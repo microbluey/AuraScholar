@@ -4,8 +4,11 @@ import { newId } from "../ids";
 export interface SentinelTaskRow {
   id: string;
   work_id: string | null;
-  doi: string;
+  /** Null when monitoring by title — the poller discovers the DOI. */
+  doi: string | null;
   title: string;
+  hint_venue: string | null;
+  hint_author: string | null;
   current_state: string;
   target_flags: string | null;
   poll_interval_s: number;
@@ -29,30 +32,45 @@ export interface SentinelEventRow {
 export class SentinelRepo {
   constructor(private readonly db: Database) {}
 
+  /** Either doi or title monitoring; title mode accepts venue/author hints. */
   async create(input: {
-    doi: string;
+    doi?: string;
     title: string;
     workId?: string;
     targets?: string[];
+    hintVenue?: string;
+    hintAuthor?: string;
   }): Promise<string> {
     const id = newId();
     const now = Date.now();
     await this.db.run(
       `INSERT INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags,
+                                   hint_venue, hint_author,
                                    poll_interval_s, next_poll_at, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'accepted', ?, 86400, ?, 'active', ?, ?)`,
+       VALUES (?, ?, ?, ?, 'accepted', ?, ?, ?, 86400, ?, 'active', ?, ?)`,
       [
         id,
         input.workId ?? null,
-        input.doi,
+        input.doi ?? null,
         input.title,
         input.targets ? JSON.stringify(input.targets) : null,
+        input.hintVenue ?? null,
+        input.hintAuthor ?? null,
         now, // first check due immediately
         now,
         now,
       ],
     );
     return id;
+  }
+
+  /** Called when title monitoring discovers the DOI. */
+  async setDoi(taskId: string, doi: string): Promise<void> {
+    await this.db.run(`UPDATE sentinel_tasks SET doi = ?, updated_at = ? WHERE id = ?`, [
+      doi,
+      Date.now(),
+      taskId,
+    ]);
   }
 
   async list(): Promise<SentinelTaskRow[]> {

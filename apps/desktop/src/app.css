@@ -74,6 +74,12 @@ body {
 .app-main {
   overflow-y: auto;
   padding: var(--space-8);
+  min-width: 0;
+}
+
+.app-main--flush {
+  padding: 0;
+  overflow: hidden;
 }
 
 .app-page-title {

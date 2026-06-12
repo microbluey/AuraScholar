@@ -17,3 +17,5 @@ export {
 export type { SentinelState, MilestoneEvidence, CheckOutcome } from "./sentinel/states";
 export { checkDoi } from "./sentinel/check";
 export type { SentinelCheckResult } from "./sentinel/check";
+export { findDoiByTitle, TITLE_MATCH_THRESHOLD } from "./sentinel/title-match";
+export type { TitleMatchHints, TitleMatchResult } from "./sentinel/title-match";

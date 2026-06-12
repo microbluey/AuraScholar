@@ -49,6 +49,14 @@ export const MIGRATIONS: Migration[] = [
       END;
     `,
   },
+  {
+    version: 3,
+    name: "sentinel_title_monitoring",
+    sql: `
+      ALTER TABLE sentinel_tasks ADD COLUMN hint_venue TEXT;
+      ALTER TABLE sentinel_tasks ADD COLUMN hint_author TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

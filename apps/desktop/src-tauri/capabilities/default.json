@@ -8,9 +8,15 @@
     "dialog:default",
     "notification:default",
     "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-mkdir",
+    "fs:allow-exists",
+    "fs:allow-read-dir",
+    "fs:allow-remove",
     {
       "identifier": "fs:scope",
-      "allow": ["$APPDATA/**"]
+      "allow": ["$APPDATA", "$APPDATA/**"]
     },
     {
       "identifier": "http:default",

@@ -28,6 +28,17 @@ export function LibraryPage() {
     return () => clearTimeout(t);
   }, [search, refresh]);
 
+  // After ingest, auto-extract the AI digest in the background when the work
+  // has a PDF and an AI provider is configured (import-time extraction).
+  const autoDigest = useCallback(
+    (workId: string, title: string) => {
+      void generateFlashcardsForWork(workId, title)
+        .then(() => setMessage(`已入库并提取重点:${title}`))
+        .catch(() => {}); // no AI config / scanned PDF — silently skip, manual button remains
+    },
+    [],
+  );
+
   const handleAdd = useCallback(async () => {
     if (!input.trim() || busy) return;
     setBusy(true);
@@ -40,8 +51,9 @@ export function LibraryPage() {
         setMessage(
           result.deduped
             ? `已在库中:${result.title}`
-            : `已入库:${result.title}${result.pdfFetched ? "(含 PDF)" : "(未找到开放获取 PDF)"}`,
+            : `已入库:${result.title}${result.pdfFetched ? "(含 PDF,正在后台提取重点…)" : "(未找到开放获取 PDF)"}`,
         );
+        if (!result.deduped && result.pdfFetched) autoDigest(result.workId, result.title);
         setInput("");
         await refresh();
       }
@@ -50,7 +62,7 @@ export function LibraryPage() {
     } finally {
       setBusy(false);
     }
-  }, [input, busy, refresh]);
+  }, [input, busy, refresh, autoDigest]);
 
   const handleUpload = useCallback(
     async (file: File) => {
@@ -62,8 +74,9 @@ export function LibraryPage() {
         setMessage(
           result.needsConfirmation
             ? `已入库(未能自动识别元数据):${result.title}`
-            : `已入库:${result.title}`,
+            : `已入库:${result.title}(正在后台提取重点…)`,
         );
+        if (!result.deduped) autoDigest(result.workId, result.title);
         await refresh();
       } catch (e) {
         setMessage(`上传失败:${e instanceof Error ? e.message : String(e)}`);
@@ -163,7 +176,7 @@ export function LibraryPage() {
                     void handleGenerateCards(w.id, w.title);
                   }}
                 >
-                  {generatingId === w.id ? "生成中…" : "🗂️ 生成闪卡"}
+                  {generatingId === w.id ? "提取中…" : "✨ 提取重点"}
                 </Button>
                 {w.doi && (
                   <Button
@@ -171,7 +184,7 @@ export function LibraryPage() {
                     style={{ fontSize: 12, padding: "4px 8px" }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      navigate(`/graph?doi=${encodeURIComponent(w.doi!)}`);
+                      navigate(`/reader?work=${w.id}&tab=graph`);
                     }}
                   >
                     🕸️ 引文脉络

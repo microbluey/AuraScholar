@@ -8,8 +8,11 @@ import { runDuePolls } from "../services/sentinel";
 
 export function SentinelPage() {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<"doi" | "title">("doi");
   const [doi, setDoi] = useState("");
   const [title, setTitle] = useState("");
+  const [hintVenue, setHintVenue] = useState("");
+  const [hintAuthor, setHintAuthor] = useState("");
   const [tasks, setTasks] = useState<SentinelTaskRow[]>([]);
   const [eventsByTask, setEventsByTask] = useState<Map<string, SentinelEventRow[]>>(new Map());
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -31,24 +34,43 @@ export function SentinelPage() {
   }, [refresh]);
 
   const handleAdd = useCallback(async () => {
-    const normalized = normalizeDoi(doi);
-    if (!normalized) {
-      setMessage("DOI 格式不正确");
-      return;
-    }
-    if (!title.trim()) {
-      setMessage("请填写论文标题(用于通知与列表展示)");
-      return;
-    }
     const db = await getDb();
-    await new SentinelRepo(db).create({ doi: normalized, title: title.trim() });
+    if (mode === "doi") {
+      const normalized = normalizeDoi(doi);
+      if (!normalized) {
+        setMessage("DOI 格式不正确");
+        return;
+      }
+      // Title is optional in DOI mode — fall back to the DOI as display name;
+      // the first poll will backfill the real title from Crossref evidence.
+      await new SentinelRepo(db).create({
+        doi: normalized,
+        title: title.trim() || normalized,
+      });
+    } else {
+      if (!title.trim()) {
+        setMessage("标题监控模式下必须填写论文标题");
+        return;
+      }
+      await new SentinelRepo(db).create({
+        title: title.trim(),
+        hintVenue: hintVenue.trim() || undefined,
+        hintAuthor: hintAuthor.trim() || undefined,
+      });
+    }
     setDoi("");
     setTitle("");
-    setMessage("已添加监控 — 首次检查将立即执行");
+    setHintVenue("");
+    setHintAuthor("");
+    setMessage(
+      mode === "doi"
+        ? "已添加监控 — 首次检查将立即执行"
+        : "已添加标题监控 — 哨兵会持续在 Crossref 搜索,找到匹配的 DOI 后自动转为精确监控",
+    );
     await refresh();
     // Kick an immediate check so the user sees fresh state.
     void runDuePolls().then(() => refresh());
-  }, [doi, title, refresh]);
+  }, [mode, doi, title, hintVenue, hintAuthor, refresh]);
 
   const handleCheckNow = useCallback(async () => {
     setBusy(true);
@@ -83,21 +105,63 @@ export function SentinelPage() {
       </p>
 
       <Card style={{ maxWidth: 720, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <Button
+            variant={mode === "doi" ? "primary" : "secondary"}
+            style={{ fontSize: 13 }}
+            onClick={() => setMode("doi")}
+          >
+            按 DOI 监控
+          </Button>
+          <Button
+            variant={mode === "title" ? "primary" : "secondary"}
+            style={{ fontSize: 13 }}
+            onClick={() => setMode("title")}
+          >
+            按标题监控(还没有 DOI)
+          </Button>
+        </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Input
-            placeholder="DOI(Accept 邮件里的那个),例如 10.1109/TPAMI.2026.12345"
-            value={doi}
-            onChange={(e) => setDoi(e.target.value)}
-          />
-          <div style={{ display: "flex", gap: 8 }}>
-            <Input
-              placeholder="论文标题"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void handleAdd()}
-            />
-            <Button onClick={() => void handleAdd()}>开始监控</Button>
-          </div>
+          {mode === "doi" ? (
+            <>
+              <Input
+                placeholder="DOI(Accept 邮件里的那个),例如 10.1109/TPAMI.2026.12345"
+                value={doi}
+                onChange={(e) => setDoi(e.target.value)}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <Input
+                  placeholder="论文标题(可选,用于列表展示)"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && void handleAdd()}
+                />
+                <Button onClick={() => void handleAdd()}>开始监控</Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <Input
+                placeholder="论文标题(必填,哨兵会据此在 Crossref 持续搜索)"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <Input
+                  placeholder="期刊/会议名(可选,提高匹配准确度)"
+                  value={hintVenue}
+                  onChange={(e) => setHintVenue(e.target.value)}
+                />
+                <Input
+                  placeholder="第一作者姓氏(可选)"
+                  value={hintAuthor}
+                  onChange={(e) => setHintAuthor(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && void handleAdd()}
+                />
+                <Button onClick={() => void handleAdd()}>开始监控</Button>
+              </div>
+            </>
+          )}
           {message && (
             <p style={{ fontSize: 13, margin: 0, color: "var(--color-text-secondary)" }}>
               {message}
@@ -139,7 +203,7 @@ export function SentinelPage() {
                 )}
               </div>
               <p className="au-text-muted" style={{ fontSize: 12, margin: "4px 0 12px", fontFamily: "var(--font-mono)" }}>
-                {task.doi}
+                {task.doi ?? `标题监控中${task.hint_venue ? ` · ${task.hint_venue}` : ""}${task.hint_author ? ` · ${task.hint_author}` : ""} — 等待 DOI 出现`}
               </p>
 
               {/* Progress pipeline */}

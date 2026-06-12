@@ -4,9 +4,11 @@
 import { SentinelRepo, type SentinelTaskRow } from "@aurascholar/db";
 import {
   checkDoi,
+  findDoiByTitle,
   isTerminal,
   nextPollInterval,
   STATE_LABEL,
+  TITLE_MATCH_THRESHOLD,
   type SentinelState,
 } from "@aurascholar/core";
 import type { ConnectorContext } from "@aurascholar/connectors";
@@ -36,7 +38,32 @@ async function pollTask(repo: SentinelRepo, task: SentinelTaskRow): Promise<numb
   const alreadyReached = priorEvents.map((e) => e.to_state as SentinelState);
 
   try {
-    const result = await checkDoi(ctx, task.doi, previousState, alreadyReached);
+    // Title-monitoring mode: no DOI yet — search Crossref by title (+hints)
+    // until a confident match appears, then continue as a DOI task.
+    let doi = task.doi;
+    if (!doi) {
+      const match = await findDoiByTitle(ctx, task.title, {
+        venue: task.hint_venue ?? undefined,
+        author: task.hint_author ?? undefined,
+      });
+      if (!match || match.confidence < TITLE_MATCH_THRESHOLD) {
+        await repo.recordCheck(task.id, {
+          nextPollS: nextPollInterval("accepted", 0),
+          errored: false,
+        });
+        return 0;
+      }
+      doi = match.doi;
+      await repo.setDoi(task.id, doi);
+      await repo.addEvent(task.id, previousState, "registered", match.evidence);
+      await tauriNotifier.notify({
+        title: "📡 已找到论文 DOI",
+        body: `${task.title} → ${doi}`,
+        tag: `sentinel:${task.id}`,
+      });
+    }
+
+    const result = await checkDoi(ctx, doi, previousState, alreadyReached);
 
     for (const milestone of result.newMilestones) {
       await repo.addEvent(task.id, previousState, milestone.state, milestone.evidence);
@@ -60,7 +87,7 @@ async function pollTask(repo: SentinelRepo, task: SentinelTaskRow): Promise<numb
       (m) => m.state === "in_issue" || m.state === "indexed_openalex",
     );
     if (crossedInIssue && !task.work_id) {
-      const imported = await ingestFromInput(task.doi).catch(() => null);
+      const imported = await ingestFromInput(doi).catch(() => null);
       if (imported) {
         await repo.linkWork(task.id, imported.workId);
         await tauriNotifier.notify({
