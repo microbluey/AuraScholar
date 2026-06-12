@@ -1,0 +1,34 @@
+{
+  "name": "@aurascholar/desktop",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@aurascholar/ai": "workspace:*",
+    "@aurascholar/db": "workspace:*",
+    "@aurascholar/platform": "workspace:*",
+    "@aurascholar/sync": "workspace:*",
+    "@aurascholar/tokens": "workspace:*",
+    "@aurascholar/ui": "workspace:*",
+    "@tauri-apps/api": "^2.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

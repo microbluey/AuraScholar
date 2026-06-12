@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capabilities for the main window","local":true,"windows":["main"],"permissions":["core:default","dialog:default","notification:default","fs:default",{"identifier":"fs:scope","allow":["$APPDATA/**"]},{"identifier":"http:default","allow":[{"url":"https://**"},{"url":"http://**"}]},"sql:default","sql:allow-execute"]}}
