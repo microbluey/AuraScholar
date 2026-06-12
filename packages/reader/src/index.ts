@@ -14,3 +14,7 @@ export type { ReaderAnnotation, AnnotationType, PendingSelection } from "./annot
 export { PdfReader } from "./PdfReader";
 export type { PdfReaderProps } from "./PdfReader";
 export { PdfPage } from "./PdfPage";
+export { AnnotationSidebar } from "./AnnotationSidebar";
+export type { AnnotationSidebarProps } from "./AnnotationSidebar";
+export { annotationsToMarkdown } from "./export-md";
+export type { ExportMeta } from "./export-md";

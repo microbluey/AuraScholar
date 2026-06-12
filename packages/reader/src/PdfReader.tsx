@@ -16,6 +16,8 @@ export interface PdfReaderProps {
   /** Highlight palette: name → CSS color. */
   palette?: Record<string, string>;
   pageFilter?: "none" | "sepia" | "invert";
+  /** When set (and changed), the reader scrolls to this page. */
+  scrollToPage?: number | null;
 }
 
 const DEFAULT_PALETTE: Record<string, string> = {
@@ -35,6 +37,7 @@ export function PdfReader({
   onAnnotationClick,
   palette = DEFAULT_PALETTE,
   pageFilter = "none",
+  scrollToPage = null,
 }: PdfReaderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1.2);
@@ -64,6 +67,12 @@ export function PdfReader({
   }, [doc.pageCount, scaledPageHeight]);
 
   useEffect(updateVisible, [updateVisible]);
+
+  // External page navigation (annotation sidebar jump).
+  useEffect(() => {
+    if (scrollToPage == null || !containerRef.current) return;
+    containerRef.current.scrollTo({ top: scrollToPage * scaledPageHeight, behavior: "smooth" });
+  }, [scrollToPage, scaledPageHeight]);
 
   // Selection capture: map DOM selection in text layers → page text range.
   const handleMouseUp = useCallback(async () => {
