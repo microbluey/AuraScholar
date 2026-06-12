@@ -16,9 +16,16 @@ export interface Migration {
   sql: string;
 }
 
+import { DDL_V1 } from "./ddl";
+
 export const MIGRATIONS: Migration[] = [
   {
     version: 1,
+    name: "schema_v1",
+    sql: DDL_V1,
+  },
+  {
+    version: 2,
     name: "fts5_works_search",
     sql: `
       CREATE VIRTUAL TABLE IF NOT EXISTS works_fts USING fts5(
