@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
 import type { WorkWithAuthors } from "@aurascholar/db";
 import { ingestFromInput, ingestFromPdf, listWorks } from "../services/library";
+import { generateFlashcardsForWork } from "../services/ai";
 
 export function LibraryPage() {
   const navigate = useNavigate();
@@ -11,6 +12,7 @@ export function LibraryPage() {
   const [items, setItems] = useState<WorkWithAuthors[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (q?: string) => {
@@ -71,6 +73,19 @@ export function LibraryPage() {
     },
     [refresh],
   );
+
+  const handleGenerateCards = useCallback(async (workId: string, title: string) => {
+    setGeneratingId(workId);
+    setMessage(null);
+    try {
+      const { created } = await generateFlashcardsForWork(workId, title);
+      setMessage(`已为《${title}》生成 ${created} 张闪卡 — 去"闪卡复习"页查看`);
+    } catch (e) {
+      setMessage(`闪卡生成失败:${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setGeneratingId(null);
+    }
+  }, []);
 
   return (
     <div>
@@ -137,6 +152,19 @@ export function LibraryPage() {
                 {w.authorNames.slice(0, 4).join(", ")}
                 {w.authorNames.length > 4 && " 等"}
                 {w.venue_name && ` · ${w.venue_name}`}
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <Button
+                  variant="ghost"
+                  style={{ fontSize: 12, padding: "4px 8px" }}
+                  disabled={generatingId !== null}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleGenerateCards(w.id, w.title);
+                  }}
+                >
+                  {generatingId === w.id ? "生成中…" : "🗂️ 生成闪卡"}
+                </Button>
               </div>
             </Card>
           ))}

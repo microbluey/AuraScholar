@@ -10,3 +10,5 @@ export { AnnotationsRepo } from "./repos/annotations";
 export type { AnnotationInput, AnnotationRow } from "./repos/annotations";
 export { AttachmentsRepo } from "./repos/attachments";
 export type { AttachmentInput, AttachmentRow } from "./repos/attachments";
+export { FlashcardsRepo, Rating } from "./repos/flashcards";
+export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards";
