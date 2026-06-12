@@ -103,6 +103,37 @@ importers:
         specifier: ^6.0.7
         version: 6.4.3(@types/node@22.19.21)
 
+  apps/gallery:
+    dependencies:
+      '@aurascholar/tokens':
+        specifier: workspace:*
+        version: link:../../packages/tokens
+      '@aurascholar/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.7(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.0.2
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.2
+        version: 19.2.3(@types/react@19.2.17)
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(vite@6.4.3(@types/node@22.19.21))
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.7
+        version: 6.4.3(@types/node@22.19.21)
+
   packages/ai:
     dependencies:
       '@aurascholar/platform':
