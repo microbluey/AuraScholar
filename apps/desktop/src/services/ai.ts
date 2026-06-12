@@ -51,6 +51,22 @@ export async function generateFlashcardsForWork(
   workId: string,
   title: string,
 ): Promise<GenerateResult> {
+  try {
+    return await generateInner(workId, title);
+  } catch (e) {
+    // Persist the failure so the reader's 重点 panel can surface it even when
+    // the generation was fired in the background at import time.
+    const db = await getDb();
+    await db.run(
+      `INSERT INTO ai_jobs (id, kind, work_id, status, error, created_at, updated_at)
+       VALUES (?, 'flashcards', ?, 'error', ?, ?, ?)`,
+      [newId(), workId, e instanceof Error ? e.message : String(e), Date.now(), Date.now()],
+    );
+    throw e;
+  }
+}
+
+async function generateInner(workId: string, title: string): Promise<GenerateResult> {
   const provider = makeProvider();
   if (!provider) throw new Error("请先在设置页配置 AI 服务(地址、模型与 API Key)");
 

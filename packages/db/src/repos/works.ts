@@ -137,8 +137,16 @@ export class WorksRepo {
     return id;
   }
 
-  async list(opts?: { search?: string; limit?: number }): Promise<WorkWithAuthors[]> {
+  async list(opts?: {
+    search?: string;
+    limit?: number;
+    collectionId?: string;
+  }): Promise<WorkWithAuthors[]> {
     const limit = opts?.limit ?? 200;
+    const collectionJoin = opts?.collectionId
+      ? `JOIN collection_items ci ON ci.work_id = w.id AND ci.collection_id = ?`
+      : "";
+    const collectionParams = opts?.collectionId ? [opts.collectionId] : [];
     let rows: WorkRow[];
     if (opts?.search?.trim()) {
       // FTS5 prefix query; quote tokens to avoid syntax errors from user input.
@@ -150,14 +158,17 @@ export class WorksRepo {
       rows = await this.db.query<WorkRow>(
         `SELECT w.* FROM works w
          JOIN works_fts f ON f.rowid = w.rowid
+         ${collectionJoin}
          WHERE works_fts MATCH ? AND w.deleted_at IS NULL
          ORDER BY rank LIMIT ?`,
-        [ftsQuery, limit],
+        [...collectionParams, ftsQuery, limit],
       );
     } else {
       rows = await this.db.query<WorkRow>(
-        `SELECT * FROM works WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?`,
-        [limit],
+        `SELECT w.* FROM works w
+         ${collectionJoin}
+         WHERE w.deleted_at IS NULL ORDER BY w.created_at DESC LIMIT ?`,
+        [...collectionParams, limit],
       );
     }
     return this.attachAuthors(rows);

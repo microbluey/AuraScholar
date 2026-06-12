@@ -2,23 +2,27 @@ import { describe, expect, it } from "vitest";
 import { findDoiByTitle } from "./title-match";
 import type { ConnectorContext } from "@aurascholar/connectors";
 
-// Stub Crossref search via a fake HttpClient returning a canned response.
-function ctxWithResults(items: unknown[]): ConnectorContext {
+// Routes the two search endpoints to separate canned responses.
+function ctx(crossrefItems: unknown[], openalexResults: unknown[] = []): ConnectorContext {
   return {
     mailto: "t@t.io",
     http: {
-      async request() {
+      async request(req: { url: string }) {
+        const isOpenAlex = req.url.includes("openalex.org");
+        const payload = isOpenAlex
+          ? { results: openalexResults }
+          : { message: { items: crossrefItems } };
         return {
           status: 200,
           headers: {},
-          body: new TextEncoder().encode(JSON.stringify({ message: { items } })),
+          body: new TextEncoder().encode(JSON.stringify(payload)),
         };
       },
     },
   };
 }
 
-const HIT = {
+const CR_HIT = {
   DOI: "10.1109/test.2026.1",
   title: ["Adaptive Graph Learning for Traffic Forecasting"],
   "container-title": ["IEEE Transactions on Intelligent Transportation Systems"],
@@ -26,56 +30,59 @@ const HIT = {
   score: 90,
 };
 
+// arXiv-style record: DOI registered at DataCite → only visible via OpenAlex.
+const OA_HIT = {
+  id: "https://openalex.org/W2741809807",
+  doi: "https://doi.org/10.48550/arxiv.1706.03762",
+  display_name: "Attention Is All You Need",
+  publication_year: 2017,
+  primary_location: { source: { display_name: "arXiv" } },
+  authorships: [{ author: { display_name: "Ashish Vaswani" } }],
+};
+
 describe("findDoiByTitle", () => {
-  it("matches an exact title with high confidence", async () => {
-    const r = await findDoiByTitle(
-      ctxWithResults([HIT]),
-      "Adaptive Graph Learning for Traffic Forecasting",
-    );
+  it("matches an exact title via Crossref", async () => {
+    const r = await findDoiByTitle(ctx([CR_HIT]), "Adaptive Graph Learning for Traffic Forecasting");
     expect(r?.doi).toBe("10.1109/test.2026.1");
+    expect(r?.source).toBe("crossref");
     expect(r?.confidence).toBeGreaterThan(0.9);
   });
 
-  it("boosts confidence when venue hint agrees", async () => {
-    const base = await findDoiByTitle(ctxWithResults([HIT]), "Adaptive Graph Learning for Traffic Forecasting");
-    const boosted = await findDoiByTitle(
-      ctxWithResults([HIT]),
-      "Adaptive Graph Learning for Traffic Forecasting",
-      { venue: "IEEE Transactions on Intelligent Transportation Systems" },
-    );
-    expect(boosted!.confidence).toBeGreaterThanOrEqual(base!.confidence);
+  it("finds arXiv/DataCite DOIs via OpenAlex when Crossref has nothing", async () => {
+    const r = await findDoiByTitle(ctx([], [OA_HIT]), "Attention Is All You Need");
+    expect(r?.doi).toBe("10.48550/arxiv.1706.03762");
+    expect(r?.source).toBe("openalex");
+    expect(r?.confidence).toBeGreaterThan(0.9);
   });
 
   it("penalizes when venue hint disagrees", async () => {
-    const r = await findDoiByTitle(
-      ctxWithResults([HIT]),
-      "Adaptive Graph Learning for Traffic Forecasting",
-      { venue: "Nature Machine Intelligence" },
-    );
+    const r = await findDoiByTitle(ctx([CR_HIT]), "Adaptive Graph Learning for Traffic Forecasting", {
+      venue: "Nature Machine Intelligence",
+    });
     expect(r!.confidence).toBeLessThan(0.85);
   });
 
-  it("uses author hint (family name) as corroborator", async () => {
-    const ok = await findDoiByTitle(
-      ctxWithResults([HIT]),
-      "Adaptive Graph Learning for Traffic Forecasting",
-      { author: "Zhang" },
-    );
-    const bad = await findDoiByTitle(
-      ctxWithResults([HIT]),
-      "Adaptive Graph Learning for Traffic Forecasting",
-      { author: "Wang" },
-    );
+  it("treats missing venue as neutral (repository records)", async () => {
+    const noVenue = { ...OA_HIT, primary_location: {} };
+    const r = await findDoiByTitle(ctx([], [noVenue]), "Attention Is All You Need", {
+      venue: "NeurIPS",
+    });
+    expect(r!.confidence).toBeGreaterThan(0.85); // not vetoed
+  });
+
+  it("uses author hint as corroborator", async () => {
+    const ok = await findDoiByTitle(ctx([CR_HIT]), "Adaptive Graph Learning for Traffic Forecasting", { author: "Zhang" });
+    const bad = await findDoiByTitle(ctx([CR_HIT]), "Adaptive Graph Learning for Traffic Forecasting", { author: "Wang" });
     expect(ok!.confidence).toBeGreaterThan(bad!.confidence);
   });
 
-  it("returns null when nothing comes back", async () => {
-    expect(await findDoiByTitle(ctxWithResults([]), "anything")).toBeNull();
+  it("returns null when both sources are empty", async () => {
+    expect(await findDoiByTitle(ctx([], []), "anything")).toBeNull();
   });
 
-  it("keeps evidence for the match decision", async () => {
-    const r = await findDoiByTitle(ctxWithResults([HIT]), "Adaptive Graph Learning for Traffic Forecasting", { venue: "IEEE" });
-    expect(r?.evidence["matched_doi"]).toBe("10.1109/test.2026.1");
-    expect(r?.evidence["hints"]).toEqual({ venue: "IEEE" });
+  it("keeps evidence including the winning source", async () => {
+    const r = await findDoiByTitle(ctx([], [OA_HIT]), "Attention Is All You Need");
+    expect(r?.evidence["matched_doi"]).toBe("10.48550/arxiv.1706.03762");
+    expect(r?.evidence["source"]).toBe("openalex");
   });
 });

@@ -1,7 +1,7 @@
 // Reader page: PDF + right panel with three tabs — 批注 / 重点 (AI digest,
 // generated at import time or on demand) / 脉络 (citation graph of this paper).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AnnotationSidebar,
   PdfDocument,
@@ -57,6 +57,7 @@ function rowToAnnotation(row: AnnotationRow): ReaderAnnotation {
 }
 
 export function ReaderPage() {
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const workIdParam = params.get("work");
   const tabParam = params.get("tab") as PanelTab | null;
@@ -245,8 +246,8 @@ export function ReaderPage() {
           <Button variant="ghost" style={{ fontSize: 13 }} onClick={() => setPanelOpen((v) => !v)}>
             {panelOpen ? "收起面板" : "展开面板"}
           </Button>
-          <Button variant="secondary" style={{ fontSize: 13 }} onClick={() => setCtx(null)}>
-            关闭
+          <Button variant="secondary" style={{ fontSize: 13 }} onClick={() => navigate("/library")}>
+            ← 返回文献库
           </Button>
         </div>
       </div>
@@ -301,8 +302,10 @@ export function ReaderPage() {
                 </button>
               ))}
             </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-              {tab === "annotations" && (
+            {/* All panels stay mounted — switching tabs must not lose
+                in-flight digest generation or the loaded graph. */}
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+              <div style={{ height: "100%", display: tab === "annotations" ? "block" : "none" }}>
                 <AnnotationSidebar
                   annotations={annotations}
                   activeId={activeId}
@@ -314,11 +317,17 @@ export function ReaderPage() {
                   onSaveComment={handleSaveComment}
                   onDelete={handleDelete}
                 />
+              </div>
+              {ctx.workId && (
+                <div style={{ height: "100%", display: tab === "digest" ? "block" : "none" }}>
+                  <DigestPanel workId={ctx.workId} title={ctx.workTitle ?? ctx.fileName} />
+                </div>
               )}
-              {tab === "digest" && ctx.workId && (
-                <DigestPanel workId={ctx.workId} title={ctx.workTitle ?? ctx.fileName} />
+              {ctx.workDoi && (
+                <div style={{ height: "100%", display: tab === "graph" ? "block" : "none" }}>
+                  <CitationGraphView doi={ctx.workDoi} height={400} />
+                </div>
               )}
-              {tab === "graph" && ctx.workDoi && <CitationGraphView doi={ctx.workDoi} height={400} />}
             </div>
           </div>
         )}
@@ -341,6 +350,22 @@ function DigestPanel({ workId, title }: { workId: string; title: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Import-time extraction may still be running in the background — poll
+  // until cards appear (or an ai_jobs error surfaces), then stop.
+  useEffect(() => {
+    if (cards.length > 0) return;
+    const timer = setInterval(async () => {
+      await refresh();
+      const db = await getDb();
+      const jobs = await db.query<{ status: string; error: string | null }>(
+        `SELECT status, error FROM ai_jobs WHERE work_id = ? ORDER BY created_at DESC LIMIT 1`,
+        [workId],
+      );
+      if (jobs[0]?.status === "error" && jobs[0].error) setError(jobs[0].error);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [cards.length, refresh, workId]);
 
   const generate = useCallback(async () => {
     setGenerating(true);

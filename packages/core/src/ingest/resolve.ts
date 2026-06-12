@@ -37,6 +37,9 @@ export async function resolveClue(ctx: ConnectorContext, clue: Clue): Promise<Re
           return published;
         }
       }
+      // Every arXiv paper has a deterministic DataCite DOI — record it so the
+      // work is graph-able and sentinel-able even before journal publication.
+      work.doi ??= `10.48550/arxiv.${clue.arxivId}`;
       return { work, confidence: 1 };
     }
     case "title":

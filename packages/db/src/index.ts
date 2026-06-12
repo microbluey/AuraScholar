@@ -14,3 +14,5 @@ export { FlashcardsRepo, Rating } from "./repos/flashcards";
 export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards";
 export { SentinelRepo } from "./repos/sentinel";
 export type { SentinelTaskRow, SentinelEventRow } from "./repos/sentinel";
+export { CollectionsRepo } from "./repos/collections";
+export type { CollectionRow } from "./repos/collections";

@@ -10,10 +10,10 @@ import { SentinelPage } from "./pages/SentinelPage";
 import { HomepagePage } from "./pages/HomepagePage";
 import { SettingsPage } from "./pages/SettingsPage";
 
-// 引文脉络与闪卡提取已并入阅读器;/graph 路由保留供文献库深链使用,不在导航显示。
+// 阅读器不在导航中 — 它是文献库里点击一篇文献后进入的页面。
+// /graph 路由保留供深链使用。
 const NAV = [
   { to: "/library", icon: "📚", label: "文献库" },
-  { to: "/reader", icon: "📖", label: "阅读器" },
   { to: "/flashcards", icon: "🗂️", label: "闪卡" },
   { to: "/sentinel", icon: "📡", label: "检索哨兵" },
   { to: "/homepage", icon: "🪪", label: "学术主页" },

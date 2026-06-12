@@ -7,6 +7,7 @@ export {
   openalexByDoi,
   openalexById,
   openalexCitedBy,
+  openalexSearchByTitle,
   normalizeOpenAlex,
   decodeInvertedIndex,
 } from "./openalex";

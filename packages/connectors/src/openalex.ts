@@ -58,6 +58,19 @@ export async function openalexById(ctx: ConnectorContext, id: string): Promise<O
   }
 }
 
+/** Title search — covers Crossref AND DataCite/arXiv registered works. */
+export async function openalexSearchByTitle(
+  ctx: ConnectorContext,
+  title: string,
+  perPage = 5,
+): Promise<OpenAlexWork[]> {
+  const data = await getJson<{ results: OpenAlexWork[] }>(
+    ctx,
+    `${BASE}/works?filter=title.search:${encodeURIComponent(title)}&per-page=${perPage}&mailto=${encodeURIComponent(ctx.mailto)}`,
+  );
+  return data.results ?? [];
+}
+
 /** Works citing the given OpenAlex work id (one page; caller paginates by cursor if needed). */
 export async function openalexCitedBy(
   ctx: ConnectorContext,
