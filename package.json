@@ -1,0 +1,25 @@
+{
+  "name": "aurascholar",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Open-source research companion for early-career researchers: reference management, indexing sentinel, and academic homepage.",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@11.6.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

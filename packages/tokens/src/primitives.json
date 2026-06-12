@@ -1,0 +1,88 @@
+{
+  "color": {
+    "paper": {
+      "50": "#fdfdfb",
+      "100": "#f8f7f3",
+      "200": "#efede6",
+      "300": "#e3e0d6",
+      "400": "#c9c5b8"
+    },
+    "ink": {
+      "900": "#1a1a18",
+      "700": "#3d3c38",
+      "500": "#6b6a63",
+      "300": "#9b9a92"
+    },
+    "slate": {
+      "950": "#0a0c10",
+      "900": "#0f1218",
+      "800": "#161b24",
+      "700": "#1f2632",
+      "600": "#2c3545",
+      "400": "#566073",
+      "200": "#aab4c4",
+      "100": "#d6dde8"
+    },
+    "teal": {
+      "600": "#3d6b66",
+      "500": "#4d837d",
+      "400": "#6aa39c"
+    },
+    "cyan": {
+      "500": "#22d3ee",
+      "400": "#4be0f5",
+      "300": "#86ecf9"
+    },
+    "violet": {
+      "500": "#8b5cf6",
+      "400": "#a78bfa"
+    },
+    "red": {
+      "600": "#b4453c",
+      "400": "#f87171"
+    },
+    "amber": {
+      "600": "#a3742b",
+      "400": "#fbbf24"
+    },
+    "green": {
+      "600": "#4a7c50",
+      "400": "#4ade80"
+    },
+    "highlight": {
+      "yellow": "#ffd866",
+      "green": "#a9dc76",
+      "blue": "#78dce8",
+      "pink": "#ff6188",
+      "purple": "#ab9df2",
+      "orange": "#fc9867"
+    }
+  },
+  "font": {
+    "serif": "\"Source Serif 4\", \"Source Han Serif SC\", \"Noto Serif SC\", Georgia, serif",
+    "sans": "\"Inter\", \"PingFang SC\", \"Noto Sans SC\", -apple-system, sans-serif",
+    "mono": "\"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace"
+  },
+  "size": {
+    "radius": {
+      "none": "0",
+      "sm": "4px",
+      "md": "8px",
+      "lg": "12px",
+      "xl": "16px",
+      "full": "9999px"
+    },
+    "space": {
+      "1": "4px",
+      "2": "8px",
+      "3": "12px",
+      "4": "16px",
+      "5": "20px",
+      "6": "24px",
+      "8": "32px",
+      "10": "40px",
+      "12": "48px",
+      "16": "64px"
+    }
+  }
+}
