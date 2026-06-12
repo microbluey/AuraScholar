@@ -15,6 +15,7 @@
     "@aurascholar/connectors": "workspace:*",
     "@aurascholar/core": "workspace:*",
     "@aurascholar/db": "workspace:*",
+    "@aurascholar/homepage": "workspace:*",
     "@aurascholar/platform": "workspace:*",
     "@aurascholar/reader": "workspace:*",
     "@aurascholar/sync": "workspace:*",
