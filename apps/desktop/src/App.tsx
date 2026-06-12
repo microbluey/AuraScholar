@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { ThemeToggle } from "@aurascholar/ui";
+import { startSentinelLoop } from "./services/sentinel";
 import { LibraryPage } from "./pages/LibraryPage";
 import { ReaderPage } from "./pages/ReaderPage";
 import { GraphPage } from "./pages/GraphPage";
@@ -19,6 +21,8 @@ const NAV = [
 ];
 
 export function App() {
+  // Catch-up poll on startup, then hourly while the app is open.
+  useEffect(() => startSentinelLoop(), []);
   return (
     <div className="app-shell">
       <aside className="app-sidebar">

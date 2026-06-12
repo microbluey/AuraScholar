@@ -12,3 +12,5 @@ export { AttachmentsRepo } from "./repos/attachments";
 export type { AttachmentInput, AttachmentRow } from "./repos/attachments";
 export { FlashcardsRepo, Rating } from "./repos/flashcards";
 export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards";
+export { SentinelRepo } from "./repos/sentinel";
+export type { SentinelTaskRow, SentinelEventRow } from "./repos/sentinel";
