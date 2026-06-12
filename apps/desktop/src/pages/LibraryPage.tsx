@@ -153,7 +153,7 @@ export function LibraryPage() {
                 {w.authorNames.length > 4 && " 等"}
                 {w.venue_name && ` · ${w.venue_name}`}
               </div>
-              <div style={{ marginTop: 8 }}>
+              <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
                 <Button
                   variant="ghost"
                   style={{ fontSize: 12, padding: "4px 8px" }}
@@ -165,6 +165,18 @@ export function LibraryPage() {
                 >
                   {generatingId === w.id ? "生成中…" : "🗂️ 生成闪卡"}
                 </Button>
+                {w.doi && (
+                  <Button
+                    variant="ghost"
+                    style={{ fontSize: 12, padding: "4px 8px" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/graph?doi=${encodeURIComponent(w.doi!)}`);
+                    }}
+                  >
+                    🕸️ 引文脉络
+                  </Button>
+                )}
               </div>
             </Card>
           ))}

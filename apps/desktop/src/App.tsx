@@ -2,6 +2,7 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { ThemeToggle } from "@aurascholar/ui";
 import { LibraryPage } from "./pages/LibraryPage";
 import { ReaderPage } from "./pages/ReaderPage";
+import { GraphPage } from "./pages/GraphPage";
 import { FlashcardsPage } from "./pages/FlashcardsPage";
 import { SentinelPage } from "./pages/SentinelPage";
 import { HomepagePage } from "./pages/HomepagePage";
@@ -10,6 +11,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 const NAV = [
   { to: "/library", icon: "📚", label: "文献库" },
   { to: "/reader", icon: "📖", label: "阅读器" },
+  { to: "/graph", icon: "🕸️", label: "引文脉络" },
   { to: "/flashcards", icon: "🗂️", label: "闪卡复习" },
   { to: "/sentinel", icon: "📡", label: "检索哨兵" },
   { to: "/homepage", icon: "🪪", label: "学术主页" },
@@ -38,6 +40,7 @@ export function App() {
           <Route path="/" element={<Navigate to="/library" replace />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/reader" element={<ReaderPage />} />
+          <Route path="/graph" element={<GraphPage />} />
           <Route path="/flashcards" element={<FlashcardsPage />} />
           <Route path="/sentinel" element={<SentinelPage />} />
           <Route path="/homepage" element={<HomepagePage />} />
