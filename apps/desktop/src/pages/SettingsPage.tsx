@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Badge, Button, Card, Input, useTheme } from "@aurascholar/ui";
 import { loadAiSettings, makeProvider, saveAiSettings } from "../services/ai";
+import {
+  exportLibraryJson,
+  loadSyncSettings,
+  runSync,
+  saveSyncSettings,
+} from "../services/sync";
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -10,6 +16,39 @@ export function SettingsPage() {
   const [apiKey, setApiKey] = useState(existing?.apiKey ?? "");
   const [status, setStatus] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+
+  const syncExisting = loadSyncSettings();
+  const [davUrl, setDavUrl] = useState(syncExisting?.baseUrl ?? "");
+  const [davUser, setDavUser] = useState(syncExisting?.username ?? "");
+  const [davPass, setDavPass] = useState(syncExisting?.password ?? "");
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSync = async () => {
+    saveSyncSettings({ baseUrl: davUrl.trim(), username: davUser.trim(), password: davPass });
+    setSyncing(true);
+    setSyncStatus("同步中…");
+    try {
+      const r = await runSync();
+      setSyncStatus(
+        `同步完成 ✓ 推送 ${r.pushedEntries} 条 · 拉取 ${r.pulledEntries} 条 · 应用 ${r.appliedEntries} 条` +
+          (r.conflicts > 0 ? ` · ${r.conflicts} 个冲突已记录` : ""),
+      );
+    } catch (e) {
+      setSyncStatus(`同步失败:${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleExport = async () => {
+    const blob = await exportLibraryJson();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `aurascholar-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   const save = () => {
     saveAiSettings({ baseUrl: baseUrl.trim(), model: model.trim(), apiKey: apiKey.trim() });
@@ -108,6 +147,41 @@ export function SettingsPage() {
             <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{status}</span>
           )}
         </div>
+      </Card>
+
+      <Card style={{ maxWidth: 640, marginTop: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <h3 className="au-heading" style={{ ...sectionTitle, marginBottom: 0 }}>
+            多设备同步(自带云盘)
+          </h3>
+          <Badge variant="neutral">WebDAV</Badge>
+        </div>
+        <p className="au-text-muted" style={{ fontSize: 13 }}>
+          支持坚果云、Nextcloud、群晖/威联通 NAS 等任何 WebDAV 服务。数据存在你自己的云盘里。
+        </p>
+        <label style={fieldLabel}>WebDAV 地址</label>
+        <Input
+          value={davUrl}
+          onChange={(e) => setDavUrl(e.target.value)}
+          placeholder="https://dav.jianguoyun.com/dav/AuraScholar"
+        />
+        <label style={fieldLabel}>用户名</label>
+        <Input value={davUser} onChange={(e) => setDavUser(e.target.value)} />
+        <label style={fieldLabel}>密码 / 应用密码</label>
+        <Input type="password" value={davPass} onChange={(e) => setDavPass(e.target.value)} />
+        <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <Button onClick={() => void handleSync()} disabled={syncing || !davUrl.trim()}>
+            {syncing ? "同步中…" : "立即同步"}
+          </Button>
+          <Button variant="secondary" onClick={() => void handleExport()}>
+            导出整库备份(JSON)
+          </Button>
+        </div>
+        {syncStatus && (
+          <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginTop: 8, marginBottom: 0 }}>
+            {syncStatus}
+          </p>
+        )}
       </Card>
     </div>
   );
