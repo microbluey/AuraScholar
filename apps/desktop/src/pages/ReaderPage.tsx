@@ -24,12 +24,14 @@ import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { getDb } from "../services/tauri-db";
 import { loadPdfForWork } from "../services/library";
 import { generateFlashcardsForWork } from "../services/ai";
+import { resolveTranslator, loadTranslateConfig } from "../services/translate";
+import { langLabel } from "@aurascholar/translate";
 import { CitationGraphView } from "../components/CitationGraphView";
 
 configureWorker(workerSrc);
 
 type PageFilter = "none" | "sepia" | "invert";
-type PanelTab = "annotations" | "digest" | "graph";
+type PanelTab = "annotations" | "translate" | "digest" | "graph";
 
 interface OpenContext {
   doc: PdfDocument;
@@ -69,6 +71,8 @@ export function ReaderPage() {
   const [jumpPage, setJumpPage] = useState<number | null>(null);
   const [tab, setTab] = useState<PanelTab>(tabParam ?? "annotations");
   const [panelOpen, setPanelOpen] = useState(true);
+  const [translateSource, setTranslateSource] = useState("");
+  const [translateSeq, setTranslateSeq] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => () => ctx?.doc.destroy(), [ctx]);
@@ -110,6 +114,15 @@ export function ReaderPage() {
       cancelled = true;
     };
   }, [workIdParam]);
+
+  // Selecting text + tapping 译 routes here: open the panel on the 译文 tab and
+  // hand the text to TranslatePanel (seq bump re-triggers even on same text).
+  const handleTranslate = useCallback((text: string) => {
+    setTranslateSource(text);
+    setTranslateSeq((n) => n + 1);
+    setTab("translate");
+    setPanelOpen(true);
+  }, []);
 
   const openFile = useCallback(async (file: File) => {
     const data = new Uint8Array(await file.arrayBuffer());
@@ -196,43 +209,24 @@ export function ReaderPage() {
 
   const tabs: Array<{ key: PanelTab; label: string; disabled?: boolean; title?: string }> = [
     { key: "annotations", label: `批注 ${annotations.length}` },
+    { key: "translate", label: "译文" },
     { key: "digest", label: "重点", disabled: !ctx.workId, title: ctx.workId ? undefined : "需先入库" },
     { key: "graph", label: "脉络", disabled: !ctx.workDoi, title: ctx.workDoi ? undefined : "无 DOI,无法构建图谱" },
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "10px 16px",
-          borderBottom: "var(--border-width) solid var(--color-border)",
-          flexShrink: 0,
-          flexWrap: "wrap",
-        }}
-      >
-        <strong
-          style={{
-            fontFamily: "var(--font-heading)",
-            fontSize: 14,
-            maxWidth: "40%",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-          title={ctx.fileName}
-        >
-          {ctx.fileName}
-        </strong>
-        <span className="au-text-muted" style={{ fontSize: 12, flexShrink: 0 }}>
+    <div className="reader-workspace">
+      <div className="reader-topbar">
+        <div className="reader-topbar__identity">
+          <span className="reader-topbar__kicker">Reader</span>
+          <strong title={ctx.fileName}>{ctx.fileName}</strong>
+        </div>
+        <span className="reader-topbar__meta">
           {ctx.doc.pageCount} 页{ctx.workId ? "" : " · 未入库(批注不保存)"}
         </span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexShrink: 0 }}>
+        <div className="reader-topbar__actions">
           <select
             className="au-input"
-            style={{ width: "auto", padding: "4px 8px", fontSize: 12 }}
             value={pageFilter}
             onChange={(e) => setPageFilter(e.target.value as PageFilter)}
           >
@@ -247,11 +241,11 @@ export function ReaderPage() {
             {panelOpen ? "收起面板" : "展开面板"}
           </Button>
           <Button variant="secondary" style={{ fontSize: 13 }} onClick={() => navigate("/library")}>
-            ← 返回文献库
+            返回文献库
           </Button>
         </div>
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+      <div className="reader-shell">
         <div style={{ flex: 1, minWidth: 0 }}>
           <PdfReader
             doc={ctx.doc}
@@ -262,41 +256,25 @@ export function ReaderPage() {
               setTab("annotations");
               setPanelOpen(true);
             }}
+            onTranslate={handleTranslate}
             pageFilter={pageFilter}
             scrollToPage={jumpPage}
           />
         </div>
         {panelOpen && (
-          <div
-            style={{
-              width: 340,
-              flexShrink: 0,
-              display: "flex",
-              flexDirection: "column",
-              borderLeft: "var(--border-width) solid var(--color-border)",
-              background: "var(--color-surface)",
-              minHeight: 0,
-            }}
-          >
-            <div style={{ display: "flex", flexShrink: 0, borderBottom: "var(--border-width) solid var(--color-border)" }}>
+          <div className="reader-research-panel">
+            <div className="reader-research-panel__head">
+              <span>研究面板</span>
+              <Badge variant="neutral">{annotations.length} 批注</Badge>
+            </div>
+            <div className="reader-tabs au-tablist">
               {tabs.map((t) => (
                 <button
                   key={t.key}
+                  className={`au-tab ${tab === t.key ? "au-tab--active" : ""}`}
                   disabled={t.disabled}
                   title={t.title}
                   onClick={() => setTab(t.key)}
-                  style={{
-                    flex: 1,
-                    padding: "10px 0",
-                    fontSize: 13,
-                    background: "none",
-                    border: "none",
-                    cursor: t.disabled ? "not-allowed" : "pointer",
-                    opacity: t.disabled ? 0.4 : 1,
-                    color: tab === t.key ? "var(--color-accent-strong)" : "var(--color-text-muted)",
-                    borderBottom: tab === t.key ? "2px solid var(--color-accent)" : "2px solid transparent",
-                    fontWeight: tab === t.key ? 600 : 400,
-                  }}
                 >
                   {t.label}
                 </button>
@@ -304,7 +282,7 @@ export function ReaderPage() {
             </div>
             {/* All panels stay mounted — switching tabs must not lose
                 in-flight digest generation or the loaded graph. */}
-            <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+            <div className="reader-research-panel__body">
               <div style={{ height: "100%", display: tab === "annotations" ? "block" : "none" }}>
                 <AnnotationSidebar
                   annotations={annotations}
@@ -318,6 +296,9 @@ export function ReaderPage() {
                   onDelete={handleDelete}
                 />
               </div>
+              <div style={{ height: "100%", display: tab === "translate" ? "block" : "none" }}>
+                <TranslatePanel source={translateSource} seq={translateSeq} />
+              </div>
               {ctx.workId && (
                 <div style={{ height: "100%", display: tab === "digest" ? "block" : "none" }}>
                   <DigestPanel workId={ctx.workId} title={ctx.workTitle ?? ctx.fileName} />
@@ -330,6 +311,97 @@ export function ReaderPage() {
               )}
             </div>
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 译文 tab: select PDF text + tap 译 → original ⇄ translation, copyable. */
+function TranslatePanel({ source, seq }: { source: string; seq: number }) {
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [engine, setEngine] = useState<string | null>(null);
+  const config = loadTranslateConfig();
+
+  // Re-run whenever a new selection arrives (seq bumps even on identical text).
+  useEffect(() => {
+    if (!source.trim()) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    void (async () => {
+      const resolved = resolveTranslator();
+      if ("error" in resolved) {
+        if (!cancelled) setError(resolved.error);
+        return;
+      }
+      try {
+        const out = await resolved.translator.translate(
+          { text: source, targetLang: config.targetLang },
+          { signal: controller.signal },
+        );
+        if (!cancelled) {
+          setResult(out.text);
+          setEngine(out.engine);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, seq]);
+
+  if (!source.trim()) {
+    return (
+      <div className="reader-digest-panel">
+        <p className="au-text-muted" style={{ fontSize: 13 }}>
+          在左侧选中 PDF 文本，点击工具条上的「译」按钮，这里会显示对照译文。
+          <br />
+          目标语言:{langLabel(config.targetLang)} · 引擎:{config.engine === "llm" ? "大模型" : config.engine}
+          （可在设置页调整）
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="reader-translate-panel">
+      <div className="reader-translate-block">
+        <div className="reader-translate-block__head">
+          <span>原文</span>
+          <button type="button" onClick={() => void navigator.clipboard?.writeText(source)}>
+            复制
+          </button>
+        </div>
+        <p className="reader-translate-text reader-translate-text--source">{source}</p>
+      </div>
+      <div className="reader-translate-block">
+        <div className="reader-translate-block__head">
+          <span>译文 {engine ? `· ${engine}` : ""}</span>
+          {result && (
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(result)}>
+              复制
+            </button>
+          )}
+        </div>
+        {busy ? (
+          <p className="au-text-muted" style={{ fontSize: 13 }}>
+            翻译中…
+          </p>
+        ) : error ? (
+          <p style={{ fontSize: 12.5, color: "var(--color-danger)" }}>{error}</p>
+        ) : (
+          <p className="reader-translate-text">{result}</p>
         )}
       </div>
     </div>
@@ -389,16 +461,16 @@ function DigestPanel({ workId, title }: { workId: string; title: string }) {
   };
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className="reader-digest-panel">
       {cards.length === 0 ? (
-        <div style={{ textAlign: "center", paddingTop: 32 }}>
+        <div className="reader-digest-empty">
           <p className="au-text-muted" style={{ fontSize: 13 }}>
             还没有提取重点。
             <br />
             AI 会从全文提炼核心贡献、方法与局限。
           </p>
           <Button onClick={() => void generate()} disabled={generating}>
-            {generating ? "提取中…" : "✨ 提取重点"}
+            {generating ? "提取中..." : "提取重点"}
           </Button>
           {error && <p style={{ fontSize: 12, color: "var(--color-danger)", marginTop: 8 }}>{error}</p>}
         </div>
@@ -407,12 +479,7 @@ function DigestPanel({ workId, title }: { workId: string; title: string }) {
           {cards.map((c) => (
             <div
               key={c.id}
-              style={{
-                padding: 10,
-                border: "var(--border-width) solid var(--color-border)",
-                borderRadius: "var(--radius-card)",
-                background: "var(--color-surface-raised)",
-              }}
+              className="reader-digest-card"
             >
               <div style={{ marginBottom: 6 }}>
                 <Badge variant="neutral">{TYPE_LABEL[c.card_type] ?? c.card_type}</Badge>

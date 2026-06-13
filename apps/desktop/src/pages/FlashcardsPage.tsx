@@ -10,6 +10,11 @@ export function FlashcardsPage() {
   const [reviewedCount, setReviewedCount] = useState(0);
 
   const refresh = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setQueue([]);
+      setRevealed(false);
+      return;
+    }
     const db = await getDb();
     setQueue(await new FlashcardsRepo(db).dueCards(50));
     setRevealed(false);
@@ -54,7 +59,8 @@ export function FlashcardsPage() {
   }, [revealed, rate]);
 
   return (
-    <div>
+    <div className="study-page">
+      <p className="app-page-kicker">AI digest to memory</p>
       <h1 className="app-page-title">闪卡复习</h1>
       <p className="app-page-subtitle">
         FSRS 间隔重复 · 今日待复习 {queue.length} 张
@@ -62,46 +68,31 @@ export function FlashcardsPage() {
       </p>
 
       {!current ? (
-        <Card style={{ maxWidth: 640, textAlign: "center", padding: 48 }}>
-          <p style={{ fontSize: 18, fontFamily: "var(--font-heading)", margin: 0 }}>
-            {reviewedCount > 0 ? "🎉 今日复习完成!" : "暂无待复习的卡片"}
-          </p>
+        <Card className="study-empty">
+          <Badge variant={reviewedCount > 0 ? "success" : "neutral"}>
+            {reviewedCount > 0 ? "今日完成" : "队列为空"}
+          </Badge>
+          <p>{reviewedCount > 0 ? "今日复习完成" : "暂无待复习的卡片"}</p>
           <p className="au-text-muted" style={{ fontSize: 13 }}>
             在文献库中对一篇文献生成 AI 闪卡,新卡片会立即进入复习队列
           </p>
         </Card>
       ) : (
-        <div style={{ maxWidth: 640 }}>
+        <div className="study-review">
           <Card
-            style={{ minHeight: 220, cursor: "pointer", marginBottom: 16 }}
+            className="study-card"
             onClick={() => setRevealed((v) => !v)}
           >
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <div className="study-card__meta">
               <Badge variant="neutral">{current.card_type}</Badge>
               {current.source === "ai" && <Badge>AI</Badge>}
+              <span className="au-kbd">Space</span>
             </div>
-            <div style={{ fontSize: 16, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-              {current.front_md}
-            </div>
+            <div className="study-card__front">{current.front_md}</div>
             {revealed && (
               <>
-                <hr
-                  style={{
-                    border: "none",
-                    borderTop: "var(--border-width) solid var(--color-border)",
-                    margin: "16px 0",
-                  }}
-                />
-                <div
-                  style={{
-                    fontSize: 15,
-                    lineHeight: 1.7,
-                    whiteSpace: "pre-wrap",
-                    color: "var(--color-text-secondary)",
-                  }}
-                >
-                  {current.back_md}
-                </div>
+                <hr className="study-card__divider" />
+                <div className="study-card__back">{current.back_md}</div>
               </>
             )}
             {!revealed && (
@@ -112,7 +103,7 @@ export function FlashcardsPage() {
           </Card>
 
           {revealed && (
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className="study-rating">
               <Button variant="danger" onClick={() => void rate(Rating.Again)}>
                 忘了 (1)
               </Button>

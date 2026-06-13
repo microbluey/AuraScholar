@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Badge, Button, Card, Input, useTheme } from "@aurascholar/ui";
 import { loadAiSettings, makeProvider, saveAiSettings } from "../services/ai";
+import { loadTranslateConfig, saveTranslateConfig } from "../services/translate";
+import { TARGET_LANGS, type TranslateEngine } from "@aurascholar/translate";
 import {
   exportLibraryJson,
   loadSyncSettings,
@@ -16,6 +18,27 @@ export function SettingsPage() {
   const [apiKey, setApiKey] = useState(existing?.apiKey ?? "");
   const [status, setStatus] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+
+  const trExisting = loadTranslateConfig();
+  const [trEngine, setTrEngine] = useState<TranslateEngine>(trExisting.engine);
+  const [trTarget, setTrTarget] = useState(trExisting.targetLang);
+  const [deeplKey, setDeeplKey] = useState(trExisting.deepl?.apiKey ?? "");
+  const [baiduAppid, setBaiduAppid] = useState(trExisting.baidu?.appid ?? "");
+  const [baiduKey, setBaiduKey] = useState(trExisting.baidu?.key ?? "");
+  const [trStatus, setTrStatus] = useState<string | null>(null);
+
+  const saveTranslate = () => {
+    saveTranslateConfig({
+      engine: trEngine,
+      targetLang: trTarget,
+      deepl: deeplKey.trim() ? { apiKey: deeplKey.trim() } : undefined,
+      baidu:
+        baiduAppid.trim() && baiduKey.trim()
+          ? { appid: baiduAppid.trim(), key: baiduKey.trim() }
+          : undefined,
+    });
+    setTrStatus("已保存");
+  };
 
   const syncExisting = loadSyncSettings();
   const [davUrl, setDavUrl] = useState(syncExisting?.baseUrl ?? "");
@@ -84,31 +107,33 @@ export function SettingsPage() {
   } as const;
 
   return (
-    <div>
+    <div className="settings-page">
+      <p className="app-page-kicker">Local control center</p>
       <h1 className="app-page-title">设置</h1>
       <p className="app-page-subtitle">主题、AI 服务与同步配置</p>
 
-      <Card style={{ maxWidth: 640, marginBottom: 24 }}>
+      <div className="settings-grid">
+      <Card className="settings-card">
         <h3 className="au-heading" style={sectionTitle}>
           外观
         </h3>
-        <div style={{ display: "flex", gap: 12 }}>
+        <div className="settings-theme-options">
           <Button
             variant={theme === "dawn" ? "primary" : "secondary"}
             onClick={() => setTheme("dawn")}
           >
-            ☀️ Dawn · 学术极简
+            Dawn · 清爽学术
           </Button>
           <Button
             variant={theme === "nocturne" ? "primary" : "secondary"}
             onClick={() => setTheme("nocturne")}
           >
-            🌙 Nocturne · 极客暗黑
+            Nocturne · 夜间研究
           </Button>
         </div>
       </Card>
 
-      <Card style={{ maxWidth: 640 }}>
+      <Card className="settings-card">
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <h3 className="au-heading" style={{ ...sectionTitle, marginBottom: 0 }}>
             AI 服务(自带 Key)
@@ -149,7 +174,77 @@ export function SettingsPage() {
         </div>
       </Card>
 
-      <Card style={{ maxWidth: 640, marginTop: 24 }}>
+      <Card className="settings-card">
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <h3 className="au-heading" style={{ ...sectionTitle, marginBottom: 0 }}>
+            阅读翻译
+          </h3>
+          <Badge variant="neutral">划词翻译</Badge>
+        </div>
+        <p className="au-text-muted" style={{ fontSize: 13 }}>
+          在阅读器里选中文本即可翻译。默认复用上面配置的 AI 大模型(学术语境质量好);也可填入
+          DeepL 或百度翻译的 Key 切换引擎。
+        </p>
+        <label style={fieldLabel}>翻译引擎</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          {([
+            { id: "llm", label: "大模型" },
+            { id: "deepl", label: "DeepL" },
+            { id: "baidu", label: "百度翻译" },
+          ] as const).map((opt) => (
+            <Button
+              key={opt.id}
+              variant={trEngine === opt.id ? "primary" : "secondary"}
+              onClick={() => setTrEngine(opt.id)}
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </div>
+        <label style={fieldLabel}>目标语言</label>
+        <select
+          className="au-input"
+          value={trTarget}
+          onChange={(e) => setTrTarget(e.target.value)}
+        >
+          {TARGET_LANGS.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.label}
+            </option>
+          ))}
+        </select>
+        {trEngine === "deepl" && (
+          <>
+            <label style={fieldLabel}>DeepL API Key</label>
+            <Input
+              type="password"
+              value={deeplKey}
+              onChange={(e) => setDeeplKey(e.target.value)}
+              placeholder="xxxxxxxx-xxxx-…:fx"
+            />
+          </>
+        )}
+        {trEngine === "baidu" && (
+          <>
+            <label style={fieldLabel}>百度翻译 APPID</label>
+            <Input value={baiduAppid} onChange={(e) => setBaiduAppid(e.target.value)} />
+            <label style={fieldLabel}>百度翻译密钥</label>
+            <Input
+              type="password"
+              value={baiduKey}
+              onChange={(e) => setBaiduKey(e.target.value)}
+            />
+          </>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+          <Button onClick={saveTranslate}>保存</Button>
+          {trStatus && (
+            <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{trStatus}</span>
+          )}
+        </div>
+      </Card>
+
+      <Card className="settings-card">
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <h3 className="au-heading" style={{ ...sectionTitle, marginBottom: 0 }}>
             多设备同步(自带云盘)
@@ -183,6 +278,7 @@ export function SettingsPage() {
           </p>
         )}
       </Card>
+      </div>
     </div>
   );
 }

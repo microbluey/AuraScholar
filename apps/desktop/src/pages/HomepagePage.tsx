@@ -165,13 +165,13 @@ export function HomepagePage() {
                 variant={profile.theme === "dawn-minimal" ? "primary" : "secondary"}
                 onClick={() => set("theme", "dawn-minimal")}
               >
-                ☀️ 学术极简
+                Dawn 学术极简
               </Button>
               <Button
                 variant={profile.theme === "nocturne-geek" ? "primary" : "secondary"}
                 onClick={() => set("theme", "nocturne-geek")}
               >
-                🌙 暗色极客
+                Nocturne 暗色极客
               </Button>
             </div>
           </Card>

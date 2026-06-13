@@ -13,6 +13,8 @@ export interface PdfReaderProps {
   annotations: ReaderAnnotation[];
   onCreateAnnotation?: (a: Omit<ReaderAnnotation, "id">) => void;
   onAnnotationClick?: (id: string) => void;
+  /** Invoked with the selected text when the user taps the translate tool. */
+  onTranslate?: (text: string) => void;
   /** Highlight palette: name → CSS color. */
   palette?: Record<string, string>;
   pageFilter?: "none" | "sepia" | "invert";
@@ -35,6 +37,7 @@ export function PdfReader({
   annotations,
   onCreateAnnotation,
   onAnnotationClick,
+  onTranslate,
   palette = DEFAULT_PALETTE,
   pageFilter = "none",
   scrollToPage = null,
@@ -200,6 +203,19 @@ export function PdfReader({
           >
             ✎
           </button>
+          {onTranslate && (
+            <button
+              className="au-reader__tool"
+              title="翻译选中文本"
+              onClick={() => {
+                onTranslate(pending.exact);
+                setPending(null);
+                window.getSelection()?.removeAllRanges();
+              }}
+            >
+              译
+            </button>
+          )}
         </div>
       )}
     </div>

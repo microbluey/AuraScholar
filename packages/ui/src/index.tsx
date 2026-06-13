@@ -69,7 +69,7 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
 }
 
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
-  variant?: "accent" | "neutral" | "success" | "warning";
+  variant?: "accent" | "neutral" | "success" | "warning" | "danger";
 }
 
 export function Badge({ variant = "accent", className, ...props }: BadgeProps) {
@@ -85,7 +85,7 @@ export function ThemeToggle() {
   const { theme, toggle } = useTheme();
   return (
     <Button variant="ghost" onClick={toggle} aria-label="切换主题" title="切换主题">
-      {theme === "dawn" ? "🌙" : "☀️"}
+      {theme === "dawn" ? "夜间" : "日间"}
     </Button>
   );
 }

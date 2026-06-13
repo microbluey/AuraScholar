@@ -16,3 +16,5 @@ export { SentinelRepo } from "./repos/sentinel";
 export type { SentinelTaskRow, SentinelEventRow } from "./repos/sentinel";
 export { CollectionsRepo } from "./repos/collections";
 export type { CollectionRow } from "./repos/collections";
+export { TagsRepo } from "./repos/tags";
+export type { TagRow } from "./repos/tags";

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aurascholar/ai": "workspace:*",
+    "@aurascholar/cite": "workspace:*",
     "@aurascholar/connectors": "workspace:*",
     "@aurascholar/core": "workspace:*",
     "@aurascholar/db": "workspace:*",
@@ -20,6 +21,7 @@
     "@aurascholar/reader": "workspace:*",
     "@aurascholar/sync": "workspace:*",
     "@aurascholar/tokens": "workspace:*",
+    "@aurascholar/translate": "workspace:*",
     "@aurascholar/ui": "workspace:*",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-fs": "^2.2.0",
