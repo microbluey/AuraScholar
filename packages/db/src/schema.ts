@@ -180,6 +180,25 @@ export const annotationComments = sqliteTable(
   (t) => [index("annotation_comments_annotation_idx").on(t.annotationId)],
 );
 
+// Writing snippets: excerpts/quotes the user collects while reading, for later
+// reuse in writing. Unlike annotations (anchored to PDF coordinates), a snippet
+// is just captured text + an optional note, traceable back to its work/page.
+export const snippets = sqliteTable(
+  "snippets",
+  {
+    id: id(),
+    workId: text("work_id").notNull().references(() => works.id),
+    pageIndex: integer("page_index"),
+    quote: text("quote").notNull(),
+    noteMd: text("note_md"),
+    tag: text("tag"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [index("snippets_work_idx").on(t.workId, t.createdAt)],
+);
+
 // ---------------------------------------------------------------------------
 // Flashcards + FSRS spaced-repetition state
 // ---------------------------------------------------------------------------

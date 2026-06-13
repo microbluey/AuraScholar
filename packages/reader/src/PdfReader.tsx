@@ -15,6 +15,8 @@ export interface PdfReaderProps {
   onAnnotationClick?: (id: string) => void;
   /** Invoked with the selected text when the user taps the translate tool. */
   onTranslate?: (text: string) => void;
+  /** Invoked with the selected text + page when the user saves a writing snippet. */
+  onSaveSnippet?: (text: string, pageIndex: number) => void;
   /** Highlight palette: name → CSS color. */
   palette?: Record<string, string>;
   pageFilter?: "none" | "sepia" | "invert";
@@ -38,6 +40,7 @@ export function PdfReader({
   onCreateAnnotation,
   onAnnotationClick,
   onTranslate,
+  onSaveSnippet,
   palette = DEFAULT_PALETTE,
   pageFilter = "none",
   scrollToPage = null,
@@ -214,6 +217,19 @@ export function PdfReader({
               }}
             >
               译
+            </button>
+          )}
+          {onSaveSnippet && (
+            <button
+              className="au-reader__tool"
+              title="存为写作素材"
+              onClick={() => {
+                onSaveSnippet(pending.exact, pending.pageIndex);
+                setPending(null);
+                window.getSelection()?.removeAllRanges();
+              }}
+            >
+              ✦
             </button>
           )}
         </div>

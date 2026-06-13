@@ -7,12 +7,17 @@ import {
   crossrefByDoi,
   crossrefSearchByTitle,
   normalizeOpenAlex,
+  normalizeS2,
   openalexByDoi,
+  s2SearchByTitle,
   unpaywallPdf,
   type ConnectorContext,
   type NormalizedWork,
 } from "@aurascholar/connectors";
 import type { Clue } from "./clues";
+
+/** Below this Crossref title-match score, corroborate with Semantic Scholar. */
+const WEAK_TITLE_MATCH = 0.7;
 
 export interface ResolvedWork {
   work: NormalizedWork;
@@ -74,14 +79,29 @@ async function resolveDoi(ctx: ConnectorContext, doi: string): Promise<ResolvedW
 
 async function resolveTitle(ctx: ConnectorContext, title: string): Promise<ResolvedWork | null> {
   const hits = await crossrefSearchByTitle(ctx, title, 5);
-  if (hits.length === 0) return null;
-  const best = hits[0]!;
-  const confidence = titleSimilarity(title, best.work.title);
-  return {
-    work: best.work,
-    confidence,
-    candidates: hits.map((h) => h.work),
-  };
+  const best = hits[0];
+  const crossrefConfidence = best ? titleSimilarity(title, best.work.title) : 0;
+
+  // Strong Crossref hit — trust it (bibliographic truth).
+  if (best && crossrefConfidence >= WEAK_TITLE_MATCH) {
+    return { work: best.work, confidence: crossrefConfidence, candidates: hits.map((h) => h.work) };
+  }
+
+  // Weak or empty Crossref result — corroborate with Semantic Scholar, which
+  // indexes preprints and venues Crossref misses. Adopt S2 only if it beats
+  // Crossref's match (and Crossref entirely when Crossref found nothing).
+  const s2Papers = await s2SearchByTitle(ctx, title, 5).catch(() => []);
+  const s2Best = s2Papers[0] ? normalizeS2(s2Papers[0]) : null;
+  const s2Confidence = s2Best ? titleSimilarity(title, s2Best.title) : 0;
+
+  if (s2Best && s2Confidence > crossrefConfidence) {
+    const candidates = [s2Best, ...hits.map((h) => h.work)];
+    return { work: s2Best, confidence: s2Confidence, candidates };
+  }
+  if (best) {
+    return { work: best.work, confidence: crossrefConfidence, candidates: hits.map((h) => h.work) };
+  }
+  return null;
 }
 
 /** Normalized Levenshtein similarity (0..1) for title-match confidence. */

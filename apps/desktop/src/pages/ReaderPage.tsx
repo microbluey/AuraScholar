@@ -8,6 +8,7 @@ import {
   PdfReader,
   annotationsToMarkdown,
   configureWorker,
+  extractFullText,
   type ReaderAnnotation,
 } from "@aurascholar/reader";
 import {
@@ -25,7 +26,8 @@ import { getDb } from "../services/tauri-db";
 import { loadPdfForWork } from "../services/library";
 import { generateFlashcardsForWork } from "../services/ai";
 import { resolveTranslator, loadTranslateConfig } from "../services/translate";
-import { langLabel } from "@aurascholar/translate";
+import { langLabel, splitForTranslation } from "@aurascholar/translate";
+import { addSnippet } from "../services/snippets";
 import { CitationGraphView } from "../components/CitationGraphView";
 
 configureWorker(workerSrc);
@@ -73,7 +75,14 @@ export function ReaderPage() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [translateSource, setTranslateSource] = useState("");
   const [translateSeq, setTranslateSeq] = useState(0);
+  const [snippetToast, setSnippetToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!snippetToast) return;
+    const t = setTimeout(() => setSnippetToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [snippetToast]);
 
   useEffect(() => () => ctx?.doc.destroy(), [ctx]);
 
@@ -123,6 +132,21 @@ export function ReaderPage() {
     setTab("translate");
     setPanelOpen(true);
   }, []);
+
+  // Selecting text + tapping ✦ saves a writing snippet (only when the doc is a
+  // library work — a bare local file has no work to attach it to).
+  const handleSaveSnippet = useCallback(
+    (text: string, pageIndex: number) => {
+      if (!ctx?.workId) {
+        setSnippetToast("请先入库,素材会关联到对应文献");
+        return;
+      }
+      void addSnippet({ workId: ctx.workId, pageIndex, quote: text })
+        .then(() => setSnippetToast("已存为写作素材"))
+        .catch((e) => setSnippetToast(`保存失败:${e instanceof Error ? e.message : String(e)}`));
+    },
+    [ctx?.workId],
+  );
 
   const openFile = useCallback(async (file: File) => {
     const data = new Uint8Array(await file.arrayBuffer());
@@ -216,6 +240,7 @@ export function ReaderPage() {
 
   return (
     <div className="reader-workspace">
+      {snippetToast && <div className="reader-toast">{snippetToast}</div>}
       <div className="reader-topbar">
         <div className="reader-topbar__identity">
           <span className="reader-topbar__kicker">Reader</span>
@@ -257,6 +282,7 @@ export function ReaderPage() {
               setPanelOpen(true);
             }}
             onTranslate={handleTranslate}
+            onSaveSnippet={handleSaveSnippet}
             pageFilter={pageFilter}
             scrollToPage={jumpPage}
           />
@@ -297,7 +323,7 @@ export function ReaderPage() {
                 />
               </div>
               <div style={{ height: "100%", display: tab === "translate" ? "block" : "none" }}>
-                <TranslatePanel source={translateSource} seq={translateSeq} />
+                <TranslatePanel source={translateSource} seq={translateSeq} doc={ctx.doc} />
               </div>
               {ctx.workId && (
                 <div style={{ height: "100%", display: tab === "digest" ? "block" : "none" }}>
@@ -317,93 +343,199 @@ export function ReaderPage() {
   );
 }
 
-/** 译文 tab: select PDF text + tap 译 → original ⇄ translation, copyable. */
-function TranslatePanel({ source, seq }: { source: string; seq: number }) {
-  const [result, setResult] = useState<string | null>(null);
+interface TranslatedSegment {
+  source: string;
+  result: string | null;
+  error?: string;
+}
+
+/**
+ * 译文 tab. Two modes:
+ *  - selection: text selected in the PDF + 译 button → single original/translation pair
+ *  - page / full text: extract page text from the doc, chunk it, translate each
+ *    chunk sequentially (cancellable) with progress, rendered as comparison pairs
+ */
+function TranslatePanel({
+  source,
+  seq,
+  doc,
+}: {
+  source: string;
+  seq: number;
+  doc: PdfDocument;
+}) {
+  const [segments, setSegments] = useState<TranslatedSegment[]>([]);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [engine, setEngine] = useState<string | null>(null);
+  const [pageInput, setPageInput] = useState("1");
+  const cancelRef = useRef<AbortController | null>(null);
   const config = loadTranslateConfig();
 
-  // Re-run whenever a new selection arrives (seq bumps even on identical text).
-  useEffect(() => {
-    if (!source.trim()) return;
-    let cancelled = false;
-    const controller = new AbortController();
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    void (async () => {
+  const cancel = useCallback(() => {
+    cancelRef.current?.abort();
+    cancelRef.current = null;
+    setBusy(false);
+    setProgress(null);
+  }, []);
+
+  // Translate an arbitrary list of source chunks sequentially with progress.
+  const translateChunks = useCallback(
+    async (chunks: string[]) => {
       const resolved = resolveTranslator();
       if ("error" in resolved) {
-        if (!cancelled) setError(resolved.error);
+        setError(resolved.error);
         return;
       }
+      cancelRef.current?.abort();
+      const controller = new AbortController();
+      cancelRef.current = controller;
+      setError(null);
+      setBusy(true);
+      setEngine(null);
+      setSegments(chunks.map((c) => ({ source: c, result: null })));
+      setProgress({ done: 0, total: chunks.length });
       try {
-        const out = await resolved.translator.translate(
-          { text: source, targetLang: config.targetLang },
-          { signal: controller.signal },
-        );
-        if (!cancelled) {
-          setResult(out.text);
-          setEngine(out.engine);
+        for (let i = 0; i < chunks.length; i++) {
+          if (controller.signal.aborted) return;
+          try {
+            const out = await resolved.translator.translate(
+              { text: chunks[i]!, targetLang: config.targetLang },
+              { signal: controller.signal },
+            );
+            if (controller.signal.aborted) return;
+            setEngine(out.engine);
+            setSegments((prev) =>
+              prev.map((s, idx) => (idx === i ? { ...s, result: out.text } : s)),
+            );
+          } catch (e) {
+            if (controller.signal.aborted) return;
+            setSegments((prev) =>
+              prev.map((s, idx) =>
+                idx === i ? { ...s, error: e instanceof Error ? e.message : String(e) } : s,
+              ),
+            );
+          }
+          setProgress({ done: i + 1, total: chunks.length });
         }
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       } finally {
-        if (!cancelled) setBusy(false);
+        if (cancelRef.current === controller) {
+          cancelRef.current = null;
+          setBusy(false);
+          setProgress(null);
+        }
       }
-    })();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
+    },
+    [config.targetLang],
+  );
+
+  // Selection → single-pair translation (seq bumps to re-trigger same text).
+  useEffect(() => {
+    if (!source.trim()) return;
+    void translateChunks([source]);
+    return () => cancelRef.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, seq]);
 
-  if (!source.trim()) {
-    return (
-      <div className="reader-digest-panel">
-        <p className="au-text-muted" style={{ fontSize: 13 }}>
-          在左侧选中 PDF 文本，点击工具条上的「译」按钮，这里会显示对照译文。
-          <br />
-          目标语言:{langLabel(config.targetLang)} · 引擎:{config.engine === "llm" ? "大模型" : config.engine}
-          （可在设置页调整）
-        </p>
-      </div>
-    );
-  }
+  const translatePage = useCallback(async () => {
+    const pageNum = Number(pageInput);
+    if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > doc.pageCount) {
+      setError(`请输入 1–${doc.pageCount} 之间的页码`);
+      return;
+    }
+    const { text } = await doc.getPageText(pageNum - 1);
+    if (!text.trim()) {
+      setError("这一页没有可提取的文本(可能是扫描版)");
+      return;
+    }
+    await translateChunks(splitForTranslation(text));
+  }, [pageInput, doc, translateChunks]);
+
+  const translateFullText = useCallback(async () => {
+    const full = await extractFullText(doc, Math.min(doc.pageCount, 40));
+    if (!full.trim()) {
+      setError("无法从文档提取文本(可能是扫描版)");
+      return;
+    }
+    await translateChunks(splitForTranslation(full));
+  }, [doc, translateChunks]);
+
+  const copyAll = useCallback(() => {
+    const text = segments.map((s) => s.result ?? "").join("\n\n");
+    void navigator.clipboard?.writeText(text);
+  }, [segments]);
 
   return (
     <div className="reader-translate-panel">
-      <div className="reader-translate-block">
-        <div className="reader-translate-block__head">
-          <span>原文</span>
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(source)}>
-            复制
-          </button>
+      <div className="reader-translate-controls">
+        <div className="reader-translate-controls__row">
+          <span className="reader-translate-controls__label">翻译本页</span>
+          <input
+            type="number"
+            className="au-input reader-translate-pageinput"
+            min={1}
+            max={doc.pageCount}
+            value={pageInput}
+            onChange={(e) => setPageInput(e.target.value)}
+            disabled={busy}
+          />
+          <span className="au-text-muted" style={{ fontSize: 12 }}>
+            / {doc.pageCount}
+          </span>
+          <Button variant="secondary" style={{ fontSize: 12 }} onClick={() => void translatePage()} disabled={busy}>
+            翻译该页
+          </Button>
         </div>
-        <p className="reader-translate-text reader-translate-text--source">{source}</p>
-      </div>
-      <div className="reader-translate-block">
-        <div className="reader-translate-block__head">
-          <span>译文 {engine ? `· ${engine}` : ""}</span>
-          {result && (
-            <button type="button" onClick={() => void navigator.clipboard?.writeText(result)}>
-              复制
-            </button>
+        <div className="reader-translate-controls__row">
+          <Button variant="ghost" style={{ fontSize: 12 }} onClick={() => void translateFullText()} disabled={busy}>
+            翻译全文(前 40 页)
+          </Button>
+          {busy && (
+            <Button variant="ghost" style={{ fontSize: 12 }} onClick={cancel}>
+              取消
+            </Button>
+          )}
+          {segments.length > 1 && !busy && (
+            <Button variant="ghost" style={{ fontSize: 12 }} onClick={copyAll}>
+              复制全部译文
+            </Button>
           )}
         </div>
-        {busy ? (
-          <p className="au-text-muted" style={{ fontSize: 13 }}>
-            翻译中…
-          </p>
-        ) : error ? (
-          <p style={{ fontSize: 12.5, color: "var(--color-danger)" }}>{error}</p>
-        ) : (
-          <p className="reader-translate-text">{result}</p>
-        )}
+        <p className="au-text-muted" style={{ fontSize: 11.5, margin: 0 }}>
+          目标语言:{langLabel(config.targetLang)} · 引擎:
+          {config.engine === "llm" ? "大模型" : config.engine}
+          {engine ? ` (${engine})` : ""}（设置页可调整）。或在左侧选中文本点「译」。
+        </p>
       </div>
+
+      {error && <p style={{ fontSize: 12.5, color: "var(--color-danger)" }}>{error}</p>}
+      {progress && (
+        <p className="au-text-muted" style={{ fontSize: 12 }}>
+          翻译中… {progress.done}/{progress.total} 段
+        </p>
+      )}
+
+      {segments.length === 0 && !error ? (
+        <p className="au-text-muted" style={{ fontSize: 13 }}>
+          选中 PDF 文本点「译」做即时翻译，或用上方按钮翻译整页 / 全文(原文 ⇄ 译文对照)。
+        </p>
+      ) : (
+        segments.map((seg, i) => (
+          <div className="reader-translate-pair" key={i}>
+            <p className="reader-translate-text reader-translate-text--source">{seg.source}</p>
+            {seg.error ? (
+              <p style={{ fontSize: 12, color: "var(--color-danger)", margin: "4px 0 0" }}>
+                {seg.error}
+              </p>
+            ) : (
+              <p className="reader-translate-text">
+                {seg.result ?? <span className="au-text-muted">…</span>}
+              </p>
+            )}
+          </div>
+        ))
+      )}
     </div>
   );
 }

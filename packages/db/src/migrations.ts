@@ -57,6 +57,24 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE sentinel_tasks ADD COLUMN hint_author TEXT;
     `,
   },
+  {
+    version: 4,
+    name: "writing_snippets",
+    sql: `
+      CREATE TABLE IF NOT EXISTS snippets (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id),
+        page_index INTEGER,
+        quote TEXT NOT NULL,
+        note_md TEXT,
+        tag TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        deleted_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS snippets_work_idx ON snippets(work_id, created_at);
+    `,
+  },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

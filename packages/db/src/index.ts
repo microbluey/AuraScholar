@@ -18,3 +18,5 @@ export { CollectionsRepo } from "./repos/collections";
 export type { CollectionRow } from "./repos/collections";
 export { TagsRepo } from "./repos/tags";
 export type { TagRow } from "./repos/tags";
+export { SnippetsRepo } from "./repos/snippets";
+export type { SnippetRow, SnippetInput, SnippetWithWork } from "./repos/snippets";

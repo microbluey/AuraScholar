@@ -1,14 +1,19 @@
 // AI service for the desktop app: BYOK config in settings (key in localStorage
 // for now — OS keychain integration is tracked for before v0.2 release),
 // flashcard generation pipeline.
-import { OpenAICompatibleProvider, generateFlashcards, flashcardsToCards, PROMPT_VERSION, type AIProvider } from "@aurascholar/ai";
+import { OpenAICompatibleProvider, AnthropicProvider, generateFlashcards, flashcardsToCards, PROMPT_VERSION, type AIProvider } from "@aurascholar/ai";
 import { FlashcardsRepo, newId } from "@aurascholar/db";
 import { PdfDocument, extractFullText } from "@aurascholar/reader";
 import { getDb } from "./tauri-db";
 import { tauriHttp } from "./tauri-platform";
 import { loadPdfForWork } from "./library";
 
+export type AiProviderKind = "openai-compatible" | "anthropic";
+
 export interface AiSettings {
+  /** Defaults to "openai-compatible" for settings saved before this field existed. */
+  kind?: AiProviderKind;
+  /** Optional for Anthropic (defaults to api.anthropic.com). */
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -21,7 +26,10 @@ export function loadAiSettings(): AiSettings | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as AiSettings;
-    return parsed.baseUrl && parsed.model && parsed.apiKey ? parsed : null;
+    const kind = parsed.kind ?? "openai-compatible";
+    // Anthropic can run without a baseUrl; openai-compatible needs one.
+    const baseOk = kind === "anthropic" || !!parsed.baseUrl;
+    return baseOk && parsed.model && parsed.apiKey ? { ...parsed, kind } : null;
   } catch {
     return null;
   }
@@ -34,6 +42,14 @@ export function saveAiSettings(settings: AiSettings): void {
 export function makeProvider(): AIProvider | null {
   const s = loadAiSettings();
   if (!s) return null;
+  if (s.kind === "anthropic") {
+    return new AnthropicProvider({
+      http: tauriHttp,
+      baseUrl: s.baseUrl || undefined,
+      model: s.model,
+      apiKey: s.apiKey,
+    });
+  }
   return new OpenAICompatibleProvider({
     http: tauriHttp,
     baseUrl: s.baseUrl,
