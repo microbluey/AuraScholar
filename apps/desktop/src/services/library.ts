@@ -159,9 +159,10 @@ async function tryFetchPdf(workId: string, work: NormalizedWork): Promise<boolea
 export async function listWorks(
   search?: string,
   collectionId?: string,
+  limit?: number,
 ): Promise<WorkWithAuthors[]> {
   const { works } = await repos();
-  return works.list({ search, collectionId });
+  return works.list({ search, collectionId, limit });
 }
 
 export async function loadPdfForWork(

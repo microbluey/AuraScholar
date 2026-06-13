@@ -20,6 +20,11 @@ export function SentinelPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setTasks([]);
+      setEventsByTask(new Map());
+      return;
+    }
     const db = await getDb();
     const repo = new SentinelRepo(db);
     const list = await repo.list();
@@ -98,28 +103,27 @@ export function SentinelPage() {
   }, [refresh]);
 
   return (
-    <div>
+    <div className="sentinel-page">
+      <p className="app-page-kicker">Publication status radar</p>
       <h1 className="app-page-title">检索哨兵</h1>
       <p className="app-page-subtitle">
         论文被接收后填入 DOI,自动监控 注册 → 在线 → 正式出版 → 数据库收录 全过程
       </p>
 
-      <Card style={{ maxWidth: 720, marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <Button
-            variant={mode === "doi" ? "primary" : "secondary"}
-            style={{ fontSize: 13 }}
+      <Card className="sentinel-create-card">
+        <div className="au-tablist sentinel-mode-tabs">
+          <button
+            className={`au-tab ${mode === "doi" ? "au-tab--active" : ""}`}
             onClick={() => setMode("doi")}
           >
             按 DOI 监控
-          </Button>
-          <Button
-            variant={mode === "title" ? "primary" : "secondary"}
-            style={{ fontSize: 13 }}
+          </button>
+          <button
+            className={`au-tab ${mode === "title" ? "au-tab--active" : ""}`}
             onClick={() => setMode("title")}
           >
             按标题监控(还没有 DOI)
-          </Button>
+          </button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {mode === "doi" ? (
@@ -170,7 +174,7 @@ export function SentinelPage() {
         </div>
       </Card>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, maxWidth: 720, marginBottom: 12 }}>
+      <div className="sentinel-toolbar">
         <span className="au-text-muted" style={{ fontSize: 13 }}>
           {tasks.filter((t) => t.status === "active").length} 个监控中 · 应用启动时自动补查,运行期间每小时检查
         </span>
@@ -184,7 +188,7 @@ export function SentinelPage() {
         </Button>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 720 }}>
+      <div className="sentinel-list">
         {tasks.map((task) => {
           const events = eventsByTask.get(task.id) ?? [];
           const currentRank = stateRank(task.current_state as SentinelState);

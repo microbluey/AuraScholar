@@ -26,6 +26,9 @@ importers:
       '@aurascholar/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@aurascholar/cite':
+        specifier: workspace:*
+        version: link:../../packages/cite
       '@aurascholar/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
@@ -50,6 +53,9 @@ importers:
       '@aurascholar/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
+      '@aurascholar/translate':
+        specifier: workspace:*
+        version: link:../../packages/translate
       '@aurascholar/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -142,6 +148,15 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)
+
+  packages/cite:
     devDependencies:
       typescript:
         specifier: ^5.7.2
@@ -277,6 +292,22 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+
+  packages/translate:
+    dependencies:
+      '@aurascholar/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@aurascholar/platform':
+        specifier: workspace:*
+        version: link:../platform
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)
 
   packages/ui:
     dependencies:
