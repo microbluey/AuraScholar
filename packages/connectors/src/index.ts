@@ -15,5 +15,5 @@ export type { OpenAlexWork } from "./openalex";
 export { unpaywallPdf } from "./unpaywall";
 export type { OaLocation } from "./unpaywall";
 export { arxivByid, parseArxivId, arxivPdfUrl } from "./arxiv";
-export { s2ByDoi, s2ById, s2SearchByTitle, normalizeS2 } from "./semanticscholar";
-export type { S2Paper, S2Author } from "./semanticscholar";
+export { s2ByDoi, s2ById, s2SearchByTitle, s2EnrichByDoi, normalizeS2 } from "./semanticscholar";
+export type { S2Paper, S2Author, S2Enrichment } from "./semanticscholar";

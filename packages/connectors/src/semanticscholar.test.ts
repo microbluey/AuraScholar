@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { StubHttpClient, jsonResponse } from "@aurascholar/platform";
-import { s2ByDoi, s2SearchByTitle, normalizeS2, type S2Paper } from "./semanticscholar";
+import { s2ByDoi, s2SearchByTitle, s2EnrichByDoi, normalizeS2, type S2Paper } from "./semanticscholar";
 import type { ConnectorContext } from "./client";
 
 function ctxWith(http: StubHttpClient): ConnectorContext {
@@ -42,6 +42,34 @@ describe("s2SearchByTitle", () => {
     const results = await s2SearchByTitle(ctxWith(http), "attention");
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toContain("Attention");
+  });
+});
+
+describe("s2EnrichByDoi", () => {
+  it("flattens tldr and citation signals", async () => {
+    const http = new StubHttpClient();
+    http.on(/graph\/v1\/paper\/DOI:/, () =>
+      jsonResponse(200, {
+        paperId: "abc123",
+        tldr: { text: "A one-line summary." },
+        citationCount: 1200,
+        influentialCitationCount: 95,
+        referenceCount: 40,
+        openAccessPdf: { url: "https://x/y.pdf" },
+        url: "https://www.semanticscholar.org/paper/abc123",
+      }),
+    );
+    const e = await s2EnrichByDoi(ctxWith(http), "10.1/XYZ");
+    expect(e?.tldr).toBe("A one-line summary.");
+    expect(e?.citationCount).toBe(1200);
+    expect(e?.influentialCitationCount).toBe(95);
+    expect(e?.openAccessPdfUrl).toBe("https://x/y.pdf");
+  });
+
+  it("returns null when S2 has no record (404)", async () => {
+    const http = new StubHttpClient();
+    http.on(/graph\/v1\/paper\/DOI:/, () => jsonResponse(404, { error: "not found" }));
+    expect(await s2EnrichByDoi(ctxWith(http), "10.1/missing")).toBeNull();
   });
 });
 

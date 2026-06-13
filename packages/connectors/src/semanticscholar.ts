@@ -36,6 +36,40 @@ export interface S2Paper {
   authors?: S2Author[];
 }
 
+/** Extra S2-only signals not carried by NormalizedWork — fetched on demand. */
+export interface S2Enrichment {
+  s2Id?: string;
+  /** S2's auto-generated one-sentence summary ("AI 摘要"). */
+  tldr?: string;
+  citationCount?: number;
+  /** Citations S2 judges "influential" — a quality signal, not just volume. */
+  influentialCitationCount?: number;
+  referenceCount?: number;
+  /** Open-access PDF S2 knows about, if any. */
+  openAccessPdfUrl?: string;
+  /** S2 landing page for the paper. */
+  url?: string;
+}
+
+interface S2PaperFull extends S2Paper {
+  tldr?: { text?: string } | null;
+  citationCount?: number;
+  influentialCitationCount?: number;
+  referenceCount?: number;
+  openAccessPdf?: { url?: string } | null;
+  url?: string;
+}
+
+const ENRICH_FIELDS = [
+  "paperId",
+  "tldr",
+  "citationCount",
+  "influentialCitationCount",
+  "referenceCount",
+  "openAccessPdf",
+  "url",
+].join(",");
+
 /** Look up by DOI (S2 accepts the `DOI:` id prefix). */
 export async function s2ByDoi(ctx: ConnectorContext, doi: string): Promise<S2Paper | null> {
   return s2ById(ctx, `DOI:${doi}`);
@@ -64,6 +98,36 @@ export async function s2SearchByTitle(
     `${BASE}/paper/search?query=${encodeURIComponent(title)}&limit=${limit}&fields=${FIELDS}`,
   );
   return data.data ?? [];
+}
+
+/**
+ * Fetches S2's value-add signals (tldr, citation counts) by DOI. Returns null
+ * when the paper isn't in S2. Kept separate from resolution so it can be called
+ * lazily from the detail panel without bloating ingest.
+ */
+export async function s2EnrichByDoi(
+  ctx: ConnectorContext,
+  doi: string,
+): Promise<S2Enrichment | null> {
+  let p: S2PaperFull;
+  try {
+    p = await getJson<S2PaperFull>(
+      ctx,
+      `${BASE}/paper/DOI:${encodeURIComponent(doi)}?fields=${ENRICH_FIELDS}`,
+    );
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+  return {
+    s2Id: p.paperId,
+    tldr: p.tldr?.text ?? undefined,
+    citationCount: p.citationCount,
+    influentialCitationCount: p.influentialCitationCount,
+    referenceCount: p.referenceCount,
+    openAccessPdfUrl: p.openAccessPdf?.url ?? undefined,
+    url: p.url,
+  };
 }
 
 export function normalizeS2(p: S2Paper): NormalizedWork {
