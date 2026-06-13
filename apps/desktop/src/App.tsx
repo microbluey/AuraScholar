@@ -30,6 +30,7 @@ interface LibraryShellStats {
   starred: number;
   annotations: number;
   flashcards: number;
+  snippets: number;
   collections: Array<{ id: string; name: string; count: number }>;
   tags: Array<{ name: string; count: number }>;
 }
@@ -81,6 +82,7 @@ export function App() {
       starredRows,
       annotationRows,
       flashcardRows,
+      snippetRows,
       collections,
       tags,
     ] = await Promise.all([
@@ -96,6 +98,7 @@ export function App() {
       ),
       db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM annotations WHERE deleted_at IS NULL`),
       db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM flashcards WHERE deleted_at IS NULL`),
+      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM snippets WHERE deleted_at IS NULL`),
       db.query<{ id: string; name: string; count: number }>(
         `SELECT c.id, c.name, COUNT(ci.work_id) AS count
          FROM collections c
@@ -122,6 +125,7 @@ export function App() {
       starred: starredRows[0]?.n ?? 0,
       annotations: annotationRows[0]?.n ?? 0,
       flashcards: flashcardRows[0]?.n ?? 0,
+      snippets: snippetRows[0]?.n ?? 0,
       collections,
       tags,
     });
@@ -143,9 +147,11 @@ export function App() {
     const onLibraryUpdated = () => void refreshLibraryStats();
     const onStorage = () => setAiModel(readAiModelLabel());
     window.addEventListener("aurascholar:library-updated", onLibraryUpdated);
+    window.addEventListener("aurascholar:snippets-updated", onLibraryUpdated);
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("aurascholar:library-updated", onLibraryUpdated);
+      window.removeEventListener("aurascholar:snippets-updated", onLibraryUpdated);
       window.removeEventListener("storage", onStorage);
     };
   }, [refreshLibraryStats]);
@@ -219,6 +225,9 @@ function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiMode
           </span>
           <span>
             闪卡 <strong>{stats.flashcards.toLocaleString("zh-CN")}</strong>
+          </span>
+          <span>
+            素材 <strong>{stats.snippets.toLocaleString("zh-CN")}</strong>
           </span>
         </div>
       )}
