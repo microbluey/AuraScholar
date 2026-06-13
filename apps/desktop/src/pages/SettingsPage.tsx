@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Badge, Button, Card, Input, useTheme } from "@aurascholar/ui";
-import { loadAiSettings, makeProvider, saveAiSettings } from "../services/ai";
+import { loadAiSettings, makeProvider, saveAiSettings, type AiProviderKind } from "../services/ai";
 import { loadTranslateConfig, saveTranslateConfig } from "../services/translate";
 import { TARGET_LANGS, type TranslateEngine } from "@aurascholar/translate";
 import {
@@ -13,6 +13,7 @@ import {
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const existing = loadAiSettings();
+  const [aiKind, setAiKind] = useState<AiProviderKind>(existing?.kind ?? "openai-compatible");
   const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? "https://api.deepseek.com/v1");
   const [model, setModel] = useState(existing?.model ?? "deepseek-chat");
   const [apiKey, setApiKey] = useState(existing?.apiKey ?? "");
@@ -74,7 +75,12 @@ export function SettingsPage() {
   };
 
   const save = () => {
-    saveAiSettings({ baseUrl: baseUrl.trim(), model: model.trim(), apiKey: apiKey.trim() });
+    saveAiSettings({
+      kind: aiKind,
+      baseUrl: baseUrl.trim(),
+      model: model.trim(),
+      apiKey: apiKey.trim(),
+    });
     setStatus("已保存");
   };
 
@@ -138,23 +144,50 @@ export function SettingsPage() {
           <h3 className="au-heading" style={{ ...sectionTitle, marginBottom: 0 }}>
             AI 服务(自带 Key)
           </h3>
-          <Badge variant="neutral">OpenAI 兼容</Badge>
+          <Badge variant="neutral">{aiKind === "anthropic" ? "Anthropic" : "OpenAI 兼容"}</Badge>
         </div>
         <p className="au-text-muted" style={{ fontSize: 13 }}>
-          支持任何 OpenAI 兼容端点:DeepSeek、Moonshot、Ollama 本地、各类中转站。Key
-          仅保存在本机。
+          {aiKind === "anthropic"
+            ? "直接使用 Anthropic Claude(Messages API)。Key 仅保存在本机。"
+            : "支持任何 OpenAI 兼容端点:DeepSeek、Moonshot、Ollama 本地、各类中转站。Key 仅保存在本机。"}
         </p>
-        <label style={fieldLabel}>API 地址</label>
+        <label style={fieldLabel}>服务类型</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          {([
+            { id: "openai-compatible", label: "OpenAI 兼容" },
+            { id: "anthropic", label: "Anthropic" },
+          ] as const).map((opt) => (
+            <Button
+              key={opt.id}
+              variant={aiKind === opt.id ? "primary" : "secondary"}
+              onClick={() => {
+                setAiKind(opt.id);
+                // Nudge sensible defaults when switching.
+                if (opt.id === "anthropic" && baseUrl.includes("deepseek")) {
+                  setBaseUrl("");
+                  setModel("claude-fable-5");
+                }
+              }}
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </div>
+        <label style={fieldLabel}>
+          API 地址{aiKind === "anthropic" ? "(可留空,默认官方端点)" : ""}
+        </label>
         <Input
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="https://api.deepseek.com/v1"
+          placeholder={
+            aiKind === "anthropic" ? "https://api.anthropic.com" : "https://api.deepseek.com/v1"
+          }
         />
         <label style={fieldLabel}>模型</label>
         <Input
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder="deepseek-chat"
+          placeholder={aiKind === "anthropic" ? "claude-fable-5" : "deepseek-chat"}
         />
         <label style={fieldLabel}>API Key</label>
         <Input

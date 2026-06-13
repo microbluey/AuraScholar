@@ -1991,6 +1991,50 @@ body {
   background: color-mix(in srgb, var(--color-surface-sunken) 40%, transparent);
 }
 
+.reader-translate-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface-sunken);
+}
+
+.reader-translate-controls__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reader-translate-controls__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.reader-translate-pageinput {
+  width: 64px;
+  text-align: center;
+}
+
+.reader-translate-pair {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+}
+
+.reader-translate-pair .reader-translate-text {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.reader-translate-pair .reader-translate-text--source {
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
 @media (max-width: 980px) {
   .reader-topbar {
     align-items: flex-start;
@@ -2132,4 +2176,111 @@ body {
   .sentinel-toolbar .au-button {
     margin-left: 0;
   }
+}
+
+/* --- Reader toast + writing snippets ------------------------------------ */
+.reader-toast {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 8px 16px;
+  border-radius: var(--radius-control);
+  background: var(--color-text);
+  color: var(--color-surface);
+  font-size: 13px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-text) 28%, transparent);
+}
+
+.snippets-page {
+  max-width: 920px;
+}
+
+.snippets-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.snippets-group {
+  padding: 16px 18px;
+}
+
+.snippets-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.snippets-group__head h3 {
+  margin: 0;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snippet-card {
+  padding: 12px 0;
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.snippet-card:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.snippet-card__quote {
+  margin: 0;
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--color-accent);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+.snippet-card__note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+
+.snippet-card__note-edit {
+  margin-top: 8px;
+}
+
+.snippet-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.snippet-card__meta {
+  font-size: 11.5px;
+}
+
+.snippet-card__actions button {
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.snippet-card__actions button:hover {
+  text-decoration: underline;
+}
+
+.snippet-card__delete {
+  color: var(--color-danger) !important;
+  margin-left: auto;
 }

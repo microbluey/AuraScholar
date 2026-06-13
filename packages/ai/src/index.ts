@@ -8,6 +8,8 @@ export type {
 export { estimateTokens } from "./provider";
 export { OpenAICompatibleProvider } from "./openai-compatible";
 export type { OpenAICompatibleOptions } from "./openai-compatible";
+export { AnthropicProvider } from "./anthropic";
+export type { AnthropicOptions } from "./anthropic";
 export {
   FlashcardOutputSchema,
   PROMPT_VERSION,

@@ -12,5 +12,6 @@ export type { DeepLOptions } from "./deepl";
 export { BaiduTranslator } from "./baidu";
 export type { BaiduOptions } from "./baidu";
 export { md5 } from "./md5";
+export { splitForTranslation } from "./chunk";
 export { makeTranslator } from "./factory";
 export type { TranslateEngine, TranslateConfig, TranslatorDeps } from "./factory";

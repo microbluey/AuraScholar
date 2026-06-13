@@ -9,6 +9,7 @@ import { GraphPage } from "./pages/GraphPage";
 import { FlashcardsPage } from "./pages/FlashcardsPage";
 import { SentinelPage } from "./pages/SentinelPage";
 import { HomepagePage } from "./pages/HomepagePage";
+import { SnippetsPage } from "./pages/SnippetsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 // 阅读器不在导航中 — 它是文献库里点击一篇文献后进入的页面。
@@ -16,6 +17,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 const NAV = [
   { to: "/library", icon: "library", label: "文献库" },
   { to: "/flashcards", icon: "cards", label: "闪卡" },
+  { to: "/snippets", icon: "snippet", label: "写作素材" },
   { to: "/sentinel", icon: "radar", label: "检索哨兵" },
   { to: "/homepage", icon: "profile", label: "学术主页" },
   { to: "/settings", icon: "settings", label: "设置" },
@@ -184,6 +186,7 @@ export function App() {
             <Route path="/reader" element={<ReaderPage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/flashcards" element={<FlashcardsPage />} />
+            <Route path="/snippets" element={<SnippetsPage />} />
             <Route path="/sentinel" element={<SentinelPage />} />
             <Route path="/homepage" element={<HomepagePage />} />
             <Route path="/settings" element={<SettingsPage />} />
@@ -365,6 +368,15 @@ function NavIcon({ name }: { name: (typeof NAV)[number]["icon"] }) {
           <path d="M7 12h7" />
           <path d="M5.5 4h13A1.5 1.5 0 0 1 20 5.5v11A1.5 1.5 0 0 1 18.5 18h-13A1.5 1.5 0 0 1 4 16.5v-11A1.5 1.5 0 0 1 5.5 4z" />
           <path d="M7 21h10" />
+        </svg>
+      );
+    case "snippet":
+      return (
+        <svg {...common}>
+          <path d="M7 4h7l4 4v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+          <path d="M13 4v5h5" />
+          <path d="M9 13h6" />
+          <path d="M9 16.5h4" />
         </svg>
       );
     case "radar":

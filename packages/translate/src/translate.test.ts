@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { StubHttpClient, jsonResponse } from "@aurascholar/platform";
 import type { AIProvider } from "@aurascholar/ai";
 import { md5 } from "./md5";
+import { splitForTranslation } from "./chunk";
 import { buildSystemPrompt } from "./llm";
 import { makeTranslator } from "./factory";
 import { DeepLTranslator } from "./deepl";
@@ -27,6 +28,29 @@ describe("md5", () => {
     expect(md5("The quick brown fox jumps over the lazy dog")).toBe(
       "9e107d9d372bb6826bd81d3542a419d6",
     );
+  });
+});
+
+describe("splitForTranslation", () => {
+  it("returns a single chunk when under the limit", () => {
+    expect(splitForTranslation("short text")).toEqual(["short text"]);
+  });
+
+  it("returns empty for blank input", () => {
+    expect(splitForTranslation("   ")).toEqual([]);
+  });
+
+  it("splits on paragraph boundaries and respects the max", () => {
+    const para = "a".repeat(1000);
+    const chunks = splitForTranslation([para, para, para].join("\n\n"), 1800);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(1800);
+  });
+
+  it("hard-splits a paragraph longer than the max", () => {
+    const chunks = splitForTranslation("x".repeat(5000), 1800);
+    expect(chunks.length).toBe(3);
+    expect(chunks.join("").length).toBe(5000);
   });
 });
 
