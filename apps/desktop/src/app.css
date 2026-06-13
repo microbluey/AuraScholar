@@ -2197,6 +2197,19 @@ body {
   max-width: 920px;
 }
 
+.snippets-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.snippets-toolbar .au-input {
+  width: auto;
+  min-width: 150px;
+}
+
 .snippets-groups {
   display: flex;
   flex-direction: column;
