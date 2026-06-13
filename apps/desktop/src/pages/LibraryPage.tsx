@@ -17,6 +17,7 @@ import { ingestFromInput, ingestFromPdf, listWorks } from "../services/library";
 import { generateFlashcardsForWork } from "../services/ai";
 import { exportWorks, bibliographyText, type ExportFormat } from "../services/cite";
 import { importReferences, previewReferences } from "../services/import-refs";
+import { fetchScholarEnrichment, type S2Enrichment } from "../services/scholar";
 import { STYLES } from "@aurascholar/cite";
 
 function isTauriRuntime(): boolean {
@@ -1518,7 +1519,74 @@ function SelectedWorkPanel({
             : "这篇文献缺少 DOI，补全元数据后可构建引文脉络。"}
         </p>
       </div>
+      <ScholarPanel doi={work.doi} />
     </>
+  );
+}
+
+/** Live Semantic Scholar signals (AI tldr + citation counts) by DOI. */
+function ScholarPanel({ doi }: { doi: string | null }) {
+  const [data, setData] = useState<S2Enrichment | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "done" | "missing" | "error">("idle");
+
+  useEffect(() => {
+    if (!doi || !isTauriRuntime()) {
+      setState("idle");
+      setData(null);
+      return;
+    }
+    let cancelled = false;
+    setState("loading");
+    setData(null);
+    void fetchScholarEnrichment(doi)
+      .then((d) => {
+        if (cancelled) return;
+        if (!d) {
+          setState("missing");
+        } else {
+          setData(d);
+          setState("done");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [doi]);
+
+  if (!doi) return null;
+
+  return (
+    <div className="library-automation au-panel">
+      <div className="library-panel-heading">
+        <h3>Semantic Scholar</h3>
+        {data?.url && (
+          <a href={data.url} target="_blank" rel="noreferrer">
+            查看 ›
+          </a>
+        )}
+      </div>
+      {state === "loading" && <p className="library-panel-empty">读取中…</p>}
+      {state === "missing" && <p className="library-panel-empty">S2 暂无这篇文献的记录。</p>}
+      {state === "error" && <p className="library-panel-empty">读取失败,稍后重试。</p>}
+      {state === "done" && data && (
+        <>
+          {data.tldr && (
+            <p className="library-scholar-tldr">
+              <strong>AI 摘要</strong>
+              {data.tldr}
+            </p>
+          )}
+          <div className="library-citation-stats">
+            <span>被引 {data.citationCount ?? "—"}</span>
+            <span>高影响 {data.influentialCitationCount ?? "—"}</span>
+            <span>参考 {data.referenceCount ?? "—"}</span>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
