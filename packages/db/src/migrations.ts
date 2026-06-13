@@ -75,6 +75,19 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS snippets_work_idx ON snippets(work_id, created_at);
     `,
   },
+  {
+    version: 5,
+    name: "translation_cache",
+    sql: `
+      CREATE TABLE IF NOT EXISTS translation_cache (
+        cache_key TEXT PRIMARY KEY,
+        engine TEXT NOT NULL,
+        target_lang TEXT NOT NULL,
+        result TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {
