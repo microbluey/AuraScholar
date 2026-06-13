@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Badge, Button, Card, Input, useTheme } from "@aurascholar/ui";
 import { loadAiSettings, makeProvider, saveAiSettings, type AiProviderKind } from "../services/ai";
-import { loadTranslateConfig, saveTranslateConfig } from "../services/translate";
+import { loadTranslateConfig, saveTranslateConfig, clearTranslationCache } from "../services/translate";
 import { TARGET_LANGS, type TranslateEngine } from "@aurascholar/translate";
 import {
   exportLibraryJson,
@@ -39,6 +39,15 @@ export function SettingsPage() {
           : undefined,
     });
     setTrStatus("已保存");
+  };
+
+  const clearTrCache = async () => {
+    try {
+      const n = await clearTranslationCache();
+      setTrStatus(`已清除 ${n} 条翻译缓存`);
+    } catch (e) {
+      setTrStatus(`清除失败:${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   const syncExisting = loadSyncSettings();
@@ -269,12 +278,18 @@ export function SettingsPage() {
             />
           </>
         )}
-        <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
           <Button onClick={saveTranslate}>保存</Button>
+          <Button variant="secondary" onClick={() => void clearTrCache()}>
+            清除翻译缓存
+          </Button>
           {trStatus && (
             <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{trStatus}</span>
           )}
         </div>
+        <p className="au-text-muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+          翻译结果会按引擎与目标语言缓存到本地,重复翻译同一段不再消耗额度。
+        </p>
       </Card>
 
       <Card className="settings-card">
