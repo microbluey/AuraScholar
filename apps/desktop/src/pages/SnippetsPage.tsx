@@ -5,7 +5,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@aurascholar/ui";
 import type { SnippetWithWork } from "@aurascholar/db";
+import { STYLES } from "@aurascholar/cite";
 import { listAllSnippets, updateSnippetNote, deleteSnippet } from "../services/snippets";
+import { referenceForWork } from "../services/cite";
+
+const STYLE_KEY = "snippet-cite-style";
 
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
@@ -21,6 +25,14 @@ export function SnippetsPage() {
   const navigate = useNavigate();
   const [groups, setGroups] = useState<WorkGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [citeStyle, setCiteStyle] = useState(
+    () => localStorage.getItem(STYLE_KEY) ?? "apa",
+  );
+
+  const changeStyle = useCallback((style: string) => {
+    setCiteStyle(style);
+    localStorage.setItem(STYLE_KEY, style);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!isTauriRuntime()) {
@@ -60,6 +72,28 @@ export function SnippetsPage() {
         阅读时随手摘录的语料,按文献分组。可加批注、复制到论文、一键溯源回原文。
       </p>
 
+      {total > 0 && (
+        <div className="snippets-toolbar">
+          <span className="au-text-muted" style={{ fontSize: 12.5 }}>
+            引文格式
+          </span>
+          <select
+            className="au-input"
+            value={citeStyle}
+            onChange={(e) => changeStyle(e.target.value)}
+          >
+            {STYLES.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <span className="au-text-muted" style={{ fontSize: 11.5 }}>
+            「复制+引文」会附上该格式的参考文献
+          </span>
+        </div>
+      )}
+
       {loading ? (
         <p className="au-text-muted">读取中…</p>
       ) : total === 0 ? (
@@ -81,6 +115,7 @@ export function SnippetsPage() {
                 <SnippetCard
                   key={s.id}
                   snippet={s}
+                  citeStyle={citeStyle}
                   onOpenSource={() =>
                     navigate(`/reader?work=${encodeURIComponent(s.work_id)}`)
                   }
@@ -96,18 +131,36 @@ export function SnippetsPage() {
 
 function SnippetCard({
   snippet,
+  citeStyle,
   onOpenSource,
 }: {
   snippet: SnippetWithWork;
+  citeStyle: string;
   onOpenSource: () => void;
 }) {
   const [note, setNote] = useState(snippet.note_md ?? "");
   const [editing, setEditing] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   const saveNote = useCallback(async () => {
     await updateSnippetNote(snippet.id, note.trim() || null);
     setEditing(false);
   }, [snippet.id, note]);
+
+  const flash = useCallback((label: string) => {
+    setCopied(label);
+    setTimeout(() => setCopied(null), 1500);
+  }, []);
+
+  // Copy the quote plus a formatted reference for the source paper, so the
+  // excerpt lands in a manuscript already attributed.
+  const copyWithCitation = useCallback(async () => {
+    const ref = await referenceForWork(snippet.work_id, citeStyle).catch(() => "");
+    const page = snippet.page_index != null ? `(p. ${snippet.page_index + 1})` : "";
+    const text = ref ? `"${snippet.quote}" ${page}\n\n${ref}` : snippet.quote;
+    await navigator.clipboard?.writeText(text);
+    flash("已复制(含引文)");
+  }, [snippet, citeStyle, flash]);
 
   return (
     <article className="snippet-card">
@@ -142,10 +195,19 @@ function SnippetCard({
           {snippet.note_md && <p className="snippet-card__note">{snippet.note_md}</p>}
           <div className="snippet-card__actions">
             <span className="au-text-muted snippet-card__meta">
-              {snippet.page_index != null ? `第 ${snippet.page_index + 1} 页` : "—"}
+              {copied ?? (snippet.page_index != null ? `第 ${snippet.page_index + 1} 页` : "—")}
             </span>
-            <button type="button" onClick={() => void navigator.clipboard?.writeText(snippet.quote)}>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(snippet.quote);
+                flash("已复制");
+              }}
+            >
               复制
+            </button>
+            <button type="button" onClick={() => void copyWithCitation()}>
+              复制+引文
             </button>
             <button type="button" onClick={() => setEditing(true)}>
               {snippet.note_md ? "编辑批注" : "加批注"}

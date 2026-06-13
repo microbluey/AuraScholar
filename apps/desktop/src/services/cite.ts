@@ -7,6 +7,7 @@ import {
   toRIS,
   toCslJson,
   formatBibliography,
+  formatEntry,
   type CslItem,
   type WorkLike,
 } from "@aurascholar/cite";
@@ -88,6 +89,12 @@ export async function exportWorks(workIds: string[], format: ExportFormat): Prom
 export async function bibliographyText(workIds: string[], styleId: string): Promise<string> {
   const items = await cslItemsForWorks(workIds);
   return formatBibliography(items, styleId).join("\n");
+}
+
+/** Single work's formatted reference (no leading number), for snippet copy. */
+export async function referenceForWork(workId: string, styleId: string): Promise<string> {
+  const [item] = await cslItemsForWorks([workId]);
+  return item ? formatEntry(item, styleId) : "";
 }
 
 // csl_json may arrive as a string (raw tauri-sql driver) or already-parsed
