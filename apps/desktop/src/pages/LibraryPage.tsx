@@ -18,6 +18,7 @@ import { generateFlashcardsForWork } from "../services/ai";
 import { exportWorks, bibliographyText, type ExportFormat } from "../services/cite";
 import { importReferences, previewReferences } from "../services/import-refs";
 import { fetchScholarEnrichment, type S2Enrichment } from "../services/scholar";
+import { MetadataEditor } from "../components/MetadataEditor";
 import { STYLES } from "@aurascholar/cite";
 
 function isTauriRuntime(): boolean {
@@ -94,6 +95,7 @@ export function LibraryPage() {
   const [page, setPage] = useState(0);
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [citeMenuOpen, setCiteMenuOpen] = useState(false);
+  const [editingMetaId, setEditingMetaId] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<{ count: number; text: string } | null>(null);
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -961,9 +963,20 @@ export function LibraryPage() {
                 setMessage("这篇文献没有 DOI，暂时无法打开引文图谱");
               }
             }}
+            onEditMetadata={() => {
+              if (selectedWork) setEditingMetaId(selectedWork.id);
+            }}
           />
         </aside>
       </div>
+
+      {editingMetaId && (
+        <MetadataEditor
+          workId={editingMetaId}
+          onClose={() => setEditingMetaId(null)}
+          onSaved={() => void refresh()}
+        />
+      )}
 
       {tagManagerOpen && (
         <TagManager
@@ -1281,6 +1294,7 @@ function SelectedWorkPanel({
   onOpenFlashcards,
   onOpenSentinel,
   onOpenGraph,
+  onEditMetadata,
 }: {
   work: WorkWithAuthors | null;
   meta: WorkRuntimeMeta | null;
@@ -1291,6 +1305,7 @@ function SelectedWorkPanel({
   onOpenFlashcards: () => void;
   onOpenSentinel: () => void;
   onOpenGraph: () => void;
+  onEditMetadata: () => void;
 }) {
   const [activePanelTab, setActivePanelTab] = useState<DetailPanelTab>("overview");
 
@@ -1387,11 +1402,12 @@ function SelectedWorkPanel({
       )}
       <div className="library-automation au-panel">
         <div className="library-panel-heading">
-          <h3>元信息与预览</h3>
-          <button type="button" onClick={onOpenReader}>
-            阅读全文 ›
+          <h3>书目信息</h3>
+          <button type="button" onClick={onEditMetadata}>
+            编辑 ›
           </button>
         </div>
+        <BibliographicLines work={work} />
         <StatusLine label="题录来源" value={sourceText} variant="neutral" />
         <StatusLine
           label="PDF 预览"
@@ -1754,5 +1770,40 @@ function StatusLine({
       <span>{label}</span>
       <Badge variant={variant}>{value}</Badge>
     </div>
+  );
+}
+
+/** Read-only list of the rich bibliographic fields that are populated. */
+function BibliographicLines({ work }: { work: WorkWithAuthors }) {
+  const vol = [work.volume && `卷 ${work.volume}`, work.issue && `期 ${work.issue}`, work.pages && `页 ${work.pages}`]
+    .filter(Boolean)
+    .join(" · ");
+  const lines: Array<[string, string | null]> = [
+    ["卷期页", vol || null],
+    ["出版社", work.publisher],
+    ["出版地", work.place_published],
+    ["版本", work.edition],
+    ["ISSN", work.issn],
+    ["ISBN", work.isbn],
+    ["语言", work.language],
+    ["DOI", work.doi],
+  ];
+  const present = lines.filter(([, v]) => v);
+  if (present.length === 0) {
+    return (
+      <p className="library-bib-empty au-text-muted">
+        暂无详细书目信息,点「编辑」补全卷期页、出版社、ISSN 等。
+      </p>
+    );
+  }
+  return (
+    <dl className="library-bib-list">
+      {present.map(([label, value]) => (
+        <div className="library-bib-row" key={label}>
+          <dt>{label}</dt>
+          <dd title={value!}>{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

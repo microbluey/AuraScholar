@@ -68,6 +68,70 @@ describe("WorksRepo", () => {
     await works.softDelete(id);
     expect(await works.list()).toHaveLength(0);
   });
+
+  it("stores and reads rich bibliographic fields + keywords", async () => {
+    const { id } = await works.upsert({
+      title: "A Rich Paper",
+      doi: "10.9/rich",
+      volume: "30",
+      issue: "4",
+      pages: "100-120",
+      publisher: "ACM",
+      placePublished: "New York",
+      issn: "1234-5678",
+      isbn: "978-3-16",
+      url: "https://x/y",
+      language: "en",
+      keywords: ["graphs", "ml"],
+    });
+    const got = await works.get(id);
+    expect(got?.volume).toBe("30");
+    expect(got?.issue).toBe("4");
+    expect(got?.pages).toBe("100-120");
+    expect(got?.publisher).toBe("ACM");
+    expect(got?.issn).toBe("1234-5678");
+    expect(JSON.parse(got!.keywords_json!)).toEqual(["graphs", "ml"]);
+  });
+
+  it("backfills rich fields on dedup without clobbering existing values", async () => {
+    const { id } = await works.upsert({ title: "P", doi: "10.9/p", volume: "1" });
+    await works.upsert({ title: "P", doi: "10.9/p", volume: "999", issue: "2", publisher: "X" });
+    const got = await works.get(id);
+    expect(got?.volume).toBe("1"); // existing kept
+    expect(got?.issue).toBe("2"); // missing backfilled
+    expect(got?.publisher).toBe("X");
+  });
+
+  it("update() patches fields and replaces authors with roles", async () => {
+    const { id } = await works.upsert({
+      title: "Editable",
+      authors: [{ displayName: "A One", position: 0 }],
+    });
+    await works.update(id, {
+      volume: "12",
+      pages: "1-9",
+      keywords: ["k1"],
+      authors: [
+        { displayName: "New Author", position: 0, role: "author" },
+        { displayName: "An Editor", position: 1, role: "editor" },
+      ],
+    });
+    const got = await works.get(id);
+    expect(got?.volume).toBe("12");
+    expect(got?.pages).toBe("1-9");
+    expect(JSON.parse(got!.keywords_json!)).toEqual(["k1"]);
+    const authors = await works.authorsOf(id);
+    expect(authors).toHaveLength(2);
+    expect(authors[1]).toMatchObject({ displayName: "An Editor", role: "editor" });
+  });
+
+  it("update() leaves untouched fields alone (partial save)", async () => {
+    const { id } = await works.upsert({ title: "Keep", volume: "5" });
+    await works.update(id, { issue: "3" });
+    const got = await works.get(id);
+    expect(got?.volume).toBe("5"); // not clobbered
+    expect(got?.issue).toBe("3");
+  });
 });
 
 describe("AttachmentsRepo + AnnotationsRepo", () => {

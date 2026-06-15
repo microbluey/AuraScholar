@@ -88,6 +88,38 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Rich bibliographic metadata, modeled on EndNote's reference fields and
+    // aligned to CSL-JSON variable names. These were previously only inside
+    // csl_json (unqueryable, and absent for manual/BibTeX entries); promoting
+    // them to columns makes them editable, searchable, and citation-ready.
+    version: 6,
+    name: "rich_bibliographic_fields",
+    sql: `
+      ALTER TABLE works ADD COLUMN volume TEXT;
+      ALTER TABLE works ADD COLUMN issue TEXT;
+      ALTER TABLE works ADD COLUMN pages TEXT;
+      ALTER TABLE works ADD COLUMN number_of_volumes TEXT;
+      ALTER TABLE works ADD COLUMN edition TEXT;
+      ALTER TABLE works ADD COLUMN section TEXT;
+      ALTER TABLE works ADD COLUMN publisher TEXT;
+      ALTER TABLE works ADD COLUMN place_published TEXT;
+      ALTER TABLE works ADD COLUMN series_title TEXT;
+      ALTER TABLE works ADD COLUMN short_title TEXT;
+      ALTER TABLE works ADD COLUMN original_title TEXT;
+      ALTER TABLE works ADD COLUMN issn TEXT;
+      ALTER TABLE works ADD COLUMN isbn TEXT;
+      ALTER TABLE works ADD COLUMN url TEXT;
+      ALTER TABLE works ADD COLUMN accessed_date TEXT;
+      ALTER TABLE works ADD COLUMN language TEXT;
+      ALTER TABLE works ADD COLUMN call_number TEXT;
+      ALTER TABLE works ADD COLUMN accession_number TEXT;
+      ALTER TABLE works ADD COLUMN label TEXT;
+      ALTER TABLE works ADD COLUMN database_name TEXT;
+      ALTER TABLE works ADD COLUMN keywords_json TEXT;
+      ALTER TABLE work_authors ADD COLUMN role TEXT NOT NULL DEFAULT 'author';
+    `,
+  },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

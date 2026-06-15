@@ -2197,6 +2197,124 @@ body {
   max-width: 920px;
 }
 
+.library-bib-list {
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.library-bib-row {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.library-bib-row dt {
+  flex-shrink: 0;
+  width: 54px;
+  color: var(--color-text-muted);
+}
+
+.library-bib-row dd {
+  margin: 0;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-bib-empty {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.library-modal--wide {
+  width: min(760px, 100%);
+}
+
+.meta-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.meta-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.meta-field > span {
+  color: var(--color-text-muted);
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.meta-group__title {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+
+.meta-authors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-sunken);
+}
+
+.meta-authors__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.meta-authors__head button {
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.meta-author-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 28px;
+  gap: 6px;
+  align-items: center;
+}
+
+.meta-author-row button {
+  border: none;
+  background: var(--color-surface);
+  border-radius: var(--radius-control);
+  color: var(--color-danger);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  height: 30px;
+}
+
+.meta-editor__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .library-scholar-tldr {
   margin: 0 0 8px;
   font-size: 12.5px;

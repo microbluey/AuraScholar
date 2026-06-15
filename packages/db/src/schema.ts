@@ -33,6 +33,29 @@ export const works = sqliteTable(
     fingerprint: text("fingerprint"),
     // Full CSL-JSON metadata — source of truth for citation formatting/export.
     cslJson: text("csl_json", { mode: "json" }),
+    // Rich bibliographic fields (EndNote-style, CSL-aligned). See migration v6.
+    volume: text("volume"),
+    issue: text("issue"),
+    pages: text("pages"),
+    numberOfVolumes: text("number_of_volumes"),
+    edition: text("edition"),
+    section: text("section"),
+    publisher: text("publisher"),
+    placePublished: text("place_published"),
+    seriesTitle: text("series_title"),
+    shortTitle: text("short_title"),
+    originalTitle: text("original_title"),
+    issn: text("issn"),
+    isbn: text("isbn"),
+    url: text("url"),
+    accessedDate: text("accessed_date"),
+    language: text("language"),
+    callNumber: text("call_number"),
+    accessionNumber: text("accession_number"),
+    label: text("label"),
+    databaseName: text("database_name"),
+    // Author/index keywords as a JSON string array.
+    keywordsJson: text("keywords_json", { mode: "json" }),
     readingStatus: text("reading_status").notNull().default("unread"), // unread | reading | read
     starred: integer("starred", { mode: "boolean" }).notNull().default(false),
     notesMd: text("notes_md"),
@@ -69,6 +92,7 @@ export const workAuthors = sqliteTable(
     position: integer("position").notNull(),
     isCorresponding: integer("is_corresponding", { mode: "boolean" }).notNull().default(false),
     rawName: text("raw_name"), // name as it appeared on the paper
+    role: text("role").notNull().default("author"), // author | editor | translator
   },
   (t) => [primaryKey({ columns: [t.workId, t.authorId] })],
 );

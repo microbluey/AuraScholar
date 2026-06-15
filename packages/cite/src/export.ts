@@ -37,6 +37,11 @@ function bibtexEntry(item: CslItem): string {
   if (item.issue) fields.push(["number", item.issue]);
   if (item.page) fields.push(["pages", item.page.replace(/-(?!-)/, "--")]);
   if (item.publisher) fields.push(["publisher", `{${item.publisher}}`]);
+  if (item["publisher-place"]) fields.push(["address", `{${item["publisher-place"]}}`]);
+  if (item.edition) fields.push(["edition", `{${item.edition}}`]);
+  if (item.ISSN) fields.push(["issn", item.ISSN]);
+  if (item.ISBN) fields.push(["isbn", item.ISBN]);
+  if (item.language) fields.push(["language", `{${item.language}}`]);
   if (item.DOI) fields.push(["doi", item.DOI]);
   if (item.URL) fields.push(["url", item.URL]);
 
@@ -101,6 +106,11 @@ function risEntry(item: CslItem): string {
     if (ep) lines.push(`EP  - ${ep.trim()}`);
   }
   if (item.publisher) lines.push(`PB  - ${item.publisher}`);
+  if (item["publisher-place"]) lines.push(`CY  - ${item["publisher-place"]}`);
+  if (item.edition) lines.push(`ET  - ${item.edition}`);
+  if (item.ISSN) lines.push(`SN  - ${item.ISSN}`);
+  else if (item.ISBN) lines.push(`SN  - ${item.ISBN}`);
+  if (item.language) lines.push(`LA  - ${item.language}`);
   if (item.DOI) lines.push(`DO  - ${item.DOI}`);
   if (item.URL) lines.push(`UR  - ${item.URL}`);
   if (item.abstract) lines.push(`AB  - ${item.abstract}`);

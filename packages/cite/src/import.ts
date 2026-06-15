@@ -126,6 +126,11 @@ function bibEntryToCsl(type: string, key: string, f: Record<string, string>): Cs
     issue: f.number,
     page: f.pages?.replace(/--/g, "-"),
     publisher: f.publisher,
+    "publisher-place": f.address,
+    edition: f.edition,
+    ISSN: f.issn,
+    ISBN: f.isbn,
+    language: f.language,
     DOI: f.doi,
     URL: f.url,
     abstract: f.abstract,
@@ -208,10 +213,23 @@ function risToCsl(f: Record<string, string[]>): CslItem {
     issue: first("IS"),
     page,
     publisher: first("PB"),
+    "publisher-place": first("CY"),
+    edition: first("ET"),
+    // SN holds ISSN or ISBN depending on type; route by what looks like an ISBN.
+    ISSN: snAs(first("SN"), "issn"),
+    ISBN: snAs(first("SN"), "isbn"),
+    language: first("LA"),
     DOI: first("DO"),
     URL: first("UR"),
     abstract: first("AB") ?? first("N2"),
   };
+}
+
+/** RIS SN is overloaded (ISSN or ISBN); classify by shape. */
+function snAs(sn: string | undefined, want: "issn" | "isbn"): string | undefined {
+  if (!sn) return undefined;
+  const isIsbn = /^(97[89][\d-]{10,}|[\d-]{10,13}[\dxX])$/.test(sn.replace(/\s/g, ""));
+  return (want === "isbn") === isIsbn ? sn : undefined;
 }
 
 function risName(raw: string): CslName {

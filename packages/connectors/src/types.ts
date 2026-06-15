@@ -9,6 +9,8 @@ export interface NormalizedAuthor {
   orcid?: string;
   position: number;
   isCorresponding?: boolean;
+  /** author (default) | editor | translator. */
+  role?: "author" | "editor" | "translator";
 }
 
 export interface NormalizedWork {
@@ -26,6 +28,18 @@ export interface NormalizedWork {
   s2Id?: string;
   pmid?: string;
   authors: NormalizedAuthor[];
+  // Rich bibliographic fields (when the source provides them).
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  publisher?: string;
+  placePublished?: string;
+  issn?: string;
+  isbn?: string;
+  language?: string;
+  url?: string;
+  /** Author/index keywords. */
+  keywords?: string[];
   /** Direct link to a legal OA PDF when one is known. */
   oaPdfUrl?: string;
   /** Raw CSL-JSON when the source provides it (Crossref does). */
