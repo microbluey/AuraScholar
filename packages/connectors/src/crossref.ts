@@ -5,17 +5,21 @@ import type { NormalizedAuthor, NormalizedWork } from "./types";
 
 const BASE = "https://api.crossref.org";
 
+interface CrossrefContributor {
+  given?: string;
+  family?: string;
+  name?: string;
+  ORCID?: string;
+  sequence?: string;
+}
+
 interface CrossrefWork {
   DOI: string;
   title?: string[];
   abstract?: string;
-  author?: Array<{
-    given?: string;
-    family?: string;
-    name?: string;
-    ORCID?: string;
-    sequence?: string;
-  }>;
+  author?: CrossrefContributor[];
+  editor?: CrossrefContributor[];
+  translator?: CrossrefContributor[];
   "container-title"?: string[];
   type?: string;
   issued?: { "date-parts"?: number[][] };
@@ -24,6 +28,13 @@ interface CrossrefWork {
   volume?: string;
   issue?: string;
   page?: string;
+  publisher?: string;
+  "publisher-location"?: string;
+  ISSN?: string[];
+  ISBN?: string[];
+  language?: string;
+  subject?: string[];
+  URL?: string;
   [key: string]: unknown;
 }
 
@@ -85,14 +96,23 @@ function normalizeCrossref(w: CrossrefWork): NormalizedWork {
     w.issued?.["date-parts"]?.[0] ??
     w["published-online"]?.["date-parts"]?.[0] ??
     w["published-print"]?.["date-parts"]?.[0];
-  const authors: NormalizedAuthor[] = (w.author ?? []).map((a, i) => ({
+  const toAuthor = (
+    role: NormalizedAuthor["role"],
+    base: number,
+  ) => (a: CrossrefContributor, i: number): NormalizedAuthor => ({
     displayName: a.name ?? [a.given, a.family].filter(Boolean).join(" "),
     family: a.family,
     given: a.given,
     orcid: a.ORCID?.replace(/^https?:\/\/orcid\.org\//, ""),
-    position: i,
-    isCorresponding: undefined,
-  }));
+    position: base + i,
+    role,
+  });
+  const authorList = (w.author ?? []).map(toAuthor("author", 0));
+  const editorList = (w.editor ?? []).map(toAuthor("editor", authorList.length));
+  const translatorList = (w.translator ?? []).map(
+    toAuthor("translator", authorList.length + editorList.length),
+  );
+  const authors: NormalizedAuthor[] = [...authorList, ...editorList, ...translatorList];
   return {
     doi: w.DOI?.toLowerCase(),
     title: w.title?.[0] ?? "(untitled)",
@@ -109,6 +129,16 @@ function normalizeCrossref(w: CrossrefWork): NormalizedWork {
     venueType: w.type?.includes("proceedings") ? "conference" : "journal",
     type: w.type === "journal-article" ? "article" : w.type,
     authors,
+    volume: w.volume,
+    issue: w.issue,
+    pages: w.page,
+    publisher: w.publisher,
+    placePublished: w["publisher-location"],
+    issn: w.ISSN?.[0],
+    isbn: w.ISBN?.[0],
+    language: w.language,
+    url: w.URL,
+    keywords: w.subject?.length ? w.subject : undefined,
     cslJson: w as Record<string, unknown>,
     source: "crossref",
   };

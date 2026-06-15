@@ -22,6 +22,16 @@ interface CiteRow {
   venue_name: string | null;
   type: string;
   csl_json: unknown;
+  volume: string | null;
+  issue: string | null;
+  pages: string | null;
+  publisher: string | null;
+  place_published: string | null;
+  edition: string | null;
+  issn: string | null;
+  isbn: string | null;
+  language: string | null;
+  url: string | null;
 }
 
 /** Loads CSL items for the given work ids, preserving the requested order. */
@@ -30,28 +40,29 @@ export async function cslItemsForWorks(workIds: string[]): Promise<CslItem[]> {
   const db = await getDb();
   const placeholders = workIds.map(() => "?").join(",");
   const rows = await db.query<CiteRow>(
-    `SELECT id, title, doi, year, publication_date, venue_name, type, csl_json
+    `SELECT id, title, doi, year, publication_date, venue_name, type, csl_json,
+            volume, issue, pages, publisher, place_published, edition, issn, isbn, language, url
      FROM works WHERE id IN (${placeholders}) AND deleted_at IS NULL`,
     workIds,
   );
-  // Author names per work (CSL author objects come from csl_json when present;
-  // this backfills the synthesized path).
-  const authorRows = await db.query<{ work_id: string; display_name: string }>(
-    `SELECT wa.work_id, a.display_name
+  // Author/editor list with roles — feeds CSL author vs editor split.
+  const authorRows = await db.query<{ work_id: string; display_name: string; role: string }>(
+    `SELECT wa.work_id, a.display_name, wa.role
      FROM work_authors wa JOIN authors a ON a.id = wa.author_id
      WHERE wa.work_id IN (${placeholders})
      ORDER BY wa.position`,
     workIds,
   );
-  const authorsByWork = new Map<string, string[]>();
+  const authorsByWork = new Map<string, Array<{ displayName: string; role?: string }>>();
   for (const r of authorRows) {
     const list = authorsByWork.get(r.work_id) ?? [];
-    list.push(r.display_name);
+    list.push({ displayName: r.display_name, role: r.role });
     authorsByWork.set(r.work_id, list);
   }
 
   const byId = new Map<string, WorkLike>();
   for (const row of rows) {
+    const detail = authorsByWork.get(row.id) ?? [];
     byId.set(row.id, {
       id: row.id,
       title: row.title,
@@ -60,7 +71,18 @@ export async function cslItemsForWorks(workIds: string[]): Promise<CslItem[]> {
       publicationDate: row.publication_date,
       venueName: row.venue_name,
       type: row.type,
-      authorNames: authorsByWork.get(row.id) ?? [],
+      authorNames: detail.map((a) => a.displayName),
+      authorsDetail: detail,
+      volume: row.volume,
+      issue: row.issue,
+      pages: row.pages,
+      publisher: row.publisher,
+      placePublished: row.place_published,
+      edition: row.edition,
+      issn: row.issn,
+      isbn: row.isbn,
+      language: row.language,
+      url: row.url,
       cslJson: parseJson(row.csl_json),
     });
   }

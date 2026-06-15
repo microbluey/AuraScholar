@@ -28,12 +28,22 @@ export interface CslItem {
   issue?: string;
   page?: string;
   publisher?: string;
+  "publisher-place"?: string;
+  edition?: string;
+  ISSN?: string;
+  ISBN?: string;
+  language?: string;
   DOI?: string;
   URL?: string;
   abstract?: string;
 }
 
-/** Minimal library-row shape used to backfill a CSL item when csl_json is null. */
+/**
+ * Library-row shape used to build a CSL item. Structured columns (volume,
+ * publisher, …) are preferred over the raw csl_json blob when present, so
+ * manual edits flow into exports. authorsDetail (with roles) takes precedence
+ * over authorNames when available.
+ */
 export interface WorkLike {
   id: string;
   title: string;
@@ -43,6 +53,17 @@ export interface WorkLike {
   venueName?: string | null;
   type?: string | null;
   authorNames?: string[];
+  authorsDetail?: Array<{ displayName: string; role?: string }>;
+  volume?: string | null;
+  issue?: string | null;
+  pages?: string | null;
+  publisher?: string | null;
+  placePublished?: string | null;
+  issn?: string | null;
+  isbn?: string | null;
+  url?: string | null;
+  edition?: string | null;
+  language?: string | null;
   cslJson?: unknown;
 }
 
@@ -64,13 +85,16 @@ const TYPE_MAP: Record<string, string> = {
  */
 export function toCslItem(work: WorkLike): CslItem {
   const raw = (work.cslJson ?? null) as Record<string, unknown> | null;
-  if (raw && typeof raw === "object" && (raw.title || raw.author)) {
-    return normalizeRawCsl(raw, work);
-  }
-  return synthesize(work);
+  const base =
+    raw && typeof raw === "object" && (raw.title || raw.author)
+      ? fromRawCsl(raw, work)
+      : synthesize(work);
+  // Structured columns (manual edits, connector-extracted fields) win over the
+  // raw blob — they're the editable source of truth.
+  return overlayColumns(base, work);
 }
 
-function normalizeRawCsl(raw: Record<string, unknown>, work: WorkLike): CslItem {
+function fromRawCsl(raw: Record<string, unknown>, work: WorkLike): CslItem {
   const title = pickString(raw.title) ?? work.title;
   const container = pickString(raw["container-title"]) ?? work.venueName ?? undefined;
   return {
@@ -101,6 +125,36 @@ function synthesize(work: WorkLike): CslItem {
     issued: yearDate(work.year) ?? rawDate(work.publicationDate),
     DOI: work.doi ?? undefined,
   };
+}
+
+/** Overlays structured library columns onto a base item where they're set. */
+function overlayColumns(base: CslItem, work: WorkLike): CslItem {
+  const out = { ...base };
+  // Author/editor split from the detailed list, when available.
+  if (work.authorsDetail?.length) {
+    out.author = work.authorsDetail
+      .filter((a) => (a.role ?? "author") === "author")
+      .map((a) => splitName(a.displayName));
+    const editors = work.authorsDetail
+      .filter((a) => a.role === "editor")
+      .map((a) => splitName(a.displayName));
+    if (editors.length) out.editor = editors;
+  }
+  const set = <K extends keyof CslItem>(key: K, val: CslItem[K] | null | undefined) => {
+    if (val != null && val !== "") out[key] = val;
+  };
+  set("volume", work.volume ?? undefined);
+  set("issue", work.issue ?? undefined);
+  set("page", work.pages ?? undefined);
+  set("publisher", work.publisher ?? undefined);
+  set("publisher-place", work.placePublished ?? undefined);
+  set("edition", work.edition ?? undefined);
+  set("ISSN", work.issn ?? undefined);
+  set("ISBN", work.isbn ?? undefined);
+  set("language", work.language ?? undefined);
+  set("URL", work.url ?? undefined);
+  if (work.doi) out.DOI = work.doi;
+  return out;
 }
 
 function mapType(t: string): string {

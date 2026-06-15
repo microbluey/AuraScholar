@@ -50,6 +50,30 @@ describe("toCslItem", () => {
     expect(item.author?.[0]?.family).toBe("Researcher");
     expect(item.issued?.["date-parts"]?.[0]?.[0]).toBe(2023);
   });
+
+  it("structured columns override the raw csl_json blob", () => {
+    const item = toCslItem({
+      ...RAW_CSL,
+      volume: "99", // column wins over csl_json's volume "30"
+      issn: "2222-3333",
+      publisher: "Edited Publisher",
+    });
+    expect(item.volume).toBe("99");
+    expect(item.ISSN).toBe("2222-3333");
+    expect(item.publisher).toBe("Edited Publisher");
+  });
+
+  it("authorsDetail splits authors and editors by role", () => {
+    const item = toCslItem({
+      ...BARE,
+      authorsDetail: [
+        { displayName: "Jane Q. Researcher", role: "author" },
+        { displayName: "Ed Itor", role: "editor" },
+      ],
+    });
+    expect(item.author?.map((a) => a.family)).toEqual(["Researcher"]);
+    expect(item.editor?.map((a) => a.family)).toEqual(["Itor"]);
+  });
 });
 
 describe("splitName", () => {

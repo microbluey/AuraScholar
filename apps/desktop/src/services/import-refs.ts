@@ -35,6 +35,18 @@ export async function importReferences(
 
 function toWorkInput(item: CslItem) {
   const year = cslYear(item);
+  const authors = (item.author ?? []).map((a, position) => ({
+    displayName: [a.given, a.family].filter(Boolean).join(" ") || a.literal || "",
+    orcid: undefined,
+    position,
+    role: "author" as const,
+  }));
+  const editors = (item.editor ?? []).map((a, i) => ({
+    displayName: [a.given, a.family].filter(Boolean).join(" ") || a.literal || "",
+    orcid: undefined,
+    position: authors.length + i,
+    role: "editor" as const,
+  }));
   return {
     doi: item.DOI?.toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "") || undefined,
     title: item.title ?? "(无标题)",
@@ -42,12 +54,18 @@ function toWorkInput(item: CslItem) {
     year,
     venueName: item["container-title"],
     type: cslTypeToWorkType(item.type),
+    volume: item.volume,
+    issue: item.issue,
+    pages: item.page,
+    publisher: item.publisher,
+    placePublished: item["publisher-place"],
+    edition: item.edition,
+    issn: item.ISSN,
+    isbn: item.ISBN,
+    language: item.language,
+    url: item.URL,
     cslJson: item,
-    authors: (item.author ?? []).map((a, position) => ({
-      displayName: [a.given, a.family].filter(Boolean).join(" ") || a.literal || "",
-      orcid: undefined,
-      position,
-    })),
+    authors: [...authors, ...editors],
   };
 }
 

@@ -84,4 +84,30 @@ describe("round-trip", () => {
     expect(back?.["container-title"]).toBe("Journal X");
     expect(back?.author?.[0]?.family).toBe("Smith");
   });
+
+  it("rich fields survive a BibTeX round-trip", () => {
+    const rich = toCslItem({
+      id: "w2",
+      title: "Rich Paper",
+      doi: "10.1/rich",
+      year: 2019,
+      venueName: "J. Rich",
+      type: "article",
+      authorNames: ["Carol King"],
+      volume: "7",
+      issue: "2",
+      pages: "11-20",
+      publisher: "Springer",
+      placePublished: "Berlin",
+      issn: "1111-2222",
+      language: "en",
+    });
+    const [back] = parseReferences(toBibTeX([rich]));
+    expect(back?.volume).toBe("7");
+    expect(back?.issue).toBe("2");
+    expect(back?.page).toBe("11-20");
+    expect(back?.publisher).toBe("Springer");
+    expect(back?.["publisher-place"]).toBe("Berlin");
+    expect(back?.ISSN).toBe("1111-2222");
+  });
 });

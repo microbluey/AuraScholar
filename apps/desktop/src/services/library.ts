@@ -46,11 +46,22 @@ function toWorkInput(w: NormalizedWork) {
     arxivId: w.arxivId,
     openalexId: w.openalexId,
     pmid: w.pmid,
+    volume: w.volume,
+    issue: w.issue,
+    pages: w.pages,
+    publisher: w.publisher,
+    placePublished: w.placePublished,
+    issn: w.issn,
+    isbn: w.isbn,
+    language: w.language,
+    url: w.url,
+    keywords: w.keywords,
     cslJson: w.cslJson,
     authors: w.authors.map((a) => ({
       displayName: a.displayName,
       orcid: a.orcid,
       position: a.position,
+      role: a.role,
     })),
   };
 }

@@ -5,7 +5,16 @@ export { newId, workFingerprint, normalizeDoi } from "./ids";
 export type { Database } from "./database";
 export { createNodeDatabase } from "./database";
 export { WorksRepo } from "./repos/works";
-export type { WorkInput, WorkRow, WorkWithAuthors } from "./repos/works";
+export type {
+  WorkInput,
+  WorkRow,
+  WorkWithAuthors,
+  WorkPatch,
+  WorkAuthorInput,
+  WorkAuthorDetail,
+  AuthorRole,
+  RichBibFields,
+} from "./repos/works";
 export { AnnotationsRepo } from "./repos/annotations";
 export type { AnnotationInput, AnnotationRow } from "./repos/annotations";
 export { AttachmentsRepo } from "./repos/attachments";

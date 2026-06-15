@@ -14,8 +14,15 @@ export interface OpenAlexWork {
   publication_date?: string;
   ids?: { pmid?: string; mag?: string };
   primary_location?: {
-    source?: { display_name?: string; type?: string };
+    source?: {
+      display_name?: string;
+      type?: string;
+      issn_l?: string;
+      issn?: string[];
+      host_organization_name?: string;
+    };
     pdf_url?: string;
+    landing_page_url?: string;
   };
   best_oa_location?: { pdf_url?: string };
   open_access?: { oa_url?: string };
@@ -23,6 +30,9 @@ export interface OpenAlexWork {
   referenced_works?: string[];
   cited_by_count?: number;
   cited_by_api_url?: string;
+  language?: string;
+  biblio?: { volume?: string; issue?: string; first_page?: string; last_page?: string };
+  keywords?: Array<{ display_name?: string; keyword?: string }>;
   authorships?: Array<{
     author?: { display_name?: string; orcid?: string };
     is_corresponding?: boolean;
@@ -103,9 +113,26 @@ export function normalizeOpenAlex(w: OpenAlexWork): NormalizedWork {
       position: i,
       isCorresponding: a.is_corresponding,
     })),
+    volume: w.biblio?.volume || undefined,
+    issue: w.biblio?.issue || undefined,
+    pages: pageRange(w.biblio?.first_page, w.biblio?.last_page),
+    publisher: w.primary_location?.source?.host_organization_name,
+    issn: w.primary_location?.source?.issn_l ?? w.primary_location?.source?.issn?.[0],
+    language: w.language,
+    url: w.primary_location?.landing_page_url,
+    keywords: w.keywords?.length
+      ? w.keywords.map((k) => k.display_name ?? k.keyword).filter((s): s is string => !!s)
+      : undefined,
     oaPdfUrl: w.best_oa_location?.pdf_url ?? w.open_access?.oa_url ?? undefined,
     source: "openalex",
   };
+}
+
+/** Joins OpenAlex first/last page into a CSL-style range. */
+function pageRange(first?: string, last?: string): string | undefined {
+  if (!first && !last) return undefined;
+  if (first && last) return `${first}-${last}`;
+  return first || last;
 }
 
 /** OpenAlex stores abstracts as {word: [positions]} — rebuild the text. */
