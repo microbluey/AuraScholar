@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { clueFromInput, clueFromUrl, cluesFromPdfText } from "./clues";
+import {
+  clueFromInput,
+  clueFromUrl,
+  cluesFromPdfSource,
+  cluesFromPdfText,
+  titleCandidatesFromPdfSource,
+} from "./clues";
 
 describe("clueFromInput", () => {
   it("recognizes bare DOIs", () => {
@@ -61,5 +67,39 @@ describe("cluesFromPdfText", () => {
   it("picks up arXiv ids", () => {
     const clues = cluesFromPdfText("preprint arXiv:2301.00001v2 under review");
     expect(clues).toContainEqual({ kind: "arxiv", arxivId: "2301.00001" });
+  });
+});
+
+describe("cluesFromPdfSource", () => {
+  it("prioritizes identifiers from PDF metadata before title fallbacks", () => {
+    const clues = cluesFromPdfSource({
+      metadata: { title: "Publisher proof 10.1145/3442188.3445922" },
+      text: "Attention Is All You Need\nAshish Vaswani et al.\nAbstract\n...",
+      fileName: "attention.pdf",
+    });
+    expect(clues[0]).toEqual({ kind: "doi", doi: "10.1145/3442188.3445922" });
+    expect(clues).toContainEqual({ kind: "title", title: "Attention Is All You Need" });
+  });
+
+  it("extracts plausible title candidates from first-page text", () => {
+    expect(
+      titleCandidatesFromPdfSource({
+        text: `
+          Attention Is All You Need
+          Ashish Vaswani, Noam Shazeer, Niki Parmar
+          Google Brain
+          Abstract
+          The dominant sequence transduction models are based on complex recurrent networks.
+        `,
+      })[0],
+    ).toBe("Attention Is All You Need");
+  });
+
+  it("filters generic PDF metadata and non-title filenames", () => {
+    const candidates = titleCandidatesFromPdfSource({
+      metadata: { title: "Microsoft Word - Main Document.docx" },
+      fileName: "s41586-021-03819-2.pdf",
+    });
+    expect(candidates).toEqual([]);
   });
 });

@@ -120,6 +120,169 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE work_authors ADD COLUMN role TEXT NOT NULL DEFAULT 'author';
     `,
   },
+  {
+    // Research discovery sites: the academic websites shown as cards on the
+    // discovery page and opened in the embedded browser. Built-in sites are
+    // seeded here (and protected from deletion — users hide rather than remove
+    // them); users can also add their own custom sites. Login/session state is
+    // NOT stored here — it lives in each site's webview dataDirectory.
+    version: 7,
+    name: "discovery_sites",
+    sql: `
+      CREATE TABLE IF NOT EXISTS discovery_sites (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        home_url TEXT NOT NULL,
+        search_url TEXT,
+        builtin INTEGER NOT NULL DEFAULT 0,
+        hidden INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT OR IGNORE INTO discovery_sites (id, name, home_url, search_url, builtin, sort_order, created_at, updated_at) VALUES
+        ('builtin:google-scholar', 'Google Scholar', 'https://scholar.google.com/', 'https://scholar.google.com/scholar?q=', 1, 10, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:web-of-science', 'Web of Science', 'https://www.webofscience.com/', NULL, 1, 20, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:scopus', 'Scopus', 'https://www.scopus.com/', NULL, 1, 30, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:pubmed', 'PubMed', 'https://pubmed.ncbi.nlm.nih.gov/', 'https://pubmed.ncbi.nlm.nih.gov/?term=', 1, 40, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:cnki', 'CNKI', 'https://www.cnki.net/', NULL, 1, 50, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000);
+    `,
+  },
+  {
+    // More common academic sites/databases for the discovery card grid. Kept in
+    // a separate migration so machines that already ran v7 still receive them.
+    // Search URLs are the site's own query-string entrypoint where known, so a
+    // typed query opens straight to results; the rest open their homepage.
+    version: 8,
+    name: "discovery_sites_more",
+    sql: `
+      INSERT OR IGNORE INTO discovery_sites (id, name, home_url, search_url, builtin, sort_order, created_at, updated_at) VALUES
+        ('builtin:ieee-xplore', 'IEEE Xplore', 'https://ieeexplore.ieee.org/', 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=', 1, 60, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:sciencedirect', 'ScienceDirect', 'https://www.sciencedirect.com/', 'https://www.sciencedirect.com/search?qs=', 1, 70, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:springerlink', 'SpringerLink', 'https://link.springer.com/', 'https://link.springer.com/search?query=', 1, 80, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:wiley', 'Wiley Online Library', 'https://onlinelibrary.wiley.com/', 'https://onlinelibrary.wiley.com/action/doSearch?AllField=', 1, 90, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:acm-dl', 'ACM Digital Library', 'https://dl.acm.org/', 'https://dl.acm.org/action/doSearch?AllField=', 1, 100, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:jstor', 'JSTOR', 'https://www.jstor.org/', 'https://www.jstor.org/action/doBasicSearch?Query=', 1, 110, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:researchgate', 'ResearchGate', 'https://www.researchgate.net/', 'https://www.researchgate.net/search?q=', 1, 120, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:biorxiv', 'bioRxiv', 'https://www.biorxiv.org/', 'https://www.biorxiv.org/search/', 1, 130, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:dblp', 'DBLP', 'https://dblp.org/', 'https://dblp.org/search?q=', 1, 140, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:baidu-xueshu', '百度学术', 'https://xueshu.baidu.com/', 'https://xueshu.baidu.com/s?wd=', 1, 150, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:wanfang', '万方数据', 'https://www.wanfangdata.com.cn/', 'https://s.wanfangdata.com.cn/paper?q=', 1, 160, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000),
+        ('builtin:cqvip', '维普', 'https://www.cqvip.com/', NULL, 1, 170, CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000);
+    `,
+  },
+  {
+    // Per-site proxy opt-in. When use_proxy = 1, the site's embedded browser
+    // session routes through the user's configured proxy (a global address in
+    // the settings table, key 'research.proxy'); otherwise it uses the system
+    // network directly. This lets a campus VPN (system-level) and a separate
+    // proxy (e.g. Clash at 127.0.0.1:7890) coexist without fighting over routes:
+    // CNKI/百度 go direct via the VPN, Google Scholar goes through the proxy.
+    version: 9,
+    name: "discovery_site_proxy",
+    sql: `
+      ALTER TABLE discovery_sites ADD COLUMN use_proxy INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    // Local-first foundation for the commercial/cloud path:
+    // - a stable logical library/vault id, independent of user accounts
+    // - sync log entries that can carry full row values (not only clocks)
+    // - per-row clocks for field-level LWW merges
+    // - blob sync state for content-addressed PDFs and supplements
+    // - derived artifacts for AI/indexing/cache outputs that can be regenerated
+    version: 10,
+    name: "local_first_foundation",
+    sql: `
+      CREATE TABLE IF NOT EXISTS libraries (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'personal',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        deleted_at INTEGER
+      );
+
+      ALTER TABLE settings ADD COLUMN scope TEXT NOT NULL DEFAULT 'local';
+      ALTER TABLE settings ADD COLUMN updated_at INTEGER;
+
+      ALTER TABLE sync_state ADD COLUMN library_id TEXT;
+
+      ALTER TABLE sync_log ADD COLUMN library_id TEXT;
+      ALTER TABLE sync_log ADD COLUMN values_json TEXT;
+      ALTER TABLE sync_log ADD COLUMN created_at INTEGER;
+      CREATE INDEX IF NOT EXISTS sync_log_library_seq_idx ON sync_log(library_id, seq);
+
+      CREATE TABLE IF NOT EXISTS sync_row_clocks (
+        table_name TEXT NOT NULL,
+        row_id TEXT NOT NULL,
+        library_id TEXT,
+        column_hlcs_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (table_name, row_id)
+      );
+      CREATE INDEX IF NOT EXISTS sync_row_clocks_library_idx ON sync_row_clocks(library_id, table_name);
+
+      CREATE TABLE IF NOT EXISTS blob_sync_state (
+        sha256 TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        library_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        remote_path TEXT,
+        uploaded_at INTEGER,
+        downloaded_at INTEGER,
+        error TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (sha256, provider_id)
+      );
+      CREATE INDEX IF NOT EXISTS blob_sync_state_library_idx ON blob_sync_state(library_id, status);
+
+      CREATE TABLE IF NOT EXISTS derived_artifacts (
+        id TEXT PRIMARY KEY,
+        library_id TEXT,
+        source_table TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        model TEXT,
+        prompt_hash TEXT,
+        input_hash TEXT,
+        payload_json TEXT NOT NULL,
+        local_only INTEGER NOT NULL DEFAULT 0,
+        syncable INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        deleted_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS derived_artifacts_source_idx ON derived_artifacts(source_table, source_id, kind);
+      CREATE INDEX IF NOT EXISTS derived_artifacts_library_idx ON derived_artifacts(library_id, kind);
+    `,
+  },
+  {
+    // Saved searches ("检索订阅"): a stored open-source aggregate query that the
+    // app re-runs on a schedule to surface newly-published matches — the
+    // discovery analogue of the sentinel. seen_ids_json holds the stable
+    // identifiers (doi/arxiv/openalex/s2/fingerprint) observed on the last run;
+    // anything outside that set on the next run counts as "new". new_count is a
+    // cached badge value the UI reads without re-running the query.
+    version: 11,
+    name: "saved_searches",
+    sql: `
+      CREATE TABLE IF NOT EXISTS saved_searches (
+        id TEXT PRIMARY KEY,
+        query TEXT NOT NULL,
+        sources_json TEXT,
+        seen_ids_json TEXT NOT NULL DEFAULT '[]',
+        new_count INTEGER NOT NULL DEFAULT 0,
+        last_run_at INTEGER,
+        next_run_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        deleted_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS saved_searches_due_idx ON saved_searches(next_run_at);
+    `,
+  },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

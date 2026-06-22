@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Badge, Button, Input } from "@aurascholar/ui";
 import {
@@ -13,19 +13,31 @@ import {
   type WorkWithAuthors,
 } from "@aurascholar/db";
 import { getDb } from "../services/tauri-db";
-import { ingestFromInput, ingestFromPdf, listWorks } from "../services/library";
+import {
+  analyzeInput,
+  analyzeOaPdf,
+  analyzePdf,
+  attachPdfToWork,
+  attachStagedPdf,
+  commitIngest,
+  restoreDedup,
+  listDeletedWorks,
+  listWorks,
+  type IngestDraft,
+} from "../services/library";
 import { generateFlashcardsForWork } from "../services/ai";
 import { exportWorks, bibliographyText, type ExportFormat } from "../services/cite";
 import { importReferences, previewReferences } from "../services/import-refs";
 import { fetchScholarEnrichment, type S2Enrichment } from "../services/scholar";
 import { MetadataEditor } from "../components/MetadataEditor";
+import { ImportConfirmDialog, type ImportDecision } from "../components/ImportConfirmDialog";
 import { STYLES } from "@aurascholar/cite";
 
 function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return "aura" in window;
 }
 
-type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred";
+type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred" | "trash";
 type SortMode = "added" | "year";
 type DetailPanelTab = "overview" | "notes";
 
@@ -38,6 +50,17 @@ interface LibraryViewDetail {
   filter?: LibraryFilter;
   collectionId?: string | null;
   tag?: string | null;
+}
+
+interface TextPromptConfig {
+  title: string;
+  label: string;
+  initialValue?: string;
+  placeholder?: string;
+  confirmLabel: string;
+  description?: string;
+  allowEmpty?: boolean;
+  onSubmit: (value: string) => Promise<void>;
 }
 
 interface WorkRuntimeMeta {
@@ -80,6 +103,7 @@ export function LibraryPage() {
   const [search, setSearch] = useState("");
   const [items, setItems] = useState<WorkWithAuthors[]>([]);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
+  const [trashCount, setTrashCount] = useState(0);
   const [workMeta, setWorkMeta] = useState<Record<string, WorkTableMeta>>({});
   const [activeCollection, setActiveCollection] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<LibraryFilter>("all");
@@ -89,16 +113,25 @@ export function LibraryPage() {
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
   const [selectedMeta, setSelectedMeta] = useState<WorkRuntimeMeta | null>(null);
   const [busy, setBusy] = useState(false);
+  const [attachingPdf, setAttachingPdf] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [page, setPage] = useState(0);
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [collectionManagerOpen, setCollectionManagerOpen] = useState(false);
+  const [textPrompt, setTextPrompt] = useState<TextPromptConfig | null>(null);
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [citeMenuOpen, setCiteMenuOpen] = useState(false);
   const [editingMetaId, setEditingMetaId] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<{ count: number; text: string } | null>(null);
   const [importing, setImporting] = useState(false);
+  // Import confirmation: analyze returns a draft (blob already staged by sha,
+  // no library rows written); commitIngest writes only after the user confirms.
+  const [confirmDraft, setConfirmDraft] = useState<IngestDraft | null>(null);
+  const [findingFulltext, setFindingFulltext] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedPdfInputRef = useRef<HTMLInputElement>(null);
   const refsInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -113,8 +146,16 @@ export function LibraryPage() {
     }
     const db = await getDb();
     const colRepo = new CollectionsRepo(db);
-    setCollections(await colRepo.list());
-    const works = await listWorks(search || undefined, activeCollection ?? undefined, LIST_HARD_LIMIT);
+    const [collectionRows, trashRows] = await Promise.all([
+      colRepo.list(),
+      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
+    ]);
+    setCollections(collectionRows);
+    setTrashCount(trashRows[0]?.n ?? 0);
+    const showTrash = activeFilter === "trash";
+    const works = showTrash
+      ? await listDeletedWorks(search || undefined, LIST_HARD_LIMIT)
+      : await listWorks(search || undefined, activeCollection ?? undefined, LIST_HARD_LIMIT);
     setItems(works);
     if (works.length === 0) {
       setWorkMeta({});
@@ -177,7 +218,7 @@ export function LibraryPage() {
     }
     setWorkMeta(nextMeta);
     window.dispatchEvent(new Event("aurascholar:library-updated"));
-  }, [search, activeCollection]);
+  }, [search, activeCollection, activeFilter]);
 
   useEffect(() => {
     const t = setTimeout(() => void refresh(), search ? 250 : 0);
@@ -190,65 +231,139 @@ export function LibraryPage() {
       .catch(() => {}); // no AI config / scanned PDF — manual extraction remains
   }, []);
 
+  // Surface a dedup hit (already in library) without a confirm card.
+  const surfaceDedup = useCallback(
+    async (draft: IngestDraft): Promise<boolean> => {
+      if (!draft.dedup) return false;
+      await restoreDedup(draft.dedup.workId);
+      // A fresh PDF for an existing work: attach it directly (work identity is
+      // already settled, no confirmation needed).
+      if (draft.pdf) {
+        await attachStagedPdf(draft.dedup.workId, draft.pdf).catch(() => {});
+      }
+      setMessage(`已在库中:${draft.dedup.title}`);
+      await refresh();
+      return true;
+    },
+    [refresh],
+  );
+
   const handleAdd = useCallback(async () => {
     if (!input.trim() || busy) return;
     setBusy(true);
-    setMessage(null);
+    setMessage("正在识别…");
     try {
-      const result = await ingestFromInput(input);
-      if (!result) {
+      const draft = await analyzeInput(input);
+      if (!draft) {
         setMessage("无法识别输入 — 请提供 DOI、arXiv ID、论文链接或标题");
-      } else {
-        setMessage(
-          result.deduped
-            ? `已在库中:${result.title}`
-            : `已入库:${result.title}${result.pdfFetched ? "(含 PDF,正在后台提取重点…)" : "(未找到开放获取 PDF)"}`,
-        );
-        if (!result.deduped && result.pdfFetched) autoDigest(result.workId, result.title);
+      } else if (await surfaceDedup(draft)) {
         setInput("");
-        await refresh();
+      } else {
+        setConfirmDraft(draft);
+        setInput("");
       }
     } catch (e) {
-      setMessage(`入库失败:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`解析失败:${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(false);
     }
-  }, [input, busy, refresh, autoDigest]);
+  }, [input, busy, surfaceDedup]);
 
   const handleUpload = useCallback(
     async (file: File) => {
       setBusy(true);
-      setMessage(null);
+      setMessage("正在识别 PDF…");
       try {
         const data = new Uint8Array(await file.arrayBuffer());
-        const result = await ingestFromPdf(file.name, data);
-        setMessage(
-          result.needsConfirmation
-            ? `已入库(未能自动识别元数据):${result.title}`
-            : `已入库:${result.title}(正在后台提取重点…)`,
-        );
-        if (!result.deduped) autoDigest(result.workId, result.title);
-        await refresh();
+        const draft = await analyzePdf(file.name, data);
+        if (await surfaceDedup(draft)) return;
+        setMessage(null);
+        setConfirmDraft(draft);
       } catch (e) {
-        setMessage(`上传失败:${e instanceof Error ? e.message : String(e)}`);
+        setMessage(`解析失败:${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setBusy(false);
       }
     },
-    [refresh, autoDigest],
+    [surfaceDedup],
   );
+
+  // User confirmed the import card → write to the library (create or attach).
+  const handleConfirmImport = useCallback(
+    async (decision: ImportDecision) => {
+      const draft = confirmDraft;
+      setConfirmDraft(null);
+      if (decision.mode === "attach") {
+        await restoreDedup(decision.workId);
+        if (decision.pdf) await attachStagedPdf(decision.workId, decision.pdf);
+        setMessage("已将 PDF 挂到所选文献");
+      } else {
+        const result = await commitIngest({
+          workInput: decision.workInput,
+          pdf: decision.pdf,
+          source: draft?.source ?? "pdf",
+        });
+        setMessage(`已入库:${result.title}`);
+        if (!result.deduped && result.pdfFetched) autoDigest(result.workId, result.title);
+      }
+      window.dispatchEvent(new Event("aurascholar:library-updated"));
+      await refresh();
+    },
+    [confirmDraft, refresh, autoDigest],
+  );
+
+  const handleCancelImport = useCallback(() => {
+    setConfirmDraft(null);
+    setMessage("已取消入库");
+  }, []);
 
   const handleNewFolder = useCallback(async () => {
     if (!isTauriRuntime()) {
       setMessage("预览模式下不会写入本地数据库");
       return;
     }
-    const name = window.prompt("新建文件夹名称:");
-    if (!name?.trim()) return;
-    const db = await getDb();
-    await new CollectionsRepo(db).create(name.trim());
-    await refresh();
+    setTextPrompt({
+      title: "新建文件夹",
+      label: "文件夹名称",
+      placeholder: "例如：Transformer 综述",
+      confirmLabel: "创建",
+      onSubmit: async (value) => {
+        const name = value.trim();
+        const db = await getDb();
+        const id = await new CollectionsRepo(db).create(name);
+        setActiveFilter("all");
+        setActiveCollection(id);
+        setActiveTag(null);
+        setActiveSource(null);
+        setMessage(`已新建文件夹「${name}」`);
+        await refresh();
+      },
+    });
   }, [refresh]);
+
+  const handleRenameFolder = useCallback(
+    async (id: string, name: string) => {
+      if (!isTauriRuntime()) {
+        setMessage("预览模式下不会写入本地数据库");
+        return;
+      }
+      setTextPrompt({
+        title: "重命名文件夹",
+        label: "文件夹名称",
+        initialValue: name,
+        confirmLabel: "保存",
+        onSubmit: async (value) => {
+          const next = value.trim();
+          if (next === name) return;
+          const db = await getDb();
+          await new CollectionsRepo(db).rename(id, next);
+          setMessage(`已重命名为「${next}」`);
+          await refresh();
+        },
+      });
+    },
+    [refresh],
+  );
 
   const handleDeleteFolder = useCallback(
     async (id: string, name: string) => {
@@ -260,6 +375,7 @@ export function LibraryPage() {
       const db = await getDb();
       await new CollectionsRepo(db).softDelete(id);
       if (activeCollection === id) setActiveCollection(null);
+      setMessage(`已删除文件夹「${name}」`);
       await refresh();
     },
     [activeCollection, refresh],
@@ -268,11 +384,13 @@ export function LibraryPage() {
   useEffect(() => {
     const onLibraryView = (event: Event) => {
       const detail = (event as CustomEvent<LibraryViewDetail>).detail ?? {};
-      setActiveFilter(detail.filter ?? "all");
-      setActiveCollection(detail.collectionId ?? null);
-      setActiveTag(detail.tag ?? null);
+      const nextFilter = detail.filter ?? "all";
+      setActiveFilter(nextFilter);
+      setActiveCollection(nextFilter === "trash" ? null : (detail.collectionId ?? null));
+      setActiveTag(nextFilter === "trash" ? null : (detail.tag ?? null));
       setActiveSource(null);
       setSelectedWorkId(null);
+      setSelectedIds(new Set());
     };
     const onCreateCollection = () => void handleNewFolder();
     const onManageTags = () => setTagManagerOpen(true);
@@ -286,6 +404,14 @@ export function LibraryPage() {
     };
   }, [handleNewFolder]);
 
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("aurascholar:library-view-state", {
+        detail: { filter: activeFilter, collectionId: activeCollection, tag: activeTag },
+      }),
+    );
+  }, [activeCollection, activeFilter, activeTag]);
+
   const handleTagFilter = useCallback(() => {
     const tagNames = Array.from(new Set(Object.values(workMeta).flatMap((meta) => meta.tags))).sort(
       (a, b) => a.localeCompare(b, "zh-CN"),
@@ -294,9 +420,17 @@ export function LibraryPage() {
       setMessage("当前结果没有可筛选的标签");
       return;
     }
-    const next = window.prompt("输入要筛选的标签名称，留空清除:", activeTag ?? tagNames[0]);
-    if (next === null) return;
-    setActiveTag(next.trim() || null);
+    setTextPrompt({
+      title: "按标签筛选",
+      label: "标签名称",
+      initialValue: activeTag ?? tagNames[0],
+      confirmLabel: "应用",
+      description: "留空可以清除当前标签筛选。",
+      allowEmpty: true,
+      onSubmit: async (value) => {
+        setActiveTag(value.trim() || null);
+      },
+    });
   }, [activeTag, workMeta]);
 
   const handleSourceFilter = useCallback(() => {
@@ -311,13 +445,27 @@ export function LibraryPage() {
       setMessage("当前结果没有可筛选的来源");
       return;
     }
-    const next = window.prompt("输入要筛选的来源，留空清除:", activeSource ?? sourceNames[0]);
-    if (next === null) return;
-    setActiveSource(next.trim() || null);
+    setTextPrompt({
+      title: "按来源筛选",
+      label: "来源名称",
+      initialValue: activeSource ?? sourceNames[0],
+      confirmLabel: "应用",
+      description: "留空可以清除当前来源筛选。",
+      allowEmpty: true,
+      onSubmit: async (value) => {
+        setActiveSource(value.trim() || null);
+      },
+    });
   }, [activeSource, items]);
 
-  const isPreview = !isTauriRuntime();
+  const isTrashView = activeFilter === "trash";
   const filteredItems = useMemo(() => {
+    const sortWorks = (works: WorkWithAuthors[]) =>
+      [...works].sort((a, b) => {
+        if (sortMode === "year") return (b.year ?? 0) - (a.year ?? 0);
+        return (b.created_at ?? 0) - (a.created_at ?? 0);
+      });
+    if (activeFilter === "trash") return sortWorks(items);
     const filtered = items.filter((work) => {
       if (activeTag && !(workMeta[work.id]?.tags ?? []).includes(activeTag)) return false;
       if (
@@ -334,12 +482,10 @@ export function LibraryPage() {
       if (activeFilter === "starred") return work.starred === 1;
       return true;
     });
-    return [...filtered].sort((a, b) => {
-      if (sortMode === "year") return (b.year ?? 0) - (a.year ?? 0);
-      return (b.created_at ?? 0) - (a.created_at ?? 0);
-    });
+    return sortWorks(filtered);
   }, [activeFilter, activeSource, activeTag, items, sortMode, workMeta]);
-  const totalDisplay = items.length.toLocaleString("zh-CN");
+  const countBaseItems = isTrashView ? [] : items;
+  const totalDisplay = countBaseItems.length.toLocaleString("zh-CN");
   const tableRows = filteredItems;
   const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
@@ -347,15 +493,114 @@ export function LibraryPage() {
     () => tableRows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
     [tableRows, safePage],
   );
-  const readingCount = items.filter((w) => w.reading_status === "reading").length;
-  const unreadCount = items.filter((w) => w.reading_status === "unread").length;
-  const notedCount = items.filter((w) => (workMeta[w.id]?.annotations ?? 0) > 0).length;
-  const starredCount = items.filter((w) => w.starred === 1).length;
+  const readingCount = countBaseItems.filter((w) => w.reading_status === "reading").length;
+  const unreadCount = countBaseItems.filter((w) => w.reading_status === "unread").length;
+  const notedCount = countBaseItems.filter((w) => (workMeta[w.id]?.annotations ?? 0) > 0).length;
+  const starredCount = countBaseItems.filter((w) => w.starred === 1).length;
+  const activeCollectionRow =
+    collections.find((collection) => collection.id === activeCollection) ?? null;
+  const viewTitle = isTrashView
+    ? "回收站"
+    : activeCollectionRow?.name ??
+      (activeTag ? `标签:${activeTag}` : activeSource ? `来源:${activeSource}` : "全部文献");
+  const viewMetaParts = [
+    `${tableRows.length.toLocaleString("zh-CN")} 条结果`,
+    activeFilter === "reading"
+      ? "阅读中"
+      : activeFilter === "unread"
+        ? "未读"
+        : activeFilter === "noted"
+          ? "有笔记"
+          : activeFilter === "starred"
+            ? "重点文献"
+            : null,
+    activeCollectionRow ? "文件夹视图" : null,
+    activeTag ? `标签 ${activeTag}` : null,
+    activeSource ? `来源 ${activeSource}` : null,
+    sortMode === "year" ? "按发表时间" : "按添加时间",
+  ].filter(Boolean);
+  const viewSubtitle = viewMetaParts.join(" · ");
+  const activeViewLabel = activeCollectionRow
+    ? `文件夹 / ${activeCollectionRow.name}`
+    : isTrashView
+      ? "系统分组 / 回收站"
+      : activeFilter === "all"
+        ? "系统分组 / 全部文献"
+        : "系统分组 / 状态筛选";
 
   const selectedWork = useMemo(
     () => tableRows.find((w) => w.id === selectedWorkId) ?? tableRows[0] ?? null,
     [tableRows, selectedWorkId],
   );
+
+  const handleAttachPdf = useCallback(
+    async (file: File) => {
+      if (!selectedWork) return;
+      if (!isTauriRuntime()) {
+        setMessage("预览模式下不会写入本地数据库");
+        return;
+      }
+      setAttachingPdf(true);
+      setMessage(null);
+      try {
+        const data = new Uint8Array(await file.arrayBuffer());
+        const result = await attachPdfToWork(selectedWork.id, file.name, data);
+        setMessage(
+          result.deduped
+            ? `这份 PDF 已经附加在《${selectedWork.title}》上`
+            : `已为《${selectedWork.title}》上传 PDF(${result.pageCount} 页)`,
+        );
+        if (!result.deduped) autoDigest(selectedWork.id, selectedWork.title);
+        await refresh();
+        setSelectedWorkId(selectedWork.id);
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      } catch (e) {
+        setMessage(`上传 PDF 失败:${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setAttachingPdf(false);
+      }
+    },
+    [autoDigest, refresh, selectedWork],
+  );
+
+  // "Find full text" for a work missing a PDF: try OA first (still confirmed via
+  // the card, defaulting to attach); otherwise open the browser at its landing
+  // page carrying the work id so the eventual download attaches to this work.
+  const handleFindFulltext = useCallback(async () => {
+    if (!selectedWork) return;
+    if (!isTauriRuntime()) {
+      setMessage("预览模式下无法联网查找全文");
+      return;
+    }
+    setFindingFulltext(true);
+    setMessage("正在查找开放获取全文…");
+    try {
+      const draft = await analyzeOaPdf({
+        doi: selectedWork.doi ?? undefined,
+        arxivId: selectedWork.arxiv_id ?? undefined,
+        title: selectedWork.title,
+      });
+      if (draft) {
+        setMessage(null);
+        setConfirmDraft({ ...draft, targetWorkId: selectedWork.id, targetTitle: selectedWork.title });
+        return;
+      }
+      // No OA copy — hand off to the browser at the publisher / search page.
+      const landing = selectedWork.doi
+        ? `https://doi.org/${selectedWork.doi}`
+        : `https://scholar.google.com/scholar?q=${encodeURIComponent(selectedWork.title)}`;
+      const params = new URLSearchParams({
+        pendingWorkId: selectedWork.id,
+        pendingTitle: selectedWork.title,
+        url: landing,
+      });
+      navigate(`/discovery?${params.toString()}`);
+    } catch (e) {
+      setMessage(`查找全文失败:${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setFindingFulltext(false);
+    }
+  }, [selectedWork, navigate]);
 
   useEffect(() => {
     if (tableRows.length === 0) {
@@ -420,10 +665,7 @@ export function LibraryPage() {
     if (!citeMenuOpen) return;
     const close = (e: Event) => {
       if (e instanceof KeyboardEvent && e.key !== "Escape") return;
-      if (
-        e instanceof MouseEvent &&
-        (e.target as HTMLElement)?.closest?.(".library-cite-menu")
-      ) {
+      if (e instanceof MouseEvent && (e.target as HTMLElement)?.closest?.(".library-cite-menu")) {
         return;
       }
       setCiteMenuOpen(false);
@@ -498,56 +740,143 @@ export function LibraryPage() {
   }, []);
 
   const bulkAddTag = useCallback(async () => {
-    if (selectedIds.size === 0 || !isTauriRuntime()) return;
-    const name = window.prompt(`为选中的 ${selectedIds.size} 篇文献添加标签:`);
-    if (!name?.trim()) return;
-    const db = await getDb();
-    await new TagsRepo(db).addToWorks(Array.from(selectedIds), name.trim());
-    setMessage(`已为 ${selectedIds.size} 篇文献添加标签「${name.trim()}」`);
-    setSelectedIds(new Set());
-    await refresh();
+    if (selectedIds.size === 0) {
+      setMessage("请先勾选要添加标签的文献");
+      return;
+    }
+    if (!isTauriRuntime()) {
+      setMessage("预览模式下不会写入本地数据库");
+      return;
+    }
+    const workIds = Array.from(selectedIds);
+    setTextPrompt({
+      title: "添加标签",
+      label: "标签名称",
+      placeholder: "例如：必读 / 方法 / 综述",
+      confirmLabel: "添加",
+      description: `将标签添加到已选的 ${workIds.length} 篇文献。`,
+      onSubmit: async (value) => {
+        const name = value.trim();
+        const db = await getDb();
+        await new TagsRepo(db).addToWorks(workIds, name);
+        setMessage(`已为 ${workIds.length} 篇文献添加标签「${name}」`);
+        setSelectedIds(new Set());
+        await refresh();
+      },
+    });
   }, [selectedIds, refresh]);
 
   const bulkMoveToCollection = useCallback(async () => {
-    if (selectedIds.size === 0 || !isTauriRuntime()) return;
-    const choices = collections.map((c, i) => `${i + 1}. ${c.name}`).join("\n");
-    const raw = window.prompt(
-      `移动选中的 ${selectedIds.size} 篇文献到文件夹(输入编号，0=移出所有文件夹):\n${choices}`,
-      "0",
-    );
-    if (raw === null) return;
-    const idx = Number(raw.trim());
-    const target = idx === 0 ? null : collections[idx - 1]?.id ?? null;
-    if (idx !== 0 && !target) {
-      setMessage("无效的文件夹编号");
+    if (selectedIds.size === 0) {
+      setMessage("请先勾选要移动的文献");
       return;
     }
+    if (!isTauriRuntime()) {
+      setMessage("预览模式下不会写入本地数据库");
+      return;
+    }
+    setMoveDialogOpen(true);
+  }, [selectedIds]);
+
+  const moveSelectedToCollection = useCallback(async (target: string | null, targetName: string) => {
+    if (selectedIds.size === 0 || !isTauriRuntime()) return;
+    const workIds = Array.from(selectedIds);
     const db = await getDb();
     const colRepo = new CollectionsRepo(db);
-    for (const workId of selectedIds) {
+    for (const workId of workIds) {
       await colRepo.setWorkCollection(workId, target);
     }
-    setMessage(
-      target
-        ? `已移动 ${selectedIds.size} 篇文献到「${collections[idx - 1]?.name}」`
-        : `已将 ${selectedIds.size} 篇文献移出所有文件夹`,
-    );
+    setMessage(target ? `已移动 ${workIds.length} 篇文献到「${targetName}」` : `已将 ${workIds.length} 篇文献移出所有文件夹`);
     setSelectedIds(new Set());
     await refresh();
   }, [selectedIds, collections, refresh]);
 
   const bulkDelete = useCallback(async () => {
     if (selectedIds.size === 0 || !isTauriRuntime()) return;
-    if (!window.confirm(`确定删除选中的 ${selectedIds.size} 篇文献?(可在数据库中恢复)`)) return;
+    if (!window.confirm(`将选中的 ${selectedIds.size} 篇文献移入回收站?`)) return;
     const db = await getDb();
     const worksRepo = new WorksRepo(db);
     for (const workId of selectedIds) {
       await worksRepo.softDelete(workId);
     }
-    setMessage(`已删除 ${selectedIds.size} 篇文献`);
+    setMessage(`已将 ${selectedIds.size} 篇文献移入回收站`);
     setSelectedIds(new Set());
     await refresh();
   }, [selectedIds, refresh]);
+
+  const restoreWorks = useCallback(
+    async (workIds: string[]) => {
+      if (workIds.length === 0 || !isTauriRuntime()) return;
+      const db = await getDb();
+      const worksRepo = new WorksRepo(db);
+      for (const workId of workIds) {
+        await worksRepo.restore(workId);
+      }
+      setMessage(`已恢复 ${workIds.length} 篇文献`);
+      setSelectedIds(new Set());
+      await refresh();
+      window.dispatchEvent(new Event("aurascholar:library-updated"));
+    },
+    [refresh],
+  );
+
+  const purgeWorks = useCallback(
+    async (workIds: string[]) => {
+      if (workIds.length === 0 || !isTauriRuntime()) return;
+      if (
+        !window.confirm(
+          `永久删除 ${workIds.length} 篇回收站文献?这会移除元数据、标签、笔记、闪卡和关联记录，不能撤销。`,
+        )
+      ) {
+        return;
+      }
+      const db = await getDb();
+      const worksRepo = new WorksRepo(db);
+      for (const workId of workIds) {
+        await worksRepo.purgeDeleted(workId);
+      }
+      setMessage(`已永久删除 ${workIds.length} 篇文献`);
+      setSelectedIds(new Set());
+      await refresh();
+      window.dispatchEvent(new Event("aurascholar:library-updated"));
+    },
+    [refresh],
+  );
+
+  const bulkMerge = useCallback(async () => {
+    if (selectedIds.size < 2 || !isTauriRuntime()) return;
+    if (!selectedWork || !selectedIds.has(selectedWork.id)) {
+      setMessage("请先在已勾选的文献中点选一篇作为主记录，再执行合并");
+      return;
+    }
+    const duplicates = Array.from(selectedIds).filter((id) => id !== selectedWork.id);
+    const titles = items
+      .filter((work) => duplicates.includes(work.id))
+      .slice(0, 4)
+      .map((work) => `《${work.title}》`)
+      .join("、");
+    const ok = window.confirm(
+      `将 ${duplicates.length} 篇重复文献合并到主记录《${selectedWork.title}》?\n\n会迁移 PDF、批注、闪卡、标签、摘录、文件夹、引文和任务；主记录的题名与作者优先保留，重复项会软删除。\n\n重复项:${titles}${duplicates.length > 4 ? "…" : ""}`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const db = await getDb();
+      const result = await new WorksRepo(db).mergeInto(selectedWork.id, duplicates);
+      setMessage(
+        `已合并 ${result.merged} 篇重复文献到《${selectedWork.title}》${result.movedAttachments ? `，迁移 ${result.movedAttachments} 个附件` : ""}`,
+      );
+      setSelectedIds(new Set());
+      setSelectedWorkId(selectedWork.id);
+      await refresh();
+      window.dispatchEvent(new Event("aurascholar:library-updated"));
+    } catch (e) {
+      setMessage(`合并失败:${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [items, refresh, selectedIds, selectedWork]);
 
   const handleExportCitations = useCallback(
     async (format: ExportFormat) => {
@@ -613,6 +942,14 @@ export function LibraryPage() {
     }
   }, [importPreview, refresh]);
 
+  const clearLibraryView = useCallback(() => {
+    setActiveFilter("all");
+    setActiveCollection(null);
+    setActiveTag(null);
+    setActiveSource(null);
+    setSelectedIds(new Set());
+  }, []);
+
   return (
     <div className="library-page">
       <h1 className="sr-only">文献库</h1>
@@ -627,83 +964,129 @@ export function LibraryPage() {
           />
           <span className="au-kbd">Enter</span>
         </div>
-        <Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={busy}>
-          导入 PDF
-        </Button>
-        <Button variant="secondary" onClick={() => refsInputRef.current?.click()} disabled={busy}>
-          导入文献库
-        </Button>
-        <Button onClick={() => void handleAdd()} disabled={busy}>
-          {busy ? "处理中..." : "添加文献"}
-        </Button>
-        <ActionIconButton label="刷新" icon="refresh" onClick={() => void refresh()} />
-        <ActionIconButton
-          label="管理标签"
-          icon="tag"
-          onClick={() => setTagManagerOpen(true)}
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/pdf"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleUpload(f);
-            e.target.value = "";
-          }}
-        />
-        <input
-          ref={refsInputRef}
-          type="file"
-          accept=".bib,.ris,.json,application/json,text/plain"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleRefsFile(f);
-            e.target.value = "";
-          }}
-        />
+        <div className="library-topbar__actions">
+          <Button
+            variant="secondary"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy}
+          >
+            导入 PDF
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => refsInputRef.current?.click()}
+            disabled={busy}
+          >
+            导入文献库
+          </Button>
+          <Button onClick={() => void handleAdd()} disabled={busy}>
+            {busy ? "处理中..." : "添加文献"}
+          </Button>
+          <ActionIconButton label="刷新" icon="refresh" onClick={() => void refresh()} />
+        </div>
       </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void handleUpload(f);
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={selectedPdfInputRef}
+        type="file"
+        accept="application/pdf"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void handleAttachPdf(f);
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={refsInputRef}
+        type="file"
+        accept=".bib,.ris,.json,application/json,text/plain"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void handleRefsFile(f);
+          e.target.value = "";
+        }}
+      />
       {message && <p className="library-command__message">{message}</p>}
 
       {selectedIds.size > 0 && (
         <div className="library-bulkbar">
           <span className="library-bulkbar__count">已选 {selectedIds.size} 篇</span>
-          <button type="button" onClick={() => void bulkAddTag()}>
-            添加标签
-          </button>
-          <button type="button" onClick={() => void bulkMoveToCollection()}>
-            移动到文件夹
-          </button>
-          <div className="library-cite-menu">
-            <button type="button" onClick={() => setCiteMenuOpen((v) => !v)}>
-              导出引用 ▾
-            </button>
-            {citeMenuOpen && (
-              <div className="library-cite-dropdown">
-                <div className="library-cite-dropdown__group">导出文件</div>
-                <button type="button" onClick={() => void handleExportCitations("bibtex")}>
-                  BibTeX (.bib)
+          {isTrashView ? (
+            <>
+              <button type="button" onClick={() => void restoreWorks(Array.from(selectedIds))}>
+                恢复
+              </button>
+              <button
+                type="button"
+                className="library-bulkbar__danger"
+                onClick={() => void purgeWorks(Array.from(selectedIds))}
+              >
+                永久删除
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={() => void bulkAddTag()}>
+                添加标签
+              </button>
+              <button type="button" onClick={() => void bulkMoveToCollection()}>
+                移动到文件夹
+              </button>
+              {selectedIds.size > 1 && (
+                <button type="button" onClick={() => void bulkMerge()} disabled={busy}>
+                  合并文献
                 </button>
-                <button type="button" onClick={() => void handleExportCitations("ris")}>
-                  RIS (.ris)
+              )}
+              <div className="library-cite-menu">
+                <button type="button" onClick={() => setCiteMenuOpen((v) => !v)}>
+                  导出引用 ▾
                 </button>
-                <button type="button" onClick={() => void handleExportCitations("csljson")}>
-                  CSL-JSON (.json)
-                </button>
-                <div className="library-cite-dropdown__group">复制参考文献</div>
-                {STYLES.map((s) => (
-                  <button key={s.id} type="button" onClick={() => void handleCopyBibliography(s.id)}>
-                    {s.label}
-                  </button>
-                ))}
+                {citeMenuOpen && (
+                  <div className="library-cite-dropdown">
+                    <div className="library-cite-dropdown__group">导出文件</div>
+                    <button type="button" onClick={() => void handleExportCitations("bibtex")}>
+                      BibTeX (.bib)
+                    </button>
+                    <button type="button" onClick={() => void handleExportCitations("ris")}>
+                      RIS (.ris)
+                    </button>
+                    <button type="button" onClick={() => void handleExportCitations("csljson")}>
+                      CSL-JSON (.json)
+                    </button>
+                    <div className="library-cite-dropdown__group">复制参考文献</div>
+                    {STYLES.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => void handleCopyBibliography(s.id)}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <button type="button" className="library-bulkbar__danger" onClick={() => void bulkDelete()}>
-            删除
-          </button>
+              <button
+                type="button"
+                className="library-bulkbar__danger"
+                onClick={() => void bulkDelete()}
+              >
+                删除
+              </button>
+            </>
+          )}
           <button
             type="button"
             className="library-bulkbar__clear"
@@ -716,16 +1099,29 @@ export function LibraryPage() {
 
       <div className="app-workspace">
         <div className="library-main">
-          <div className="library-tabs">
+          <div className="library-list-header">
+            <div className="library-list-header__copy">
+              <span className="library-view-eyebrow">{activeViewLabel}</span>
+              <div className="library-view-title-row">
+                <h2>{viewTitle}</h2>
+                <span>{viewSubtitle}</span>
+              </div>
+            </div>
+            <div className="library-inline-search library-inline-search--header">
+              <Input
+                placeholder={isTrashView ? "搜索回收站" : "在结果中搜索"}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <span className="au-kbd">⌘ F</span>
+            </div>
+          </div>
+
+          <div className="library-tabs library-tabs--compact">
             <button
               className={`library-tab ${activeFilter === "all" ? "library-tab--active" : ""}`}
               type="button"
-              onClick={() => {
-                setActiveCollection(null);
-                setActiveFilter("all");
-                setActiveTag(null);
-                setActiveSource(null);
-              }}
+              onClick={clearLibraryView}
             >
               全部 <span>{totalDisplay}</span>
             </button>
@@ -757,90 +1153,106 @@ export function LibraryPage() {
             >
               重点 <span>{starredCount}</span>
             </button>
+            <button
+              className={`library-tab ${activeFilter === "trash" ? "library-tab--active" : ""}`}
+              type="button"
+              onClick={() => {
+                setActiveFilter("trash");
+                setActiveCollection(null);
+                setActiveTag(null);
+                setActiveSource(null);
+                setSelectedIds(new Set());
+              }}
+            >
+              回收站 <span>{trashCount}</span>
+            </button>
           </div>
 
-          <div className="library-filterbar">
-            <button
-              className="library-filter-button"
-              type="button"
-              onClick={() => setActiveFilter(activeFilter === "starred" ? "all" : "starred")}
-            >
-              {activeFilter === "starred" ? "取消重点" : "智能筛选"}
-            </button>
-            <button className="library-filter-button" type="button" onClick={handleTagFilter}>
-              {activeTag ? `标签:${activeTag}` : "标签"}
-            </button>
-            <button className="library-filter-button" type="button" onClick={handleSourceFilter}>
-              {activeSource ? `来源:${activeSource}` : "来源"}
-            </button>
-            <button
-              className="library-filter-button"
-              type="button"
-              onClick={() => setSortMode(sortMode === "year" ? "added" : "year")}
-            >
-              {sortMode === "year" ? "按添加时间" : "按发表时间"}
-            </button>
-            <button
-              className="library-filter-button"
-              type="button"
-              onClick={() => setMessage("更多筛选即将接入标签、附件、AI 状态和哨兵状态")}
-            >
-              更多
-            </button>
-            <div className="library-inline-search">
-              <Input
-                placeholder="在结果中搜索"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <span className="au-kbd">⌘ F</span>
-            </div>
+          <div className="library-filterbar library-filterbar--compact">
+            {isTrashView ? (
+              <>
+                <button className="library-filter-button" type="button" onClick={clearLibraryView}>
+                  返回全部
+                </button>
+                <button
+                  className="library-filter-button"
+                  type="button"
+                  onClick={() => setCollectionManagerOpen(true)}
+                >
+                  管理分组
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="library-filter-button"
+                  type="button"
+                  onClick={() => setActiveFilter(activeFilter === "starred" ? "all" : "starred")}
+                >
+                  {activeFilter === "starred" ? "取消重点" : "智能筛选"}
+                </button>
+                <button className="library-filter-button" type="button" onClick={handleTagFilter}>
+                  {activeTag ? `标签:${activeTag}` : "标签"}
+                </button>
+                <button
+                  className="library-filter-button"
+                  type="button"
+                  onClick={handleSourceFilter}
+                >
+                  {activeSource ? `来源:${activeSource}` : "来源"}
+                </button>
+                <button
+                  className="library-filter-button"
+                  type="button"
+                  onClick={() => setCollectionManagerOpen(true)}
+                >
+                  管理分组
+                </button>
+                <button
+                  className="library-filter-button"
+                  type="button"
+                  onClick={() => setTagManagerOpen(true)}
+                >
+                  管理标签
+                </button>
+                <button
+                  className="library-filter-button"
+                  type="button"
+                  onClick={() => setSortMode(sortMode === "year" ? "added" : "year")}
+                >
+                  {sortMode === "year" ? "按添加时间" : "按发表时间"}
+                </button>
+                <button
+                  className="library-filter-button"
+                  type="button"
+                  onClick={() => setMessage("更多筛选即将接入标签、附件、AI 状态和哨兵状态")}
+                >
+                  更多
+                </button>
+                {(activeCollection || activeTag || activeSource || activeFilter !== "all") && (
+                  <button
+                    className="library-filter-button"
+                    type="button"
+                    onClick={clearLibraryView}
+                  >
+                    清除筛选
+                  </button>
+                )}
+              </>
+            )}
           </div>
-
-          {!isPreview && (
-            <div className="library-collection-row">
-              <FolderItem
-                label="全部文献"
-                count={items.length}
-                active={activeCollection === null}
-                onClick={() => {
-                  setActiveCollection(null);
-                  setActiveTag(null);
-                  setActiveSource(null);
-                }}
-              />
-              {collections.map((c) => (
-                <FolderItem
-                  key={c.id}
-                  label={c.name}
-                  active={activeCollection === c.id}
-                  onClick={() => {
-                    setActiveCollection(c.id);
-                    setActiveTag(null);
-                    setActiveSource(null);
-                  }}
-                  onDelete={() => void handleDeleteFolder(c.id, c.name)}
-                />
-              ))}
-              <button
-                className="library-folder-add"
-                title="新建文件夹"
-                onClick={() => void handleNewFolder()}
-              >
-                新建文件夹
-              </button>
-            </div>
-          )}
 
           {tableRows.length === 0 ? (
             <div className="library-empty au-surface">
-              <h3>{items.length === 0 ? "还没有文献" : "当前筛选无结果"}</h3>
+              <h3>{isTrashView ? "回收站为空" : items.length === 0 ? "还没有文献" : "当前筛选无结果"}</h3>
               <p className="au-text-muted">
-                {items.length > 0
-                  ? "换一个筛选条件，或在上方搜索框里缩小/清除关键词。"
-                  : activeCollection
-                    ? "这个文件夹是空的。"
-                    : "从 DOI、arXiv、论文链接或 PDF 开始建立你的研究工作台。"}
+                {isTrashView
+                  ? "移入回收站的文献会显示在这里，可以恢复或永久删除。"
+                  : items.length > 0
+                    ? "换一个筛选条件，或在上方搜索框里缩小/清除关键词。"
+                    : activeCollection
+                      ? "这个文件夹是空的。"
+                      : "从 DOI、arXiv、论文链接或 PDF 开始建立你的研究工作台。"}
               </p>
             </div>
           ) : (
@@ -867,7 +1279,7 @@ export function LibraryPage() {
                 <span>来源</span>
                 <span>标签</span>
                 <span>引用</span>
-                <span>添加时间</span>
+                <span>{isTrashView ? "删除时间" : "添加时间"}</span>
               </div>
               {pagedRows.map((w, index) => (
                 <div
@@ -912,7 +1324,9 @@ export function LibraryPage() {
                     <WorkTags work={w} meta={workMeta[w.id]} index={index} />
                   </div>
                   <span className="library-table__cell">{citationLabel(workMeta[w.id])}</span>
-                  <span className="library-table__cell">{formatAddedDate(w.created_at)}</span>
+                  <span className="library-table__cell">
+                    {formatAddedDate(isTrashView ? w.deleted_at : w.created_at)}
+                  </span>
                 </div>
               ))}
               <div className="library-table__footer">
@@ -949,10 +1363,21 @@ export function LibraryPage() {
             work={selectedWork}
             meta={selectedMeta}
             tableMeta={selectedWork ? workMeta[selectedWork.id] : undefined}
+            isTrashView={isTrashView}
             generating={generating}
+            attachingPdf={attachingPdf}
             onOpenReader={() => {
               if (selectedWork) openReader(selectedWork);
             }}
+            onRestoreWork={() => {
+              if (selectedWork) void restoreWorks([selectedWork.id]);
+            }}
+            onPurgeWork={() => {
+              if (selectedWork) void purgeWorks([selectedWork.id]);
+            }}
+            onUploadPdf={() => selectedPdfInputRef.current?.click()}
+            onFindFulltext={() => void handleFindFulltext()}
+            findingFulltext={findingFulltext}
             onGenerateFlashcards={() => void generateForSelected()}
             onOpenFlashcards={() => navigate("/flashcards")}
             onOpenSentinel={() => navigate("/sentinel")}
@@ -978,12 +1403,78 @@ export function LibraryPage() {
         />
       )}
 
+      {confirmDraft && (
+        <ImportConfirmDialog
+          draft={confirmDraft}
+          onCommit={handleConfirmImport}
+          onCancel={handleCancelImport}
+        />
+      )}
+
+      {collectionManagerOpen && (
+        <CollectionManager
+          collections={collections}
+          activeCollection={activeCollection}
+          trashCount={trashCount}
+          isTrashView={isTrashView}
+          onClose={() => setCollectionManagerOpen(false)}
+          onSelectAll={() => {
+            clearLibraryView();
+            setCollectionManagerOpen(false);
+          }}
+          onSelectTrash={() => {
+            setActiveFilter("trash");
+            setActiveCollection(null);
+            setActiveTag(null);
+            setActiveSource(null);
+            setSelectedIds(new Set());
+            setCollectionManagerOpen(false);
+          }}
+          onSelectCollection={(collectionId) => {
+            setActiveFilter("all");
+            setActiveCollection(collectionId);
+            setActiveTag(null);
+            setActiveSource(null);
+            setSelectedIds(new Set());
+            setCollectionManagerOpen(false);
+          }}
+          onCreate={() => {
+            setCollectionManagerOpen(false);
+            void handleNewFolder();
+          }}
+          onRename={(collection) => {
+            setCollectionManagerOpen(false);
+            void handleRenameFolder(collection.id, collection.name);
+          }}
+          onDelete={(collection) => {
+            setCollectionManagerOpen(false);
+            void handleDeleteFolder(collection.id, collection.name);
+          }}
+        />
+      )}
+
       {tagManagerOpen && (
         <TagManager
           onClose={() => setTagManagerOpen(false)}
           onChanged={() => {
             void refresh();
             window.dispatchEvent(new Event("aurascholar:library-updated"));
+          }}
+        />
+      )}
+
+      {textPrompt && (
+        <TextPromptDialog config={textPrompt} onClose={() => setTextPrompt(null)} />
+      )}
+
+      {moveDialogOpen && (
+        <MoveToCollectionDialog
+          collections={collections}
+          selectedCount={selectedIds.size}
+          onClose={() => setMoveDialogOpen(false)}
+          onMove={async (collectionId, collectionName) => {
+            await moveSelectedToCollection(collectionId, collectionName);
+            setMoveDialogOpen(false);
           }}
         />
       )}
@@ -1015,7 +1506,11 @@ export function LibraryPage() {
               <Button onClick={() => void confirmImport()} disabled={importing}>
                 {importing ? "导入中…" : `导入 ${importPreview.count} 条`}
               </Button>
-              <Button variant="secondary" onClick={() => setImportPreview(null)} disabled={importing}>
+              <Button
+                variant="secondary"
+                onClick={() => setImportPreview(null)}
+                disabled={importing}
+              >
                 取消
               </Button>
             </div>
@@ -1026,9 +1521,274 @@ export function LibraryPage() {
   );
 }
 
+function TextPromptDialog({
+  config,
+  onClose,
+}: {
+  config: TextPromptConfig;
+  onClose: () => void;
+}) {
+  const [value, setValue] = useState(config.initialValue ?? "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const trimmed = value.trim();
+  const canSubmit = config.allowEmpty || Boolean(trimmed);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canSubmit) {
+      setError("请输入内容");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await config.onSubmit(config.allowEmpty ? trimmed : trimmed);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="library-modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <form className="library-modal library-prompt-modal" onSubmit={submit} onClick={(e) => e.stopPropagation()}>
+        <div className="library-modal__head">
+          <h2>{config.title}</h2>
+          <button
+            type="button"
+            className="library-modal__close"
+            onClick={onClose}
+            aria-label="关闭"
+            disabled={submitting}
+          >
+            ×
+          </button>
+        </div>
+        {config.description && <p className="library-prompt-modal__description">{config.description}</p>}
+        <label className="library-prompt-field">
+          <span>{config.label}</span>
+          <Input
+            autoFocus
+            placeholder={config.placeholder}
+            value={value}
+            onChange={(event) => {
+              setValue(event.target.value);
+              setError(null);
+            }}
+            disabled={submitting}
+          />
+        </label>
+        {error && <p className="library-prompt-modal__error">{error}</p>}
+        <div className="library-modal-actions">
+          <Button type="submit" disabled={submitting || !canSubmit}>
+            {submitting ? "处理中..." : config.confirmLabel}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>
+            取消
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function MoveToCollectionDialog({
+  collections,
+  selectedCount,
+  onMove,
+  onClose,
+}: {
+  collections: CollectionRow[];
+  selectedCount: number;
+  onMove: (collectionId: string | null, collectionName: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [movingTo, setMovingTo] = useState<string | null>(null);
+
+  const move = async (collectionId: string | null, collectionName: string) => {
+    setMovingTo(collectionId ?? "__none__");
+    try {
+      await onMove(collectionId, collectionName);
+    } finally {
+      setMovingTo(null);
+    }
+  };
+
+  return (
+    <div className="library-modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <div className="library-modal library-move-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="library-modal__head">
+          <h2>移动到文件夹</h2>
+          <button
+            type="button"
+            className="library-modal__close"
+            onClick={onClose}
+            aria-label="关闭"
+            disabled={movingTo !== null}
+          >
+            ×
+          </button>
+        </div>
+        <p className="library-prompt-modal__description">
+          为已选的 {selectedCount} 篇文献选择目标文件夹。
+        </p>
+        <div className="library-move-options">
+          <button
+            type="button"
+            className="library-move-option"
+            onClick={() => void move(null, "全部文献")}
+            disabled={movingTo !== null}
+          >
+            <span>移出所有文件夹</span>
+            <small>保留在全部文献中</small>
+          </button>
+          {collections.length === 0 ? (
+            <p className="library-panel-empty">还没有文件夹。先新建文件夹后再移动文献。</p>
+          ) : (
+            collections.map((collection) => (
+              <button
+                key={collection.id}
+                type="button"
+                className="library-move-option"
+                onClick={() => void move(collection.id, collection.name)}
+                disabled={movingTo !== null}
+              >
+                <span>{collection.name}</span>
+                <small>{collection.count.toLocaleString("zh-CN")} 篇</small>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CollectionManager({
+  collections,
+  activeCollection,
+  trashCount,
+  isTrashView,
+  onClose,
+  onSelectAll,
+  onSelectTrash,
+  onSelectCollection,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  collections: CollectionRow[];
+  activeCollection: string | null;
+  trashCount: number;
+  isTrashView: boolean;
+  onClose: () => void;
+  onSelectAll: () => void;
+  onSelectTrash: () => void;
+  onSelectCollection: (collectionId: string) => void;
+  onCreate: () => void;
+  onRename: (collection: CollectionRow) => void;
+  onDelete: (collection: CollectionRow) => void;
+}) {
+  return (
+    <div className="library-modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+      <div
+        className="library-modal library-collection-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="library-modal__head">
+          <div>
+            <h2>管理分组</h2>
+            <p className="library-modal__subhead">选择当前视图，或整理自定义文件夹。</p>
+          </div>
+          <button
+            type="button"
+            className="library-modal__close"
+            onClick={onClose}
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="library-collection-manager__section">
+          <button
+            type="button"
+            className={`library-collection-manager__system ${
+              !activeCollection && !isTrashView
+                ? "library-collection-manager__system--active"
+                : ""
+            }`}
+            onClick={onSelectAll}
+          >
+            <span>全部文献</span>
+            <small>主视图</small>
+          </button>
+          <button
+            type="button"
+            className={`library-collection-manager__system ${
+              isTrashView ? "library-collection-manager__system--active" : ""
+            }`}
+            onClick={onSelectTrash}
+          >
+            <span>回收站</span>
+            <small>{trashCount.toLocaleString("zh-CN")} 篇</small>
+          </button>
+        </div>
+
+        <div className="library-collection-manager__head">
+          <span>自定义文件夹</span>
+          <button type="button" onClick={onCreate}>
+            新建
+          </button>
+        </div>
+
+        {collections.length === 0 ? (
+          <p className="library-panel-empty">还没有文件夹。新建后会同时出现在左侧分组里。</p>
+        ) : (
+          <ul className="library-collection-manager">
+            {collections.map((collection) => (
+              <li
+                key={collection.id}
+                className={`library-collection-manager__row ${
+                  activeCollection === collection.id
+                    ? "library-collection-manager__row--active"
+                    : ""
+                }`}
+              >
+                <button
+                  type="button"
+                  className="library-collection-manager__select"
+                  onClick={() => onSelectCollection(collection.id)}
+                >
+                  <span>{collection.name}</span>
+                  <small>{collection.count.toLocaleString("zh-CN")} 篇</small>
+                </button>
+                <button type="button" onClick={() => onRename(collection)}>
+                  重命名
+                </button>
+                <button
+                  type="button"
+                  className="library-collection-manager__delete"
+                  onClick={() => onDelete(collection)}
+                >
+                  删除
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TagManager({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
   const [tags, setTags] = useState<TagRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tagPrompt, setTagPrompt] = useState<TextPromptConfig | null>(null);
 
   const load = useCallback(async () => {
     if (!isTauriRuntime()) {
@@ -1049,29 +1809,47 @@ function TagManager({ onClose, onChanged }: { onClose: () => void; onChanged: ()
 
   const rename = useCallback(
     async (tag: TagRow) => {
-      const next = window.prompt("重命名标签:", tag.name);
-      if (!next?.trim() || next.trim() === tag.name) return;
-      await (await repo()).rename(tag.id, next.trim());
-      await load();
-      onChanged();
+      setTagPrompt({
+        title: "重命名标签",
+        label: "标签名称",
+        initialValue: tag.name,
+        confirmLabel: "保存",
+        onSubmit: async (value) => {
+          const next = value.trim();
+          if (next === tag.name) return;
+          await (await repo()).rename(tag.id, next);
+          await load();
+          onChanged();
+        },
+      });
     },
     [repo, load, onChanged],
   );
 
   const recolor = useCallback(
     async (tag: TagRow) => {
-      const next = window.prompt("设置标签颜色(CSS 颜色值，留空清除):", tag.color ?? "");
-      if (next === null) return;
-      await (await repo()).setColor(tag.id, next.trim() || null);
-      await load();
-      onChanged();
+      setTagPrompt({
+        title: "设置标签颜色",
+        label: "CSS 颜色值",
+        initialValue: tag.color ?? "",
+        placeholder: "#4f8f86 或 teal",
+        confirmLabel: "保存",
+        description: "留空会清除自定义颜色。",
+        allowEmpty: true,
+        onSubmit: async (value) => {
+          await (await repo()).setColor(tag.id, value.trim() || null);
+          await load();
+          onChanged();
+        },
+      });
     },
     [repo, load, onChanged],
   );
 
   const remove = useCallback(
     async (tag: TagRow) => {
-      if (!window.confirm(`删除标签「${tag.name}」?这会从 ${tag.count} 篇文献上移除该标签。`)) return;
+      if (!window.confirm(`删除标签「${tag.name}」?这会从 ${tag.count} 篇文献上移除该标签。`))
+        return;
       await (await repo()).softDelete(tag.id);
       await load();
       onChanged();
@@ -1084,7 +1862,12 @@ function TagManager({ onClose, onChanged }: { onClose: () => void; onChanged: ()
       <div className="library-modal" onClick={(e) => e.stopPropagation()}>
         <div className="library-modal__head">
           <h2>管理标签</h2>
-          <button type="button" className="library-modal__close" onClick={onClose} aria-label="关闭">
+          <button
+            type="button"
+            className="library-modal__close"
+            onClick={onClose}
+            aria-label="关闭"
+          >
             ×
           </button>
         </div>
@@ -1118,6 +1901,9 @@ function TagManager({ onClose, onChanged }: { onClose: () => void; onChanged: ()
               </li>
             ))}
           </ul>
+        )}
+        {tagPrompt && (
+          <TextPromptDialog config={tagPrompt} onClose={() => setTagPrompt(null)} />
         )}
       </div>
     </div>
@@ -1240,56 +2026,19 @@ function formatAddedDate(createdAt: number | null | undefined) {
   }).format(date);
 }
 
-function FolderItem({
-  label,
-  count,
-  active,
-  onClick,
-  onDelete,
-}: {
-  label: string;
-  count?: number;
-  active: boolean;
-  onClick: () => void;
-  onDelete?: () => void;
-}) {
-  return (
-    <div
-      className={`library-folder ${active ? "library-folder--active" : ""}`}
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onClick();
-        }
-      }}
-    >
-      <span>{label}</span>
-      {typeof count === "number" && <span className="library-folder__count">{count}</span>}
-      {onDelete && (
-        <button
-          className="library-folder__delete"
-          title="删除文件夹"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-        >
-          ×
-        </button>
-      )}
-    </div>
-  );
-}
-
 function SelectedWorkPanel({
   work,
   meta,
   tableMeta,
+  isTrashView,
   generating,
+  attachingPdf,
   onOpenReader,
+  onRestoreWork,
+  onPurgeWork,
+  onUploadPdf,
+  onFindFulltext,
+  findingFulltext,
   onGenerateFlashcards,
   onOpenFlashcards,
   onOpenSentinel,
@@ -1299,8 +2048,15 @@ function SelectedWorkPanel({
   work: WorkWithAuthors | null;
   meta: WorkRuntimeMeta | null;
   tableMeta?: WorkTableMeta;
+  isTrashView: boolean;
   generating: boolean;
+  attachingPdf: boolean;
   onOpenReader: () => void;
+  onRestoreWork: () => void;
+  onPurgeWork: () => void;
+  onUploadPdf: () => void;
+  onFindFulltext: () => void;
+  findingFulltext: boolean;
   onGenerateFlashcards: () => void;
   onOpenFlashcards: () => void;
   onOpenSentinel: () => void;
@@ -1328,6 +2084,70 @@ function SelectedWorkPanel({
     work.authorNames.length > 0 ? work.authorNames.slice(0, 4).join(", ") : "作者未标注";
   const sourceText = [work.venue_name, work.year].filter(Boolean).join(" · ") || "来源未标注";
   const tags = (tableMeta?.tags.length ? tableMeta.tags : fallbackWorkLabels(work)).slice(0, 4);
+
+  if (isTrashView) {
+    return (
+      <>
+        <div className="library-detail au-panel library-detail--selected library-detail--trash">
+          <div className="library-panel-heading">
+            <span className="library-panel-kicker">Recycle bin</span>
+            <button type="button" onClick={onRestoreWork}>
+              恢复 ›
+            </button>
+          </div>
+          <h2>{work.title}</h2>
+          <p>{authorText}</p>
+          <div className="library-detail__meta-grid">
+            <span>
+              <strong>{work.year ?? "—"}</strong>
+              <small>年份</small>
+            </span>
+            <span>
+              <strong>{work.venue_name ?? "—"}</strong>
+              <small>来源</small>
+            </span>
+            <span>
+              <strong>{work.doi ? "有" : "无"}</strong>
+              <small>DOI</small>
+            </span>
+          </div>
+          <div className="library-detail__chips">
+            {tags.length > 0 ? (
+              tags.map((tag, index) => (
+                <span
+                  key={tag}
+                  className={`library-research-tag library-research-tag--${tagTone(tag, index)}`}
+                >
+                  {tag}
+                </span>
+              ))
+            ) : (
+              <span className="library-research-tag library-research-tag--neutral">未标注</span>
+            )}
+          </div>
+          <Button className="library-detail__read" onClick={onRestoreWork}>
+            恢复到文献库
+          </Button>
+          <button type="button" className="library-danger-button" onClick={onPurgeWork}>
+            永久删除
+          </button>
+        </div>
+        <div className="library-automation au-panel">
+          <div className="library-panel-heading">
+            <h3>书目信息</h3>
+          </div>
+          <BibliographicLines work={work} />
+          <StatusLine label="题录来源" value={sourceText} variant="neutral" />
+          <StatusLine
+            label="PDF 附件"
+            value={meta ? (meta.pdfCount ? `${meta.pdfCount} 个` : "无") : "读取中"}
+            variant={meta?.pdfCount ? "success" : "neutral"}
+          />
+          <p className="library-preview-copy">{work.abstract || "暂无摘要。"}</p>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -1437,9 +2257,19 @@ function SelectedWorkPanel({
       <div className="library-automation au-panel">
         <div className="library-panel-heading">
           <h3>入库与处理</h3>
-          <button type="button" onClick={onOpenReader}>
-            打开阅读器 ›
-          </button>
+          <div className="library-panel-actions">
+            <button type="button" onClick={onUploadPdf} disabled={attachingPdf}>
+              {attachingPdf ? "上传中..." : meta?.pdfCount ? "添加 PDF" : "上传 PDF"}
+            </button>
+            {!isTrashView && meta && !meta.pdfCount && (
+              <button type="button" onClick={onFindFulltext} disabled={findingFulltext}>
+                {findingFulltext ? "查找中..." : "去找全文"}
+              </button>
+            )}
+            <button type="button" onClick={onOpenReader}>
+              打开阅读器 ›
+            </button>
+          </div>
         </div>
         <StatusLine
           label="PDF 附件"
@@ -1775,7 +2605,11 @@ function StatusLine({
 
 /** Read-only list of the rich bibliographic fields that are populated. */
 function BibliographicLines({ work }: { work: WorkWithAuthors }) {
-  const vol = [work.volume && `卷 ${work.volume}`, work.issue && `期 ${work.issue}`, work.pages && `页 ${work.pages}`]
+  const vol = [
+    work.volume && `卷 ${work.volume}`,
+    work.issue && `期 ${work.issue}`,
+    work.pages && `页 ${work.pages}`,
+  ]
     .filter(Boolean)
     .join(" · ");
   const lines: Array<[string, string | null]> = [

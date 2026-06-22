@@ -17,7 +17,7 @@ export class TagsRepo {
   /** All tags with how many (non-deleted) works carry each. */
   async list(): Promise<TagRow[]> {
     return this.db.query<TagRow>(
-      `SELECT t.id, t.name, t.color, COUNT(wt.work_id) AS count
+      `SELECT t.id, t.name, t.color, COUNT(w.id) AS count
        FROM tags t
        LEFT JOIN work_tags wt ON wt.tag_id = t.id
        LEFT JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL

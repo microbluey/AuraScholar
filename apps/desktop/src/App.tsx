@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ThemeToggle } from "@aurascholar/ui";
+import { hideResearchViews } from "./services/research-browser";
 import { startSentinelLoop } from "./services/sentinel";
+import { startSavedSearchLoop } from "./services/saved-searches";
 import { getDb } from "./services/tauri-db";
 import { LibraryPage } from "./pages/LibraryPage";
+import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { ReaderPage } from "./pages/ReaderPage";
 import { GraphPage } from "./pages/GraphPage";
 import { FlashcardsPage } from "./pages/FlashcardsPage";
@@ -16,6 +19,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 // /graph 路由保留供深链使用。
 const NAV = [
   { to: "/library", icon: "library", label: "文献库" },
+  { to: "/discovery", icon: "search", label: "学术检索" },
   { to: "/flashcards", icon: "cards", label: "闪卡" },
   { to: "/snippets", icon: "snippet", label: "写作素材" },
   { to: "/sentinel", icon: "radar", label: "检索哨兵" },
@@ -25,6 +29,7 @@ const NAV = [
 
 interface LibraryShellStats {
   total: number;
+  trash: number;
   reading: number;
   unread: number;
   starred: number;
@@ -36,13 +41,15 @@ interface LibraryShellStats {
 }
 
 interface LibraryViewDetail {
-  filter?: "all" | "reading" | "unread" | "starred";
+  filter?: "all" | "reading" | "unread" | "noted" | "starred" | "trash";
   collectionId?: string | null;
   tag?: string | null;
 }
 
+type LibraryViewState = Required<LibraryViewDetail>;
+
 function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return "aura" in window;
 }
 
 function readAiModelLabel() {
@@ -56,10 +63,30 @@ function readAiModelLabel() {
   }
 }
 
+function normalizeLibraryView(detail: LibraryViewDetail = {}): LibraryViewState {
+  return {
+    filter: detail.filter ?? "all",
+    collectionId: detail.collectionId ?? null,
+    tag: detail.tag ?? null,
+  };
+}
+
+function sameLibraryView(a: LibraryViewState, b: LibraryViewDetail): boolean {
+  const normalized = normalizeLibraryView(b);
+  return (
+    a.filter === normalized.filter &&
+    a.collectionId === normalized.collectionId &&
+    a.tag === normalized.tag
+  );
+}
+
 export function App() {
   // Catch-up poll on startup, then hourly while the app is open.
   useEffect(() => {
-    if ("__TAURI_INTERNALS__" in window) startSentinelLoop();
+    if ("aura" in window) {
+      startSentinelLoop();
+      startSavedSearchLoop();
+    }
   }, []);
   const location = useLocation();
   const navigate = useNavigate();
@@ -68,6 +95,15 @@ export function App() {
   const showLibraryMeta = location.pathname.startsWith("/library");
   const [libraryStats, setLibraryStats] = useState<LibraryShellStats | null>(null);
   const [aiModel, setAiModel] = useState(() => readAiModelLabel());
+  const [activeLibraryView, setActiveLibraryView] = useState<LibraryViewState>(() =>
+    normalizeLibraryView(),
+  );
+
+  useEffect(() => {
+    if (!location.pathname.startsWith("/discovery")) {
+      void hideResearchViews();
+    }
+  }, [location.pathname]);
 
   const refreshLibraryStats = useCallback(async () => {
     if (!showLibraryMeta || !isTauriRuntime()) {
@@ -77,6 +113,7 @@ export function App() {
     const db = await getDb();
     const [
       totalRows,
+      trashRows,
       readingRows,
       unreadRows,
       starredRows,
@@ -87,6 +124,7 @@ export function App() {
       tags,
     ] = await Promise.all([
       db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL`),
+      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
       db.query<{ n: number }>(
         `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'reading'`,
       ),
@@ -100,15 +138,16 @@ export function App() {
       db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM flashcards WHERE deleted_at IS NULL`),
       db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM snippets WHERE deleted_at IS NULL`),
       db.query<{ id: string; name: string; count: number }>(
-        `SELECT c.id, c.name, COUNT(ci.work_id) AS count
+        `SELECT c.id, c.name, COUNT(w.id) AS count
          FROM collections c
          LEFT JOIN collection_items ci ON ci.collection_id = c.id
+         LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
          WHERE c.deleted_at IS NULL
          GROUP BY c.id, c.name
          ORDER BY c.name`,
       ),
       db.query<{ name: string; count: number }>(
-        `SELECT t.name, COUNT(wt.work_id) AS count
+        `SELECT t.name, COUNT(w.id) AS count
          FROM tags t
          JOIN work_tags wt ON wt.tag_id = t.id
          JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
@@ -120,6 +159,7 @@ export function App() {
     ]);
     setLibraryStats({
       total: totalRows[0]?.n ?? 0,
+      trash: trashRows[0]?.n ?? 0,
       reading: readingRows[0]?.n ?? 0,
       unread: unreadRows[0]?.n ?? 0,
       starred: starredRows[0]?.n ?? 0,
@@ -137,6 +177,7 @@ export function App() {
 
   const openLibraryView = useCallback(
     (detail: LibraryViewDetail) => {
+      setActiveLibraryView(normalizeLibraryView(detail));
       navigate("/library");
       window.dispatchEvent(new CustomEvent("aurascholar:library-view", { detail }));
     },
@@ -145,12 +186,17 @@ export function App() {
 
   useEffect(() => {
     const onLibraryUpdated = () => void refreshLibraryStats();
+    const onLibraryViewState = (event: Event) => {
+      setActiveLibraryView(normalizeLibraryView((event as CustomEvent<LibraryViewDetail>).detail));
+    };
     const onStorage = () => setAiModel(readAiModelLabel());
     window.addEventListener("aurascholar:library-updated", onLibraryUpdated);
+    window.addEventListener("aurascholar:library-view-state", onLibraryViewState);
     window.addEventListener("aurascholar:snippets-updated", onLibraryUpdated);
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("aurascholar:library-updated", onLibraryUpdated);
+      window.removeEventListener("aurascholar:library-view-state", onLibraryViewState);
       window.removeEventListener("aurascholar:snippets-updated", onLibraryUpdated);
       window.removeEventListener("storage", onStorage);
     };
@@ -175,6 +221,7 @@ export function App() {
           {showLibraryMeta && libraryStats && (
             <LibrarySidebarMeta
               stats={libraryStats}
+              activeView={activeLibraryView}
               onSelect={openLibraryView}
               onCreateCollection={() =>
                 window.dispatchEvent(new Event("aurascholar:create-collection"))
@@ -189,6 +236,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/library" replace />} />
             <Route path="/library" element={<LibraryPage />} />
+            <Route path="/discovery" element={<DiscoveryPage />} />
             <Route path="/reader" element={<ReaderPage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/flashcards" element={<FlashcardsPage />} />
@@ -241,10 +289,12 @@ function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiMode
 
 function LibrarySidebarMeta({
   stats,
+  activeView,
   onSelect,
   onCreateCollection,
 }: {
   stats: LibraryShellStats;
+  activeView: LibraryViewState;
   onSelect: (detail: LibraryViewDetail) => void;
   onCreateCollection: () => void;
 }) {
@@ -278,6 +328,12 @@ function LibrarySidebarMeta({
       count: stats.starred,
       detail: { filter: "starred", collectionId: null },
     },
+    {
+      key: "trash",
+      label: "回收站",
+      count: stats.trash,
+      detail: { filter: "trash", collectionId: null },
+    },
     ...stats.collections.map((c) => ({
       key: c.id,
       label: c.name,
@@ -298,7 +354,7 @@ function LibrarySidebarMeta({
         {groups.map(({ key, label, count, detail }) => (
           <button
             key={key}
-            className={`app-sidebar-subitem ${label === "全部文献" ? "app-sidebar-subitem--active" : ""}`}
+            className={`app-sidebar-subitem ${sameLibraryView(activeView, detail) ? "app-sidebar-subitem--active" : ""}`}
             type="button"
             onClick={() => onSelect(detail)}
           >
@@ -314,15 +370,15 @@ function LibrarySidebarMeta({
           <span>新建分组</span>
         </button>
       </div>
-      {stats.tags.length > 0 && (
-        <div className="app-sidebar-section">
-          <div className="app-sidebar-section__head">
-            <span>标签</span>
-          </div>
-          {stats.tags.map((tag, index) => (
+      <div className="app-sidebar-section">
+        <div className="app-sidebar-section__head">
+          <span>标签</span>
+        </div>
+        {stats.tags.length > 0 ? (
+          stats.tags.map((tag, index) => (
             <button
               key={tag.name}
-              className="app-sidebar-tag"
+              className={`app-sidebar-tag ${activeView.tag === tag.name ? "app-sidebar-tag--active" : ""}`}
               type="button"
               onClick={() => onSelect({ filter: "all", collectionId: null, tag: tag.name })}
             >
@@ -330,16 +386,18 @@ function LibrarySidebarMeta({
               <span>{tag.name}</span>
               <small>{tag.count.toLocaleString("zh-CN")}</small>
             </button>
-          ))}
-          <button
-            className="app-sidebar-subitem app-sidebar-subitem--muted"
-            type="button"
-            onClick={() => window.dispatchEvent(new Event("aurascholar:manage-tags"))}
-          >
-            <span>管理标签</span>
-          </button>
-        </div>
-      )}
+          ))
+        ) : (
+          <span className="app-sidebar-empty">暂无标签</span>
+        )}
+        <button
+          className="app-sidebar-subitem app-sidebar-subitem--muted"
+          type="button"
+          onClick={() => window.dispatchEvent(new Event("aurascholar:manage-tags"))}
+        >
+          <span>管理标签</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -368,6 +426,14 @@ function NavIcon({ name }: { name: (typeof NAV)[number]["icon"] }) {
         <svg {...common}>
           <path d="M5 4.5h4.5A2.5 2.5 0 0 1 12 7v12a2.5 2.5 0 0 0-2.5-2.5H5z" />
           <path d="M19 4.5h-4.5A2.5 2.5 0 0 0 12 7v12a2.5 2.5 0 0 1 2.5-2.5H19z" />
+        </svg>
+      );
+    case "search":
+      return (
+        <svg {...common}>
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="m16 16 4 4" />
+          <path d="M8.5 11h5" />
         </svg>
       );
     case "cards":

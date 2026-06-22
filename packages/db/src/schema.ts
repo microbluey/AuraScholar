@@ -1,4 +1,12 @@
-import { sqliteTable, text, integer, real, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  real,
+  primaryKey,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 // Convention: UUIDv7 string PKs (time-ordered, sync-friendly). Timestamps are
 // epoch milliseconds. deleted_at is a soft-delete tombstone required by the
@@ -8,6 +16,17 @@ const id = () => text("id").primaryKey();
 const createdAt = () => integer("created_at").notNull();
 const updatedAt = () => integer("updated_at").notNull();
 const deletedAt = () => integer("deleted_at");
+
+// A logical local-first library/vault. The local app can run without an
+// account; later cloud accounts attach to libraries through memberships.
+export const libraries = sqliteTable("libraries", {
+  id: id(),
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("personal"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+  deletedAt: deletedAt(),
+});
 
 // ---------------------------------------------------------------------------
 // Works (papers / preprints / book chapters)
@@ -87,8 +106,12 @@ export const authors = sqliteTable(
 export const workAuthors = sqliteTable(
   "work_authors",
   {
-    workId: text("work_id").notNull().references(() => works.id),
-    authorId: text("author_id").notNull().references(() => authors.id),
+    workId: text("work_id")
+      .notNull()
+      .references(() => works.id),
+    authorId: text("author_id")
+      .notNull()
+      .references(() => authors.id),
     position: integer("position").notNull(),
     isCorresponding: integer("is_corresponding", { mode: "boolean" }).notNull().default(false),
     rawName: text("raw_name"), // name as it appeared on the paper
@@ -103,7 +126,9 @@ export const attachments = sqliteTable(
   "attachments",
   {
     id: id(),
-    workId: text("work_id").notNull().references(() => works.id),
+    workId: text("work_id")
+      .notNull()
+      .references(() => works.id),
     kind: text("kind").notNull().default("pdf"), // pdf | supplement
     sha256: text("sha256").notNull(),
     byteSize: integer("byte_size").notNull(),
@@ -136,8 +161,12 @@ export const collections = sqliteTable("collections", {
 export const collectionItems = sqliteTable(
   "collection_items",
   {
-    collectionId: text("collection_id").notNull().references(() => collections.id),
-    workId: text("work_id").notNull().references(() => works.id),
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => collections.id),
+    workId: text("work_id")
+      .notNull()
+      .references(() => works.id),
   },
   (t) => [primaryKey({ columns: [t.collectionId, t.workId] })],
 );
@@ -158,8 +187,12 @@ export const tags = sqliteTable(
 export const workTags = sqliteTable(
   "work_tags",
   {
-    workId: text("work_id").notNull().references(() => works.id),
-    tagId: text("tag_id").notNull().references(() => tags.id),
+    workId: text("work_id")
+      .notNull()
+      .references(() => works.id),
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tags.id),
   },
   (t) => [primaryKey({ columns: [t.workId, t.tagId] })],
 );
@@ -173,8 +206,12 @@ export const annotations = sqliteTable(
   "annotations",
   {
     id: id(),
-    attachmentId: text("attachment_id").notNull().references(() => attachments.id),
-    workId: text("work_id").notNull().references(() => works.id),
+    attachmentId: text("attachment_id")
+      .notNull()
+      .references(() => attachments.id),
+    workId: text("work_id")
+      .notNull()
+      .references(() => works.id),
     type: text("type").notNull(), // highlight | underline | strikeout | ink | note | comment
     color: text("color"),
     pageIndex: integer("page_index").notNull(),
@@ -195,7 +232,9 @@ export const annotationComments = sqliteTable(
   "annotation_comments",
   {
     id: id(),
-    annotationId: text("annotation_id").notNull().references(() => annotations.id),
+    annotationId: text("annotation_id")
+      .notNull()
+      .references(() => annotations.id),
     contentMd: text("content_md").notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -211,7 +250,9 @@ export const snippets = sqliteTable(
   "snippets",
   {
     id: id(),
-    workId: text("work_id").notNull().references(() => works.id),
+    workId: text("work_id")
+      .notNull()
+      .references(() => works.id),
     pageIndex: integer("page_index"),
     quote: text("quote").notNull(),
     noteMd: text("note_md"),
@@ -223,6 +264,26 @@ export const snippets = sqliteTable(
   (t) => [index("snippets_work_idx").on(t.workId, t.createdAt)],
 );
 
+// Saved searches ("检索订阅"): a stored open-source aggregate query re-run on a
+// schedule to surface newly-published matches. seenIdsJson is the baseline set
+// of stable ids observed last run; anything new on the next run bumps newCount.
+export const savedSearches = sqliteTable(
+  "saved_searches",
+  {
+    id: id(),
+    query: text("query").notNull(),
+    sourcesJson: text("sources_json"),
+    seenIdsJson: text("seen_ids_json").notNull().default("[]"),
+    newCount: integer("new_count").notNull().default(0),
+    lastRunAt: integer("last_run_at"),
+    nextRunAt: integer("next_run_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [index("saved_searches_due_idx").on(t.nextRunAt)],
+);
+
 // ---------------------------------------------------------------------------
 // Flashcards + FSRS spaced-repetition state
 // ---------------------------------------------------------------------------
@@ -231,7 +292,9 @@ export const flashcards = sqliteTable(
   "flashcards",
   {
     id: id(),
-    workId: text("work_id").notNull().references(() => works.id),
+    workId: text("work_id")
+      .notNull()
+      .references(() => works.id),
     frontMd: text("front_md").notNull(),
     backMd: text("back_md").notNull(),
     cardType: text("card_type").notNull().default("qa"), // tldr | contribution | method | qa | limitation
@@ -246,7 +309,9 @@ export const flashcards = sqliteTable(
 );
 
 export const flashcardSrs = sqliteTable("flashcard_srs", {
-  flashcardId: text("flashcard_id").primaryKey().references(() => flashcards.id),
+  flashcardId: text("flashcard_id")
+    .primaryKey()
+    .references(() => flashcards.id),
   dueAt: integer("due_at").notNull(),
   stability: real("stability").notNull().default(0),
   difficulty: real("difficulty").notNull().default(0),
@@ -260,7 +325,9 @@ export const flashcardReviews = sqliteTable(
   "flashcard_reviews",
   {
     id: id(),
-    flashcardId: text("flashcard_id").notNull().references(() => flashcards.id),
+    flashcardId: text("flashcard_id")
+      .notNull()
+      .references(() => flashcards.id),
     rating: integer("rating").notNull(), // ts-fsrs Rating enum
     reviewedAt: integer("reviewed_at").notNull(),
     elapsedDays: real("elapsed_days").notNull().default(0),
@@ -319,7 +386,9 @@ export const sentinelEvents = sqliteTable(
   "sentinel_events",
   {
     id: id(),
-    taskId: text("task_id").notNull().references(() => sentinelTasks.id),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => sentinelTasks.id),
     fromState: text("from_state").notNull(),
     toState: text("to_state").notNull(),
     evidenceJson: text("evidence_json", { mode: "json" }),
@@ -337,20 +406,29 @@ export const syncLog = sqliteTable(
   "sync_log",
   {
     seq: integer("seq").primaryKey({ autoIncrement: true }),
+    libraryId: text("library_id"),
     entityTable: text("entity_table").notNull(),
     entityId: text("entity_id").notNull(),
     op: text("op").notNull(), // upsert | delete
+    // Full row values at write time; older databases may have null here until
+    // all repo mutations are routed through the logging layer.
+    valuesJson: text("values_json", { mode: "json" }),
     // { fieldName: hlcString } — per-field clocks for last-writer-wins merge.
     columnHlcsJson: text("column_hlcs_json", { mode: "json" }),
     hlc: text("hlc").notNull(),
     deviceId: text("device_id").notNull(),
+    createdAt: integer("created_at"),
     syncedAt: integer("synced_at"),
   },
-  (t) => [index("sync_log_entity_idx").on(t.entityTable, t.entityId)],
+  (t) => [
+    index("sync_log_entity_idx").on(t.entityTable, t.entityId),
+    index("sync_log_library_seq_idx").on(t.libraryId, t.seq),
+  ],
 );
 
 export const syncState = sqliteTable("sync_state", {
   providerId: text("provider_id").primaryKey(),
+  libraryId: text("library_id"),
   lastPushedSeq: integer("last_pushed_seq").notNull().default(0),
   lastPulledCursor: text("last_pulled_cursor"),
   remoteConfigJson: text("remote_config_json", { mode: "json" }),
@@ -362,6 +440,40 @@ export const devices = sqliteTable("devices", {
   platform: text("platform").notNull(),
   lastSeenAt: integer("last_seen_at").notNull(),
 });
+
+export const syncRowClocks = sqliteTable(
+  "sync_row_clocks",
+  {
+    tableName: text("table_name").notNull(),
+    rowId: text("row_id").notNull(),
+    libraryId: text("library_id"),
+    columnHlcsJson: text("column_hlcs_json", { mode: "json" }).notNull(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.tableName, t.rowId] }),
+    index("sync_row_clocks_library_idx").on(t.libraryId, t.tableName),
+  ],
+);
+
+export const blobSyncState = sqliteTable(
+  "blob_sync_state",
+  {
+    sha256: text("sha256").notNull(),
+    providerId: text("provider_id").notNull(),
+    libraryId: text("library_id"),
+    status: text("status").notNull().default("pending"),
+    remotePath: text("remote_path"),
+    uploadedAt: integer("uploaded_at"),
+    downloadedAt: integer("downloaded_at"),
+    error: text("error"),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.sha256, t.providerId] }),
+    index("blob_sync_state_library_idx").on(t.libraryId, t.status),
+  ],
+);
 
 // ---------------------------------------------------------------------------
 // AI jobs, settings, CV profiles
@@ -384,11 +496,38 @@ export const aiJobs = sqliteTable(
   (t) => [index("ai_jobs_status_idx").on(t.status)],
 );
 
+export const derivedArtifacts = sqliteTable(
+  "derived_artifacts",
+  {
+    id: id(),
+    libraryId: text("library_id"),
+    sourceTable: text("source_table").notNull(),
+    sourceId: text("source_id").notNull(),
+    kind: text("kind").notNull(),
+    model: text("model"),
+    promptHash: text("prompt_hash"),
+    inputHash: text("input_hash"),
+    payloadJson: text("payload_json", { mode: "json" }).notNull(),
+    localOnly: integer("local_only", { mode: "boolean" }).notNull().default(false),
+    syncable: integer("syncable", { mode: "boolean" }).notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    expiresAt: integer("expires_at"),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    index("derived_artifacts_source_idx").on(t.sourceTable, t.sourceId, t.kind),
+    index("derived_artifacts_library_idx").on(t.libraryId, t.kind),
+  ],
+);
+
 // API keys never live here — desktop uses the OS keychain, web uses
 // WebCrypto-encrypted storage. This table is for non-secret preferences only.
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   valueJson: text("value_json", { mode: "json" }),
+  scope: text("scope").notNull().default("local"), // local | sync
+  updatedAt: integer("updated_at"),
 });
 
 export const cvProfiles = sqliteTable("cv_profiles", {

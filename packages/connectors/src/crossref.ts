@@ -1,7 +1,7 @@
 // Crossref REST API — bibliographic source of truth for DOI-registered works.
 // https://api.crossref.org — polite pool via mailto query param.
-import { getJson, type ConnectorContext } from "./client";
-import type { NormalizedAuthor, NormalizedWork } from "./types";
+import { getJson, type ConnectorContext, type ConnectorRequestOptions } from "./client";
+import type { ConnectorSearchFilters, NormalizedAuthor, NormalizedWork } from "./types";
 
 const BASE = "https://api.crossref.org";
 
@@ -41,11 +41,13 @@ interface CrossrefWork {
 export async function crossrefByDoi(
   ctx: ConnectorContext,
   doi: string,
+  opts?: ConnectorRequestOptions,
 ): Promise<NormalizedWork | null> {
   try {
     const data = await getJson<{ message: CrossrefWork }>(
       ctx,
       `${BASE}/works/${encodeURIComponent(doi)}?mailto=${encodeURIComponent(ctx.mailto)}`,
+      opts,
     );
     return normalizeCrossref(data.message);
   } catch (e) {
@@ -63,10 +65,29 @@ export async function crossrefSearchByTitle(
   ctx: ConnectorContext,
   title: string,
   rows = 5,
+  opts?: ConnectorRequestOptions,
+  filters?: ConnectorSearchFilters,
+  page = 1,
 ): Promise<CrossrefSearchHit[]> {
+  let url =
+    `${BASE}/works?query.bibliographic=${encodeURIComponent(title)}` +
+    `&rows=${rows}&mailto=${encodeURIComponent(ctx.mailto)}`;
+  if (page > 1) url += `&offset=${(page - 1) * rows}`;
+  if (filters?.author) url += `&query.author=${encodeURIComponent(filters.author)}`;
+  // Crossref filter syntax: name:value pairs comma-joined; ":" and "," are
+  // literal separators, so only the values are percent-encoded.
+  const filterParts: string[] = [];
+  if (filters?.yearFrom) filterParts.push(`from-pub-date:${filters.yearFrom}-01-01`);
+  if (filters?.yearTo) filterParts.push(`until-pub-date:${filters.yearTo}-12-31`);
+  if (filters?.venue) filterParts.push(`container-title:${encodeURIComponent(filters.venue)}`);
+  if (filterParts.length > 0) url += `&filter=${filterParts.join(",")}`;
+  if (filters?.sort === "citations") url += `&sort=is-referenced-by-count&order=desc`;
+  else if (filters?.sort === "year") url += `&sort=published&order=desc`;
+
   const data = await getJson<{ message: { items: (CrossrefWork & { score: number })[] } }>(
     ctx,
-    `${BASE}/works?query.bibliographic=${encodeURIComponent(title)}&rows=${rows}&mailto=${encodeURIComponent(ctx.mailto)}`,
+    url,
+    opts,
   );
   return (data.message.items ?? []).map((item) => ({
     work: normalizeCrossref(item),
@@ -96,17 +117,16 @@ function normalizeCrossref(w: CrossrefWork): NormalizedWork {
     w.issued?.["date-parts"]?.[0] ??
     w["published-online"]?.["date-parts"]?.[0] ??
     w["published-print"]?.["date-parts"]?.[0];
-  const toAuthor = (
-    role: NormalizedAuthor["role"],
-    base: number,
-  ) => (a: CrossrefContributor, i: number): NormalizedAuthor => ({
-    displayName: a.name ?? [a.given, a.family].filter(Boolean).join(" "),
-    family: a.family,
-    given: a.given,
-    orcid: a.ORCID?.replace(/^https?:\/\/orcid\.org\//, ""),
-    position: base + i,
-    role,
-  });
+  const toAuthor =
+    (role: NormalizedAuthor["role"], base: number) =>
+    (a: CrossrefContributor, i: number): NormalizedAuthor => ({
+      displayName: a.name ?? [a.given, a.family].filter(Boolean).join(" "),
+      family: a.family,
+      given: a.given,
+      orcid: a.ORCID?.replace(/^https?:\/\/orcid\.org\//, ""),
+      position: base + i,
+      role,
+    });
   const authorList = (w.author ?? []).map(toAuthor("author", 0));
   const editorList = (w.editor ?? []).map(toAuthor("editor", authorList.length));
   const translatorList = (w.translator ?? []).map(

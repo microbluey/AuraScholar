@@ -1,20 +1,7 @@
-// Desktop Platform implementation: Tauri HTTP (no CORS), app-data FS,
-// OS notifications. Secrets/scheduler land with later phases.
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import {
-  exists,
-  mkdir,
-  readDir,
-  readFile,
-  remove,
-  writeFile,
-  BaseDirectory,
-} from "@tauri-apps/plugin-fs";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
+// Desktop Platform implementation, backed by the Electron preload bridge
+// (window.aura). Export names are kept (tauriHttp/tauriFs/tauriNotifier) so the
+// many call sites don't churn during the migration; they no longer touch Tauri.
+// TODO(rename): rename this module to electron-platform.ts once the dust settles.
 import type {
   FileSystem,
   HttpClient,
@@ -26,53 +13,59 @@ import type {
 
 export const tauriHttp: HttpClient = {
   async request(req: HttpRequest): Promise<HttpResponse> {
-    const res = await tauriFetch(req.url, {
-      method: req.method ?? "GET",
-      headers: req.headers,
-      body: req.body as BodyInit | undefined,
-      signal: req.timeoutMs ? AbortSignal.timeout(req.timeoutMs) : undefined,
-    });
-    const headers: Record<string, string> = {};
-    res.headers.forEach((v, k) => (headers[k.toLowerCase()] = v));
-    return {
-      status: res.status,
-      headers,
-      body: new Uint8Array(await res.arrayBuffer()),
+    if (req.signal?.aborted) throw abortError();
+    const requestId = req.signal ? crypto.randomUUID() : undefined;
+    const onAbort = () => {
+      if (requestId) void window.aura.cancelHttp(requestId);
     };
+    req.signal?.addEventListener("abort", onAbort, { once: true });
+    const res = await window.aura
+      .http({
+        requestId,
+        url: req.url,
+        method: req.method,
+        headers: req.headers,
+        body: req.body,
+        timeoutMs: req.timeoutMs,
+      })
+      .finally(() => req.signal?.removeEventListener("abort", onAbort));
+    if (req.signal?.aborted) throw abortError();
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(res.headers)) headers[k.toLowerCase()] = v;
+    return { status: res.status, headers, body: res.body };
   },
 };
 
-const BASE = { baseDir: BaseDirectory.AppData } as const;
+function abortError(): Error {
+  const error = new Error("Request aborted");
+  error.name = "AbortError";
+  return error;
+}
 
 export const tauriFs: FileSystem = {
-  async readFile(path) {
-    return readFile(path, BASE);
+  readFile(path) {
+    return window.aura.fs.readFile(path);
   },
-  async writeFile(path, data) {
-    const dir = path.split("/").slice(0, -1).join("/");
-    if (dir && !(await exists(dir, BASE))) await mkdir(dir, { ...BASE, recursive: true });
-    await writeFile(path, data, BASE);
+  writeFile(path, data) {
+    return window.aura.fs.writeFile(path, data);
   },
-  async deleteFile(path) {
-    await remove(path, BASE);
+  deleteFile(path) {
+    return window.aura.fs.deleteFile(path);
   },
-  async exists(path) {
-    return exists(path, BASE);
+  exists(path) {
+    return window.aura.fs.exists(path);
   },
-  async listDir(path) {
-    const entries = await readDir(path, BASE);
-    return entries.map((e) => e.name);
+  listDir(path) {
+    return window.aura.fs.listDir(path);
   },
-  async mkdirp(path) {
-    if (!(await exists(path, BASE))) await mkdir(path, { ...BASE, recursive: true });
+  mkdirp(path) {
+    return window.aura.fs.mkdirp(path);
   },
 };
 
 export const tauriNotifier: Notifier = {
   async notify(options: NotificationOptions): Promise<void> {
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (granted) sendNotification({ title: options.title, body: options.body });
+    await window.aura.notify(options.title, options.body);
   },
 };
 

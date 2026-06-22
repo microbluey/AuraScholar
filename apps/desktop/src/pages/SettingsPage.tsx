@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge, Button, Card, Input, useTheme } from "@aurascholar/ui";
 import { loadAiSettings, makeProvider, saveAiSettings, type AiProviderKind } from "../services/ai";
 import { loadTranslateConfig, saveTranslateConfig, clearTranslationCache } from "../services/translate";
@@ -12,24 +12,40 @@ import {
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
-  const existing = loadAiSettings();
-  const [aiKind, setAiKind] = useState<AiProviderKind>(existing?.kind ?? "openai-compatible");
-  const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? "https://api.deepseek.com/v1");
-  const [model, setModel] = useState(existing?.model ?? "deepseek-chat");
-  const [apiKey, setApiKey] = useState(existing?.apiKey ?? "");
+  const [aiKind, setAiKind] = useState<AiProviderKind>("openai-compatible");
+  const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com/v1");
+  const [model, setModel] = useState("deepseek-chat");
+  const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
 
-  const trExisting = loadTranslateConfig();
-  const [trEngine, setTrEngine] = useState<TranslateEngine>(trExisting.engine);
-  const [trTarget, setTrTarget] = useState(trExisting.targetLang);
-  const [deeplKey, setDeeplKey] = useState(trExisting.deepl?.apiKey ?? "");
-  const [baiduAppid, setBaiduAppid] = useState(trExisting.baidu?.appid ?? "");
-  const [baiduKey, setBaiduKey] = useState(trExisting.baidu?.key ?? "");
+  const [trEngine, setTrEngine] = useState<TranslateEngine>("llm");
+  const [trTarget, setTrTarget] = useState("zh");
+  const [deeplKey, setDeeplKey] = useState("");
+  const [baiduAppid, setBaiduAppid] = useState("");
+  const [baiduKey, setBaiduKey] = useState("");
   const [trStatus, setTrStatus] = useState<string | null>(null);
 
-  const saveTranslate = () => {
-    saveTranslateConfig({
+  // Settings (incl. secrets) load asynchronously from safeStorage on mount.
+  useEffect(() => {
+    void loadAiSettings().then((s) => {
+      if (!s) return;
+      setAiKind(s.kind ?? "openai-compatible");
+      if (s.baseUrl) setBaseUrl(s.baseUrl);
+      if (s.model) setModel(s.model);
+      setApiKey(s.apiKey ?? "");
+    });
+    void loadTranslateConfig().then((c) => {
+      setTrEngine(c.engine);
+      setTrTarget(c.targetLang);
+      setDeeplKey(c.deepl?.apiKey ?? "");
+      setBaiduAppid(c.baidu?.appid ?? "");
+      setBaiduKey(c.baidu?.key ?? "");
+    });
+  }, []);
+
+  const saveTranslate = async () => {
+    await saveTranslateConfig({
       engine: trEngine,
       targetLang: trTarget,
       deepl: deeplKey.trim() ? { apiKey: deeplKey.trim() } : undefined,
@@ -50,15 +66,23 @@ export function SettingsPage() {
     }
   };
 
-  const syncExisting = loadSyncSettings();
-  const [davUrl, setDavUrl] = useState(syncExisting?.baseUrl ?? "");
-  const [davUser, setDavUser] = useState(syncExisting?.username ?? "");
-  const [davPass, setDavPass] = useState(syncExisting?.password ?? "");
+  const [davUrl, setDavUrl] = useState("");
+  const [davUser, setDavUser] = useState("");
+  const [davPass, setDavPass] = useState("");
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
 
+  useEffect(() => {
+    void loadSyncSettings().then((s) => {
+      if (!s) return;
+      setDavUrl(s.baseUrl);
+      setDavUser(s.username);
+      setDavPass(s.password);
+    });
+  }, []);
+
   const handleSync = async () => {
-    saveSyncSettings({ baseUrl: davUrl.trim(), username: davUser.trim(), password: davPass });
+    await saveSyncSettings({ baseUrl: davUrl.trim(), username: davUser.trim(), password: davPass });
     setSyncing(true);
     setSyncStatus("同步中…");
     try {
@@ -83,8 +107,8 @@ export function SettingsPage() {
     URL.revokeObjectURL(a.href);
   };
 
-  const save = () => {
-    saveAiSettings({
+  const save = async () => {
+    await saveAiSettings({
       kind: aiKind,
       baseUrl: baseUrl.trim(),
       model: model.trim(),
@@ -94,11 +118,11 @@ export function SettingsPage() {
   };
 
   const test = async () => {
-    save();
+    await save();
     setTesting(true);
     setStatus("测试中…");
     try {
-      const provider = makeProvider();
+      const provider = await makeProvider();
       if (!provider) throw new Error("配置不完整");
       const res = await provider.generateText({
         messages: [{ role: "user", content: "Reply with exactly: ok" }],
@@ -206,7 +230,7 @@ export function SettingsPage() {
           placeholder="sk-…"
         />
         <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
-          <Button onClick={save}>保存</Button>
+          <Button onClick={() => void save()}>保存</Button>
           <Button variant="secondary" onClick={() => void test()} disabled={testing}>
             测试连接
           </Button>
@@ -279,7 +303,7 @@ export function SettingsPage() {
           </>
         )}
         <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <Button onClick={saveTranslate}>保存</Button>
+          <Button onClick={() => void saveTranslate()}>保存</Button>
           <Button variant="secondary" onClick={() => void clearTrCache()}>
             清除翻译缓存
           </Button>

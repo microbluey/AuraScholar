@@ -20,7 +20,7 @@ export function SentinelPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!("__TAURI_INTERNALS__" in window)) {
+    if (!("aura" in window)) {
       setTasks([]);
       setEventsByTask(new Map());
       return;

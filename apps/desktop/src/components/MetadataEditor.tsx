@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Input } from "@aurascholar/ui";
 import type { WorkPatch, AuthorRole } from "@aurascholar/db";
+import type { NormalizedWork } from "@aurascholar/connectors";
 import { loadWorkMetadata, saveWorkMetadata } from "../services/metadata";
 
 interface AuthorDraft {
@@ -12,7 +13,7 @@ interface AuthorDraft {
   role: AuthorRole;
 }
 
-interface Draft {
+export interface Draft {
   title: string;
   type: string;
   doi: string;
@@ -42,6 +43,68 @@ interface Draft {
   abstract: string;
   keywords: string;
   authors: AuthorDraft[];
+}
+
+export function emptyDraft(): Draft {
+  return {
+    title: "",
+    type: "article",
+    doi: "",
+    year: "",
+    publicationDate: "",
+    venueName: "",
+    volume: "",
+    issue: "",
+    pages: "",
+    edition: "",
+    numberOfVolumes: "",
+    section: "",
+    publisher: "",
+    placePublished: "",
+    seriesTitle: "",
+    shortTitle: "",
+    originalTitle: "",
+    issn: "",
+    isbn: "",
+    url: "",
+    accessedDate: "",
+    language: "",
+    callNumber: "",
+    accessionNumber: "",
+    label: "",
+    databaseName: "",
+    abstract: "",
+    keywords: "",
+    authors: [],
+  };
+}
+
+/** Build an editor draft from a resolved candidate (not-yet-ingested work). */
+export function normalizedWorkToDraft(w: NormalizedWork): Draft {
+  return {
+    ...emptyDraft(),
+    title: w.title ?? "",
+    type: w.type ?? "article",
+    doi: w.doi ?? "",
+    year: w.year != null ? String(w.year) : "",
+    publicationDate: w.publicationDate ?? "",
+    venueName: w.venueName ?? "",
+    volume: w.volume ?? "",
+    issue: w.issue ?? "",
+    pages: w.pages ?? "",
+    publisher: w.publisher ?? "",
+    placePublished: w.placePublished ?? "",
+    issn: w.issn ?? "",
+    isbn: w.isbn ?? "",
+    url: w.url ?? "",
+    language: w.language ?? "",
+    abstract: w.abstract ?? "",
+    keywords: (w.keywords ?? []).join(", "),
+    authors: w.authors.map((a) => ({
+      displayName: a.displayName,
+      role: (a.role as AuthorRole) ?? "author",
+    })),
+  };
 }
 
 const TEXT_FIELDS: Array<{ key: keyof Draft; label: string; group: string }> = [
@@ -81,18 +144,27 @@ const ROLES: Array<{ value: AuthorRole; label: string }> = [
 
 export function MetadataEditor({
   workId,
+  initialDraft,
   onClose,
   onSaved,
+  onCommit,
 }: {
-  workId: string;
+  /** Edit an existing library work. Omit for draft (pre-ingest) mode. */
+  workId?: string;
+  /** Draft-mode initial values (used when workId is absent). */
+  initialDraft?: Draft;
   onClose: () => void;
-  onSaved: () => void;
+  /** Called after saving an existing work (workId mode). */
+  onSaved?: () => void;
+  /** Draft mode: receives the edited patch instead of writing to the DB. */
+  onCommit?: (patch: WorkPatch) => void;
 }) {
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(workId ? null : (initialDraft ?? emptyDraft()));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!workId) return; // draft mode: initialized from initialDraft, no DB load
     let cancelled = false;
     void loadWorkMetadata(workId)
       .then((m) => {
@@ -205,15 +277,19 @@ export function MetadataEditor({
         .map((a, position) => ({ displayName: a.displayName.trim(), role: a.role, position })),
     };
     try {
-      await saveWorkMetadata(workId, patch);
-      onSaved();
+      if (workId) {
+        await saveWorkMetadata(workId, patch);
+        onSaved?.();
+      } else {
+        onCommit?.(patch);
+      }
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
-  }, [draft, workId, onSaved, onClose]);
+  }, [draft, workId, onSaved, onCommit, onClose]);
 
   return (
     <div className="library-modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
