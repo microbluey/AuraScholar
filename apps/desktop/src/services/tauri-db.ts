@@ -1,8 +1,8 @@
-// Desktop Database driver over tauri-plugin-sql (sqlite). The plugin keeps a
-// connection pool on the Rust side; we address it by URL.
-import Database from "@tauri-apps/plugin-sql";
+// Desktop Database driver. Runs in the renderer but every call is forwarded to
+// the better-sqlite3 connection in the Electron main process via the preload
+// bridge (window.aura.db). Migrations run main-side at startup.
+// TODO(rename): rename to db.ts once the migration settles.
 import type { Database as AppDatabase } from "@aurascholar/db";
-import { runMigrations } from "@aurascholar/db";
 
 let instance: Promise<AppDatabase> | null = null;
 
@@ -12,24 +12,19 @@ export function getDb(): Promise<AppDatabase> {
 }
 
 async function open(): Promise<AppDatabase> {
-  const sqlite = await Database.load("sqlite:aurascholar.db");
   const db: AppDatabase = {
-    async query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-      return sqlite.select<T[]>(sql, params);
+    query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+      return window.aura.db.query<T>(sql, params);
     },
-    async run(sql: string, params: unknown[] = []): Promise<number> {
-      const res = await sqlite.execute(sql, params);
-      return res.rowsAffected;
+    run(sql: string, params: unknown[] = []): Promise<number> {
+      return window.aura.db.run(sql, params);
     },
-    async exec(sql: string): Promise<void> {
-      await sqlite.execute(sql, []);
+    exec(sql: string): Promise<void> {
+      return window.aura.db.exec(sql);
     },
-    async queryScalar(sql: string): Promise<unknown> {
-      const rows = await sqlite.select<Record<string, unknown>[]>(sql, []);
-      const first = rows[0];
-      return first ? Object.values(first)[0] : undefined;
+    queryScalar(sql: string): Promise<unknown> {
+      return window.aura.db.queryScalar(sql);
     },
   };
-  await runMigrations(db);
   return db;
 }

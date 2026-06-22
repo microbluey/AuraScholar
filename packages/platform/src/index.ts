@@ -13,6 +13,8 @@ export interface HttpRequest {
   body?: Uint8Array | string;
   /** Milliseconds before the request is aborted. */
   timeoutMs?: number;
+  /** Optional caller-controlled cancellation signal. */
+  signal?: AbortSignal;
 }
 
 export interface HttpResponse {

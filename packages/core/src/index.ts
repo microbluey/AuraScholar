@@ -1,5 +1,11 @@
-export type { Clue } from "./ingest/clues";
-export { clueFromInput, clueFromUrl, cluesFromPdfText } from "./ingest/clues";
+export type { Clue, PdfClueSource, PdfMetadataFields } from "./ingest/clues";
+export {
+  clueFromInput,
+  clueFromUrl,
+  cluesFromPdfSource,
+  cluesFromPdfText,
+  titleCandidatesFromPdfSource,
+} from "./ingest/clues";
 export type { ResolvedWork } from "./ingest/resolve";
 export { resolveClue, findOaPdf, titleSimilarity } from "./ingest/resolve";
 export { buildCitationGraph } from "./graph/build";
@@ -19,3 +25,19 @@ export { checkDoi } from "./sentinel/check";
 export type { SentinelCheckResult } from "./sentinel/check";
 export { findDoiByTitle, TITLE_MATCH_THRESHOLD } from "./sentinel/title-match";
 export type { TitleMatchHints, TitleMatchResult } from "./sentinel/title-match";
+export {
+  mergeDiscoveryResults,
+  searchOpenSources,
+  searchOpenSourcesDetailed,
+} from "./discovery/search";
+export type {
+  DiscoveryQuery,
+  DiscoveryResult,
+  DiscoverySearchOptions,
+  DiscoverySearchReport,
+  DiscoverySort,
+  DiscoverySource,
+  DiscoverySourceReport,
+  DiscoverySourceStatus,
+  SourceCursor,
+} from "./discovery/search";

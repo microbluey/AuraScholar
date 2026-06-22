@@ -5,15 +5,24 @@
 ## 开发环境
 
 - Node.js ≥ 20,pnpm ≥ 9
-- Rust 工具链(桌面端开发,[安装指南](https://www.rust-lang.org/tools/install))
-- Tauri 2 前置依赖([按平台配置](https://v2.tauri.app/start/prerequisites/))
+- 桌面端是 Electron 应用(纯 JS/TS,无需 Rust)
 
 ```bash
 pnpm install
 pnpm build          # 构建所有包
 pnpm test           # 运行所有测试
-cd apps/desktop && pnpm tauri dev   # 启动桌面应用
+
+# 启动桌面应用
+pnpm --filter @aurascholar/desktop rebuild:electron   # 把原生模块切到 Electron ABI
+pnpm --filter @aurascholar/desktop dev
 ```
+
+> **原生模块 ABI**:唯一的原生依赖 `better-sqlite3` 在 Node(测试)与
+> Electron(应用)下需要不同的二进制 ABI,同一份产物不能两用。`pnpm install`
+> 后默认是 Node ABI(`pnpm test` 可直接跑);跑应用前用 `rebuild:electron` 切换,
+> 之后要再跑测试用 `pnpm rebuild better-sqlite3` 切回。报错
+> `NODE_MODULE_VERSION xxx vs yyy` 即此 ABI 不匹配。打包时 electron-builder
+> 自动为 Electron 重编,发布产物无此问题。
 
 ## 项目结构速览
 
@@ -28,11 +37,11 @@ cd apps/desktop && pnpm tauri dev   # 启动桌面应用
 | `packages/ai` | AIProvider 抽象 + BYOK 实现 |
 | `packages/sync` | SyncProvider 抽象 + 同步引擎(HLC + LWW) |
 | `packages/homepage` | 学术主页模板与渲染 |
-| `apps/desktop` | Tauri 2 桌面应用 |
+| `apps/desktop` | Electron 桌面应用(`electron/` 主进程 + `src/` 渲染进程) |
 
 架构铁律:
 
-1. **领域逻辑只写在 packages,不写在 apps** — 三端(桌面/Web/移动)共享同一套 TS 代码,Rust 只做平台壳。
+1. **领域逻辑只写在 packages,不写在 apps** — 三端(桌面/Web/移动)共享同一套 TS 代码,app 壳只做平台胶水层(Electron 主进程提供 SQLite / HTTP / FS / 通知,经 preload 的 `window.aura` 桥接给渲染进程)。
 2. **`core`/`reader`/`sync`/`ai` 只依赖 `platform` 的接口**,不依赖任何具体实现;实现由 app 入口注入。
 3. **批注锚定的文本空间是冻结接口**(`packages/reader/src/document.ts`),改动它必须升 anchor version 并跑回归语料。
 4. 所有表的写操作走软删(`deleted_at`),同步引擎依赖墓碑。

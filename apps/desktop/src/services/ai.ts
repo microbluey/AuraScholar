@@ -1,12 +1,13 @@
-// AI service for the desktop app: BYOK config in settings (key in localStorage
-// for now — OS keychain integration is tracked for before v0.2 release),
-// flashcard generation pipeline.
+// AI service for the desktop app: BYOK config in settings. Non-secret fields
+// (kind/baseUrl/model) live in localStorage; the API key is stored encrypted
+// via safeStorage (see services/secrets.ts). Flashcard generation pipeline.
 import { OpenAICompatibleProvider, AnthropicProvider, generateFlashcards, flashcardsToCards, PROMPT_VERSION, type AIProvider } from "@aurascholar/ai";
 import { FlashcardsRepo, newId } from "@aurascholar/db";
 import { PdfDocument, extractFullText } from "@aurascholar/reader";
 import { getDb } from "./tauri-db";
 import { tauriHttp } from "./tauri-platform";
 import { loadPdfForWork } from "./library";
+import { SECRET_KEYS, getSecret, migrateInlineSecret, setSecret } from "./secrets";
 
 export type AiProviderKind = "openai-compatible" | "anthropic";
 
@@ -21,26 +22,35 @@ export interface AiSettings {
 
 const SETTINGS_KEY = "ai-settings";
 
-export function loadAiSettings(): AiSettings | null {
+export async function loadAiSettings(): Promise<AiSettings | null> {
   const raw = localStorage.getItem(SETTINGS_KEY);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as AiSettings;
     const kind = parsed.kind ?? "openai-compatible";
+    // Migrate any inline plaintext key out of localStorage into the secret store.
+    const migrated = await migrateInlineSecret(SECRET_KEYS.aiApiKey, parsed.apiKey);
+    if (parsed.apiKey) {
+      const { apiKey: _drop, ...config } = parsed;
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...config, kind }));
+    }
+    const apiKey = migrated || (await getSecret(SECRET_KEYS.aiApiKey));
     // Anthropic can run without a baseUrl; openai-compatible needs one.
     const baseOk = kind === "anthropic" || !!parsed.baseUrl;
-    return baseOk && parsed.model && parsed.apiKey ? { ...parsed, kind } : null;
+    return baseOk && parsed.model && apiKey ? { ...parsed, kind, apiKey } : null;
   } catch {
     return null;
   }
 }
 
-export function saveAiSettings(settings: AiSettings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+export async function saveAiSettings(settings: AiSettings): Promise<void> {
+  const { apiKey, ...config } = settings;
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(config));
+  await setSecret(SECRET_KEYS.aiApiKey, apiKey);
 }
 
-export function makeProvider(): AIProvider | null {
-  const s = loadAiSettings();
+export async function makeProvider(): Promise<AIProvider | null> {
+  const s = await loadAiSettings();
   if (!s) return null;
   if (s.kind === "anthropic") {
     return new AnthropicProvider({
@@ -83,7 +93,7 @@ export async function generateFlashcardsForWork(
 }
 
 async function generateInner(workId: string, title: string): Promise<GenerateResult> {
-  const provider = makeProvider();
+  const provider = await makeProvider();
   if (!provider) throw new Error("请先在设置页配置 AI 服务(地址、模型与 API Key)");
 
   const pdf = await loadPdfForWork(workId);

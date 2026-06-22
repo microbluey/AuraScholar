@@ -26,7 +26,7 @@ import { getDb } from "../services/tauri-db";
 import { loadPdfForWork } from "../services/library";
 import { generateFlashcardsForWork } from "../services/ai";
 import { resolveTranslator, loadTranslateConfig } from "../services/translate";
-import { langLabel, splitForTranslation } from "@aurascholar/translate";
+import { langLabel, splitForTranslation, type TranslateConfig } from "@aurascholar/translate";
 import { addSnippet } from "../services/snippets";
 import { CitationGraphView } from "../components/CitationGraphView";
 
@@ -371,7 +371,10 @@ function TranslatePanel({
   const [engine, setEngine] = useState<string | null>(null);
   const [pageInput, setPageInput] = useState("1");
   const cancelRef = useRef<AbortController | null>(null);
-  const config = loadTranslateConfig();
+  const [config, setConfig] = useState<TranslateConfig>({ engine: "llm", targetLang: "zh" });
+  useEffect(() => {
+    void loadTranslateConfig().then(setConfig);
+  }, []);
 
   const cancel = useCallback(() => {
     cancelRef.current?.abort();
@@ -383,7 +386,7 @@ function TranslatePanel({
   // Translate an arbitrary list of source chunks sequentially with progress.
   const translateChunks = useCallback(
     async (chunks: string[]) => {
-      const resolved = resolveTranslator();
+      const resolved = await resolveTranslator();
       if ("error" in resolved) {
         setError(resolved.error);
         return;

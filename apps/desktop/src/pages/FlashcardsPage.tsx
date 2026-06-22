@@ -10,7 +10,7 @@ export function FlashcardsPage() {
   const [reviewedCount, setReviewedCount] = useState(0);
 
   const refresh = useCallback(async () => {
-    if (!("__TAURI_INTERNALS__" in window)) {
+    if (!("aura" in window)) {
       setQueue([]);
       setRevealed(false);
       return;

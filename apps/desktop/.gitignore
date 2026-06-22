@@ -1,0 +1,4 @@
+# electron-vite build output
+out/
+# electron-builder packaged artifacts
+release/

@@ -8,6 +8,7 @@ export interface CollectionRow {
   name: string;
   parent_id: string | null;
   sort_order: number;
+  count: number;
 }
 
 export class CollectionsRepo {
@@ -25,7 +26,13 @@ export class CollectionsRepo {
 
   async list(): Promise<CollectionRow[]> {
     return this.db.query<CollectionRow>(
-      `SELECT id, name, parent_id, sort_order FROM collections WHERE deleted_at IS NULL ORDER BY name`,
+      `SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
+       FROM collections c
+       LEFT JOIN collection_items ci ON ci.collection_id = c.id
+       LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
+       WHERE c.deleted_at IS NULL
+       GROUP BY c.id, c.name, c.parent_id, c.sort_order
+       ORDER BY c.name`,
     );
   }
 

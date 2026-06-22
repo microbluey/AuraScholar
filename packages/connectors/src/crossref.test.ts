@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { StubHttpClient, jsonResponse } from "@aurascholar/platform";
-import { crossrefByDoi } from "./crossref";
+import { crossrefByDoi, crossrefSearchByTitle } from "./crossref";
 import type { ConnectorContext } from "./client";
 
 function ctxWith(http: StubHttpClient): ConnectorContext {
@@ -30,6 +30,35 @@ const MESSAGE = {
   subject: ["Graph Theory", "Algorithms"],
   URL: "https://doi.org/10.1145/xyz",
 };
+
+describe("crossrefSearchByTitle URL construction", () => {
+  it("matches the legacy URL when no filters/page given (regression)", async () => {
+    const http = new StubHttpClient();
+    http.on(/crossref/, () => jsonResponse(200, { message: { items: [] } }));
+    await crossrefSearchByTitle(ctxWith(http), "deep learning", 5);
+    expect(http.requests[0]!.url).toBe(
+      "https://api.crossref.org/works?query.bibliographic=deep%20learning&rows=5&mailto=test%40example.com",
+    );
+  });
+
+  it("adds offset, author, year filter, and sort", async () => {
+    const http = new StubHttpClient();
+    http.on(/crossref/, () => jsonResponse(200, { message: { items: [] } }));
+    await crossrefSearchByTitle(
+      ctxWith(http),
+      "graphs",
+      10,
+      undefined,
+      { author: "Lovelace", yearFrom: 2018, yearTo: 2020, sort: "citations" },
+      2,
+    );
+    const url = http.requests[0]!.url;
+    expect(url).toContain("offset=10");
+    expect(url).toContain("query.author=Lovelace");
+    expect(url).toContain("filter=from-pub-date:2018-01-01,until-pub-date:2020-12-31");
+    expect(url).toContain("sort=is-referenced-by-count&order=desc");
+  });
+});
 
 describe("crossrefByDoi → normalizeCrossref", () => {
   it("extracts rich bibliographic fields", async () => {

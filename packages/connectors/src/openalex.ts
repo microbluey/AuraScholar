@@ -1,7 +1,7 @@
 // OpenAlex — ID crosswalk, abstracts (inverted index), OA locations, and the
 // citation graph (referenced_works + cites filter). https://docs.openalex.org
-import { getJson, type ConnectorContext } from "./client";
-import type { NormalizedWork } from "./types";
+import { getJson, type ConnectorContext, type ConnectorRequestOptions } from "./client";
+import type { ConnectorSearchFilters, NormalizedWork } from "./types";
 
 const BASE = "https://api.openalex.org";
 
@@ -43,11 +43,13 @@ export interface OpenAlexWork {
 export async function openalexByDoi(
   ctx: ConnectorContext,
   doi: string,
+  opts?: ConnectorRequestOptions,
 ): Promise<OpenAlexWork | null> {
   try {
     return await getJson<OpenAlexWork>(
       ctx,
       `${BASE}/works/https://doi.org/${encodeURIComponent(doi)}?mailto=${encodeURIComponent(ctx.mailto)}`,
+      opts,
     );
   } catch (e) {
     if ((e as { status?: number }).status === 404) return null;
@@ -55,7 +57,10 @@ export async function openalexByDoi(
   }
 }
 
-export async function openalexById(ctx: ConnectorContext, id: string): Promise<OpenAlexWork | null> {
+export async function openalexById(
+  ctx: ConnectorContext,
+  id: string,
+): Promise<OpenAlexWork | null> {
   const short = id.replace(/^https:\/\/openalex\.org\//, "");
   try {
     return await getJson<OpenAlexWork>(
@@ -73,11 +78,28 @@ export async function openalexSearchByTitle(
   ctx: ConnectorContext,
   title: string,
   perPage = 5,
+  opts?: ConnectorRequestOptions,
+  filters?: ConnectorSearchFilters,
+  page = 1,
 ): Promise<OpenAlexWork[]> {
-  const data = await getJson<{ results: OpenAlexWork[] }>(
-    ctx,
-    `${BASE}/works?filter=title.search:${encodeURIComponent(title)}&per-page=${perPage}&mailto=${encodeURIComponent(ctx.mailto)}`,
-  );
+  // OpenAlex filter is a single comma-joined list; ":" and "," are literal so
+  // only the values are encoded.
+  const filterParts = [`title.search:${encodeURIComponent(title)}`];
+  if (filters?.author) filterParts.push(`raw_author_name.search:${encodeURIComponent(filters.author)}`);
+  if (filters?.yearFrom) filterParts.push(`from_publication_date:${filters.yearFrom}-01-01`);
+  if (filters?.yearTo) filterParts.push(`to_publication_date:${filters.yearTo}-12-31`);
+  if (filters?.venue)
+    filterParts.push(`primary_location.source.display_name.search:${encodeURIComponent(filters.venue)}`);
+
+  let url =
+    `${BASE}/works?filter=${filterParts.join(",")}` +
+    `&per-page=${perPage}&mailto=${encodeURIComponent(ctx.mailto)}`;
+  if (page > 1) url += `&page=${page}`;
+  // A sort= replaces relevance ranking, so only add it for explicit non-relevance sorts.
+  if (filters?.sort === "citations") url += `&sort=cited_by_count:desc`;
+  else if (filters?.sort === "year") url += `&sort=publication_date:desc`;
+
+  const data = await getJson<{ results: OpenAlexWork[] }>(ctx, url, opts);
   return data.results ?? [];
 }
 
@@ -124,6 +146,7 @@ export function normalizeOpenAlex(w: OpenAlexWork): NormalizedWork {
       ? w.keywords.map((k) => k.display_name ?? k.keyword).filter((s): s is string => !!s)
       : undefined,
     oaPdfUrl: w.best_oa_location?.pdf_url ?? w.open_access?.oa_url ?? undefined,
+    citedByCount: w.cited_by_count,
     source: "openalex",
   };
 }

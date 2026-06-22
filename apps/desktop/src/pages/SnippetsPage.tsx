@@ -12,7 +12,7 @@ import { referenceForWork } from "../services/cite";
 const STYLE_KEY = "snippet-cite-style";
 
 function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return "aura" in window;
 }
 
 interface WorkGroup {

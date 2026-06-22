@@ -26,6 +26,13 @@ export interface PageTextIndex {
   }>;
 }
 
+export interface PdfDocumentMetadata {
+  title?: string;
+  author?: string;
+  subject?: string;
+  keywords?: string;
+}
+
 export function configureWorker(workerSrc: string): void {
   pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 }
@@ -46,6 +53,52 @@ export class PdfDocument {
 
   async getPage(pageIndex: number): Promise<PDFPageProxy> {
     return this.raw.getPage(pageIndex + 1); // pdf.js is 1-based
+  }
+
+  /** PDF Info/XMP metadata. Treat as hints only; many PDFs contain stale values. */
+  async getMetadata(): Promise<PdfDocumentMetadata> {
+    const raw = await this.raw.getMetadata().catch(() => null);
+    const info = (raw?.info ?? {}) as Record<string, unknown>;
+    const xmp = raw?.metadata as { get?: (name: string) => unknown } | undefined;
+    const get = (...names: string[]) => {
+      for (const name of names) {
+        const value = metadataString(info[name]) ?? metadataString(xmp?.get?.(name));
+        if (value) return value;
+      }
+      return undefined;
+    };
+
+    return {
+      title: get("Title", "dc:title"),
+      author: get("Author", "dc:creator"),
+      subject: get("Subject", "dc:description"),
+      keywords: get("Keywords", "pdf:Keywords"),
+    };
+  }
+
+  /**
+   * Page text for metadata extraction. This preserves line breaks when pdf.js
+   * exposes them and is intentionally separate from the frozen anchoring text.
+   */
+  async getPageTextLines(pageIndex: number): Promise<string[]> {
+    const page = await this.getPage(pageIndex);
+    const content = await page.getTextContent();
+    const lines: string[] = [];
+    let current = "";
+
+    for (const item of content.items) {
+      if (!("str" in item)) continue;
+      const textItem = item as TextItem;
+      current += textItem.str;
+      if (textItem.hasEOL) {
+        const line = current.trim();
+        if (line) lines.push(line);
+        current = "";
+      }
+    }
+    const tail = current.trim();
+    if (tail) lines.push(tail);
+    return lines;
   }
 
   /** Builds (and caches) the anchoring text index for a page. */
@@ -77,6 +130,21 @@ export class PdfDocument {
     this.textCache.clear();
     void this.raw.destroy();
   }
+}
+
+function metadataString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const cleaned = value.replace(/\s+/g, " ").trim();
+    return cleaned || undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map(metadataString).filter(Boolean).join("; ") || undefined;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return metadataString(record["#text"] ?? record.value ?? record.text);
+  }
+  return undefined;
 }
 
 /** Full-document text extraction for the AI flashcard pipeline. */
