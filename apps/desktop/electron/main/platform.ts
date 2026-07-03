@@ -4,7 +4,8 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { app, clipboard, ipcMain, Notification, safeStorage, shell } from "electron";
+import { app, clipboard, Notification, safeStorage, shell } from "electron";
+import { handle } from "./ipc";
 import { CH, type HttpRequestDTO, type HttpResponseDTO } from "../shared";
 
 const appData = () => app.getPath("userData");
@@ -89,24 +90,24 @@ function decode(stored: string): string {
 }
 
 export function registerPlatformHandlers(): void {
-  ipcMain.handle(CH.http, (_e, req: HttpRequestDTO) => httpRequest(req));
-  ipcMain.handle(CH.httpCancel, (_e, requestId: string) => {
+  handle(CH.http, (_e, req: HttpRequestDTO) => httpRequest(req));
+  handle(CH.httpCancel, (_e, requestId: string) => {
     httpControllers.get(requestId)?.abort();
   });
 
-  ipcMain.handle(CH.fsRead, async (_e, rel: string) => {
+  handle(CH.fsRead, async (_e, rel: string) => {
     const buf = await fs.readFile(resolveRel(rel));
     return new Uint8Array(buf);
   });
-  ipcMain.handle(CH.fsWrite, async (_e, rel: string, data: Uint8Array) => {
+  handle(CH.fsWrite, async (_e, rel: string, data: Uint8Array) => {
     const abs = resolveRel(rel);
     await fs.mkdir(dirname(abs), { recursive: true });
     await fs.writeFile(abs, Buffer.from(data));
   });
-  ipcMain.handle(CH.fsDelete, async (_e, rel: string) => {
+  handle(CH.fsDelete, async (_e, rel: string) => {
     await fs.rm(resolveRel(rel), { force: true });
   });
-  ipcMain.handle(CH.fsExists, async (_e, rel: string) => {
+  handle(CH.fsExists, async (_e, rel: string) => {
     try {
       await fs.access(resolveRel(rel));
       return true;
@@ -114,25 +115,25 @@ export function registerPlatformHandlers(): void {
       return false;
     }
   });
-  ipcMain.handle(CH.fsListDir, async (_e, rel: string) => {
+  handle(CH.fsListDir, async (_e, rel: string) => {
     try {
       return await fs.readdir(resolveRel(rel));
     } catch {
       return [];
     }
   });
-  ipcMain.handle(CH.fsMkdirp, async (_e, rel: string) => {
+  handle(CH.fsMkdirp, async (_e, rel: string) => {
     await fs.mkdir(resolveRel(rel), { recursive: true });
   });
 
-  ipcMain.handle(CH.notify, (_e, title: string, body?: string) => {
+  handle(CH.notify, (_e, title: string, body?: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show();
   });
-  ipcMain.handle(CH.clipboardReadText, () => clipboard.readText());
-  ipcMain.handle(CH.clipboardWriteText, (_e, text: string) => {
+  handle(CH.clipboardReadText, () => clipboard.readText());
+  handle(CH.clipboardWriteText, (_e, text: string) => {
     clipboard.writeText(text);
   });
-  ipcMain.handle(CH.openExternal, async (_e, url: string) => {
+  handle(CH.openExternal, async (_e, url: string) => {
     try {
       await openExternalUrl(url);
       return null;
@@ -141,22 +142,22 @@ export function registerPlatformHandlers(): void {
     }
   });
 
-  ipcMain.handle(CH.secretGet, async (_e, key: string) => {
+  handle(CH.secretGet, async (_e, key: string) => {
     const map = await readSecrets();
     return key in map ? decode(map[key]!) : null;
   });
-  ipcMain.handle(CH.secretSet, async (_e, key: string, value: string) => {
+  handle(CH.secretSet, async (_e, key: string, value: string) => {
     const map = await readSecrets();
     map[key] = encode(value);
     await writeSecrets(map);
   });
-  ipcMain.handle(CH.secretDelete, async (_e, key: string) => {
+  handle(CH.secretDelete, async (_e, key: string) => {
     const map = await readSecrets();
     delete map[key];
     await writeSecrets(map);
   });
 
-  ipcMain.handle(CH.deviceId, () => getStableDeviceId());
+  handle(CH.deviceId, () => getStableDeviceId());
 }
 
 export async function getStableDeviceId(): Promise<string> {

@@ -3,7 +3,8 @@
 // once at startup. The native SQLite driver stays in the main process so the
 // renderer bundle never pulls better-sqlite3 into the browser dependency graph.
 import { join } from "node:path";
-import { app, ipcMain } from "electron";
+import { app } from "electron";
+import { handle } from "./ipc";
 import type { Database } from "@aurascholar/db";
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
@@ -31,16 +32,16 @@ export function getMainDb(): Promise<Database> {
 }
 
 export function registerDbHandlers(): void {
-  ipcMain.handle(CH.dbQuery, async (_e, sql: string, params: unknown[]) => {
+  handle(CH.dbQuery, async (_e, sql: string, params: unknown[]) => {
     return (await getMainDb()).query(sql, params);
   });
-  ipcMain.handle(CH.dbRun, async (_e, sql: string, params: unknown[]) => {
+  handle(CH.dbRun, async (_e, sql: string, params: unknown[]) => {
     return (await getMainDb()).run(sql, params);
   });
-  ipcMain.handle(CH.dbExec, async (_e, sql: string) => {
+  handle(CH.dbExec, async (_e, sql: string) => {
     await (await getMainDb()).exec(sql);
   });
-  ipcMain.handle(CH.dbScalar, async (_e, sql: string) => {
+  handle(CH.dbScalar, async (_e, sql: string) => {
     return (await getMainDb()).queryScalar(sql);
   });
 }

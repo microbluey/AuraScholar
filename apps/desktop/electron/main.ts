@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow } from "electron";
 import { CH } from "./shared";
+import { handle, setTrustedSender } from "./main/ipc";
 import { openExternalUrl, registerPlatformHandlers } from "./main/platform";
 import { registerDbHandlers } from "./main/db";
 import {
@@ -45,6 +46,8 @@ async function createWindow(): Promise<void> {
     return { action: "deny" };
   });
 
+  setTrustedSender(win.webContents);
+
   if (SMOKE_MODE) {
     // Lazy chunk: the ~6k-line harness never loads in a normal launch.
     const { setupSmokeHarness } = await import("./main/smoke");
@@ -64,7 +67,7 @@ app.whenReady().then(() => {
   registerPlatformHandlers();
   registerDbHandlers();
   registerResearchHandlers();
-  ipcMain.handle(CH.citationBridgePort, () => citationBridgePort());
+  handle(CH.citationBridgePort, () => citationBridgePort());
   startCitationBridge();
 
   void createWindow();
