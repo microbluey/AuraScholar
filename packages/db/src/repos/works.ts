@@ -2,6 +2,7 @@ import type { Database } from "../database";
 import { newId, normalizeDoi, workFingerprint } from "../ids";
 
 export type AuthorRole = "author" | "editor" | "translator";
+export type ReadingStatus = "unread" | "reading" | "read";
 
 export interface WorkAuthorInput {
   displayName: string;
@@ -79,6 +80,7 @@ export interface WorkRow {
   openalex_id: string | null;
   s2_id: string | null;
   pmid: string | null;
+  fingerprint: string | null;
   volume: string | null;
   issue: string | null;
   pages: string | null;
@@ -553,6 +555,9 @@ export class WorksRepo {
    * written, so partial saves don't clobber untouched fields.
    */
   async update(id: string, patch: WorkPatch): Promise<void> {
+    const now = Date.now();
+    const needsFingerprint =
+      patch.title !== undefined || patch.year !== undefined || patch.authors !== undefined;
     const sets: string[] = [];
     const params: unknown[] = [];
     const scalar: Array<[keyof WorkPatch, string]> = [
@@ -577,24 +582,69 @@ export class WorksRepo {
       sets.push(`keywords_json = ?`);
       params.push(patch.keywords?.length ? JSON.stringify(patch.keywords) : null);
     }
-    if (sets.length > 0) {
-      await this.db.run(`UPDATE works SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [
-        ...params,
-        Date.now(),
-        id,
-      ]);
+    if (needsFingerprint) {
+      const currentRows = await this.db.query<WorkRow>(`SELECT * FROM works WHERE id = ?`, [id]);
+      const current = currentRows[0];
+      if (!current) throw new Error("文献不存在");
+      const nextTitle = patch.title ?? current.title;
+      const nextYear = patch.year !== undefined ? (patch.year ?? null) : current.year;
+      const currentAuthors =
+        patch.authors ??
+        (await this.authorsOf(id)).map((author) => ({
+          displayName: author.displayName,
+          orcid: author.orcid ?? undefined,
+          position: author.position,
+          role: author.role as AuthorRole,
+        }));
+      const firstAuthor = currentAuthors[0]?.displayName?.split(/\s+/).pop() ?? null;
+      sets.push(`fingerprint = ?`);
+      params.push(workFingerprint(nextTitle, nextYear, firstAuthor));
     }
 
-    if (patch.authors) {
-      await this.db.run(`DELETE FROM work_authors WHERE work_id = ?`, [id]);
-      for (const author of patch.authors) {
-        const authorId = await this.upsertAuthor(author.displayName, author.orcid);
-        await this.db.run(
-          `INSERT OR IGNORE INTO work_authors (work_id, author_id, position, raw_name, role) VALUES (?, ?, ?, ?, ?)`,
-          [id, authorId, author.position, author.displayName, author.role ?? "author"],
-        );
+    await this.db.exec("BEGIN");
+    try {
+      if (sets.length > 0) {
+        await this.db.run(`UPDATE works SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [
+          ...params,
+          now,
+          id,
+        ]);
       }
+
+      if (patch.authors) {
+        await this.db.run(`DELETE FROM work_authors WHERE work_id = ?`, [id]);
+        for (const author of patch.authors) {
+          const authorId = await this.upsertAuthor(author.displayName, author.orcid);
+          await this.db.run(
+            `INSERT OR IGNORE INTO work_authors (work_id, author_id, position, raw_name, role) VALUES (?, ?, ?, ?, ?)`,
+            [id, authorId, author.position, author.displayName, author.role ?? "author"],
+          );
+        }
+      }
+      await this.db.exec("COMMIT");
+    } catch (e) {
+      await this.db.exec("ROLLBACK");
+      throw e;
     }
+  }
+
+  async setReadingStatus(id: string, status: ReadingStatus): Promise<void> {
+    if (!["unread", "reading", "read"].includes(status)) {
+      throw new Error("阅读状态无效");
+    }
+    await this.db.run(`UPDATE works SET reading_status = ?, updated_at = ? WHERE id = ?`, [
+      status,
+      Date.now(),
+      id,
+    ]);
+  }
+
+  async setStarred(id: string, starred: boolean): Promise<void> {
+    await this.db.run(`UPDATE works SET starred = ?, updated_at = ? WHERE id = ?`, [
+      starred ? 1 : 0,
+      Date.now(),
+      id,
+    ]);
   }
 
   private async upsertAuthor(displayName: string, orcid?: string): Promise<string> {

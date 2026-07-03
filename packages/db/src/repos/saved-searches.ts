@@ -12,6 +12,7 @@ export interface SavedSearchRow {
   new_count: number;
   last_run_at: number | null;
   next_run_at: number | null;
+  last_error: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -39,7 +40,7 @@ export class SavedSearchesRepo {
 
   async list(): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
-      `SELECT id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+      `SELECT id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
               created_at, updated_at
        FROM saved_searches WHERE deleted_at IS NULL ORDER BY created_at DESC`,
     );
@@ -48,7 +49,7 @@ export class SavedSearchesRepo {
   /** Searches whose next_run_at has come due (or was never scheduled). */
   async due(now = Date.now()): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
-      `SELECT id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+      `SELECT id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
               created_at, updated_at
        FROM saved_searches
        WHERE deleted_at IS NULL AND (next_run_at IS NULL OR next_run_at <= ?)
@@ -70,9 +71,20 @@ export class SavedSearchesRepo {
     const now = Date.now();
     await this.db.run(
       `UPDATE saved_searches
-       SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?, updated_at = ?
+       SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?,
+           last_error = NULL, updated_at = ?
        WHERE id = ?`,
       [JSON.stringify(seenIds), newCount, now, nextRunAt, now, id],
+    );
+  }
+
+  async recordError(id: string, error: string, nextRunAt: number): Promise<void> {
+    const now = Date.now();
+    await this.db.run(
+      `UPDATE saved_searches
+       SET last_run_at = ?, next_run_at = ?, last_error = ?, updated_at = ?
+       WHERE id = ?`,
+      [now, nextRunAt, summarizeError(error), now, id],
     );
   }
 
@@ -92,4 +104,8 @@ export class SavedSearchesRepo {
       id,
     ]);
   }
+}
+
+function summarizeError(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 500);
 }

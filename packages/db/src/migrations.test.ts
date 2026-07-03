@@ -22,6 +22,14 @@ async function columnExists(table: string, column: string): Promise<boolean> {
   return rows.some((row) => row.name === column);
 }
 
+async function indexExists(name: string): Promise<boolean> {
+  const rows = await db.query<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type='index' AND name=?`,
+    [name],
+  );
+  return rows.length > 0;
+}
+
 describe("migrations", () => {
   it("records the latest version", async () => {
     const max = await db.queryScalar(`SELECT MAX(version) FROM _migrations`);
@@ -84,6 +92,11 @@ describe("migrations", () => {
     expect(await columnExists("saved_searches", "seen_ids_json")).toBe(true);
     expect(await columnExists("saved_searches", "new_count")).toBe(true);
     expect(await columnExists("saved_searches", "next_run_at")).toBe(true);
+    expect(await columnExists("saved_searches", "last_error")).toBe(true);
+  });
+
+  it("tracks the latest sentinel polling error", async () => {
+    expect(await columnExists("sentinel_tasks", "last_error")).toBe(true);
   });
 
   it("creates local-first cloud/sync foundation tables", async () => {
@@ -96,5 +109,12 @@ describe("migrations", () => {
     expect(await columnExists("sync_log", "library_id")).toBe(true);
     expect(await columnExists("sync_log", "values_json")).toBe(true);
     expect(await columnExists("sync_state", "library_id")).toBe(true);
+  });
+
+  it("indexes stable academic identifiers used by import dedup", async () => {
+    expect(await indexExists("works_arxiv_idx")).toBe(true);
+    expect(await indexExists("works_openalex_idx")).toBe(true);
+    expect(await indexExists("works_s2_idx")).toBe(true);
+    expect(await indexExists("works_pmid_idx")).toBe(true);
   });
 });

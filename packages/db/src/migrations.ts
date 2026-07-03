@@ -283,6 +283,38 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS saved_searches_due_idx ON saved_searches(next_run_at);
     `,
   },
+  {
+    // Stable academic identifiers are used for library status checks and
+    // duplicate detection beyond DOI. Index them so large libraries do not
+    // degrade into table scans when importing from discovery/browser flows.
+    version: 12,
+    name: "works_stable_id_indexes",
+    sql: `
+      CREATE INDEX IF NOT EXISTS works_arxiv_idx ON works(arxiv_id) WHERE arxiv_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS works_openalex_idx ON works(openalex_id) WHERE openalex_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS works_s2_idx ON works(s2_id) WHERE s2_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS works_pmid_idx ON works(pmid) WHERE pmid IS NOT NULL;
+    `,
+  },
+  {
+    // Keep the latest sentinel polling failure visible to users. error_count
+    // alone shows that something is wrong but not whether it is a network,
+    // DOI, rate-limit, or connector problem.
+    version: 13,
+    name: "sentinel_last_error",
+    sql: `
+      ALTER TABLE sentinel_tasks ADD COLUMN last_error TEXT;
+    `,
+  },
+  {
+    // Saved-search polling has the same long-running background failure mode:
+    // a network/API failure should not look like "no new results".
+    version: 14,
+    name: "saved_searches_last_error",
+    sql: `
+      ALTER TABLE saved_searches ADD COLUMN last_error TEXT;
+    `,
+  },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

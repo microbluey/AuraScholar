@@ -1,5 +1,22 @@
 import type { Database } from "../database";
-import { newId } from "../ids";
+import { newId, normalizeDoi } from "../ids";
+
+export interface SentinelCreateInput {
+  doi?: string | null;
+  title: string;
+  workId?: string;
+  targets?: string[];
+  hintVenue?: string;
+  hintAuthor?: string;
+}
+
+export type SentinelCreateStatus = "created" | "existing" | "restored";
+
+export interface SentinelCreateResult {
+  id: string;
+  status: SentinelCreateStatus;
+  task: SentinelTaskRow;
+}
 
 export interface SentinelTaskRow {
   id: string;
@@ -15,8 +32,11 @@ export interface SentinelTaskRow {
   next_poll_at: number;
   last_polled_at: number | null;
   error_count: number;
+  last_error: string | null;
   status: string;
   created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
 }
 
 export interface SentinelEventRow {
@@ -33,14 +53,8 @@ export class SentinelRepo {
   constructor(private readonly db: Database) {}
 
   /** Either doi or title monitoring; title mode accepts venue/author hints. */
-  async create(input: {
-    doi?: string;
-    title: string;
-    workId?: string;
-    targets?: string[];
-    hintVenue?: string;
-    hintAuthor?: string;
-  }): Promise<string> {
+  async create(input: SentinelCreateInput): Promise<string> {
+    const prepared = prepareCreateInput(input);
     const id = newId();
     const now = Date.now();
     await this.db.run(
@@ -50,18 +64,81 @@ export class SentinelRepo {
        VALUES (?, ?, ?, ?, 'accepted', ?, ?, ?, 86400, ?, 'active', ?, ?)`,
       [
         id,
-        input.workId ?? null,
-        input.doi ?? null,
-        input.title,
-        input.targets ? JSON.stringify(input.targets) : null,
-        input.hintVenue ?? null,
-        input.hintAuthor ?? null,
+        prepared.workId ?? null,
+        prepared.doi,
+        prepared.title,
+        prepared.targets ? JSON.stringify(prepared.targets) : null,
+        prepared.hintVenue ?? null,
+        prepared.hintAuthor ?? null,
         now, // first check due immediately
         now,
         now,
       ],
     );
     return id;
+  }
+
+  async createOrRestore(input: SentinelCreateInput): Promise<SentinelCreateResult> {
+    const prepared = prepareCreateInput(input);
+    const existing = await this.findMatchingTask(prepared);
+
+    if (existing && existing.deleted_at == null) {
+      if (prepared.workId && !existing.work_id) {
+        await this.db.run(`UPDATE sentinel_tasks SET work_id = ?, updated_at = ? WHERE id = ?`, [
+          prepared.workId,
+          Date.now(),
+          existing.id,
+        ]);
+        const linked = await this.get(existing.id);
+        return { id: existing.id, status: "existing", task: linked ?? existing };
+      }
+      return { id: existing.id, status: "existing", task: existing };
+    }
+
+    if (existing) {
+      const now = Date.now();
+      await this.db.run(
+        `UPDATE sentinel_tasks SET
+           work_id = COALESCE(?, work_id),
+           doi = ?,
+           title = ?,
+           target_flags = COALESCE(?, target_flags),
+           hint_venue = ?,
+           hint_author = ?,
+           next_poll_at = ?,
+           status = 'active',
+           deleted_at = NULL,
+           updated_at = ?
+         WHERE id = ?`,
+        [
+          prepared.workId ?? null,
+          prepared.doi,
+          prepared.title,
+          prepared.targets ? JSON.stringify(prepared.targets) : null,
+          prepared.hintVenue ?? null,
+          prepared.hintAuthor ?? null,
+          now,
+          now,
+          existing.id,
+        ],
+      );
+      const restored = await this.get(existing.id);
+      if (!restored) throw new Error("恢复哨兵任务失败");
+      return { id: restored.id, status: "restored", task: restored };
+    }
+
+    const id = await this.create(prepared);
+    const task = await this.get(id);
+    if (!task) throw new Error("创建哨兵任务失败");
+    return { id, status: "created", task };
+  }
+
+  async get(taskId: string): Promise<SentinelTaskRow | null> {
+    const rows = await this.db.query<SentinelTaskRow>(
+      `SELECT * FROM sentinel_tasks WHERE id = ? LIMIT 1`,
+      [taskId],
+    );
+    return rows[0] ?? null;
   }
 
   /** Called when title monitoring discovers the DOI. */
@@ -95,6 +172,7 @@ export class SentinelRepo {
       newState?: string;
       nextPollS: number;
       errored: boolean;
+      error?: string | null;
       done?: boolean;
     },
   ): Promise<void> {
@@ -106,6 +184,7 @@ export class SentinelRepo {
          next_poll_at = ?,
          poll_interval_s = ?,
          error_count = CASE WHEN ? THEN error_count + 1 ELSE 0 END,
+         last_error = CASE WHEN ? THEN ? ELSE NULL END,
          status = CASE WHEN ? THEN 'done' ELSE status END,
          updated_at = ?
        WHERE id = ?`,
@@ -115,6 +194,8 @@ export class SentinelRepo {
         now + update.nextPollS * 1000,
         update.nextPollS,
         update.errored ? 1 : 0,
+        update.errored ? 1 : 0,
+        update.error ? summarizeError(update.error) : null,
         update.done ? 1 : 0,
         now,
         taskId,
@@ -181,4 +262,66 @@ export class SentinelRepo {
       taskId,
     ]);
   }
+
+  private async findMatchingTask(input: PreparedSentinelCreateInput): Promise<SentinelTaskRow | null> {
+    if (input.doi) {
+      const rows = await this.db.query<SentinelTaskRow>(
+        `SELECT * FROM sentinel_tasks
+         WHERE doi = ?
+         ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, created_at DESC
+         LIMIT 1`,
+        [input.doi],
+      );
+      return rows[0] ?? null;
+    }
+
+    const targetTitle = normalizeSentinelTitle(input.title);
+    const rows = await this.db.query<SentinelTaskRow>(
+      `SELECT * FROM sentinel_tasks WHERE doi IS NULL`,
+    );
+    return (
+      rows
+        .filter((task) => normalizeSentinelTitle(task.title) === targetTitle)
+        .sort(
+          (a, b) =>
+            Number(a.deleted_at !== null) - Number(b.deleted_at !== null) ||
+            b.created_at - a.created_at,
+        )[0] ?? null
+    );
+  }
+}
+
+function summarizeError(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+interface PreparedSentinelCreateInput {
+  doi: string | null;
+  title: string;
+  workId?: string;
+  targets?: string[];
+  hintVenue?: string;
+  hintAuthor?: string;
+}
+
+function prepareCreateInput(input: SentinelCreateInput): PreparedSentinelCreateInput {
+  const doi = input.doi ? normalizeDoi(input.doi) ?? input.doi.trim().toLowerCase() : null;
+  return {
+    doi,
+    title: input.title.trim(),
+    workId: input.workId,
+    targets: input.targets,
+    hintVenue: input.hintVenue?.trim() || undefined,
+    hintAuthor: input.hintAuthor?.trim() || undefined,
+  };
+}
+
+function normalizeSentinelTitle(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9一-鿿]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }

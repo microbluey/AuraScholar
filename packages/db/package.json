@@ -11,6 +11,62 @@
     "./schema": {
       "types": "./dist/schema.d.ts",
       "default": "./dist/schema.js"
+    },
+    "./migrations": {
+      "types": "./dist/migrations.d.ts",
+      "default": "./dist/migrations.js"
+    },
+    "./local-first": {
+      "types": "./dist/local-first.d.ts",
+      "default": "./dist/local-first.js"
+    },
+    "./node": {
+      "types": "./dist/database.d.ts",
+      "default": "./dist/database.js"
+    },
+    "./ids": {
+      "types": "./dist/ids.d.ts",
+      "default": "./dist/ids.js"
+    },
+    "./work-list": {
+      "types": "./dist/work-list.d.ts",
+      "default": "./dist/work-list.js"
+    },
+    "./repos/annotations": {
+      "types": "./dist/repos/annotations.d.ts",
+      "default": "./dist/repos/annotations.js"
+    },
+    "./repos/attachments": {
+      "types": "./dist/repos/attachments.d.ts",
+      "default": "./dist/repos/attachments.js"
+    },
+    "./repos/collections": {
+      "types": "./dist/repos/collections.d.ts",
+      "default": "./dist/repos/collections.js"
+    },
+    "./repos/flashcards": {
+      "types": "./dist/repos/flashcards.d.ts",
+      "default": "./dist/repos/flashcards.js"
+    },
+    "./repos/saved-searches": {
+      "types": "./dist/repos/saved-searches.d.ts",
+      "default": "./dist/repos/saved-searches.js"
+    },
+    "./repos/snippets": {
+      "types": "./dist/repos/snippets.d.ts",
+      "default": "./dist/repos/snippets.js"
+    },
+    "./repos/sentinel": {
+      "types": "./dist/repos/sentinel.d.ts",
+      "default": "./dist/repos/sentinel.js"
+    },
+    "./repos/tags": {
+      "types": "./dist/repos/tags.d.ts",
+      "default": "./dist/repos/tags.js"
+    },
+    "./repos/works": {
+      "types": "./dist/repos/works.d.ts",
+      "default": "./dist/repos/works.js"
     }
   },
   "files": ["dist"],

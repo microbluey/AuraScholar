@@ -280,12 +280,43 @@ describe("WorksRepo", () => {
     expect(authors[1]).toMatchObject({ displayName: "An Editor", role: "editor" });
   });
 
+  it("update() refreshes the dedup fingerprint after title/year/author edits", async () => {
+    const { id } = await works.upsert({
+      title: "Original Title",
+      year: 2020,
+      authors: [{ displayName: "A One", position: 0 }],
+    });
+
+    await works.update(id, {
+      title: "Retitled Paper",
+      year: 2024,
+      authors: [{ displayName: "B Two", position: 0, role: "author" }],
+    });
+
+    const rows = await db.query<{ fingerprint: string }>(
+      `SELECT fingerprint FROM works WHERE id = ?`,
+      [id],
+    );
+    expect(rows[0]?.fingerprint).toBe("retitled paper|2024|two");
+  });
+
   it("update() leaves untouched fields alone (partial save)", async () => {
     const { id } = await works.upsert({ title: "Keep", volume: "5" });
     await works.update(id, { issue: "3" });
     const got = await works.get(id);
     expect(got?.volume).toBe("5"); // not clobbered
     expect(got?.issue).toBe("3");
+  });
+
+  it("sets reading status and starred state", async () => {
+    const { id } = await works.upsert({ title: "Workflow Paper" });
+
+    await works.setReadingStatus(id, "reading");
+    await works.setStarred(id, true);
+
+    const got = await works.get(id);
+    expect(got?.reading_status).toBe("reading");
+    expect(got?.starred).toBe(1);
   });
 });
 

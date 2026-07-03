@@ -5,7 +5,6 @@ export { newId, workFingerprint, normalizeDoi } from "./ids";
 export { ensureLocalFirstState } from "./local-first";
 export type { LocalFirstState, EnsureLocalFirstOptions } from "./local-first";
 export type { Database } from "./database";
-export { createNodeDatabase } from "./database";
 export { WorksRepo } from "./repos/works";
 export type {
   WorkInput,
@@ -15,6 +14,7 @@ export type {
   WorkAuthorInput,
   WorkAuthorDetail,
   AuthorRole,
+  ReadingStatus,
   RichBibFields,
 } from "./repos/works";
 export { AnnotationsRepo } from "./repos/annotations";

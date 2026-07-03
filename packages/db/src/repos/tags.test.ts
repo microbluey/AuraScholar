@@ -30,6 +30,18 @@ describe("TagsRepo", () => {
     expect(list[0]?.name).toBe("方法");
   });
 
+  it("ensure() restores a soft-deleted tag with the same name", async () => {
+    const id = await tags.ensure("方法");
+    await tags.softDelete(id);
+
+    const restored = await tags.ensure("方法", "#0f766e");
+
+    expect(restored).toBe(id);
+    const list = await tags.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ id, name: "方法", color: "#0f766e" });
+  });
+
   it("addToWorks attaches a tag to many works and counts them", async () => {
     const w1 = await makeWork("Paper 1");
     const w2 = await makeWork("Paper 2");
@@ -54,6 +66,20 @@ describe("TagsRepo", () => {
     const tag = (await tags.list())[0];
     expect(tag?.name).toBe("new");
     expect(tag?.color).toBe("#000");
+  });
+
+  it("rename merges into an existing tag instead of failing unique constraints", async () => {
+    const w1 = await makeWork("Paper 1");
+    const w2 = await makeWork("Paper 2");
+    await tags.addToWorks([w1], "old");
+    await tags.addToWorks([w2], "new");
+    const oldId = (await tags.list()).find((t) => t.name === "old")!.id;
+
+    await tags.rename(oldId, "new");
+
+    const list = await tags.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ name: "new", count: 2 });
   });
 
   it("softDelete removes the tag and its work associations", async () => {
