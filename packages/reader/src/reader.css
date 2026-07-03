@@ -126,7 +126,14 @@
   transform: scale(1.2);
 }
 
+.au-reader__swatch:disabled {
+  cursor: wait;
+  opacity: 0.58;
+  transform: none;
+}
+
 .au-reader__tool {
+  min-width: 28px;
   background: transparent;
   border: none;
   color: var(--color-text-secondary);
@@ -139,6 +146,15 @@
 .au-reader__tool:hover {
   background: var(--color-accent-subtle);
   color: var(--color-text);
+}
+
+.au-reader__tool:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.au-reader__tool--snippet[aria-busy="true"] {
+  color: var(--color-accent);
 }
 
 /* --- Annotation sidebar --- */
@@ -188,6 +204,11 @@
   border-style: dashed;
 }
 
+.au-annsidebar__item--busy {
+  border-color: var(--color-accent);
+  cursor: wait;
+}
+
 .au-annsidebar__meta {
   display: flex;
   align-items: center;
@@ -214,6 +235,8 @@
 }
 
 .au-annsidebar__action {
+  width: 24px;
+  height: 24px;
   margin-left: auto;
   background: none;
   border: none;
@@ -226,6 +249,11 @@
 
 .au-annsidebar__action:hover {
   color: var(--color-danger);
+}
+
+.au-annsidebar__action:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .au-annsidebar__quote {
@@ -257,6 +285,11 @@
   padding: 0;
 }
 
+.au-annsidebar__add-comment:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 .au-annsidebar__editor {
   width: 100%;
   font-family: var(--font-body);
@@ -276,8 +309,15 @@
 
 .au-annsidebar__editor-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   margin-top: 4px;
+}
+
+.au-annsidebar__editor-status {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .au-annsidebar__btn {
@@ -292,4 +332,9 @@
 
 .au-annsidebar__btn:hover {
   border-color: var(--color-accent);
+}
+
+.au-annsidebar__btn:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }

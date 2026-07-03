@@ -4,4 +4,4 @@ export { toCslJson, toBibTeX, toRIS } from "./export";
 export type { CitationStyle } from "./styles";
 export { STYLES, formatBibliography, formatEntry, formatCitation } from "./styles";
 export type { ImportFormat } from "./import";
-export { parseReferences, parseBibTeX, parseRis, detectFormat } from "./import";
+export { parseReferences, parseBibTeX, parseRis, parseNbib, parseEnw, detectFormat } from "./import";

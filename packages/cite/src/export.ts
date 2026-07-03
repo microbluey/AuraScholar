@@ -43,6 +43,7 @@ function bibtexEntry(item: CslItem): string {
   if (item.ISBN) fields.push(["isbn", item.ISBN]);
   if (item.language) fields.push(["language", `{${item.language}}`]);
   if (item.DOI) fields.push(["doi", item.DOI]);
+  if (item.PMID) fields.push(["pmid", item.PMID]);
   if (item.URL) fields.push(["url", item.URL]);
 
   const body = fields.map(([k, v]) => `  ${k} = {${stripBraces(v)}}`).join(",\n");
@@ -112,6 +113,7 @@ function risEntry(item: CslItem): string {
   else if (item.ISBN) lines.push(`SN  - ${item.ISBN}`);
   if (item.language) lines.push(`LA  - ${item.language}`);
   if (item.DOI) lines.push(`DO  - ${item.DOI}`);
+  if (item.PMID) lines.push(`AN  - PMID:${item.PMID}`);
   if (item.URL) lines.push(`UR  - ${item.URL}`);
   if (item.abstract) lines.push(`AB  - ${item.abstract}`);
   lines.push("ER  - ");

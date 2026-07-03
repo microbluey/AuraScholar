@@ -43,7 +43,7 @@ export class PdfDocument {
   private constructor(readonly raw: PDFDocumentProxy) {}
 
   static async load(data: Uint8Array): Promise<PdfDocument> {
-    const doc = await pdfjs.getDocument({ data }).promise;
+    const doc = await pdfjs.getDocument({ data, verbosity: pdfjs.VerbosityLevel.ERRORS }).promise;
     return new PdfDocument(doc);
   }
 

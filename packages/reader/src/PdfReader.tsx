@@ -16,7 +16,7 @@ export interface PdfReaderProps {
   /** Invoked with the selected text when the user taps the translate tool. */
   onTranslate?: (text: string) => void;
   /** Invoked with the selected text + page when the user saves a writing snippet. */
-  onSaveSnippet?: (text: string, pageIndex: number) => void;
+  onSaveSnippet?: (text: string, pageIndex: number) => void | Promise<void>;
   /** Highlight palette: name → CSS color. */
   palette?: Record<string, string>;
   pageFilter?: "none" | "sepia" | "invert";
@@ -50,6 +50,7 @@ export function PdfReader({
   const [visibleRange, setVisibleRange] = useState<[number, number]>([0, 2]);
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const [pageHeight, setPageHeight] = useState(800); // estimated until first page loads
+  const [snippetSaving, setSnippetSaving] = useState(false);
 
   // Measure first page to estimate scroll heights for virtualization.
   useEffect(() => {
@@ -115,7 +116,7 @@ export function PdfReader({
 
   const createFromPending = useCallback(
     async (type: AnnotationType, color: string) => {
-      if (!pending || !onCreateAnnotation) return;
+      if (!pending || !onCreateAnnotation || snippetSaving) return;
       const index = await doc.getPageText(pending.pageIndex);
       const anchor: AnnotationAnchor = {
         version: 1,
@@ -131,15 +132,31 @@ export function PdfReader({
       setPending(null);
       window.getSelection()?.removeAllRanges();
     },
-    [pending, onCreateAnnotation, doc],
+    [pending, onCreateAnnotation, doc, snippetSaving],
   );
 
+  const saveSnippetFromPending = useCallback(async () => {
+    if (!pending || !onSaveSnippet || snippetSaving) return;
+    setSnippetSaving(true);
+    try {
+      await onSaveSnippet(pending.exact, pending.pageIndex);
+      setPending(null);
+      window.getSelection()?.removeAllRanges();
+    } finally {
+      setSnippetSaving(false);
+    }
+  }, [onSaveSnippet, pending, snippetSaving]);
+
   const pages = useMemo(() => {
+    const maxPage = doc.pageCount - 1;
+    if (maxPage < 0) return [];
     const [first, last] = visibleRange;
+    const start = Math.min(Math.max(0, first), maxPage);
+    const end = Math.min(Math.max(start, last), maxPage);
     const out: number[] = [];
-    for (let i = first; i <= last; i++) out.push(i);
+    for (let i = start; i <= end; i++) out.push(i);
     return out;
-  }, [visibleRange]);
+  }, [doc.pageCount, visibleRange]);
 
   return (
     <div className="au-reader" onMouseUp={() => void handleMouseUp()}>
@@ -188,12 +205,14 @@ export function PdfReader({
               key={name}
               className="au-reader__swatch"
               style={{ background: color }}
+              disabled={snippetSaving}
               title={`高亮 · ${name}`}
               onClick={() => void createFromPending("highlight", color)}
             />
           ))}
           <button
             className="au-reader__tool"
+            disabled={snippetSaving}
             title="下划线"
             onClick={() => void createFromPending("underline", "var(--color-accent)")}
           >
@@ -201,6 +220,7 @@ export function PdfReader({
           </button>
           <button
             className="au-reader__tool"
+            disabled={snippetSaving}
             title="批注"
             onClick={() => void createFromPending("note", palette.yellow ?? "#ffd866")}
           >
@@ -209,8 +229,10 @@ export function PdfReader({
           {onTranslate && (
             <button
               className="au-reader__tool"
+              disabled={snippetSaving}
               title="翻译选中文本"
               onClick={() => {
+                if (snippetSaving) return;
                 onTranslate(pending.exact);
                 setPending(null);
                 window.getSelection()?.removeAllRanges();
@@ -221,15 +243,13 @@ export function PdfReader({
           )}
           {onSaveSnippet && (
             <button
-              className="au-reader__tool"
-              title="存为写作素材"
-              onClick={() => {
-                onSaveSnippet(pending.exact, pending.pageIndex);
-                setPending(null);
-                window.getSelection()?.removeAllRanges();
-              }}
+              className="au-reader__tool au-reader__tool--snippet"
+              aria-busy={snippetSaving}
+              disabled={snippetSaving}
+              title={snippetSaving ? "正在保存为写作素材" : "存为写作素材"}
+              onClick={() => void saveSnippetFromPending()}
             >
-              ✦
+              {snippetSaving ? "…" : "✦"}
             </button>
           )}
         </div>

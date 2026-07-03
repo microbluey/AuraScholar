@@ -37,9 +37,16 @@ export async function findDoiByTitle(
   title: string,
   hints: TitleMatchHints = {},
 ): Promise<TitleMatchResult | null> {
-  const [crossrefHits, openalexHits] = await Promise.all([
-    crossrefSearchByTitle(ctx, title, 5).catch(() => []),
-    openalexSearchByTitle(ctx, title, 5).catch(() => []),
+  const [crossrefResult, openalexResult] = await Promise.all([
+    settleSource(() => crossrefSearchByTitle(ctx, title, 5)),
+    settleSource(() => openalexSearchByTitle(ctx, title, 5)),
+  ]);
+  const crossrefHits = crossrefResult.value ?? [];
+  const openalexHits = openalexResult.value ?? [];
+
+  assertTitleSearchComplete([
+    { name: "Crossref", hits: crossrefHits.length, error: crossrefResult.error },
+    { name: "OpenAlex", hits: openalexHits.length, error: openalexResult.error },
   ]);
 
   const candidates: Array<{ work: NormalizedWork; source: "crossref" | "openalex" }> = [
@@ -107,4 +114,35 @@ function normalizeName(name: string): string {
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z一-鿿]/g, "");
+}
+
+interface SourceResult<T> {
+  value: T | null;
+  error: unknown | null;
+}
+
+async function settleSource<T>(load: () => Promise<T>): Promise<SourceResult<T>> {
+  try {
+    return { value: await load(), error: null };
+  } catch (error) {
+    return { value: null, error };
+  }
+}
+
+function assertTitleSearchComplete(
+  sources: Array<{ name: string; hits: number; error: unknown | null }>,
+): void {
+  if (sources.some((source) => source.hits > 0)) return;
+
+  const failures = sources.filter((source) => source.error);
+  if (failures.length === 0) return;
+
+  throw new Error(`标题 DOI 检索失败:${failures.map(formatSourceFailure).join("; ")}`);
+}
+
+function formatSourceFailure(source: { name: string; error: unknown | null }): string {
+  const raw =
+    source.error instanceof Error ? source.error.message : String(source.error ?? "未知错误");
+  const compact = raw.replace(/\s+/g, " ").trim();
+  return `${source.name} ${compact.slice(0, 220)}`;
 }

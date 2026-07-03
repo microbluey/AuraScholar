@@ -56,10 +56,12 @@ describe("toCslItem", () => {
       ...RAW_CSL,
       volume: "99", // column wins over csl_json's volume "30"
       issn: "2222-3333",
+      pmid: "41000001",
       publisher: "Edited Publisher",
     });
     expect(item.volume).toBe("99");
     expect(item.ISSN).toBe("2222-3333");
+    expect(item.PMID).toBe("41000001");
     expect(item.publisher).toBe("Edited Publisher");
   });
 
@@ -87,24 +89,27 @@ describe("exporters", () => {
   const item = toCslItem(RAW_CSL);
 
   it("BibTeX has a key, type, and braces", () => {
-    const bib = toBibTeX([item]);
+    const bib = toBibTeX([{ ...item, PMID: "41000001" }]);
     expect(bib).toMatch(/@article\{vaswani2017/);
     expect(bib).toContain("title = {Attention Is All You Need}");
     expect(bib).toContain("author = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki}");
     expect(bib).toContain("pages = {5998--6008}");
+    expect(bib).toContain("pmid = {41000001}");
   });
 
   it("RIS has TY/AU/ER tags", () => {
-    const ris = toRIS([item]);
+    const ris = toRIS([{ ...item, PMID: "41000001" }]);
     expect(ris).toContain("TY  - JOUR");
     expect(ris).toContain("AU  - Vaswani, Ashish");
     expect(ris).toContain("PY  - 2017");
+    expect(ris).toContain("AN  - PMID:41000001");
     expect(ris.trimEnd().endsWith("ER  -")).toBe(true);
   });
 
   it("CSL-JSON round-trips", () => {
-    const json = JSON.parse(toCslJson([item]));
+    const json = JSON.parse(toCslJson([{ ...item, PMID: "41000001" }]));
     expect(json[0].title).toBe("Attention Is All You Need");
+    expect(json[0].PMID).toBe("41000001");
   });
 });
 

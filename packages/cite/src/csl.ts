@@ -34,6 +34,7 @@ export interface CslItem {
   ISBN?: string;
   language?: string;
   DOI?: string;
+  PMID?: string;
   URL?: string;
   abstract?: string;
 }
@@ -48,6 +49,7 @@ export interface WorkLike {
   id: string;
   title: string;
   doi?: string | null;
+  pmid?: string | null;
   year?: number | null;
   publicationDate?: string | null;
   venueName?: string | null;
@@ -110,6 +112,7 @@ function fromRawCsl(raw: Record<string, unknown>, work: WorkLike): CslItem {
     page: pickString(raw.page),
     publisher: pickString(raw.publisher),
     DOI: pickString(raw.DOI) ?? work.doi ?? undefined,
+    PMID: pickString(raw.PMID) ?? work.pmid ?? undefined,
     URL: pickString(raw.URL),
     abstract: pickString(raw.abstract),
   };
@@ -124,6 +127,7 @@ function synthesize(work: WorkLike): CslItem {
     "container-title": work.venueName ?? undefined,
     issued: yearDate(work.year) ?? rawDate(work.publicationDate),
     DOI: work.doi ?? undefined,
+    PMID: work.pmid ?? undefined,
   };
 }
 
@@ -154,6 +158,7 @@ function overlayColumns(base: CslItem, work: WorkLike): CslItem {
   set("language", work.language ?? undefined);
   set("URL", work.url ?? undefined);
   if (work.doi) out.DOI = work.doi;
+  if (work.pmid) out.PMID = work.pmid;
   return out;
 }
 
