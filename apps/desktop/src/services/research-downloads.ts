@@ -7,8 +7,7 @@
 // before anything reaches the library; citation files (.bib etc.) are
 // authoritative and imported directly. No per-site scraping required.
 import { tauriFs } from "./tauri-platform";
-import { analyzePdf, analyzePdfWithIdentity, type IngestDraft } from "./library";
-import { importReferences, previewReferences } from "./import-refs";
+import type { IngestDraft } from "./library-types";
 import type { ScholarIdentity } from "../../electron/shared";
 
 function hasIdentity(s?: ScholarIdentity): s is ScholarIdentity {
@@ -48,6 +47,7 @@ async function ingestDownloadedFile(
       // Analyze only — never auto-write. The page identity (citation_* meta) is
       // preferred over guessing a DOI from the PDF body. The temp file is kept
       // until the user confirms or cancels (handled by the caller).
+      const { analyzePdf, analyzePdfWithIdentity } = await import("./library");
       const draft = hasIdentity(scholar)
         ? await analyzePdfWithIdentity(display, bytes, scholar, relPath)
         : await analyzePdf(display, bytes);
@@ -55,6 +55,7 @@ async function ingestDownloadedFile(
     }
     if (REFERENCE_EXTS.includes(ext)) {
       const text = new TextDecoder().decode(bytes);
+      const { importReferences, previewReferences } = await import("./import-refs");
       // .txt / .json may not actually be references — bail quietly if nothing parses.
       if (previewReferences(text).length === 0) {
         void tauriFs.deleteFile(relPath).catch(() => {});

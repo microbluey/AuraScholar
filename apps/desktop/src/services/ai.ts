@@ -2,12 +2,18 @@
 // (kind/baseUrl/model) live in localStorage; the API key is stored encrypted
 // via safeStorage (see services/secrets.ts). Flashcard generation pipeline.
 import { OpenAICompatibleProvider, AnthropicProvider, generateFlashcards, flashcardsToCards, PROMPT_VERSION, type AIProvider } from "@aurascholar/ai";
-import { FlashcardsRepo, newId } from "@aurascholar/db";
+import { newId } from "@aurascholar/db/ids";
+import { FlashcardsRepo } from "@aurascholar/db/repos/flashcards";
 import { PdfDocument, extractFullText } from "@aurascholar/reader";
 import { getDb } from "./tauri-db";
 import { tauriHttp } from "./tauri-platform";
-import { loadPdfForWork } from "./library";
 import { SECRET_KEYS, getSecret, migrateInlineSecret, setSecret } from "./secrets";
+import {
+  isStorageRecord,
+  readLocalStorageJson,
+  tryWriteLocalStorageJson,
+  writeLocalStorageJson,
+} from "../storage";
 
 export type AiProviderKind = "openai-compatible" | "anthropic";
 
@@ -23,29 +29,28 @@ export interface AiSettings {
 const SETTINGS_KEY = "ai-settings";
 
 export async function loadAiSettings(): Promise<AiSettings | null> {
-  const raw = localStorage.getItem(SETTINGS_KEY);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as AiSettings;
-    const kind = parsed.kind ?? "openai-compatible";
-    // Migrate any inline plaintext key out of localStorage into the secret store.
-    const migrated = await migrateInlineSecret(SECRET_KEYS.aiApiKey, parsed.apiKey);
-    if (parsed.apiKey) {
-      const { apiKey: _drop, ...config } = parsed;
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...config, kind }));
-    }
-    const apiKey = migrated || (await getSecret(SECRET_KEYS.aiApiKey));
-    // Anthropic can run without a baseUrl; openai-compatible needs one.
-    const baseOk = kind === "anthropic" || !!parsed.baseUrl;
-    return baseOk && parsed.model && apiKey ? { ...parsed, kind, apiKey } : null;
-  } catch {
-    return null;
+  const parsed = readLocalStorageJson<unknown>(SETTINGS_KEY, null);
+  if (!isStorageRecord(parsed)) return null;
+
+  const kind: AiProviderKind = parsed.kind === "anthropic" ? "anthropic" : "openai-compatible";
+  const baseUrl = typeof parsed.baseUrl === "string" ? parsed.baseUrl : "";
+  const model = typeof parsed.model === "string" ? parsed.model : "";
+  const inlineApiKey = typeof parsed.apiKey === "string" ? parsed.apiKey : "";
+
+  // Migrate any inline plaintext key out of localStorage into the secret store.
+  const migrated = await migrateInlineSecret(SECRET_KEYS.aiApiKey, inlineApiKey);
+  if (inlineApiKey) {
+    tryWriteLocalStorageJson(SETTINGS_KEY, { baseUrl, kind, model });
   }
+  const apiKey = migrated || (await getSecret(SECRET_KEYS.aiApiKey));
+  // Anthropic can run without a baseUrl; openai-compatible needs one.
+  const baseOk = kind === "anthropic" || !!baseUrl;
+  return baseOk && model && apiKey ? { baseUrl, kind, model, apiKey } : null;
 }
 
 export async function saveAiSettings(settings: AiSettings): Promise<void> {
   const { apiKey, ...config } = settings;
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(config));
+  writeLocalStorageJson(SETTINGS_KEY, config);
   await setSecret(SECRET_KEYS.aiApiKey, apiKey);
 }
 
@@ -72,16 +77,23 @@ export interface GenerateResult {
   created: number;
 }
 
+export interface GenerateFlashcardsOptions {
+  /** Manual requests persist failures so the UI can surface them; optional background attempts may stay silent. */
+  persistError?: boolean;
+}
+
 /** Generates AI flashcards for a library work from its PDF text. */
 export async function generateFlashcardsForWork(
   workId: string,
   title: string,
+  options: GenerateFlashcardsOptions = {},
 ): Promise<GenerateResult> {
   try {
     return await generateInner(workId, title);
   } catch (e) {
-    // Persist the failure so the reader's 重点 panel can surface it even when
-    // the generation was fired in the background at import time.
+    if (options.persistError === false) throw e;
+    // Persist manual/on-demand failures so the reader and library panels can
+    // surface them after navigation.
     const db = await getDb();
     await db.run(
       `INSERT INTO ai_jobs (id, kind, work_id, status, error, created_at, updated_at)
@@ -96,6 +108,7 @@ async function generateInner(workId: string, title: string): Promise<GenerateRes
   const provider = await makeProvider();
   if (!provider) throw new Error("请先在设置页配置 AI 服务(地址、模型与 API Key)");
 
+  const { loadPdfForWork } = await import("./library-read");
   const pdf = await loadPdfForWork(workId);
   if (!pdf) throw new Error("这篇文献没有 PDF 附件,无法提取正文");
 

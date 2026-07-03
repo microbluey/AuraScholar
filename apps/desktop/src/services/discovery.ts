@@ -1,4 +1,5 @@
 import {
+  mergeDiscoveryResults,
   searchOpenSourcesDetailed,
   type DiscoveryQuery,
   type DiscoveryResult,
@@ -8,10 +9,10 @@ import {
   type SourceCursor,
 } from "@aurascholar/core";
 import { type NormalizedWork } from "@aurascholar/connectors";
-import { workFingerprint } from "@aurascholar/db";
+import { workFingerprint } from "@aurascholar/db/ids";
 import { getDb } from "./tauri-db";
 import { tauriHttp } from "./tauri-platform";
-import { ingestResolvedWork, type IngestResult } from "./library";
+import type { IngestResult } from "./library-types";
 
 const ctx = { http: tauriHttp, mailto: "contact@aurascholar.app" };
 
@@ -20,11 +21,15 @@ export interface DiscoveryResultWithLibrary extends DiscoveryResult {
   libraryWorkId?: string;
   /** Set after import when no PDF was attached — card can offer "find full text". */
   needsFulltext?: boolean;
+  /** Sources that contributed this merged result in the current UI search. */
+  matchedSources: DiscoverySource[];
 }
 
 export interface DiscoverySearchReportWithLibrary extends Omit<DiscoverySearchReport, "results"> {
   results: DiscoveryResultWithLibrary[];
 }
+
+export { mergeDiscoveryResults };
 
 export async function searchDiscovery(
   query: string,
@@ -45,6 +50,8 @@ export async function searchDiscoveryDetailed(
     limit?: number;
   },
 ): Promise<DiscoverySearchReportWithLibrary> {
+  const smokeReport = smokeDiscoveryReport(query, sources);
+  if (smokeReport) return smokeReport;
   const report = await searchOpenSourcesDetailed(ctx, query, {
     sources,
     limit: opts?.limit ?? 20,
@@ -59,6 +66,9 @@ export async function searchDiscoveryDetailed(
 }
 
 export async function importDiscoveryResult(work: NormalizedWork): Promise<IngestResult> {
+  const smokeResult = await smokeDiscoveryImportResult(work);
+  if (smokeResult) return smokeResult;
+  const { ingestResolvedWork } = await import("./library");
   return ingestResolvedWork(work);
 }
 
@@ -66,7 +76,11 @@ async function markLibraryStatus(
   results: DiscoveryResult[],
 ): Promise<DiscoveryResultWithLibrary[]> {
   if (!("aura" in window) || results.length === 0) {
-    return results.map((result) => ({ ...result, inLibrary: false }));
+    return results.map((result) => ({
+      ...result,
+      inLibrary: false,
+      matchedSources: [result.source],
+    }));
   }
 
   const db = await getDb();
@@ -156,8 +170,105 @@ async function markLibraryStatus(
       ...result,
       inLibrary: !!id,
       libraryWorkId: id,
+      matchedSources: [result.source],
     };
   });
+}
+
+interface DiscoverySmokeImportFixture {
+  delayMs?: number;
+  deduped?: boolean;
+  doi?: string;
+  needsConfirmation?: boolean;
+  pdfFetched?: boolean;
+  title?: string;
+  workId?: string;
+}
+
+interface DiscoverySmokeFixture {
+  acceptAnyQuery?: boolean;
+  query: string;
+  title: string;
+  doi?: string;
+  abstract?: string;
+  year?: number;
+  venueName?: string;
+  oaPdfUrl?: string;
+  citedByCount?: number;
+  importResult?: DiscoverySmokeImportFixture;
+}
+
+interface DiscoverySmokeWindow extends Window {
+  __AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__?: DiscoverySmokeFixture | null;
+}
+
+async function smokeDiscoveryImportResult(work: NormalizedWork): Promise<IngestResult | null> {
+  const fixture = (window as DiscoverySmokeWindow).__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
+  const importResult = fixture?.importResult;
+  if (!importResult) return null;
+  if (importResult.doi && importResult.doi.toLowerCase() !== work.doi?.toLowerCase()) return null;
+  if (importResult.delayMs && importResult.delayMs > 0) {
+    await new Promise((resolve) => window.setTimeout(resolve, importResult.delayMs));
+  }
+  return {
+    workId: importResult.workId ?? `smoke-work:${work.doi ?? work.title}`,
+    deduped: importResult.deduped ?? false,
+    title: importResult.title ?? work.title,
+    pdfFetched: importResult.pdfFetched ?? false,
+    needsConfirmation: importResult.needsConfirmation,
+  };
+}
+
+function smokeDiscoveryReport(
+  query: string | DiscoveryQuery,
+  sources?: DiscoverySource[],
+): DiscoverySearchReportWithLibrary | null {
+  const fixture = (window as DiscoverySmokeWindow).__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
+  const text = (typeof query === "string" ? query : query.text).trim();
+  if (!fixture || (!fixture.acceptAnyQuery && text !== fixture.query)) return null;
+
+  const requestedSources: DiscoverySource[] =
+    sources && sources.length > 0 ? sources : ["crossref", "openalex", "s2", "arxiv"];
+  const activeSources = new Set<DiscoverySource>(
+    requestedSources.filter((source) => source !== "arxiv"),
+  );
+  const results: DiscoveryResultWithLibrary[] = [...activeSources].map((source, index) => ({
+    id: `smoke-discovery:${source}:${fixture.doi ?? fixture.title}:${index}`,
+    source,
+    score: Math.max(82, 100 - index * 4),
+    inLibrary: false,
+    matchedSources: [source],
+    work: {
+      title: fixture.title,
+      doi: fixture.doi,
+      abstract: fixture.abstract,
+      year: fixture.year,
+      venueName: fixture.venueName,
+      authors: [{ displayName: "Smoke Researcher", family: "Researcher", position: 0 }],
+      citedByCount: source === "crossref" ? undefined : fixture.citedByCount,
+      oaPdfUrl: source === "crossref" ? undefined : fixture.oaPdfUrl,
+      openalexId: source === "openalex" ? "W4242424242" : undefined,
+      s2Id: source === "s2" ? "smoke-s2-trust-signal" : undefined,
+      source,
+    },
+  }));
+
+  return {
+    results,
+    sources: Object.fromEntries(
+      requestedSources.map((source) => [
+        source,
+        {
+          source,
+          status: activeSources.has(source) ? "done" : "empty",
+          count: activeSources.has(source) ? 1 : 0,
+        },
+      ]),
+    ) as DiscoverySearchReportWithLibrary["sources"],
+    cursors: Object.fromEntries(
+      requestedSources.map((source) => [source, { page: 1, hasMore: false }]),
+    ) as DiscoverySearchReportWithLibrary["cursors"],
+  };
 }
 
 function fingerprintForWork(work: NormalizedWork): string | null {

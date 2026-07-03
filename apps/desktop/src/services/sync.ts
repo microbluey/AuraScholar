@@ -14,10 +14,17 @@ import {
   type ConflictRecord,
   type SyncResult,
 } from "@aurascholar/sync";
-import { ensureLocalFirstState, type Database, type LocalFirstState } from "@aurascholar/db";
+import type { Database } from "@aurascholar/db";
+import { ensureLocalFirstState, type LocalFirstState } from "@aurascholar/db/local-first";
 import { getDb } from "./tauri-db";
 import { tauriHttp } from "./tauri-platform";
 import { SECRET_KEYS, getSecret, migrateInlineSecret, setSecret } from "./secrets";
+import {
+  isStorageRecord,
+  readLocalStorageJson,
+  tryWriteLocalStorageJson,
+  writeLocalStorageJson,
+} from "../storage";
 
 export interface SyncSettings {
   baseUrl: string;
@@ -28,27 +35,26 @@ export interface SyncSettings {
 const SETTINGS_KEY = "sync-settings";
 
 export async function loadSyncSettings(): Promise<SyncSettings | null> {
-  const raw = localStorage.getItem(SETTINGS_KEY);
-  if (!raw) return null;
-  try {
-    const s = JSON.parse(raw) as SyncSettings;
-    if (!s.baseUrl) return null;
-    // Migrate any inline plaintext password into the secret store.
-    const migrated = await migrateInlineSecret(SECRET_KEYS.syncPassword, s.password);
-    if (s.password) {
-      const { password: _drop, ...config } = s;
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...config, password: "" }));
-    }
-    const password = migrated || (await getSecret(SECRET_KEYS.syncPassword));
-    return { ...s, password };
-  } catch {
-    return null;
+  const parsed = readLocalStorageJson<unknown>(SETTINGS_KEY, null);
+  if (!isStorageRecord(parsed)) return null;
+
+  const baseUrl = typeof parsed.baseUrl === "string" ? parsed.baseUrl : "";
+  if (!baseUrl) return null;
+  const username = typeof parsed.username === "string" ? parsed.username : "";
+  const inlinePassword = typeof parsed.password === "string" ? parsed.password : "";
+
+  // Migrate any inline plaintext password into the secret store.
+  const migrated = await migrateInlineSecret(SECRET_KEYS.syncPassword, inlinePassword);
+  if (inlinePassword) {
+    tryWriteLocalStorageJson(SETTINGS_KEY, { baseUrl, username, password: "" });
   }
+  const password = migrated || (await getSecret(SECRET_KEYS.syncPassword));
+  return { baseUrl, username, password };
 }
 
 export async function saveSyncSettings(s: SyncSettings): Promise<void> {
   const { password, ...config } = s;
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...config, password: "" }));
+  writeLocalStorageJson(SETTINGS_KEY, { ...config, password: "" });
   await setSecret(SECRET_KEYS.syncPassword, password);
 }
 

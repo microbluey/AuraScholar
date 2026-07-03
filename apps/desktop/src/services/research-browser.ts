@@ -5,6 +5,10 @@ import type { Bounds, CaptureResult, ResearchTab } from "../../electron/shared";
 
 export type { ResearchTab, Bounds, CaptureResult };
 
+type ResearchSmokeWindow = Window & {
+  __AURASCHOLAR_SMOKE_RESEARCH_HIDE_ERROR__?: string | null;
+};
+
 function ready(): boolean {
   return "aura" in window;
 }
@@ -59,6 +63,8 @@ export async function closeResearchTab(tabId: string): Promise<void> {
 /** Detach all views from the window (when leaving the browser view). */
 export async function hideResearchViews(): Promise<void> {
   if (!ready()) return;
+  const smokeError = (window as ResearchSmokeWindow).__AURASCHOLAR_SMOKE_RESEARCH_HIDE_ERROR__;
+  if (smokeError) throw new Error(smokeError);
   await window.aura.research.hide();
 }
 

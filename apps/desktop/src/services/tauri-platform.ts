@@ -69,6 +69,32 @@ export const tauriNotifier: Notifier = {
   },
 };
 
+const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
+export function normalizeExternalUrl(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("无效的外部链接");
+  }
+  if (!EXTERNAL_PROTOCOLS.has(url.protocol)) {
+    throw new Error(`不允许打开 ${url.protocol || "未知"} 链接`);
+  }
+  return url.toString();
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  const safeUrl = normalizeExternalUrl(url);
+  const aura = (window as Window & { aura?: Window["aura"] }).aura;
+  if (aura) {
+    await aura.openExternal(safeUrl);
+    return;
+  }
+  const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
+  if (!opened) throw new Error("浏览器阻止了外部链接弹窗");
+}
+
 /** sha256 of file bytes — content addressing for the blob store. */
 export async function sha256Hex(data: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", data as BufferSource);

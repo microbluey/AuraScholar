@@ -1,13 +1,8 @@
 // Library service: glues ingest pipeline (core) + repos (db) + blob store
 // (fs) together for the desktop app.
-import {
-  AnnotationsRepo,
-  AttachmentsRepo,
-  WorksRepo,
-  normalizeDoi,
-  type WorkInput,
-  type WorkWithAuthors,
-} from "@aurascholar/db";
+import { normalizeDoi } from "@aurascholar/db/ids";
+import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
+import { WorksRepo } from "@aurascholar/db/repos/works";
 import {
   clueFromInput,
   cluesFromPdfSource,
@@ -18,145 +13,33 @@ import {
 import type { Clue } from "@aurascholar/core";
 import type { ScholarIdentity } from "../../electron/shared";
 import type { ConnectorContext, NormalizedWork } from "@aurascholar/connectors";
-import { PdfDocument } from "@aurascholar/reader";
+import { configureWorker, PdfDocument } from "@aurascholar/reader";
 import type { PdfDocumentMetadata } from "@aurascholar/reader";
+import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { getDb } from "./tauri-db";
 import { blobPath, sha256Hex, tauriFs, tauriHttp } from "./tauri-platform";
+import { toWorkInput } from "./work-input";
+import type {
+  AttachPdfResult,
+  DedupHit,
+  IngestDraft,
+  IngestResult,
+  LocalMatch,
+  OaLookupWork,
+  PendingPdf,
+  PdfFields,
+} from "./library-types";
 
 // Until a settings UI exists, use a project contact for polite pools.
 const ctx: ConnectorContext = { http: tauriHttp, mailto: "contact@aurascholar.app" };
 
-export interface IngestResult {
-  workId: string;
-  deduped: boolean;
-  title: string;
-  pdfFetched: boolean;
-  /** Set when title-search confidence was low — UI should let the user verify. */
-  needsConfirmation?: boolean;
-}
-
-export interface AttachPdfResult {
-  attachmentId: string;
-  deduped: boolean;
-  pageCount: number;
-}
-
-/**
- * A PDF staged during analysis. Its blob is already written (content-addressed
- * by sha, so writing is idempotent and harmless); commit only creates the
- * `attachments` row. `relPath` is the research-download temp file, deleted by
- * the caller after commit/cancel; null for in-memory local uploads.
- */
-export interface PendingPdf {
-  sha: string;
-  fileName: string;
-  byteSize: number;
-  pageCount: number;
-  relPath: string | null;
-  fetchedVia: "manual" | "research-download";
-}
-
-/** Import already in the library — surfaced directly without a confirm card. */
-export interface DedupHit {
-  reason: "exact-file" | "doi";
-  workId: string;
-  title: string;
-}
-
-/**
- * Output of the analyze step: resolved candidates + staged PDF, with NO rows
- * written to `works`/`attachments`. The user picks/edits a candidate in the
- * confirm card; only `commitIngest` writes to the library.
- */
-export interface IngestDraft {
-  source: "browser" | "pdf" | "input";
-  /** All resolved candidates (best first). Empty = nothing resolved. */
-  candidates: NormalizedWork[];
-  /** Index of the most-confident candidate; -1 when none is trustworthy. */
-  bestIndex: number;
-  /** Confidence of the best candidate (0..1), for a "low confidence" hint. */
-  confidence: number;
-  pdf: PendingPdf | null;
-  /** Non-null = already in the library; caller should skip the card. */
-  dedup: DedupHit | null;
-  /** Fallback title for the "leave unidentified" choice. */
-  fallbackTitle: string;
-  /** Fields harvested from the PDF itself — used when no online match fits. */
-  pdfFields: PdfFields | null;
-  /** Existing library works that look like a match (attach instead of create). */
-  localMatches: LocalMatch[];
-  /**
-   * When set, this import is "find full text for an existing work" — the confirm
-   * card defaults to attaching the PDF to this work rather than creating one.
-   */
-  targetWorkId?: string;
-  targetTitle?: string;
-}
-
-/** Minimal work shape for OA lookup (subset of NormalizedWork fields). */
-export interface OaLookupWork {
-  doi?: string;
-  arxivId?: string;
-  oaPdfUrl?: string;
-  title: string;
-}
-
-/** Best-effort metadata read straight from the PDF (Info/XMP + first page). */
-export interface PdfFields {
-  title?: string;
-  authors: string[];
-  year?: number;
-}
-
-/** A library work that may be the same paper — selecting it attaches the PDF. */
-export interface LocalMatch {
-  workId: string;
-  title: string;
-  year: number | null;
-  authors: string[];
-  doi: string | null;
-}
+configureWorker(workerSrc);
 
 async function repos() {
   const db = await getDb();
   return {
     works: new WorksRepo(db),
     attachments: new AttachmentsRepo(db),
-    annotations: new AnnotationsRepo(db),
-  };
-}
-
-export function toWorkInput(w: NormalizedWork): WorkInput {
-  return {
-    doi: w.doi,
-    title: w.title,
-    abstract: w.abstract,
-    year: w.year,
-    publicationDate: w.publicationDate,
-    venueName: w.venueName,
-    venueType: w.venueType,
-    type: w.type,
-    arxivId: w.arxivId,
-    openalexId: w.openalexId,
-    s2Id: w.s2Id,
-    pmid: w.pmid,
-    volume: w.volume,
-    issue: w.issue,
-    pages: w.pages,
-    publisher: w.publisher,
-    placePublished: w.placePublished,
-    issn: w.issn,
-    isbn: w.isbn,
-    language: w.language,
-    url: w.url,
-    keywords: w.keywords,
-    cslJson: w.cslJson,
-    authors: w.authors.map((a) => ({
-      displayName: a.displayName,
-      orcid: a.orcid,
-      position: a.position,
-      role: a.role,
-    })),
   };
 }
 
@@ -331,52 +214,6 @@ export async function analyzePdfWithIdentity(
     pdfFields,
     localMatches,
   };
-}
-
-/**
- * Commit a user-confirmed import: the ONLY place that writes works/attachments.
- * `workInput` is the user's final pick/edit; `pdf` is the staged blob (already
- * on disk) to attach.
- */
-export async function commitIngest(args: {
-  workInput: WorkInput;
-  pdf: PendingPdf | null;
-  source: IngestDraft["source"];
-}): Promise<IngestResult> {
-  const { works, attachments } = await repos();
-  const { id, deduped } = await works.upsert(args.workInput);
-  let pdfFetched = false;
-  if (args.pdf) {
-    await attachments.create({
-      workId: id,
-      sha256: args.pdf.sha,
-      byteSize: args.pdf.byteSize,
-      originalFilename: args.pdf.fileName,
-      fetchedVia: args.pdf.fetchedVia,
-      pageCount: args.pdf.pageCount,
-    });
-    pdfFetched = true;
-  }
-  return { workId: id, deduped, title: args.workInput.title, pdfFetched };
-}
-
-/** Restore a soft-deleted dedup hit and surface it (no new rows written). */
-export async function restoreDedup(workId: string): Promise<void> {
-  const { works } = await repos();
-  await works.restore(workId);
-}
-
-/** Attach an already-staged PDF (blob on disk) to a work — for dedup hits. */
-export async function attachStagedPdf(workId: string, pdf: PendingPdf): Promise<void> {
-  const { attachments } = await repos();
-  await attachments.create({
-    workId,
-    sha256: pdf.sha,
-    byteSize: pdf.byteSize,
-    originalFilename: pdf.fileName,
-    fetchedVia: pdf.fetchedVia,
-    pageCount: pdf.pageCount,
-  });
 }
 
 // ── analyze helpers ─────────────────────────────────────────────────────────
@@ -662,32 +499,15 @@ export async function analyzeOaPdf(work: OaLookupWork): Promise<IngestDraft | nu
   };
 }
 
-export async function listWorks(
-  search?: string,
-  collectionId?: string,
-  limit?: number,
-): Promise<WorkWithAuthors[]> {
-  const { works } = await repos();
-  return works.list({ search, collectionId, limit });
-}
-
-export async function listDeletedWorks(
-  search?: string,
-  limit?: number,
-): Promise<WorkWithAuthors[]> {
-  const { works } = await repos();
-  return works.listDeleted({ search, limit });
-}
-
-export async function loadPdfForWork(
-  workId: string,
-): Promise<{ attachmentId: string; data: Uint8Array } | null> {
-  const { attachments } = await repos();
-  const list = await attachments.forWork(workId);
-  const pdf = list.find((a) => a.kind === "pdf");
-  if (!pdf) return null;
-  const data = await tauriFs.readFile(blobPath(pdf.sha256));
-  return { attachmentId: pdf.id, data };
-}
-
 export { repos };
+export { toWorkInput };
+export type {
+  AttachPdfResult,
+  DedupHit,
+  IngestDraft,
+  IngestResult,
+  LocalMatch,
+  OaLookupWork,
+  PendingPdf,
+  PdfFields,
+} from "./library-types";

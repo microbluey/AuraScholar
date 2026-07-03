@@ -3,7 +3,7 @@
 // built-ins. Login/cookies are NOT here — they live in each site's Electron
 // session partition (see electron/main/research-browser.ts), cleared via
 // clearSiteData().
-import { newId } from "@aurascholar/db";
+import { newId } from "@aurascholar/db/ids";
 import { getDb } from "./tauri-db";
 
 export interface DiscoverySite {
@@ -15,6 +15,12 @@ export interface DiscoverySite {
   hidden: boolean;
   sortOrder: number;
   useProxy: boolean;
+}
+
+export interface AddSiteResult {
+  created: boolean;
+  status: "created" | "existing" | "restored";
+  site: DiscoverySite;
 }
 
 interface SiteRow {
@@ -111,11 +117,12 @@ export async function addSite(input: {
   name: string;
   homeUrl: string;
   searchUrl?: string;
-}): Promise<DiscoverySite> {
+}): Promise<AddSiteResult> {
   const db = await getDb();
   const now = Date.now();
   const id = `custom:${newId()}`;
   const name = input.name.trim();
+  if (!name) throw new Error("站点名称不能为空");
   const homeUrl = normalizeHttpUrl(input.homeUrl, "主页 URL");
   const searchUrl = input.searchUrl?.trim()
     ? normalizeHttpUrl(input.searchUrl, "检索 URL")
@@ -123,20 +130,44 @@ export async function addSite(input: {
   const maxOrder = Number(
     (await db.queryScalar(`SELECT COALESCE(MAX(sort_order), 0) FROM discovery_sites`)) ?? 0,
   );
-  await db.run(
+  const sortOrder = maxOrder + 10;
+  const changes = await db.run(
     `INSERT INTO discovery_sites (id, name, home_url, search_url, builtin, hidden, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)`,
-    [id, name, homeUrl, searchUrl ?? null, maxOrder + 10, now, now],
+     SELECT ?, ?, ?, ?, 0, 0, ?, ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM discovery_sites WHERE home_url = ?)`,
+    [id, name, homeUrl, searchUrl ?? null, sortOrder, now, now, homeUrl],
   );
+  if (changes === 0) {
+    const existing = await db.query<SiteRow>(
+      `SELECT id, name, home_url, search_url, builtin, hidden, sort_order, use_proxy
+       FROM discovery_sites WHERE home_url = ? LIMIT 1`,
+      [homeUrl],
+    );
+    if (existing[0]) {
+      if (existing[0].hidden === 1) {
+        await db.run(`UPDATE discovery_sites SET hidden = 0, updated_at = ? WHERE id = ?`, [
+          now,
+          existing[0].id,
+        ]);
+        return { created: false, status: "restored", site: fromRow({ ...existing[0], hidden: 0 }) };
+      }
+      return { created: false, status: "existing", site: fromRow(existing[0]) };
+    }
+    throw new Error("添加站点失败,请稍后重试");
+  }
   return {
-    id,
-    name,
-    homeUrl,
-    searchUrl,
-    builtin: false,
-    hidden: false,
-    sortOrder: maxOrder + 10,
-    useProxy: false,
+    created: true,
+    status: "created",
+    site: {
+      id,
+      name,
+      homeUrl,
+      searchUrl,
+      builtin: false,
+      hidden: false,
+      sortOrder,
+      useProxy: false,
+    },
   };
 }
 
