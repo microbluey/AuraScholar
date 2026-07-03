@@ -25,7 +25,7 @@ export class DeepLTranslator implements Translator {
     this.baseUrl = (opts.baseUrl || DEFAULT_BASE).replace(/\/+$/, "");
   }
 
-  async translate(input: TranslateInput, opts?: TranslateOptions): Promise<TranslateResult> {
+  async translate(input: TranslateInput, _opts?: TranslateOptions): Promise<TranslateResult> {
     const text = input.text.trim();
     if (!text) return { text: "", engine: this.id };
 

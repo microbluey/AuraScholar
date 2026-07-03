@@ -185,8 +185,8 @@ export async function analyzePdfWithIdentity(
 
   const pdf = await stagePdf(fileName, data, relPath, "research-download", exact.pageCount);
   const pdfFields = pdfFieldsFrom(exact.metadata, exact.text, fileName, identity);
-  let candidates: NormalizedWork[] = [];
-  let confidence = 0;
+  let candidates: NormalizedWork[];
+  let confidence: number;
   if (clue) {
     const r = await resolveCandidates(clue);
     candidates = r.candidates;

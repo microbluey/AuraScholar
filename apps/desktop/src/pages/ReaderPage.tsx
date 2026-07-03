@@ -271,7 +271,7 @@ export function ReaderPage() {
       if (savingSnippetRef.current) return;
       savingSnippetRef.current = true;
       const startedAt = Date.now();
-      let message = "";
+      let message: string;
       if (!ctx?.workId) {
         message = "请先入库，素材会关联到对应文献";
       } else {

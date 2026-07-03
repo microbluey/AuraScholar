@@ -39,7 +39,7 @@ export class BaiduTranslator implements Translator {
     this.fixedSalt = opts.salt;
   }
 
-  async translate(input: TranslateInput, opts?: TranslateOptions): Promise<TranslateResult> {
+  async translate(input: TranslateInput, _opts?: TranslateOptions): Promise<TranslateResult> {
     const q = input.text.trim();
     if (!q) return { text: "", engine: this.id };
 

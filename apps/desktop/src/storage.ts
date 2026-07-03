@@ -27,7 +27,7 @@ export function writeLocalStorageItem(key: string, value: string): void {
   try {
     window.localStorage.setItem(key, value);
   } catch (error) {
-    throw new Error(`无法保存本地设置 ${key}: ${storageErrorMessage(error)}`);
+    throw new Error(`无法保存本地设置 ${key}: ${storageErrorMessage(error)}`, { cause: error });
   }
 }
 
@@ -54,7 +54,9 @@ export function writeLocalStorageJson(key: string, value: unknown): void {
   try {
     serialized = JSON.stringify(value);
   } catch (error) {
-    throw new Error(`无法序列化本地设置 ${key}: ${storageErrorMessage(error)}`);
+    throw new Error(`无法序列化本地设置 ${key}: ${storageErrorMessage(error)}`, {
+      cause: error,
+    });
   }
   writeLocalStorageItem(key, serialized);
 }

@@ -19,7 +19,7 @@ describe("HlcClock", () => {
   });
 
   it("advances past observed remote timestamps", () => {
-    let wall = 1000;
+    const wall = 1000;
     const clock = new HlcClock("dev-a", () => wall);
     const remote = hlcToString({ wallMs: 99999, counter: 3, deviceId: "dev-b" });
     clock.observe(remote);

@@ -26,7 +26,7 @@ import type { IngestDraft, PendingPdf } from "../services/library-types";
 import type { ExportFormat } from "../services/cite";
 import type { S2Enrichment } from "../services/scholar";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
-import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
+import { useConfirmDialog } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { useModalFocusTrap } from "../components/useModalFocusTrap";
 import { writeClipboardText } from "../clipboard";

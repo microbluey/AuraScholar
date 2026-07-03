@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-control-regex -- control chars are exactly what we strip
 const ILLEGAL_FILENAME_CHARS = /[\x00-\x1f<>:"/\\|?*]+/g;
 
 export function safeDownloadName(name: string, fallback = "aurascholar-export"): string {

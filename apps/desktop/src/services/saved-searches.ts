@@ -155,7 +155,7 @@ async function runRow(
     const message = error instanceof Error ? error.message : String(error);
     await repo.recordError(row.id, message, Date.now() + POLL_INTERVAL_MS);
     notifySavedSearchesUpdated();
-    if (options.throwOnError) throw new Error(message);
+    if (options.throwOnError) throw new Error(message, { cause: error });
     return 0;
   }
 

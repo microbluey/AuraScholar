@@ -186,7 +186,7 @@ export function parseRis(text: string): CslItem[] {
   const items: CslItem[] = [];
   let cur: Record<string, string[]> | null = null;
   for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^([A-Z][A-Z0-9])  - ?(.*)$/);
+    const m = line.match(/^([A-Z][A-Z0-9]) {2}- ?(.*)$/);
     if (!m) continue;
     const tag = m[1]!;
     const val = m[2]!.trim();
