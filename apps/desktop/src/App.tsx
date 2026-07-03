@@ -1,19 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { ThemeToggle } from "@aurascholar/ui";
-import { hideResearchViews } from "./services/research-browser";
-import { startSentinelLoop } from "./services/sentinel";
-import { startSavedSearchLoop } from "./services/saved-searches";
-import { getDb } from "./services/tauri-db";
-import { LibraryPage } from "./pages/LibraryPage";
-import { DiscoveryPage } from "./pages/DiscoveryPage";
-import { ReaderPage } from "./pages/ReaderPage";
-import { GraphPage } from "./pages/GraphPage";
-import { FlashcardsPage } from "./pages/FlashcardsPage";
-import { SentinelPage } from "./pages/SentinelPage";
-import { HomepagePage } from "./pages/HomepagePage";
-import { SnippetsPage } from "./pages/SnippetsPage";
-import { SettingsPage } from "./pages/SettingsPage";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { useModalFocusTrap } from "./components/useModalFocusTrap";
+import { isImeComposing } from "./keyboard";
+import { shortcutLabel } from "./shortcut-labels";
+import { readLocalStorageJson } from "./storage";
 
 // 阅读器不在导航中 — 它是文献库里点击一篇文献后进入的页面。
 // /graph 路由保留供深链使用。
@@ -48,19 +47,55 @@ interface LibraryViewDetail {
 
 type LibraryViewState = Required<LibraryViewDetail>;
 
+type LibraryActionEventName = "aurascholar:create-collection" | "aurascholar:manage-tags";
+
+type PendingLibraryCommand =
+  | { detail: LibraryViewDetail; kind: "view" }
+  | { eventName: LibraryActionEventName; kind: "event" };
+
+interface RuntimeIssue {
+  detail?: string;
+  id: number;
+  message: string;
+  title: string;
+}
+
+interface SmokeRouteCrashProbe {
+  message?: string;
+  pathPrefix?: string;
+}
+
+type SmokeProbeWindow = Window & {
+  __AURASCHOLAR_SMOKE_ROUTE_CRASH__?: SmokeRouteCrashProbe | null;
+};
+
+interface AppCommand {
+  description: string;
+  group: string;
+  icon: (typeof NAV)[number]["icon"];
+  id: string;
+  keywords: string[];
+  run: () => void;
+  title: string;
+}
+
+const NAV_DESCRIPTIONS: Record<(typeof NAV)[number]["to"], string> = {
+  "/library": "导入、整理、阅读和引用你的论文库。",
+  "/discovery": "检索开放学术来源并把结果沉淀到文献库。",
+  "/flashcards": "进入间隔复习队列，把论文变成长期记忆。",
+  "/snippets": "整理摘录、批注和可复制的写作素材。",
+  "/sentinel": "订阅检索任务，持续追踪新论文。",
+  "/homepage": "编辑个人学术主页并导出发布内容。",
+  "/settings": "配置 AI、翻译、同步、备份和外观。",
+};
+
 function isTauriRuntime(): boolean {
   return "aura" in window;
 }
 
 function readAiModelLabel() {
-  const raw = localStorage.getItem("ai-settings");
-  if (!raw) return "AI 未配置";
-  try {
-    const parsed = JSON.parse(raw) as { model?: string };
-    return parsed.model?.trim() || "AI 未配置";
-  } catch {
-    return "AI 未配置";
-  }
+  const parsed = readLocalStorageJson<{ model?: unknown } | null>("ai-settings", null);
+  return typeof parsed?.model === "string" ? parsed.model.trim() || "AI 未配置" : "AI 未配置";
 }
 
 function normalizeLibraryView(detail: LibraryViewDetail = {}): LibraryViewState {
@@ -80,96 +115,228 @@ function sameLibraryView(a: LibraryViewState, b: LibraryViewDetail): boolean {
   );
 }
 
+function dispatchLibraryView(detail: LibraryViewDetail) {
+  window.dispatchEvent(new CustomEvent("aurascholar:library-view", { detail }));
+}
+
+function dispatchLibraryEvent(eventName: LibraryActionEventName) {
+  window.dispatchEvent(new Event(eventName));
+}
+
+function commandElementId(id: string): string {
+  return `command-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+function scoreCommandAction(action: AppCommand, parts: string[]): number | null {
+  const title = action.title.toLowerCase();
+  const description = action.description.toLowerCase();
+  const group = action.group.toLowerCase();
+  const keywords = action.keywords.map((keyword) => keyword.toLowerCase());
+  const haystack = [title, description, group, ...keywords].join(" ");
+
+  if (!parts.every((part) => haystack.includes(part))) return null;
+
+  return parts.reduce((score, part) => {
+    let nextScore = score;
+    if (title === part) nextScore += 60;
+    else if (title.includes(part)) nextScore += 30;
+    if (keywords.some((keyword) => keyword === part)) nextScore += 24;
+    else if (keywords.some((keyword) => keyword.includes(part))) nextScore += 16;
+    if (group.includes(part)) nextScore += 8;
+    if (description.includes(part)) nextScore += 4;
+    return nextScore;
+  }, 0);
+}
+
+function activeRouteLabel(pathname: string): string {
+  if (pathname.startsWith("/reader")) return "PDF 阅读器";
+  const active = NAV.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`));
+  return active?.label ?? "工作台";
+}
+
+function runtimeLabel(): string {
+  return isTauriRuntime() ? "桌面运行时" : "浏览器预览";
+}
+
+function describeUnknownError(value: unknown): string {
+  if (value instanceof Error) return value.message || value.name;
+  if (typeof value === "string") return value;
+  if (value == null) return "未知错误";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function runtimeIssueFromErrorEvent(event: ErrorEvent): RuntimeIssue {
+  const location = event.filename ? `${event.filename}:${event.lineno}:${event.colno}` : undefined;
+  return {
+    detail: location,
+    id: Date.now(),
+    message: describeUnknownError(event.error ?? event.message),
+    title: "应用捕获到运行时异常",
+  };
+}
+
+function runtimeIssueFromRejection(event: PromiseRejectionEvent): RuntimeIssue {
+  return {
+    id: Date.now(),
+    message: describeUnknownError(event.reason),
+    title: "后台任务遇到异常",
+  };
+}
+
 export function App() {
-  // Catch-up poll on startup, then hourly while the app is open.
-  useEffect(() => {
-    if ("aura" in window) {
-      startSentinelLoop();
-      startSavedSearchLoop();
-    }
-  }, []);
   const location = useLocation();
   const navigate = useNavigate();
+  const previousPathRef = useRef(location.pathname);
   // The reader needs edge-to-edge layout; other pages keep comfortable padding.
   const flush = location.pathname.startsWith("/reader");
   const showLibraryMeta = location.pathname.startsWith("/library");
+  const currentLabel = activeRouteLabel(location.pathname);
+  const currentRuntime = runtimeLabel();
+  const commandShortcut = useMemo(() => shortcutLabel("K", { compactApple: true }), []);
   const [libraryStats, setLibraryStats] = useState<LibraryShellStats | null>(null);
   const [aiModel, setAiModel] = useState(() => readAiModelLabel());
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [runtimeIssue, setRuntimeIssue] = useState<RuntimeIssue | null>(null);
+  const [pendingLibraryCommand, setPendingLibraryCommand] = useState<PendingLibraryCommand | null>(
+    null,
+  );
   const [activeLibraryView, setActiveLibraryView] = useState<LibraryViewState>(() =>
     normalizeLibraryView(),
   );
 
+  // Catch-up poll on startup, then hourly while the app is open. These services
+  // pull network/connectors code, so load them after the shell is interactive.
   useEffect(() => {
-    if (!location.pathname.startsWith("/discovery")) {
-      void hideResearchViews();
+    if (!isTauriRuntime()) return;
+    void import("./services/sentinel")
+      .then(({ startSentinelLoop }) => startSentinelLoop())
+      .catch((error) =>
+        setRuntimeIssue({
+          id: Date.now(),
+          message: describeUnknownError(error),
+          title: "检索哨兵启动失败",
+        }),
+      );
+    void import("./services/saved-searches")
+      .then(({ startSavedSearchLoop }) => startSavedSearchLoop())
+      .catch((error) =>
+        setRuntimeIssue({
+          id: Date.now(),
+          message: describeUnknownError(error),
+          title: "检索订阅启动失败",
+        }),
+      );
+  }, []);
+
+  useEffect(() => {
+    const previousPath = previousPathRef.current;
+    previousPathRef.current = location.pathname;
+    if (
+      isTauriRuntime() &&
+      previousPath.startsWith("/discovery") &&
+      !location.pathname.startsWith("/discovery")
+    ) {
+      void import("./services/research-browser")
+        .then(({ hideResearchViews }) => hideResearchViews())
+        .catch((error) =>
+          setRuntimeIssue({
+            id: Date.now(),
+            message: describeUnknownError(error),
+            title: "内置浏览器视图隐藏失败",
+          }),
+        );
     }
   }, [location.pathname]);
 
+  useEffect(() => {
+    const onRuntimeError = (event: ErrorEvent) => {
+      setRuntimeIssue(runtimeIssueFromErrorEvent(event));
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      setRuntimeIssue(runtimeIssueFromRejection(event));
+    };
+    window.addEventListener("error", onRuntimeError);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", onRuntimeError);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    };
+  }, []);
+
   const refreshLibraryStats = useCallback(async () => {
-    if (!showLibraryMeta || !isTauriRuntime()) {
+    if (!isTauriRuntime()) {
       setLibraryStats(null);
       return;
     }
-    const db = await getDb();
-    const [
-      totalRows,
-      trashRows,
-      readingRows,
-      unreadRows,
-      starredRows,
-      annotationRows,
-      flashcardRows,
-      snippetRows,
-      collections,
-      tags,
-    ] = await Promise.all([
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL`),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
-      db.query<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'reading'`,
-      ),
-      db.query<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'unread'`,
-      ),
-      db.query<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND starred = 1`,
-      ),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM annotations WHERE deleted_at IS NULL`),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM flashcards WHERE deleted_at IS NULL`),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM snippets WHERE deleted_at IS NULL`),
-      db.query<{ id: string; name: string; count: number }>(
-        `SELECT c.id, c.name, COUNT(w.id) AS count
-         FROM collections c
-         LEFT JOIN collection_items ci ON ci.collection_id = c.id
-         LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
-         WHERE c.deleted_at IS NULL
-         GROUP BY c.id, c.name
-         ORDER BY c.name`,
-      ),
-      db.query<{ name: string; count: number }>(
-        `SELECT t.name, COUNT(w.id) AS count
-         FROM tags t
-         JOIN work_tags wt ON wt.tag_id = t.id
-         JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
-         WHERE t.deleted_at IS NULL
-         GROUP BY t.id, t.name
-         ORDER BY count DESC, t.name
-         LIMIT 6`,
-      ),
-    ]);
-    setLibraryStats({
-      total: totalRows[0]?.n ?? 0,
-      trash: trashRows[0]?.n ?? 0,
-      reading: readingRows[0]?.n ?? 0,
-      unread: unreadRows[0]?.n ?? 0,
-      starred: starredRows[0]?.n ?? 0,
-      annotations: annotationRows[0]?.n ?? 0,
-      flashcards: flashcardRows[0]?.n ?? 0,
-      snippets: snippetRows[0]?.n ?? 0,
-      collections,
-      tags,
-    });
-  }, [showLibraryMeta]);
+    try {
+      const { getDb } = await import("./services/tauri-db");
+      const db = await getDb();
+      const [
+        totalRows,
+        trashRows,
+        readingRows,
+        unreadRows,
+        starredRows,
+        annotationRows,
+        flashcardRows,
+        snippetRows,
+        collections,
+        tags,
+      ] = await Promise.all([
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL`),
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'reading'`,
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'unread'`,
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND starred = 1`,
+        ),
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM annotations WHERE deleted_at IS NULL`),
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM flashcards WHERE deleted_at IS NULL`),
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM snippets WHERE deleted_at IS NULL`),
+        db.query<{ id: string; name: string; count: number }>(
+          `SELECT c.id, c.name, COUNT(w.id) AS count
+           FROM collections c
+           LEFT JOIN collection_items ci ON ci.collection_id = c.id
+           LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
+           WHERE c.deleted_at IS NULL
+           GROUP BY c.id, c.name
+           ORDER BY c.name`,
+        ),
+        db.query<{ name: string; count: number }>(
+          `SELECT t.name, COUNT(w.id) AS count
+           FROM tags t
+           JOIN work_tags wt ON wt.tag_id = t.id
+           JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
+           WHERE t.deleted_at IS NULL
+           GROUP BY t.id, t.name
+           ORDER BY count DESC, t.name
+           LIMIT 6`,
+        ),
+      ]);
+      setLibraryStats({
+        total: totalRows[0]?.n ?? 0,
+        trash: trashRows[0]?.n ?? 0,
+        reading: readingRows[0]?.n ?? 0,
+        unread: unreadRows[0]?.n ?? 0,
+        starred: starredRows[0]?.n ?? 0,
+        annotations: annotationRows[0]?.n ?? 0,
+        flashcards: flashcardRows[0]?.n ?? 0,
+        snippets: snippetRows[0]?.n ?? 0,
+        collections,
+        tags,
+      });
+    } catch {
+      setLibraryStats(null);
+    }
+  }, []);
 
   useEffect(() => {
     void refreshLibraryStats();
@@ -178,11 +345,140 @@ export function App() {
   const openLibraryView = useCallback(
     (detail: LibraryViewDetail) => {
       setActiveLibraryView(normalizeLibraryView(detail));
-      navigate("/library");
-      window.dispatchEvent(new CustomEvent("aurascholar:library-view", { detail }));
+      if (location.pathname.startsWith("/library")) {
+        setPendingLibraryCommand(null);
+        dispatchLibraryView(detail);
+      } else {
+        setPendingLibraryCommand({ detail, kind: "view" });
+        navigate("/library");
+      }
     },
-    [navigate],
+    [location.pathname, navigate],
   );
+
+  const dispatchLibraryAction = useCallback(
+    (eventName: LibraryActionEventName) => {
+      if (location.pathname.startsWith("/library")) {
+        setPendingLibraryCommand(null);
+        dispatchLibraryEvent(eventName);
+      } else {
+        setPendingLibraryCommand({ eventName, kind: "event" });
+        navigate("/library");
+      }
+    },
+    [location.pathname, navigate],
+  );
+
+  useEffect(() => {
+    if (!pendingLibraryCommand || !location.pathname.startsWith("/library")) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (pendingLibraryCommand.kind === "view") {
+        dispatchLibraryView(pendingLibraryCommand.detail);
+      } else {
+        dispatchLibraryEvent(pendingLibraryCommand.eventName);
+      }
+      setPendingLibraryCommand(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.pathname, pendingLibraryCommand]);
+
+  const commandActions = useMemo<AppCommand[]>(
+    () => [
+      ...NAV.map((item) => ({
+        description: NAV_DESCRIPTIONS[item.to],
+        group: "工作区",
+        icon: item.icon,
+        id: `nav:${item.to}`,
+        keywords: [item.label, item.to.replace("/", ""), "打开", "跳转"],
+        run: () => navigate(item.to),
+        title: item.label,
+      })),
+      {
+        description: "回到系统分组，查看所有未删除文献。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:all",
+        keywords: ["全部", "文献", "library", "all"],
+        run: () => openLibraryView({ filter: "all", collectionId: null, tag: null }),
+        title: "全部文献",
+      },
+      {
+        description: "只看正在阅读的论文，继续未完成的研究流。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:reading",
+        keywords: ["阅读中", "继续", "reading"],
+        run: () => openLibraryView({ filter: "reading", collectionId: null, tag: null }),
+        title: "阅读中文献",
+      },
+      {
+        description: "查看尚未处理的新文献。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:unread",
+        keywords: ["未读", "新文献", "unread"],
+        run: () => openLibraryView({ filter: "unread", collectionId: null, tag: null }),
+        title: "未读文献",
+      },
+      {
+        description: "快速回到标记为重点的论文。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:starred",
+        keywords: ["重点", "收藏", "starred"],
+        run: () => openLibraryView({ filter: "starred", collectionId: null, tag: null }),
+        title: "重点文献",
+      },
+      {
+        description: "查看被移入回收站的文献并恢复。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:trash",
+        keywords: ["回收站", "删除", "trash"],
+        run: () => openLibraryView({ filter: "trash", collectionId: null, tag: null }),
+        title: "回收站",
+      },
+      {
+        description: "创建新的文献分组，用于课题、项目或综述。",
+        group: "整理动作",
+        icon: "library",
+        id: "library:create-collection",
+        keywords: ["新建分组", "集合", "文件夹", "collection"],
+        run: () => dispatchLibraryAction("aurascholar:create-collection"),
+        title: "新建分组",
+      },
+      {
+        description: "打开标签管理，合并、重命名或清理标签。",
+        group: "整理动作",
+        icon: "library",
+        id: "library:manage-tags",
+        keywords: ["标签", "tag", "管理标签"],
+        run: () => dispatchLibraryAction("aurascholar:manage-tags"),
+        title: "管理标签",
+      },
+      {
+        description: "配置模型服务，让摘要、重点、翻译和闪卡开始工作。",
+        group: "配置",
+        icon: "settings",
+        id: "settings:ai",
+        keywords: ["ai", "模型", "api key", "配置"],
+        run: () => navigate("/settings"),
+        title: "配置 AI 服务",
+      },
+    ],
+    [dispatchLibraryAction, navigate, openLibraryView],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     const onLibraryUpdated = () => void refreshLibraryStats();
@@ -190,34 +486,68 @@ export function App() {
       setActiveLibraryView(normalizeLibraryView((event as CustomEvent<LibraryViewDetail>).detail));
     };
     const onStorage = () => setAiModel(readAiModelLabel());
+    const onAiSettingsUpdated = () => setAiModel(readAiModelLabel());
     window.addEventListener("aurascholar:library-updated", onLibraryUpdated);
     window.addEventListener("aurascholar:library-view-state", onLibraryViewState);
     window.addEventListener("aurascholar:snippets-updated", onLibraryUpdated);
+    window.addEventListener("aurascholar:ai-settings-updated", onAiSettingsUpdated);
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("aurascholar:library-updated", onLibraryUpdated);
       window.removeEventListener("aurascholar:library-view-state", onLibraryViewState);
       window.removeEventListener("aurascholar:snippets-updated", onLibraryUpdated);
+      window.removeEventListener("aurascholar:ai-settings-updated", onAiSettingsUpdated);
       window.removeEventListener("storage", onStorage);
     };
   }, [refreshLibraryStats]);
 
   return (
-    <div className="app-frame">
+    <div className={flush ? "app-frame app-frame--immersive" : "app-frame"}>
+      <a className="app-skip-link" href="#app-main">
+        跳到内容
+      </a>
+      {runtimeIssue && (
+        <RuntimeIssueBanner issue={runtimeIssue} onDismiss={() => setRuntimeIssue(null)} />
+      )}
       <div className="app-shell">
-        <aside className="app-sidebar">
+        <aside className="app-sidebar" aria-label="主导航">
           <div className="app-sidebar__brand">
             <span className="app-sidebar__mark">A</span>
-            <span>
-              Aura<span className="accent">Scholar</span>
+            <span className="app-sidebar__wordmark">
+              <span>
+                Aura<span className="accent">Scholar</span>
+              </span>
+              <small>Research OS</small>
             </span>
           </div>
-          {NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} className="app-nav-item">
-              <NavIcon name={item.icon} />
-              <span>{item.label}</span>
-            </NavLink>
-          ))}
+          <ShellWorkspaceCard
+            activeLabel={currentLabel}
+            runtime={currentRuntime}
+            stats={libraryStats}
+            aiModel={aiModel}
+          />
+          <button
+            type="button"
+            className="app-command-trigger"
+            onClick={() => setCommandOpen(true)}
+          >
+            <span>快速打开</span>
+            <kbd>{commandShortcut}</kbd>
+          </button>
+          <nav className="app-nav" aria-label="主导航">
+            {NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className="app-nav-item"
+                aria-label={item.label}
+                title={item.label}
+              >
+                <NavIcon name={item.icon} />
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
           {showLibraryMeta && libraryStats && (
             <LibrarySidebarMeta
               stats={libraryStats}
@@ -229,30 +559,129 @@ export function App() {
             />
           )}
           <div className="app-sidebar__footer">
+            <ShellHealth stats={libraryStats} aiModel={aiModel} runtime={currentRuntime} />
             <ThemeToggle />
           </div>
         </aside>
-        <main className={flush ? "app-main app-main--flush" : "app-main"}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/library" replace />} />
-            <Route path="/library" element={<LibraryPage />} />
-            <Route path="/discovery" element={<DiscoveryPage />} />
-            <Route path="/reader" element={<ReaderPage />} />
-            <Route path="/graph" element={<GraphPage />} />
-            <Route path="/flashcards" element={<FlashcardsPage />} />
-            <Route path="/snippets" element={<SnippetsPage />} />
-            <Route path="/sentinel" element={<SentinelPage />} />
-            <Route path="/homepage" element={<HomepagePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Routes>
+        <main
+          id="app-main"
+          className={flush ? "app-main app-main--flush" : "app-main"}
+          tabIndex={-1}
+        >
+          <AppErrorBoundary
+            level="route"
+            resetKey={`${location.pathname}${location.search}`}
+            scope={currentLabel}
+          >
+            <SmokeRouteCrashProbe locationKey={`${location.pathname}${location.search}`} />
+            <Outlet />
+          </AppErrorBoundary>
         </main>
       </div>
-      <StatusBar stats={showLibraryMeta ? libraryStats : null} aiModel={aiModel} />
+      <StatusBar
+        stats={libraryStats}
+        aiModel={aiModel}
+        runtime={currentRuntime}
+        activeLabel={currentLabel}
+      />
+      <MobileDock onCommand={() => setCommandOpen(true)} />
+      <AppCommandPalette
+        actions={commandActions}
+        onClose={() => setCommandOpen(false)}
+        open={commandOpen}
+      />
     </div>
   );
 }
 
-function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiModel: string }) {
+function SmokeRouteCrashProbe({ locationKey }: { locationKey: string }) {
+  const probe = (window as SmokeProbeWindow).__AURASCHOLAR_SMOKE_ROUTE_CRASH__;
+  if (!probe) return null;
+  if (!locationKey.startsWith(probe.pathPrefix ?? "/")) return null;
+  throw new Error(probe.message ?? "AURASCHOLAR_SMOKE_ROUTE_CRASH");
+}
+
+function RuntimeIssueBanner({ issue, onDismiss }: { issue: RuntimeIssue; onDismiss: () => void }) {
+  return (
+    <aside className="app-runtime-issue" role="status" aria-live="polite">
+      <div>
+        <strong>{issue.title}</strong>
+        <span>{issue.message}</span>
+        {issue.detail && <small>{issue.detail}</small>}
+      </div>
+      <button type="button" onClick={onDismiss}>
+        关闭
+      </button>
+    </aside>
+  );
+}
+
+function ShellWorkspaceCard({
+  activeLabel,
+  runtime,
+  stats,
+  aiModel,
+}: {
+  activeLabel: string;
+  runtime: string;
+  stats: LibraryShellStats | null;
+  aiModel: string;
+}) {
+  const aiReady = aiModel !== "AI 未配置";
+  return (
+    <section className="app-workspace-card" aria-label="当前工作区">
+      <span className="app-workspace-card__eyebrow">当前工作区</span>
+      <strong>{activeLabel}</strong>
+      <div className="app-workspace-card__chips">
+        <span>{runtime}</span>
+        <span>{aiReady ? "AI 就绪" : "AI 待配置"}</span>
+      </div>
+      <div className="app-workspace-card__meter" aria-hidden="true">
+        <span style={{ width: `${Math.min(100, Math.max(18, stats ? stats.total * 4 : 24))}%` }} />
+      </div>
+    </section>
+  );
+}
+
+function ShellHealth({
+  stats,
+  aiModel,
+  runtime,
+}: {
+  stats: LibraryShellStats | null;
+  aiModel: string;
+  runtime: string;
+}) {
+  const aiReady = aiModel !== "AI 未配置";
+  return (
+    <div className="app-shell-health" aria-label="状态摘要">
+      <div>
+        <span>文献</span>
+        <strong>{stats ? stats.total.toLocaleString("zh-CN") : "--"}</strong>
+      </div>
+      <div>
+        <span>素材</span>
+        <strong>{stats ? stats.snippets.toLocaleString("zh-CN") : "--"}</strong>
+      </div>
+      <div>
+        <span>{runtime}</span>
+        <strong>{aiReady ? "AI 就绪" : "配置 AI"}</strong>
+      </div>
+    </div>
+  );
+}
+
+function StatusBar({
+  stats,
+  aiModel,
+  runtime,
+  activeLabel,
+}: {
+  stats: LibraryShellStats | null;
+  aiModel: string;
+  runtime: string;
+  activeLabel: string;
+}) {
   return (
     <footer className="app-statusbar">
       <div className="app-statusbar__cluster">
@@ -261,7 +690,7 @@ function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiMode
       </div>
       <div className="app-statusbar__cluster">
         <span className="app-statusbar__check" />
-        <strong>本地库</strong>
+        <strong>{runtime}</strong>
       </div>
       {stats && (
         <div className="app-statusbar__metrics">
@@ -280,10 +709,190 @@ function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiMode
         </div>
       )}
       <div className="app-statusbar__cluster app-statusbar__cluster--end">
-        <span>AI 模型</span>
-        <strong>{aiModel}</strong>
+        <span>{activeLabel}</span>
+        <strong title={aiModel}>{aiModel}</strong>
       </div>
     </footer>
+  );
+}
+
+function MobileDock({ onCommand }: { onCommand: () => void }) {
+  return (
+    <nav className="app-mobile-dock" aria-label="移动主导航">
+      <button
+        type="button"
+        className="app-mobile-dock__item app-mobile-dock__item--command"
+        onClick={onCommand}
+      >
+        <NavIcon name="search" />
+        <span>快捷</span>
+      </button>
+      {NAV.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          className="app-mobile-dock__item"
+          aria-label={item.label}
+          title={item.label}
+        >
+          <NavIcon name={item.icon} />
+          <span>{item.label}</span>
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
+function AppCommandPalette({
+  actions,
+  onClose,
+  open,
+}: {
+  actions: AppCommand[];
+  onClose: () => void;
+  open: boolean;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [query, setQuery] = useState("");
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const filteredActions = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return actions;
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    return actions
+      .map((action, index) => ({ action, index, score: scoreCommandAction(action, parts) }))
+      .filter((result): result is { action: AppCommand; index: number; score: number } => {
+        return result.score !== null;
+      })
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((result) => result.action);
+  }, [actions, query]);
+
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    setActiveIndex(0);
+  }, [open]);
+
+  useModalFocusTrap(dialogRef, {
+    active: open,
+    initialFocusSelector: "[data-autofocus]",
+    onEscape: onClose,
+  });
+
+  useEffect(() => {
+    setActiveIndex((index) => Math.min(index, Math.max(0, filteredActions.length - 1)));
+  }, [filteredActions.length]);
+
+  if (!open) return null;
+
+  const runAction = (action: AppCommand) => {
+    action.run();
+    onClose();
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (isImeComposing(event)) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => (index + 1) % Math.max(1, filteredActions.length));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex(
+        (index) =>
+          (index - 1 + Math.max(1, filteredActions.length)) % Math.max(1, filteredActions.length),
+      );
+      return;
+    }
+    if (event.key === "Enter" && filteredActions[activeIndex]) {
+      event.preventDefault();
+      runAction(filteredActions[activeIndex]);
+    }
+  };
+
+  return (
+    <div className="app-command-overlay" role="presentation" onMouseDown={onClose}>
+      <section
+        ref={dialogRef}
+        aria-label="全局命令"
+        aria-modal="true"
+        className="app-command-palette"
+        data-modal-root="true"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="app-command-palette__search">
+          <NavIcon name="search" />
+          <input
+            ref={inputRef}
+            aria-activedescendant={
+              filteredActions[activeIndex]
+                ? commandElementId(filteredActions[activeIndex].id)
+                : undefined
+            }
+            aria-autocomplete="list"
+            aria-controls="app-command-list"
+            aria-expanded={open}
+            aria-label="搜索命令"
+            autoComplete="off"
+            data-autofocus="true"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActiveIndex(0);
+            }}
+            onKeyDown={onKeyDown}
+            placeholder="搜索工作区、文献视图或动作..."
+            role="combobox"
+            value={query}
+          />
+          <kbd>Esc</kbd>
+        </div>
+        <div className="app-command-palette__meta">
+          <span>全局命令</span>
+          <span>{filteredActions.length} 项</span>
+        </div>
+        <div className="app-command-list" id="app-command-list" role="listbox">
+          {filteredActions.length > 0 ? (
+            filteredActions.map((action, index) => (
+              <button
+                key={action.id}
+                id={commandElementId(action.id)}
+                className={`app-command-item ${index === activeIndex ? "app-command-item--active" : ""}`}
+                onClick={() => runAction(action)}
+                onMouseEnter={() => setActiveIndex(index)}
+                role="option"
+                type="button"
+                aria-selected={index === activeIndex}
+              >
+                <span className="app-command-item__icon">
+                  <NavIcon name={action.icon} />
+                </span>
+                <span className="app-command-item__body">
+                  <strong>{action.title}</strong>
+                  <small>{action.description}</small>
+                </span>
+                <span className="app-command-item__group">{action.group}</span>
+              </button>
+            ))
+          ) : (
+            <div className="app-command-empty" role="note">
+              <strong>没有匹配命令</strong>
+              <span>试试“文献”“AI”“回收站”或“设置”。</span>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 

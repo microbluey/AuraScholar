@@ -7,13 +7,23 @@
 //   • the PDF's own extracted fields (title/authors/year), so "unidentified"
 //     isn't reduced to a bare filename;
 //   • a hand-edited record.
-import { useMemo, useState, type CSSProperties } from "react";
-import { Button } from "@aurascholar/ui";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { Badge, Button } from "@aurascholar/ui";
 import type { NormalizedWork } from "@aurascholar/connectors";
 import type { WorkInput, WorkPatch } from "@aurascholar/db";
-import type { IngestDraft, LocalMatch, PdfFields, PendingPdf } from "../services/library";
-import { toWorkInput } from "../services/library";
+import type { IngestDraft, LocalMatch, PdfFields, PendingPdf } from "../services/library-types";
+import { toWorkInput } from "../services/work-input";
 import { MetadataEditor, emptyDraft, normalizedWorkToDraft, type Draft } from "./MetadataEditor";
+import { useModalFocusTrap } from "./useModalFocusTrap";
+
+const MIN_IMPORT_CONFIRM_BUSY_MS = 250;
+
+async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
+  const remaining = minimumMs - (Date.now() - startedAt);
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}
 
 /** What the user picked. Drives whether commit creates a new work or attaches. */
 type Selection =
@@ -54,9 +64,14 @@ export function ImportConfirmDialog({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const committingRef = useRef(false);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
 
   const lowConfidence =
     selection.kind === "online" && draft.bestIndex >= 0 && draft.confidence < 0.7;
+  const confidenceLabel = `${Math.round(draft.confidence * 100)}%`;
 
   const isOnline = (i: number) => !edited && selection.kind === "online" && selection.index === i;
   const isLocal = (id: string) => !edited && selection.kind === "local" && selection.workId === id;
@@ -67,12 +82,16 @@ export function ImportConfirmDialog({
 
   const editorInitial: Draft = useMemo(() => {
     if (edited) return workInputToDraft(edited);
-    if (selection.kind === "online") return normalizedWorkToDraft(draft.candidates[selection.index]!);
+    if (selection.kind === "online")
+      return normalizedWorkToDraft(draft.candidates[selection.index]!);
     if (selection.kind === "pdf" && draft.pdfFields) return pdfFieldsToDraft(draft.pdfFields);
     return { ...emptyDraft(), title: draft.fallbackTitle };
   }, [edited, selection, draft]);
 
   const confirm = async () => {
+    if (committingRef.current) return;
+    committingRef.current = true;
+    const startedAt = Date.now();
     setBusy(true);
     setError(null);
     try {
@@ -84,19 +103,42 @@ export function ImportConfirmDialog({
       } else if (selection.kind === "local") {
         decision = { mode: "attach", workId: selection.workId, pdf: draft.pdf };
       } else if (selection.kind === "online") {
-        decision = { mode: "create", workInput: toWorkInput(draft.candidates[selection.index]!), pdf: draft.pdf };
+        decision = {
+          mode: "create",
+          workInput: toWorkInput(draft.candidates[selection.index]!),
+          pdf: draft.pdf,
+        };
       } else if (selection.kind === "pdf" && draft.pdfFields) {
-        decision = { mode: "create", workInput: pdfFieldsToWorkInput(draft.pdfFields, draft.fallbackTitle), pdf: draft.pdf };
+        decision = {
+          mode: "create",
+          workInput: pdfFieldsToWorkInput(draft.pdfFields, draft.fallbackTitle),
+          pdf: draft.pdf,
+        };
       } else {
         // "Leave unidentified": fallback title only, NO guessed identifier.
-        decision = { mode: "create", workInput: { title: draft.fallbackTitle || "未命名文献", type: "article" }, pdf: draft.pdf };
+        decision = {
+          mode: "create",
+          workInput: { title: draft.fallbackTitle || "未命名文献", type: "article" },
+          pdf: draft.pdf,
+        };
       }
+      await waitForMinimumElapsed(startedAt, MIN_IMPORT_CONFIRM_BUSY_MS);
       await onCommit(decision);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      committingRef.current = false;
       setBusy(false);
     }
   };
+
+  const requestCancel = useCallback(() => {
+    if (!busy) onCancel();
+  }, [busy, onCancel]);
+
+  useModalFocusTrap(dialogRef, {
+    initialFocusSelector: "[data-autofocus]",
+    onEscape: requestCancel,
+  });
 
   if (editing) {
     return (
@@ -112,25 +154,59 @@ export function ImportConfirmDialog({
     );
   }
 
+  const primaryBusyLabel = isAttach && !edited ? "挂载中..." : "入库中...";
+  const primaryLabel = isAttach && !edited ? "挂到该文献" : "确认入库";
+
   return (
-    <div className="library-modal-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
-      <div className="library-modal library-modal--wide" onClick={(e) => e.stopPropagation()}>
+    <div className="library-modal-overlay" role="presentation" onMouseDown={requestCancel}>
+      <section
+        ref={dialogRef}
+        aria-describedby={descriptionId}
+        aria-labelledby={titleId}
+        aria-busy={busy}
+        aria-modal="true"
+        className="library-modal library-modal--wide import-confirm-modal"
+        data-modal-root="true"
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        tabIndex={-1}
+      >
         <div className="library-modal__head">
-          <h2>{draft.targetWorkId ? "确认补充全文" : "确认入库"}</h2>
-          <button type="button" className="library-modal__close" onClick={onCancel} aria-label="关闭">
+          <div>
+            <Badge variant={draft.targetWorkId ? "neutral" : "accent"}>
+              {draft.targetWorkId ? "全文补充" : "待确认"}
+            </Badge>
+            <h2 id={titleId}>{draft.targetWorkId ? "确认补充全文" : "确认入库"}</h2>
+          </div>
+          <button
+            type="button"
+            className="library-modal__close"
+            onClick={requestCancel}
+            aria-label="关闭"
+            disabled={busy}
+          >
             ×
           </button>
         </div>
 
-        <p className="au-text-muted" style={{ fontSize: 13 }}>
+        <p className="import-confirm__intro" id={descriptionId}>
           {draft.targetWorkId
             ? "找到的全文将挂到所选文献。请核对是否同一篇;若不对,可改选其他候选或新建。"
             : "确认这篇文献的题录后再入库。可选在线候选、库中已有文献(将把 PDF 挂到它上面)、用 PDF 自身信息,或手动编辑。"}
         </p>
         {lowConfidence && (
-          <p style={{ fontSize: 13, color: "var(--au-warn, #b45309)" }}>
-            ⚠ 匹配置信度较低,请仔细核对是否为同一篇。
-          </p>
+          <div
+            className="import-confirm__warning"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <Badge variant="warning">低置信度</Badge>
+            <div>
+              <strong>候选匹配置信度 {confidenceLabel}</strong>
+              <p>标题检索可能返回相似但不同的论文。入库前请核对题名、作者、年份和 DOI。</p>
+            </div>
+          </div>
         )}
 
         {/* Find-full-text target */}
@@ -138,10 +214,14 @@ export function ImportConfirmDialog({
           <Section title="补充全文到">
             <Option
               active={!edited && selection.kind === "target"}
-              onSelect={() => { setEdited(null); setSelection({ kind: "target" }); }}
+              disabled={busy}
+              onSelect={() => {
+                setEdited(null);
+                setSelection({ kind: "target" });
+              }}
             >
-              <strong style={titleStyle}>{draft.targetTitle ?? "所选文献"}</strong>
-              <span style={metaStyle}>把这份 PDF 挂到该文献(不新建记录)</span>
+              <strong>{draft.targetTitle ?? "所选文献"}</strong>
+              <span>把这份 PDF 挂到该文献(不新建记录)</span>
             </Option>
           </Section>
         )}
@@ -150,9 +230,17 @@ export function ImportConfirmDialog({
         {draft.candidates.length > 0 && (
           <Section title="在线检索结果">
             {draft.candidates.map((c, i) => (
-              <Option key={candidateKey(c, i)} active={isOnline(i)} onSelect={() => { setEdited(null); setSelection({ kind: "online", index: i }); }}>
-                <strong style={titleStyle}>{c.title}</strong>
-                <span style={metaStyle}>{candidateMeta(c)}</span>
+              <Option
+                key={candidateKey(c, i)}
+                active={isOnline(i)}
+                disabled={busy}
+                onSelect={() => {
+                  setEdited(null);
+                  setSelection({ kind: "online", index: i });
+                }}
+              >
+                <strong>{c.title}</strong>
+                <span>{candidateMeta(c)}</span>
               </Option>
             ))}
           </Section>
@@ -162,9 +250,17 @@ export function ImportConfirmDialog({
         {draft.localMatches.length > 0 && (
           <Section title="文献库中已有(选中将把 PDF 挂到该条)">
             {draft.localMatches.map((m) => (
-              <Option key={m.workId} active={isLocal(m.workId)} onSelect={() => { setEdited(null); setSelection({ kind: "local", workId: m.workId }); }}>
-                <strong style={titleStyle}>{m.title}</strong>
-                <span style={metaStyle}>{localMeta(m)}</span>
+              <Option
+                key={m.workId}
+                active={isLocal(m.workId)}
+                disabled={busy}
+                onSelect={() => {
+                  setEdited(null);
+                  setSelection({ kind: "local", workId: m.workId });
+                }}
+              >
+                <strong>{m.title}</strong>
+                <span>{localMeta(m)}</span>
               </Option>
             ))}
           </Section>
@@ -173,97 +269,126 @@ export function ImportConfirmDialog({
         {/* PDF-extracted fields + blank fallback */}
         <Section title="其他">
           {draft.pdfFields?.title && (
-            <Option active={isPdf} onSelect={() => { setEdited(null); setSelection({ kind: "pdf" }); }}>
-              <strong style={titleStyle}>使用 PDF 提取的信息</strong>
-              <span style={metaStyle}>{pdfFieldsMeta(draft.pdfFields)}</span>
+            <Option
+              active={isPdf}
+              disabled={busy}
+              onSelect={() => {
+                setEdited(null);
+                setSelection({ kind: "pdf" });
+              }}
+            >
+              <strong>使用 PDF 提取的信息</strong>
+              <span>{pdfFieldsMeta(draft.pdfFields)}</span>
             </Option>
           )}
-          <Option active={isBlank} onSelect={() => { setEdited(null); setSelection({ kind: "blank" }); }}>
-            <strong style={titleStyle}>都不对 / 留作未识别</strong>
-            <span style={metaStyle}>
-              以「{draft.fallbackTitle || "未命名文献"}」入库,不带任何标识符,稍后可补充
-            </span>
+          <Option
+            active={isBlank}
+            disabled={busy}
+            onSelect={() => {
+              setEdited(null);
+              setSelection({ kind: "blank" });
+            }}
+          >
+            <strong>都不对 / 留作未识别</strong>
+            <span>以「{draft.fallbackTitle || "未命名文献"}」入库,不带任何标识符,稍后可补充</span>
           </Option>
         </Section>
 
         {edited && (
-          <p style={{ fontSize: 12, marginTop: 10, color: "var(--au-text-muted,#6b7280)" }}>
-            已手动编辑:<strong>{edited.title}</strong>
+          <div className="import-confirm__edited">
+            <Badge variant="success">已编辑</Badge>
+            <span>
+              将以手动编辑后的题录入库：<strong>{edited.title}</strong>
+            </span>
+          </div>
+        )}
+
+        <div className="import-confirm__attachment">
+          <Badge variant={draft.pdf ? "success" : "neutral"}>
+            {draft.pdf ? "PDF 附件" : "无附件"}
+          </Badge>
+          <span>
+            {draft.pdf
+              ? `${draft.pdf.fileName} · ${draft.pdf.pageCount} 页 · ${formatBytes(draft.pdf.byteSize)}`
+              : "确认后只创建题录，稍后可以继续补充全文。"}
+          </span>
+        </div>
+
+        {error && <p className="import-confirm__error">{error}</p>}
+        {busy && (
+          <p className="import-confirm__status" role="status" aria-live="polite">
+            {isAttach && !edited ? "正在挂载 PDF..." : "正在确认入库..."}
           </p>
         )}
 
-        <div style={{ marginTop: 14, fontSize: 12, color: "var(--au-text-muted,#6b7280)" }}>
-          {draft.pdf
-            ? `附件:${draft.pdf.fileName} · ${draft.pdf.pageCount} 页 · ${formatBytes(draft.pdf.byteSize)}`
-            : "无附件"}
-        </div>
-
-        {error && (
-          <p style={{ color: "var(--au-danger,#dc2626)", fontSize: 13, marginTop: 10 }}>{error}</p>
-        )}
-
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <Button onClick={() => void confirm()} disabled={busy}>
-            {busy ? "入库中…" : isAttach && !edited ? "挂到该文献" : "确认入库"}
+        <div className="library-modal-actions import-confirm__actions">
+          <Button onClick={() => void confirm()} disabled={busy} aria-busy={busy}>
+            {busy ? primaryBusyLabel : primaryLabel}
           </Button>
-          <Button variant="secondary" onClick={() => setEditing(true)} disabled={busy || (isAttach && !edited)}>
+          <Button
+            variant="secondary"
+            onClick={() => setEditing(true)}
+            disabled={busy || (isAttach && !edited)}
+          >
             编辑元信息
           </Button>
-          <Button variant="secondary" onClick={onCancel} disabled={busy}>
+          <Button variant="secondary" onClick={requestCancel} disabled={busy}>
             取消
           </Button>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginTop: 12 }}>
-      <p style={{ fontSize: 12, fontWeight: 600, color: "var(--au-text-muted,#6b7280)", margin: "0 0 6px" }}>
-        {title}
-      </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{children}</div>
-    </div>
+    <section className="import-confirm-section">
+      <h3>{title}</h3>
+      <div className="import-confirm-section__options">{children}</div>
+    </section>
   );
 }
 
 function Option({
   active,
+  disabled = false,
   onSelect,
   children,
 }: {
   active: boolean;
+  disabled?: boolean;
   onSelect: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <label className="import-candidate" style={optionStyle(active)}>
-      <input type="radio" name="import-selection" checked={active} onChange={onSelect} style={{ marginTop: 3 }} />
-      <span>{children}</span>
+    <label
+      className={`import-confirm-option ${active ? "import-confirm-option--active" : ""} ${
+        disabled ? "import-confirm-option--disabled" : ""
+      }`}
+      aria-disabled={disabled}
+    >
+      <input
+        type="radio"
+        name="import-selection"
+        checked={active}
+        disabled={disabled}
+        data-autofocus={active ? "true" : undefined}
+        onChange={onSelect}
+      />
+      <span className="import-confirm-option__body">{children}</span>
+      <span className="import-confirm-option__status">
+        {disabled ? (active ? "处理中" : "锁定") : active ? "已选择" : "选择"}
+      </span>
     </label>
   );
 }
 
-const titleStyle: CSSProperties = { fontSize: 14 };
-const metaStyle: CSSProperties = { display: "block", fontSize: 12, color: "var(--au-text-muted,#6b7280)" };
-
-function optionStyle(active: boolean): CSSProperties {
-  return {
-    display: "flex",
-    gap: 10,
-    alignItems: "flex-start",
-    padding: "10px 12px",
-    borderRadius: 8,
-    cursor: "pointer",
-    border: active ? "1px solid var(--au-accent,#2563eb)" : "1px solid var(--au-border,#e5e7eb)",
-    background: active ? "var(--au-accent-soft,#eff6ff)" : "transparent",
-  };
-}
-
 function candidateMeta(c: NormalizedWork): string {
-  const authors = c.authors.slice(0, 3).map((a) => a.displayName).join(", ");
+  const authors = c.authors
+    .slice(0, 3)
+    .map((a) => a.displayName)
+    .join(", ");
   const more = c.authors.length > 3 ? " 等" : "";
   return [
     authors ? authors + more : "",
@@ -278,7 +403,11 @@ function candidateMeta(c: NormalizedWork): string {
 function localMeta(m: LocalMatch): string {
   const authors = m.authors.slice(0, 3).join(", ");
   const more = m.authors.length > 3 ? " 等" : "";
-  return [authors ? authors + more : "", m.year != null ? String(m.year) : "", m.doi ? `DOI ${m.doi}` : ""]
+  return [
+    authors ? authors + more : "",
+    m.year != null ? String(m.year) : "",
+    m.doi ? `DOI ${m.doi}` : "",
+  ]
     .filter(Boolean)
     .join(" · ");
 }
@@ -334,7 +463,10 @@ function workInputToDraft(w: WorkInput): Draft {
     language: w.language ?? "",
     abstract: w.abstract ?? "",
     keywords: (w.keywords ?? []).join(", "),
-    authors: (w.authors ?? []).map((a) => ({ displayName: a.displayName, role: a.role ?? "author" })),
+    authors: (w.authors ?? []).map((a) => ({
+      displayName: a.displayName,
+      role: a.role ?? "author",
+    })),
   };
 }
 
