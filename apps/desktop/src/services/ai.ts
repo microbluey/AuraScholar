@@ -5,8 +5,8 @@ import { OpenAICompatibleProvider, AnthropicProvider, generateFlashcards, flashc
 import { newId } from "@aurascholar/db/ids";
 import { FlashcardsRepo } from "@aurascholar/db/repos/flashcards";
 import { PdfDocument, extractFullText } from "@aurascholar/reader";
-import { getDb } from "./tauri-db";
-import { tauriHttp } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { auraHttp } from "./aura-platform";
 import { SECRET_KEYS, getSecret, migrateInlineSecret, setSecret } from "./secrets";
 import {
   isStorageRecord,
@@ -59,14 +59,14 @@ export async function makeProvider(): Promise<AIProvider | null> {
   if (!s) return null;
   if (s.kind === "anthropic") {
     return new AnthropicProvider({
-      http: tauriHttp,
+      http: auraHttp,
       baseUrl: s.baseUrl || undefined,
       model: s.model,
       apiKey: s.apiKey,
     });
   }
   return new OpenAICompatibleProvider({
-    http: tauriHttp,
+    http: auraHttp,
     baseUrl: s.baseUrl,
     model: s.model,
     apiKey: s.apiKey,

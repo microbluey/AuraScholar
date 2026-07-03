@@ -3,8 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FlashcardsRepo, Rating, type DueCard } from "@aurascholar/db/repos/flashcards";
 import { Badge, Button, Card } from "@aurascholar/ui";
-import { getDb } from "../services/tauri-db";
+import { getDb } from "../services/aura-db";
 import { InlineNotice } from "../components/InlineNotice";
+import { isDesktopRuntime } from "../services/aura-platform";
 
 interface StudyStats {
   total: number;
@@ -34,9 +35,6 @@ const RATING_OPTIONS: Array<{
   { rating: Rating.Easy, key: "4", label: "轻松", hint: "拉开间隔", variant: "secondary" },
 ];
 
-function isTauriRuntime(): boolean {
-  return "aura" in window;
-}
 
 async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
   const remaining = minimumMs - (Date.now() - startedAt);
@@ -67,7 +65,7 @@ export function FlashcardsPage() {
   const refresh = useCallback(async (options: { clearMessage?: boolean; showLoading?: boolean } = {}) => {
     const clearMessage = options.clearMessage ?? true;
     const showLoading = options.showLoading ?? true;
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setQueue([]);
       setStats(EMPTY_STATS);
       setRevealed(false);
@@ -128,7 +126,7 @@ export function FlashcardsPage() {
 
   const rate = useCallback(
     async (rating: Rating) => {
-      if (!current || ratingBusyRef.current || !isTauriRuntime()) return;
+      if (!current || ratingBusyRef.current || !isDesktopRuntime()) return;
       const startedAt = Date.now();
       ratingBusyRef.current = true;
       setRatingBusy(true);

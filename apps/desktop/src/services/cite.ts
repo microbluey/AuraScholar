@@ -12,7 +12,7 @@ import {
   type WorkLike,
 } from "@aurascholar/cite";
 import { downloadBlob } from "../download";
-import { getDb } from "./tauri-db";
+import { getDb } from "./aura-db";
 
 interface CiteRow {
   id: string;
@@ -118,7 +118,7 @@ export async function referenceForWork(workId: string, styleId: string): Promise
   return item ? formatEntry(item, styleId) : "";
 }
 
-// csl_json may arrive as a string (raw tauri-sql driver) or already-parsed
+// csl_json may arrive as a string (raw SQL driver) or already-parsed
 // object (drizzle json mode) depending on the driver — handle both.
 function parseJson(value: unknown): unknown {
   if (!value) return null;

@@ -21,7 +21,7 @@ import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { writeClipboardText } from "../clipboard";
 import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
 import { downloadBlob } from "../download";
-import { getDb } from "../services/tauri-db";
+import { getDb } from "../services/aura-db";
 import { loadPdfForWork } from "../services/library-read";
 import { resolveTranslator, loadTranslateConfig } from "../services/translate";
 import { langLabel, splitForTranslation, type TranslateConfig } from "@aurascholar/translate";

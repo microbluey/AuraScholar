@@ -1,7 +1,7 @@
 import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
 import { WorksRepo } from "@aurascholar/db/repos/works";
-import { getDb } from "./tauri-db";
-import { blobPath, tauriFs } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { blobPath, auraFs } from "./aura-platform";
 import type { CommitIngestArgs, IngestResult, PendingPdf } from "./library-types";
 
 async function repos() {
@@ -65,11 +65,11 @@ export async function attachStagedPdf(
 export async function discardStagedPdf(pdf: PendingPdf | null | undefined): Promise<void> {
   if (!pdf) return;
   if (pdf.relPath) {
-    await tauriFs.deleteFile(pdf.relPath).catch(() => {});
+    await auraFs.deleteFile(pdf.relPath).catch(() => {});
   }
   const { attachments } = await repos();
   const existing = await attachments.bySha(pdf.sha);
   if (!existing) {
-    await tauriFs.deleteFile(blobPath(pdf.sha)).catch(() => {});
+    await auraFs.deleteFile(blobPath(pdf.sha)).catch(() => {});
   }
 }

@@ -8,7 +8,7 @@ import {
 } from "@aurascholar/db/repos/sentinel";
 import { STATE_LABEL, SENTINEL_STATES, stateRank, type SentinelState } from "@aurascholar/core";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
-import { getDb } from "../services/tauri-db";
+import { getDb } from "../services/aura-db";
 import {
   runDuePollsDetailed,
   runSentinelTaskNow,
@@ -18,6 +18,7 @@ import { useConfirmDialog } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { downloadBlob } from "../download";
 import { isImeComposing } from "../keyboard";
+import { isDesktopRuntime } from "../services/aura-platform";
 
 type CreateMode = "doi" | "title";
 type SentinelView = "all" | "active" | "due" | "changed" | "title";
@@ -28,9 +29,6 @@ type TaskAction = { id: string; type: TaskActionType } | null;
 const PIPELINE_STATES = SENTINEL_STATES;
 const MIN_SENTINEL_ACTION_BUSY_MS = 250;
 
-function isTauriRuntime(): boolean {
-  return "aura" in window;
-}
 
 async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
   const remaining = minimumMs - (Date.now() - startedAt);
@@ -59,7 +57,7 @@ export function SentinelPage() {
   const taskBusy = taskAction !== null;
 
   const refresh = useCallback(async () => {
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setTasks([]);
       setEventsByTask(new Map());
       setLoading(false);
@@ -106,7 +104,7 @@ export function SentinelPage() {
   }, [eventsByTask, tasks, view]);
 
   const handleAdd = useCallback(async () => {
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("浏览器预览无法写入本地数据库，请在桌面应用中创建监控。");
       return;
     }
@@ -170,7 +168,7 @@ export function SentinelPage() {
   }, [doi, globalAction, hintAuthor, hintVenue, mode, refresh, taskAction, title]);
 
   const handleCheckNow = useCallback(async () => {
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("浏览器预览无法执行后台检查，请在桌面应用中使用。");
       return;
     }
@@ -194,7 +192,7 @@ export function SentinelPage() {
 
   const handleForceCheck = useCallback(
     async (taskId: string) => {
-      if (!isTauriRuntime()) return;
+      if (!isDesktopRuntime()) return;
       if (globalAction || taskAction) return;
       const startedAt = Date.now();
       let finalMessage: string | null = null;
@@ -217,7 +215,7 @@ export function SentinelPage() {
 
   const handleToggleStatus = useCallback(
     async (task: SentinelTaskRow) => {
-      if (!isTauriRuntime()) return;
+      if (!isDesktopRuntime()) return;
       if (globalAction || taskAction) return;
       const nextStatus = task.status === "paused" ? "active" : "paused";
       const startedAt = Date.now();
@@ -241,7 +239,7 @@ export function SentinelPage() {
 
   const handleDelete = useCallback(
     async (task: SentinelTaskRow) => {
-      if (!isTauriRuntime()) return;
+      if (!isDesktopRuntime()) return;
       if (globalAction || taskAction) return;
       const confirmed = await confirm({
         title: "删除哨兵监控？",

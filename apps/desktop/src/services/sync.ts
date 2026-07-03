@@ -16,8 +16,8 @@ import {
 } from "@aurascholar/sync";
 import type { Database } from "@aurascholar/db";
 import { ensureLocalFirstState, type LocalFirstState } from "@aurascholar/db/local-first";
-import { getDb } from "./tauri-db";
-import { tauriHttp } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { auraHttp } from "./aura-platform";
 import { SECRET_KEYS, getSecret, migrateInlineSecret, setSecret } from "./secrets";
 import {
   isStorageRecord,
@@ -363,7 +363,7 @@ export async function runSync(): Promise<SyncResult> {
   const db = await getDb();
   const { deviceId, libraryId } = await getSyncIdentity();
   const provider = new WebDavProvider({
-    http: tauriHttp,
+    http: auraHttp,
     baseUrl: settings.baseUrl,
     username: settings.username,
     password: settings.password,

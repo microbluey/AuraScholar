@@ -16,8 +16,8 @@ import type { ConnectorContext, NormalizedWork } from "@aurascholar/connectors";
 import { configureWorker, PdfDocument } from "@aurascholar/reader";
 import type { PdfDocumentMetadata } from "@aurascholar/reader";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { getDb } from "./tauri-db";
-import { blobPath, sha256Hex, tauriFs, tauriHttp } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { blobPath, sha256Hex, auraFs, auraHttp } from "./aura-platform";
 import { toWorkInput } from "./work-input";
 import type {
   AttachPdfResult,
@@ -31,7 +31,7 @@ import type {
 } from "./library-types";
 
 // Until a settings UI exists, use a project contact for polite pools.
-const ctx: ConnectorContext = { http: tauriHttp, mailto: "contact@aurascholar.app" };
+const ctx: ConnectorContext = { http: auraHttp, mailto: "contact@aurascholar.app" };
 
 configureWorker(workerSrc);
 
@@ -279,7 +279,7 @@ async function stagePdf(
   pageCount?: number,
 ): Promise<PendingPdf> {
   const sha = await sha256Hex(data);
-  await tauriFs.writeFile(blobPath(sha), data);
+  await auraFs.writeFile(blobPath(sha), data);
   const pages = pageCount ?? (await loadPdfCopy(data)).pageCount;
   return { sha, fileName, byteSize: data.byteLength, pageCount: pages, relPath, fetchedVia };
 }
@@ -422,7 +422,7 @@ export async function attachPdfToWork(
 
   // Write the blob from the original bytes first; probe page count with a copy
   // (pdf.js detaches the buffer it's given).
-  await tauriFs.writeFile(blobPath(sha), data);
+  await auraFs.writeFile(blobPath(sha), data);
   const { pageCount } = await loadPdfCopy(data);
 
   const { id, deduped } = await attachments.create({
@@ -446,7 +446,7 @@ async function fetchOaBytes(
   const oa = await findOaPdf(ctx, work as NormalizedWork).catch(() => null);
   if (!oa) return null;
   try {
-    const res = await tauriHttp.request({ url: oa.url, timeoutMs: 60_000 });
+    const res = await auraHttp.request({ url: oa.url, timeoutMs: 60_000 });
     if (res.status !== 200 || res.body.byteLength < 1024) return null;
     const head = new TextDecoder().decode(res.body.slice(0, 5));
     if (!head.startsWith("%PDF")) return null;
@@ -465,7 +465,7 @@ async function tryFetchPdf(workId: string, work: NormalizedWork): Promise<boolea
   const oa = await fetchOaBytes(work);
   if (!oa) return false;
   const sha = await sha256Hex(oa.bytes);
-  await tauriFs.writeFile(blobPath(sha), oa.bytes);
+  await auraFs.writeFile(blobPath(sha), oa.bytes);
   await attachments.create({
     workId,
     sha256: sha,

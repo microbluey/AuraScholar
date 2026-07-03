@@ -20,7 +20,7 @@ import type {
   TagRow,
   WorkWithAuthors,
 } from "@aurascholar/db";
-import { getDb } from "../services/tauri-db";
+import { getDb } from "../services/aura-db";
 import { listDeletedWorks, listWorks } from "../services/library-list";
 import type { IngestDraft, PendingPdf } from "../services/library-types";
 import type { ExportFormat } from "../services/cite";
@@ -32,7 +32,7 @@ import { useModalFocusTrap } from "../components/useModalFocusTrap";
 import { writeClipboardText } from "../clipboard";
 import { isImeComposing } from "../keyboard";
 import { shortcutLabel } from "../shortcut-labels";
-import { blobPath, openExternalUrl, sha256Hex, tauriFs } from "../services/tauri-platform";
+import { blobPath, openExternalUrl, sha256Hex, auraFs, isDesktopRuntime } from "../services/aura-platform";
 
 const MetadataEditor = lazy(() =>
   import("../components/MetadataEditor").then((m) => ({ default: m.MetadataEditor })),
@@ -41,9 +41,6 @@ const ImportConfirmDialog = lazy(() =>
   import("../components/ImportConfirmDialog").then((m) => ({ default: m.ImportConfirmDialog })),
 );
 
-function isTauriRuntime(): boolean {
-  return "aura" in window;
-}
 
 type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred" | "trash";
 type SortMode = "added" | "year";
@@ -270,14 +267,14 @@ export function LibraryPage() {
   const fillExamplePaper = useCallback(() => {
     setInput("1706.03762");
     setMessage(
-      isTauriRuntime()
+      isDesktopRuntime()
         ? "已填入示例 arXiv ID。按 Enter 或点击“添加文献”即可预览入库卡片。"
         : "已填入示例 arXiv ID。浏览器预览只展示输入效果，真实解析和入库请在桌面应用中完成。",
     );
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setCollections([]);
       setItems([]);
       setWorkMeta({});
@@ -494,7 +491,7 @@ export function LibraryPage() {
 
   const handleAdd = useCallback(async () => {
     if (!input.trim() || busy) return;
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("浏览器预览不会解析或写入本地文献库，请在桌面应用中完成入库。");
       return;
     }
@@ -546,7 +543,7 @@ export function LibraryPage() {
       try {
         const data = new Uint8Array(await file.arrayBuffer());
         const sha = await sha256Hex(data);
-        await tauriFs.writeFile(blobPath(sha), data);
+        await auraFs.writeFile(blobPath(sha), data);
         const title = file.name.replace(/\.pdf$/i, "") || "Smoke PDF";
         const pdf: PendingPdf = {
           sha,
@@ -620,7 +617,7 @@ export function LibraryPage() {
 
   const handleNewFolder = useCallback(async () => {
     if (collectionAction) return;
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("预览模式下不会写入本地数据库");
       return;
     }
@@ -661,7 +658,7 @@ export function LibraryPage() {
   const handleRenameFolder = useCallback(
     async (id: string, name: string) => {
       if (collectionAction) return;
-      if (!isTauriRuntime()) {
+      if (!isDesktopRuntime()) {
         setMessage("预览模式下不会写入本地数据库");
         return;
       }
@@ -701,7 +698,7 @@ export function LibraryPage() {
   const handleDeleteFolder = useCallback(
     async (id: string, name: string) => {
       if (collectionAction) return;
-      if (!isTauriRuntime()) {
+      if (!isDesktopRuntime()) {
         setMessage("预览模式下不会写入本地数据库");
         return;
       }
@@ -923,7 +920,7 @@ export function LibraryPage() {
   const handleAttachPdf = useCallback(
     async (file: File) => {
       if (!selectedWork) return;
-      if (!isTauriRuntime()) {
+      if (!isDesktopRuntime()) {
         setMessage("预览模式下不会写入本地数据库");
         return;
       }
@@ -958,7 +955,7 @@ export function LibraryPage() {
   // page carrying the work id so the eventual download attaches to this work.
   const handleFindFulltext = useCallback(async () => {
     if (!selectedWork) return;
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("预览模式下无法联网查找全文");
       return;
     }
@@ -1000,7 +997,7 @@ export function LibraryPage() {
   const updateWorkStarred = useCallback(
     async (work: WorkWithAuthors, starred: boolean) => {
       if (Object.prototype.hasOwnProperty.call(starActionBusyRef.current, work.id)) return;
-      if (!isTauriRuntime()) {
+      if (!isDesktopRuntime()) {
         setMessage("预览模式下不会写入本地数据库");
         return;
       }
@@ -1034,7 +1031,7 @@ export function LibraryPage() {
     async (status: ReadingStatus) => {
       if (!selectedWork) return;
       if (readingStatusBusyRef.current) return;
-      if (!isTauriRuntime()) {
+      if (!isDesktopRuntime()) {
         setMessage("预览模式下不会写入本地数据库");
         return;
       }
@@ -1063,7 +1060,7 @@ export function LibraryPage() {
   );
 
   const deleteSelectedWork = useCallback(async () => {
-    if (!selectedWork || workActionBusy || !isTauriRuntime()) return;
+    if (!selectedWork || workActionBusy || !isDesktopRuntime()) return;
     const confirmed = await confirm({
       title: "移入回收站？",
       description: `《${selectedWork.title}》会从当前列表移到回收站。`,
@@ -1097,7 +1094,7 @@ export function LibraryPage() {
   }, [confirm, refresh, selectedWork, workActionBusy]);
 
   const createSentinelForSelected = useCallback(async () => {
-    if (!selectedWork || !isTauriRuntime() || sentinelActionBusyRef.current) return;
+    if (!selectedWork || !isDesktopRuntime() || sentinelActionBusyRef.current) return;
     if (!selectedWork.doi) {
       setMessage("这篇文献没有 DOI，无法创建精确哨兵监控");
       return;
@@ -1137,7 +1134,7 @@ export function LibraryPage() {
   }, [tableRows, selectedWorkId]);
 
   useEffect(() => {
-    if (!selectedWork || !isTauriRuntime()) {
+    if (!selectedWork || !isDesktopRuntime()) {
       setSelectedMeta(null);
       return;
     }
@@ -1250,7 +1247,7 @@ export function LibraryPage() {
 
   const generateForSelected = useCallback(async () => {
     if (!selectedWork || generating) return;
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("浏览器预览没有本地数据库和 PDF 附件，无法生成闪卡");
       return;
     }
@@ -1349,7 +1346,7 @@ export function LibraryPage() {
       setMessage("请先勾选要添加标签的文献");
       return;
     }
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("预览模式下不会写入本地数据库");
       return;
     }
@@ -1380,7 +1377,7 @@ export function LibraryPage() {
       setMessage("请先勾选要移动的文献");
       return;
     }
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setMessage("预览模式下不会写入本地数据库");
       return;
     }
@@ -1389,7 +1386,7 @@ export function LibraryPage() {
 
   const moveSelectedToCollection = useCallback(
     async (target: string | null, targetName: string): Promise<boolean> => {
-      if (selectedIds.size === 0 || !isTauriRuntime()) return false;
+      if (selectedIds.size === 0 || !isDesktopRuntime()) return false;
       const workIds = Array.from(selectedIds);
       const startedAt = Date.now();
       try {
@@ -1418,7 +1415,7 @@ export function LibraryPage() {
   );
 
   const bulkDelete = useCallback(async () => {
-    if (selectedIds.size === 0 || workActionBusy || !isTauriRuntime()) return;
+    if (selectedIds.size === 0 || workActionBusy || !isDesktopRuntime()) return;
     const workIds = Array.from(selectedIds);
     const confirmed = await confirm({
       title: "批量移入回收站？",
@@ -1455,7 +1452,7 @@ export function LibraryPage() {
 
   const restoreWorks = useCallback(
     async (workIds: string[]) => {
-      if (workIds.length === 0 || workActionBusy || !isTauriRuntime()) return;
+      if (workIds.length === 0 || workActionBusy || !isDesktopRuntime()) return;
       const startedAt = Date.now();
       setWorkActionBusy("restore");
       setMessage(`正在恢复 ${workIds.length} 篇文献...`);
@@ -1482,7 +1479,7 @@ export function LibraryPage() {
 
   const purgeWorks = useCallback(
     async (workIds: string[]) => {
-      if (workIds.length === 0 || workActionBusy || !isTauriRuntime()) return;
+      if (workIds.length === 0 || workActionBusy || !isDesktopRuntime()) return;
       const confirmed = await confirm({
         title: "永久删除文献？",
         description: `将永久删除 ${workIds.length} 篇回收站文献。`,
@@ -1516,7 +1513,7 @@ export function LibraryPage() {
   );
 
   const bulkMerge = useCallback(async () => {
-    if (selectedIds.size < 2 || workActionBusy || !isTauriRuntime()) return;
+    if (selectedIds.size < 2 || workActionBusy || !isDesktopRuntime()) return;
     if (!selectedWork || !selectedIds.has(selectedWork.id)) {
       setMessage("请先在已勾选的文献中点选一篇作为主记录，再执行合并");
       return;
@@ -1692,9 +1689,9 @@ export function LibraryPage() {
 
   const confirmImport = useCallback(async () => {
     if (importingRef.current) return;
-    if (!importPreview || !isTauriRuntime()) {
+    if (!importPreview || !isDesktopRuntime()) {
       setImportPreview(null);
-      if (!isTauriRuntime()) setMessage("预览模式下不会写入本地数据库");
+      if (!isDesktopRuntime()) setMessage("预览模式下不会写入本地数据库");
       return;
     }
     importingRef.current = true;
@@ -2081,7 +2078,7 @@ export function LibraryPage() {
             items.length === 0 && !isTrashView && !activeCollection ? (
               <LibraryOnboardingEmpty
                 busy={busy}
-                previewMode={!isTauriRuntime()}
+                previewMode={!isDesktopRuntime()}
                 onImportPdf={() => fileInputRef.current?.click()}
                 onImportRefs={() => refsInputRef.current?.click()}
                 onTryExample={fillExamplePaper}
@@ -3062,7 +3059,7 @@ function TagManager({ onClose, onChanged }: { onClose: () => void; onChanged: ()
   });
 
   const load = useCallback(async () => {
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setTags([]);
       setLoading(false);
       return;
@@ -3903,7 +3900,7 @@ function ScholarPanel({ doi }: { doi: string | null }) {
   }, [doi]);
 
   const load = useCallback(() => {
-    if (!doi || !isTauriRuntime() || state === "loading") return;
+    if (!doi || !isDesktopRuntime() || state === "loading") return;
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
     setState("loading");

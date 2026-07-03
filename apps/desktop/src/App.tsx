@@ -13,6 +13,7 @@ import { useModalFocusTrap } from "./components/useModalFocusTrap";
 import { isImeComposing } from "./keyboard";
 import { shortcutLabel } from "./shortcut-labels";
 import { readLocalStorageJson } from "./storage";
+import { isDesktopRuntime } from "./services/aura-platform";
 
 // 阅读器不在导航中 — 它是文献库里点击一篇文献后进入的页面。
 // /graph 路由保留供深链使用。
@@ -89,9 +90,6 @@ const NAV_DESCRIPTIONS: Record<(typeof NAV)[number]["to"], string> = {
   "/settings": "配置 AI、翻译、同步、备份和外观。",
 };
 
-function isTauriRuntime(): boolean {
-  return "aura" in window;
-}
 
 function readAiModelLabel() {
   const parsed = readLocalStorageJson<{ model?: unknown } | null>("ai-settings", null);
@@ -155,7 +153,7 @@ function activeRouteLabel(pathname: string): string {
 }
 
 function runtimeLabel(): string {
-  return isTauriRuntime() ? "桌面运行时" : "浏览器预览";
+  return isDesktopRuntime() ? "桌面运行时" : "浏览器预览";
 }
 
 function describeUnknownError(value: unknown): string {
@@ -211,7 +209,7 @@ export function App() {
   // Catch-up poll on startup, then hourly while the app is open. These services
   // pull network/connectors code, so load them after the shell is interactive.
   useEffect(() => {
-    if (!isTauriRuntime()) return;
+    if (!isDesktopRuntime()) return;
     void import("./services/sentinel")
       .then(({ startSentinelLoop }) => startSentinelLoop())
       .catch((error) =>
@@ -236,7 +234,7 @@ export function App() {
     const previousPath = previousPathRef.current;
     previousPathRef.current = location.pathname;
     if (
-      isTauriRuntime() &&
+      isDesktopRuntime() &&
       previousPath.startsWith("/discovery") &&
       !location.pathname.startsWith("/discovery")
     ) {
@@ -268,12 +266,12 @@ export function App() {
   }, []);
 
   const refreshLibraryStats = useCallback(async () => {
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setLibraryStats(null);
       return;
     }
     try {
-      const { getDb } = await import("./services/tauri-db");
+      const { getDb } = await import("./services/aura-db");
       const db = await getDb();
       const [
         totalRows,

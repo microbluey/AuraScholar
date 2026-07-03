@@ -11,10 +11,10 @@ import {
 import type { ConnectorContext } from "@aurascholar/connectors";
 import { Badge, Button } from "@aurascholar/ui";
 import { InlineNotice, type InlineNoticeTone } from "./InlineNotice";
-import { getDb } from "../services/tauri-db";
-import { tauriHttp } from "../services/tauri-platform";
+import { getDb } from "../services/aura-db";
+import { auraHttp, isDesktopRuntime } from "../services/aura-platform";
 
-const ctx: ConnectorContext = { http: tauriHttp, mailto: "contact@aurascholar.app" };
+const ctx: ConnectorContext = { http: auraHttp, mailto: "contact@aurascholar.app" };
 
 const RELATION_COLOR: Record<string, string> = {
   center: "var(--color-accent)",
@@ -30,9 +30,6 @@ interface ImportNotice {
   tone: InlineNoticeTone;
 }
 
-function isDesktopRuntime(): boolean {
-  return "aura" in window;
-}
 
 async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
   const remaining = minimumMs - (Date.now() - startedAt);

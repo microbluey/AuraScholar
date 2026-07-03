@@ -6,6 +6,7 @@ import { Badge, Button, Card, Input } from "@aurascholar/ui";
 import { CitationGraphView } from "../components/CitationGraphView";
 import { InlineNotice } from "../components/InlineNotice";
 import { isImeComposing } from "../keyboard";
+import { isDesktopRuntime } from "../services/aura-platform";
 
 const EXAMPLE_DOIS = [
   {
@@ -22,9 +23,6 @@ const EXAMPLE_DOIS = [
   },
 ] as const;
 
-function isDesktopRuntime(): boolean {
-  return "aura" in window;
-}
 
 function normalizeDoi(input: string): string {
   return input

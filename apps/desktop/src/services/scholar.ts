@@ -3,9 +3,9 @@
 // work (they drift over time and not every paper is in S2), so the panel shows
 // them as live, best-effort context.
 import { s2EnrichByDoi, type ConnectorContext, type S2Enrichment } from "@aurascholar/connectors";
-import { tauriHttp } from "./tauri-platform";
+import { auraHttp } from "./aura-platform";
 
-const ctx: ConnectorContext = { http: tauriHttp, mailto: "contact@aurascholar.app" };
+const ctx: ConnectorContext = { http: auraHttp, mailto: "contact@aurascholar.app" };
 
 export type { S2Enrichment };
 

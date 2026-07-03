@@ -4,7 +4,8 @@
 // session partition (see electron/main/research-browser.ts), cleared via
 // clearSiteData().
 import { newId } from "@aurascholar/db/ids";
-import { getDb } from "./tauri-db";
+import { getDb } from "./aura-db";
+import { isDesktopRuntime } from "./aura-platform";
 
 export interface DiscoverySite {
   id: string;
@@ -34,9 +35,6 @@ interface SiteRow {
   use_proxy: number;
 }
 
-function isTauri(): boolean {
-  return "aura" in window;
-}
 
 function fromRow(row: SiteRow): DiscoverySite {
   return {
@@ -104,7 +102,7 @@ function normalizeEzproxyPrefix(input: string): string {
 
 /** All sites, in display order. Includes hidden ones (filter in the UI). */
 export async function listSites(): Promise<DiscoverySite[]> {
-  if (!isTauri()) return [];
+  if (!isDesktopRuntime()) return [];
   const db = await getDb();
   const rows = await db.query<SiteRow>(
     `SELECT id, name, home_url, search_url, builtin, hidden, sort_order, use_proxy
@@ -183,7 +181,7 @@ export async function setSiteProxy(id: string, useProxy: boolean): Promise<void>
 
 /** Global proxy address (e.g. "http://127.0.0.1:7890"), stored in settings. */
 export async function getProxyAddress(): Promise<string> {
-  if (!isTauri()) return "";
+  if (!isDesktopRuntime()) return "";
   const db = await getDb();
   const rows = await db.query<{ value_json: string }>(
     `SELECT value_json FROM settings WHERE key = 'research.proxy'`,
@@ -213,7 +211,7 @@ export async function setProxyAddress(address: string): Promise<void> {
  * subscribed journal carry the school's identity without needing the campus IP.
  */
 export async function getEzproxyPrefix(): Promise<string> {
-  if (!isTauri()) return "";
+  if (!isDesktopRuntime()) return "";
   const db = await getDb();
   const rows = await db.query<{ value_json: string }>(
     `SELECT value_json FROM settings WHERE key = 'research.ezproxy'`,
@@ -269,13 +267,13 @@ export async function setHidden(id: string, hidden: boolean): Promise<void> {
 
 /** Clear a site's stored cookies/cache (its Electron session partition). */
 export async function clearSiteData(site: DiscoverySite): Promise<void> {
-  if (!isTauri()) return;
+  if (!isDesktopRuntime()) return;
   await window.aura.research.clearSiteData(site.id);
 }
 
 /** Which of the given sites already hold local data (cookies present). */
 export async function sitesWithData(ids: string[]): Promise<Set<string>> {
-  if (!isTauri() || ids.length === 0) return new Set();
+  if (!isDesktopRuntime() || ids.length === 0) return new Set();
   try {
     return new Set(await window.aura.research.siteData(ids));
   } catch {

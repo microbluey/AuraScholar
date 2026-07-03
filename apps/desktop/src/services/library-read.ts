@@ -1,6 +1,6 @@
 import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
-import { getDb } from "./tauri-db";
-import { blobPath, tauriFs } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { blobPath, auraFs } from "./aura-platform";
 
 export async function loadPdfForWork(
   workId: string,
@@ -17,12 +17,12 @@ export async function loadPdfForWork(
   for (const pdf of pdfs) {
     try {
       const path = blobPath(pdf.sha256);
-      const exists = await tauriFs.exists(path);
+      const exists = await auraFs.exists(path);
       if (!exists) {
         lastError = new Error(`blob missing:${path}`);
         continue;
       }
-      const data = await tauriFs.readFile(path);
+      const data = await auraFs.readFile(path);
       return { attachmentId: pdf.id, data };
     } catch (error) {
       lastError = error;

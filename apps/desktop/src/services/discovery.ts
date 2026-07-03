@@ -10,11 +10,11 @@ import {
 } from "@aurascholar/core";
 import { type NormalizedWork } from "@aurascholar/connectors";
 import { workFingerprint } from "@aurascholar/db/ids";
-import { getDb } from "./tauri-db";
-import { tauriHttp } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { auraHttp } from "./aura-platform";
 import type { IngestResult } from "./library-types";
 
-const ctx = { http: tauriHttp, mailto: "contact@aurascholar.app" };
+const ctx = { http: auraHttp, mailto: "contact@aurascholar.app" };
 
 export interface DiscoveryResultWithLibrary extends DiscoveryResult {
   inLibrary: boolean;

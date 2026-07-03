@@ -39,7 +39,7 @@ import {
 } from "../services/discovery-sites";
 import { subscribeResearchDownloads } from "../services/research-downloads";
 import type { IngestDraft } from "../services/library-types";
-import { openExternalUrl, tauriFs } from "../services/tauri-platform";
+import { openExternalUrl, auraFs, isDesktopRuntime } from "../services/aura-platform";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { useConfirmDialog } from "../components/ConfirmDialog";
@@ -103,9 +103,6 @@ const SOURCE_STATUS_ORDER: SourceStatus[] = [
   "idle",
 ];
 
-function isDesktopRuntime(): boolean {
-  return "aura" in window;
-}
 
 function hostOf(url: string): string {
   try {
@@ -746,7 +743,7 @@ export function DiscoveryPage() {
         pdfMessage = `PDF 挂载失败:${e instanceof Error ? e.message : String(e)}`;
       }
     }
-    if (draft.pdf?.relPath && attached) void tauriFs.deleteFile(draft.pdf.relPath).catch(() => {});
+    if (draft.pdf?.relPath && attached) void auraFs.deleteFile(draft.pdf.relPath).catch(() => {});
     setMessage(`已在库中:${draft.dedup.title}${pdfMessage ? `，${pdfMessage}` : ""}`);
     window.dispatchEvent(new Event("aurascholar:library-updated"));
   }, []);

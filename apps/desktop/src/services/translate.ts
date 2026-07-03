@@ -11,8 +11,8 @@ import {
   type TranslateResult,
   type Translator,
 } from "@aurascholar/translate";
-import { tauriHttp } from "./tauri-platform";
-import { getDb } from "./tauri-db";
+import { auraHttp } from "./aura-platform";
+import { getDb } from "./aura-db";
 import { SECRET_KEYS, getSecret, migrateInlineSecret, setSecret } from "./secrets";
 import {
   isStorageRecord,
@@ -145,7 +145,7 @@ export async function resolveTranslator(): Promise<{ translator: Translator } | 
   const config = await loadTranslateConfig();
   const provider =
     config.engine === "llm" ? await import("./ai").then(({ makeProvider }) => makeProvider()) : null;
-  const result = makeTranslator(config, { http: tauriHttp, provider });
+  const result = makeTranslator(config, { http: auraHttp, provider });
   if ("error" in result) return result;
   return { translator: new CachingTranslator(result.translator) };
 }

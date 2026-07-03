@@ -13,6 +13,7 @@ import { InlineNotice } from "../components/InlineNotice";
 import { writeClipboardText } from "../clipboard";
 import { isImeComposing } from "../keyboard";
 import { readLocalStorageItem, tryWriteLocalStorageItem } from "../storage";
+import { isDesktopRuntime } from "../services/aura-platform";
 
 const STYLE_KEY = "snippet-cite-style";
 const MIN_SNIPPET_ACTION_BUSY_MS = 250;
@@ -26,9 +27,6 @@ interface WorkGroup {
   items: SnippetWithWork[];
 }
 
-function isTauriRuntime(): boolean {
-  return "aura" in window;
-}
 
 async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
   const remaining = minimumMs - (Date.now() - startedAt);
@@ -86,7 +84,7 @@ export function SnippetsPage() {
   }, [hasDirtyNotes]);
 
   const refresh = useCallback(async () => {
-    if (!isTauriRuntime()) {
+    if (!isDesktopRuntime()) {
       setGroups([]);
       setLoading(false);
       setMessage(
@@ -275,7 +273,7 @@ export function SnippetsPage() {
         </Card>
       ) : total === 0 ? (
         <SnippetsEmptyState
-          previewMode={!isTauriRuntime()}
+          previewMode={!isDesktopRuntime()}
           onOpenLibrary={() => navigate("/library")}
           onOpenReader={() => navigate("/library")}
         />

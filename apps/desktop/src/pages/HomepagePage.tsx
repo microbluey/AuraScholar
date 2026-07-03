@@ -11,6 +11,7 @@ import { useConfirmDialog } from "../components/ConfirmDialog";
 import { writeClipboardText } from "../clipboard";
 import { downloadBlob } from "../download";
 import { isStorageRecord, readLocalStorageJson, tryWriteLocalStorageJson } from "../storage";
+import { isDesktopRuntime } from "../services/aura-platform";
 
 const PROFILE_KEY = "homepage-profile";
 const FEATURED_LIMIT = 8;
@@ -61,9 +62,6 @@ const EMPTY: StoredProfile = {
   selectedWorkIds: [],
 };
 
-function isTauriRuntime(): boolean {
-  return "aura" in window;
-}
 
 function isThemeId(value: unknown): value is ThemeId {
   return THEMES.some((theme) => theme.id === value);
@@ -181,7 +179,7 @@ export function HomepagePage() {
     let cancelled = false;
 
     async function loadWorks() {
-      if (!isTauriRuntime()) {
+      if (!isDesktopRuntime()) {
         setWorksStatus("preview");
         setMessage("浏览器预览无法读取本地文献库，仍可编辑资料、预览和导出主页。");
         return;

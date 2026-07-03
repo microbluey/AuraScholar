@@ -6,7 +6,7 @@
 // nothing written) and surfaced to a confirmation card — the user picks/edits
 // before anything reaches the library; citation files (.bib etc.) are
 // authoritative and imported directly. No per-site scraping required.
-import { tauriFs } from "./tauri-platform";
+import { auraFs } from "./aura-platform";
 import type { IngestDraft } from "./library-types";
 import type { ScholarIdentity } from "../../electron/shared";
 
@@ -42,7 +42,7 @@ async function ingestDownloadedFile(
   const display = fileName.replace(/^\d+-/, "");
   const ext = extOf(display);
   try {
-    const bytes = await tauriFs.readFile(relPath);
+    const bytes = await auraFs.readFile(relPath);
     if (ext === ".pdf") {
       // Analyze only — never auto-write. The page identity (citation_* meta) is
       // preferred over guessing a DOI from the PDF body. The temp file is kept
@@ -58,11 +58,11 @@ async function ingestDownloadedFile(
       const { importReferences, previewReferences } = await import("./import-refs");
       // .txt / .json may not actually be references — bail quietly if nothing parses.
       if (previewReferences(text).length === 0) {
-        void tauriFs.deleteFile(relPath).catch(() => {});
+        void auraFs.deleteFile(relPath).catch(() => {});
         return { kind: "ignored", fileName: display };
       }
       const summary = await importReferences(text);
-      void tauriFs.deleteFile(relPath).catch(() => {});
+      void auraFs.deleteFile(relPath).catch(() => {});
       return {
         kind: "references",
         fileName: display,
@@ -70,10 +70,10 @@ async function ingestDownloadedFile(
         deduped: summary.deduped > 0,
       };
     }
-    void tauriFs.deleteFile(relPath).catch(() => {});
+    void auraFs.deleteFile(relPath).catch(() => {});
     return { kind: "ignored", fileName: display };
   } catch (e) {
-    void tauriFs.deleteFile(relPath).catch(() => {});
+    void auraFs.deleteFile(relPath).catch(() => {});
     return { kind: "error", fileName: display, error: e instanceof Error ? e.message : String(e) };
   }
 }

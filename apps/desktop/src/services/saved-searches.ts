@@ -7,8 +7,8 @@ import {
   type SavedSearchRow,
 } from "@aurascholar/db/repos/saved-searches";
 import type { NormalizedWork } from "@aurascholar/connectors";
-import { getDb } from "./tauri-db";
-import { tauriNotifier } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { auraNotifier } from "./aura-platform";
 import type { DiscoveryResultWithLibrary } from "./discovery";
 import type { DiscoverySource } from "@aurascholar/core";
 
@@ -172,7 +172,7 @@ async function runRow(
   notifySavedSearchesUpdated();
 
   if (!options.silent && fresh.length > 0) {
-    await tauriNotifier.notify({
+    await auraNotifier.notify({
       title: `🔎 检索订阅有 ${fresh.length} 篇新结果`,
       body: row.query,
       tag: `saved-search:${row.id}`,

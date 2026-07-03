@@ -1,7 +1,5 @@
 // Desktop Platform implementation, backed by the Electron preload bridge
-// (window.aura). Export names are kept (tauriHttp/tauriFs/tauriNotifier) so the
-// many call sites don't churn during the migration; they no longer touch Tauri.
-// TODO(rename): rename this module to electron-platform.ts once the dust settles.
+// (window.aura): CORS-free HTTP, app-data FS, notifications, and helpers.
 import type {
   FileSystem,
   HttpClient,
@@ -11,7 +9,13 @@ import type {
   Notifier,
 } from "@aurascholar/platform";
 
-export const tauriHttp: HttpClient = {
+
+/** True when running inside the Electron shell (the preload bridge exists). */
+export function isDesktopRuntime(): boolean {
+  return "aura" in window;
+}
+
+export const auraHttp: HttpClient = {
   async request(req: HttpRequest): Promise<HttpResponse> {
     if (req.signal?.aborted) throw abortError();
     const requestId = req.signal ? crypto.randomUUID() : undefined;
@@ -42,7 +46,7 @@ function abortError(): Error {
   return error;
 }
 
-export const tauriFs: FileSystem = {
+export const auraFs: FileSystem = {
   readFile(path) {
     return window.aura.fs.readFile(path);
   },
@@ -63,7 +67,7 @@ export const tauriFs: FileSystem = {
   },
 };
 
-export const tauriNotifier: Notifier = {
+export const auraNotifier: Notifier = {
   async notify(options: NotificationOptions): Promise<void> {
     await window.aura.notify(options.title, options.body);
   },

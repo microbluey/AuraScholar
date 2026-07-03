@@ -12,10 +12,10 @@ import {
   type SentinelState,
 } from "@aurascholar/core";
 import type { ConnectorContext } from "@aurascholar/connectors";
-import { getDb } from "./tauri-db";
-import { tauriHttp, tauriNotifier } from "./tauri-platform";
+import { getDb } from "./aura-db";
+import { auraHttp, auraNotifier } from "./aura-platform";
 
-const ctx: ConnectorContext = { http: tauriHttp, mailto: "contact@aurascholar.app" };
+const ctx: ConnectorContext = { http: auraHttp, mailto: "contact@aurascholar.app" };
 
 export interface SentinelPollFailure {
   taskId: string;
@@ -95,7 +95,7 @@ async function pollTask(
       doi = match.doi;
       await repo.setDoi(task.id, doi);
       await repo.addEvent(task.id, previousState, "registered", match.evidence);
-      await tauriNotifier.notify({
+      await auraNotifier.notify({
         title: "📡 已找到论文 DOI",
         body: `${task.title} → ${doi}`,
         tag: `sentinel:${task.id}`,
@@ -106,7 +106,7 @@ async function pollTask(
 
     for (const milestone of result.newMilestones) {
       await repo.addEvent(task.id, previousState, milestone.state, milestone.evidence);
-      await tauriNotifier.notify({
+      await auraNotifier.notify({
         title: `📡 ${STATE_LABEL[milestone.state]}`,
         body: task.title,
         tag: `sentinel:${task.id}`,
@@ -130,7 +130,7 @@ async function pollTask(
       const imported = await ingestFromInput(doi).catch(() => null);
       if (imported) {
         await repo.linkWork(task.id, imported.workId);
-        await tauriNotifier.notify({
+        await auraNotifier.notify({
           title: "📚 已自动导入文献库",
           body: task.title,
           tag: `sentinel:${task.id}`,

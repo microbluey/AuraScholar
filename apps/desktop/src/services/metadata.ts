@@ -6,7 +6,7 @@ import {
   type WorkPatch,
   type WorkRow,
 } from "@aurascholar/db/repos/works";
-import { getDb } from "./tauri-db";
+import { getDb } from "./aura-db";
 
 export interface WorkMetadata {
   work: WorkRow;

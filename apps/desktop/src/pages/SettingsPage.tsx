@@ -12,6 +12,7 @@ import { exportLibraryJson, loadSyncSettings, runSync, saveSyncSettings } from "
 import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { downloadBlob } from "../download";
+import { isDesktopRuntime } from "../services/aura-platform";
 
 const AI_SETTINGS_UPDATED_EVENT = "aurascholar:ai-settings-updated";
 
@@ -87,9 +88,6 @@ const DEFAULT_SYNC_SETTINGS: SyncSettingsSnapshot = {
 
 const MIN_SETTINGS_BUSY_MS = 500;
 
-function isDesktopRuntime(): boolean {
-  return "aura" in window;
-}
 
 function describeUnknownError(value: unknown): string {
   if (value instanceof Error) return value.message || value.name;

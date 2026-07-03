@@ -3,7 +3,7 @@ import {
   listDeletedWorks as listDbDeletedWorks,
   listWorks as listDbWorks,
 } from "@aurascholar/db/work-list";
-import { getDb } from "./tauri-db";
+import { getDb } from "./aura-db";
 
 export async function listWorks(
   search?: string,

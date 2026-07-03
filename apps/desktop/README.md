@@ -12,9 +12,9 @@ built with [electron-vite](https://electron-vite.org/).
   connection (better-sqlite3), CORS-free HTTP, FS under app-data, OS
   notifications, secrets, the multi-tab research browser, and the local
   citation bridge.
-- **Platform layer** — `src/services/tauri-platform.ts` / `tauri-db.ts` keep
-  their old names (to avoid churning ~22 call sites) but now delegate to
-  `window.aura`. They have nothing to do with Tauri anymore. *(TODO: rename.)*
+- **Platform layer** — `src/services/aura-platform.ts` / `aura-db.ts` adapt
+  the `window.aura` preload bridge to the `@aurascholar/platform` interfaces
+  (HTTP / FS / notifications) and the shared `Database` handle.
 - Domain logic lives in `packages/*` and is shell-agnostic (depends only on the
   `@aurascholar/platform` interfaces).
 

@@ -4,7 +4,7 @@
 // the Zotero/EndNote migration on-ramp.
 import { parseReferences, cslYear, type CslItem, type ImportFormat } from "@aurascholar/cite";
 import { WorksRepo } from "@aurascholar/db/repos/works";
-import { getDb } from "./tauri-db";
+import { getDb } from "./aura-db";
 
 export interface ImportSummary {
   total: number;
