@@ -4,11 +4,25 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { app, ipcMain, Notification, safeStorage } from "electron";
+import { app, clipboard, ipcMain, Notification, safeStorage, shell } from "electron";
 import { CH, type HttpRequestDTO, type HttpResponseDTO } from "../shared";
 
 const appData = () => app.getPath("userData");
 const httpControllers = new Map<string, AbortController>();
+const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
+export async function openExternalUrl(rawUrl: string): Promise<void> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("无效的外部链接");
+  }
+  if (!EXTERNAL_PROTOCOLS.has(url.protocol)) {
+    throw new Error(`不允许打开 ${url.protocol || "未知"} 链接`);
+  }
+  await shell.openExternal(url.toString());
+}
 
 /** Resolve an app-data-relative path, guarding against traversal escapes. */
 function resolveRel(rel: string): string {
@@ -113,6 +127,18 @@ export function registerPlatformHandlers(): void {
 
   ipcMain.handle(CH.notify, (_e, title: string, body?: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show();
+  });
+  ipcMain.handle(CH.clipboardReadText, () => clipboard.readText());
+  ipcMain.handle(CH.clipboardWriteText, (_e, text: string) => {
+    clipboard.writeText(text);
+  });
+  ipcMain.handle(CH.openExternal, async (_e, url: string) => {
+    try {
+      await openExternalUrl(url);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   });
 
   ipcMain.handle(CH.secretGet, async (_e, key: string) => {

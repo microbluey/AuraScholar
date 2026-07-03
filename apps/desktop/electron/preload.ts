@@ -42,6 +42,18 @@ const api = {
   notify(title: string, body?: string): Promise<void> {
     return ipcRenderer.invoke(CH.notify, title, body);
   },
+  clipboard: {
+    readText(): Promise<string> {
+      return ipcRenderer.invoke(CH.clipboardReadText);
+    },
+    writeText(text: string): Promise<void> {
+      return ipcRenderer.invoke(CH.clipboardWriteText, text);
+    },
+  },
+  async openExternal(url: string): Promise<void> {
+    const error = await ipcRenderer.invoke(CH.openExternal, url);
+    if (error) throw new Error(String(error));
+  },
   secrets: {
     get(key: string): Promise<string | null> {
       return ipcRenderer.invoke(CH.secretGet, key);
