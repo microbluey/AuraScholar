@@ -14,7 +14,7 @@ import {
   type ConnectorContext,
   type NormalizedWork,
 } from "@aurascholar/connectors";
-import type { Clue } from "./clues";
+import type { Clue } from "./clues.js";
 
 /** Below this Crossref title-match score, corroborate with Semantic Scholar. */
 const WEAK_TITLE_MATCH = 0.7;

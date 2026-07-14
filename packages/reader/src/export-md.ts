@@ -1,6 +1,6 @@
 // Markdown export of a document's annotations — the "take my notes with me"
 // feature researchers expect from any reference manager.
-import type { ReaderAnnotation } from "./annotations";
+import type { ReaderAnnotation } from "./annotations.js";
 
 export interface ExportMeta {
   title: string;

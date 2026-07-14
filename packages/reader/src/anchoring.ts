@@ -6,7 +6,7 @@
 //   2. exact match of quote anywhere on the page (nearest to stored position)
 //   3. fuzzy (edit-distance windowed) search seeded by position, then global
 //   4. orphaned — surfaced to the user, never silently dropped
-import type { AnchorResolution, AnnotationAnchor, TextQuoteSelector } from "./anchor-types";
+import type { AnchorResolution, AnnotationAnchor, TextQuoteSelector } from "./anchor-types.js";
 
 /** Minimum normalized similarity for a fuzzy match to be accepted. */
 const FUZZY_THRESHOLD = 0.75;

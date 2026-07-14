@@ -1,7 +1,7 @@
 // OpenAlex — ID crosswalk, abstracts (inverted index), OA locations, and the
 // citation graph (referenced_works + cites filter). https://docs.openalex.org
-import { getJson, type ConnectorContext, type ConnectorRequestOptions } from "./client";
-import type { ConnectorSearchFilters, NormalizedWork } from "./types";
+import { getJson, type ConnectorContext, type ConnectorRequestOptions } from "./client.js";
+import type { ConnectorSearchFilters, NormalizedWork } from "./types.js";
 
 const BASE = "https://api.openalex.org";
 

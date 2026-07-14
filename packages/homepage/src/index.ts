@@ -3,7 +3,7 @@ export type {
   ProfilePublication,
   ProfileLink,
   ProfileSection,
-} from "./model";
-export { formatGbt7714, formatApa } from "./model";
-export { renderSite } from "./render";
-export type { RenderedSite } from "./render";
+} from "./model.js";
+export { formatGbt7714, formatApa } from "./model.js";
+export { renderSite } from "./render.js";
+export type { RenderedSite } from "./render.js";

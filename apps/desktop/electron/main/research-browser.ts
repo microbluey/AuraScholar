@@ -8,7 +8,9 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { app, BrowserWindow, ipcMain, session, WebContentsView, type Session } from "electron";
+import { app, BrowserWindow, session, WebContentsView, type Session } from "electron";
+import { describeSafeError } from "@aurascholar/platform";
+import { handle } from "./ipc";
 import {
   CH,
   EV,
@@ -20,6 +22,7 @@ import {
 
 const ARCHIVE_MS = 30 * 60 * 1000; // 30 minutes idle → archive
 const DOWNLOAD_SUBDIR = "research-downloads";
+const RESEARCH_PROTOCOLS = new Set(["http:", "https:"]);
 
 interface Tab {
   tabId: string;
@@ -45,6 +48,31 @@ const identityByPdfUrl = new Map<string, ScholarIdentity>();
 
 function partitionFor(siteId: string): string {
   return `persist:research-${siteId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+function validateResearchUrl(rawUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("无效的研究浏览器地址");
+  }
+  if (!RESEARCH_PROTOCOLS.has(url.protocol)) {
+    throw new Error(`研究浏览器不允许打开 ${url.protocol || "未知"} 协议`);
+  }
+  if (url.username || url.password) {
+    throw new Error("研究浏览器地址不能包含用户名或密码");
+  }
+  return url;
+}
+
+function isAllowedResearchUrl(rawUrl: string): boolean {
+  try {
+    validateResearchUrl(rawUrl);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function snapshot(): ResearchTab[] {
@@ -248,8 +276,12 @@ function createView(tab: Tab): WebContentsView {
     // window. Open them in a fresh tab (same site session, so login/cookies
     // carry over) instead of hijacking the current page, which would strip the
     // user of their search-results context with no way back.
-    if (/^https?:\/\//i.test(url)) spawnTab(tab.siteId, url, tab.proxy);
+    if (isAllowedResearchUrl(url)) spawnTab(tab.siteId, url, tab.proxy);
     return { action: "deny" };
+  });
+  view.webContents.on("will-navigate", (event, url) => {
+    if (isAllowedResearchUrl(url)) return;
+    event.preventDefault();
   });
   view.webContents.on("page-title-updated", (_e, title) => {
     tab.title = title;
@@ -285,18 +317,19 @@ function createView(tab: Tab): WebContentsView {
  * external links open beside the current page instead of replacing it.
  */
 function spawnTab(siteId: string, url: string, proxy: string): string {
+  const safeUrl = validateResearchUrl(url).toString();
   const tabId = randomUUID();
   tabs.set(tabId, {
     tabId,
     siteId,
-    url,
+    url: safeUrl,
     title: "",
     proxy,
     lastActiveAt: Date.now(),
     view: null,
     // Opening a known full-text URL in a new tab (target=_blank "Paper" link)
     // inherits the abstract page's identity so its download attaches correctly.
-    scholar: identityForUrl(url),
+    scholar: identityForUrl(safeUrl),
   });
   showTab(tabId);
   return tabId;
@@ -341,7 +374,7 @@ export function hideResearchViews(): void {
 }
 
 export function registerResearchHandlers(): void {
-  ipcMain.handle(CH.researchOpen, (_e, siteId: string, url: string, proxy: string) => {
+  handle(CH.researchOpen, (_e, siteId: string, url: string, proxy: string) => {
     // Reuse an existing tab for the same site if present.
     const existing = [...tabs.values()].find((t) => t.siteId === siteId);
     if (existing) {
@@ -352,42 +385,43 @@ export function registerResearchHandlers(): void {
     return spawnTab(siteId, url, proxy);
   });
 
-  ipcMain.handle(CH.researchActivate, (_e, tabId: string) => {
+  handle(CH.researchActivate, (_e, tabId: string) => {
     showTab(tabId);
   });
 
-  ipcMain.handle(CH.researchGoBack, () => {
+  handle(CH.researchGoBack, () => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (tab?.view?.webContents.navigationHistory.canGoBack()) {
       tab.view.webContents.navigationHistory.goBack();
     }
   });
 
-  ipcMain.handle(CH.researchGoForward, () => {
+  handle(CH.researchGoForward, () => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (tab?.view?.webContents.navigationHistory.canGoForward()) {
       tab.view.webContents.navigationHistory.goForward();
     }
   });
 
-  ipcMain.handle(CH.researchReload, () => {
+  handle(CH.researchReload, () => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     tab?.view?.webContents.reload();
   });
 
   // null arg = read the active tab's current URL; a string = navigate to it.
-  ipcMain.handle(CH.researchNavigate, (_e, url: string | null) => {
+  handle(CH.researchNavigate, (_e, url: string | null) => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (!tab) return "";
     if (url === null) {
       return tab.view ? tab.view.webContents.getURL() : tab.url;
     }
-    tab.url = url;
-    if (tab.view) void tab.view.webContents.loadURL(url);
-    return url;
+    const safeUrl = validateResearchUrl(url).toString();
+    tab.url = safeUrl;
+    if (tab.view) void tab.view.webContents.loadURL(safeUrl);
+    return safeUrl;
   });
 
-  ipcMain.handle(CH.researchClose, (_e, tabId: string) => {
+  handle(CH.researchClose, (_e, tabId: string) => {
     const tab = tabs.get(tabId);
     if (!tab) return;
     if (tab.view && win) win.contentView.removeChildView(tab.view);
@@ -400,17 +434,17 @@ export function registerResearchHandlers(): void {
     emitTabs();
   });
 
-  ipcMain.handle(CH.researchHide, () => {
+  handle(CH.researchHide, () => {
     detachActiveView();
   });
 
-  ipcMain.handle(CH.researchSetBounds, (_e, b: Bounds) => {
+  handle(CH.researchSetBounds, (_e, b: Bounds) => {
     bounds = b;
     const cur = activeTabId ? tabs.get(activeTabId) : null;
     cur?.view?.setBounds(b);
   });
 
-  ipcMain.handle(CH.researchList, () => snapshot());
+  handle(CH.researchList, () => snapshot());
 
   // Capture the active tab for ingest. Many publishers render full-text inline
   // (Content-Disposition: inline, an embedded viewer, or a blob: URL) so the
@@ -421,7 +455,7 @@ export function registerResearchHandlers(): void {
   //   • anything else → printToPDF() renders the page as it stands (behind any
   //     paywall the user already cleared) and we hand the bytes straight to the
   //     renderer to ingest.
-  ipcMain.handle(CH.researchCapture, async (): Promise<CaptureResult> => {
+  handle(CH.researchCapture, async (): Promise<CaptureResult> => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (!tab?.view) return { kind: "none", error: "no active page" };
     const wc = tab.view.webContents;
@@ -452,15 +486,15 @@ export function registerResearchHandlers(): void {
       });
       return { kind: "print", relPath, fileName };
     } catch (e) {
-      return { kind: "none", error: e instanceof Error ? e.message : String(e) };
+      return { kind: "none", error: describeSafeError(e) };
     }
   });
 
-  ipcMain.handle(CH.researchClearSiteData, async (_e, siteId: string) => {
+  handle(CH.researchClearSiteData, async (_e, siteId: string) => {
     await session.fromPartition(partitionFor(siteId)).clearStorageData();
   });
 
-  ipcMain.handle(CH.researchSiteData, async (_e, siteIds: string[]) => {
+  handle(CH.researchSiteData, async (_e, siteIds: string[]) => {
     const withData: string[] = [];
     for (const id of siteIds) {
       const cookies = await session.fromPartition(partitionFor(id)).cookies.get({});

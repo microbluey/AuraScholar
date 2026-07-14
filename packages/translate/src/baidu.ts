@@ -1,9 +1,9 @@
 // Baidu Translate (通用翻译 API). Signed requests: sign = md5(appid+q+salt+key).
 // Goes through the platform HttpClient. Baidu uses its own language codes
 // (zh, en, jp, kor, fra, de, auto) — mapped here.
-import type { HttpClient } from "@aurascholar/platform";
-import { md5 } from "./md5";
-import type { TranslateInput, TranslateOptions, TranslateResult, Translator } from "./types";
+import { redactSensitiveText, type HttpClient } from "@aurascholar/platform";
+import { md5 } from "./md5.js";
+import type { TranslateInput, TranslateOptions, TranslateResult, Translator } from "./types.js";
 
 export interface BaiduOptions {
   http: HttpClient;
@@ -39,7 +39,7 @@ export class BaiduTranslator implements Translator {
     this.fixedSalt = opts.salt;
   }
 
-  async translate(input: TranslateInput, opts?: TranslateOptions): Promise<TranslateResult> {
+  async translate(input: TranslateInput, _opts?: TranslateOptions): Promise<TranslateResult> {
     const q = input.text.trim();
     if (!q) return { text: "", engine: this.id };
 
@@ -70,7 +70,7 @@ export class BaiduTranslator implements Translator {
       trans_result?: Array<{ src: string; dst: string }>;
     };
     if (data.error_code) {
-      throw new Error(`百度翻译错误 ${data.error_code}: ${data.error_msg ?? ""}`);
+      throw new Error(`百度翻译错误 ${data.error_code}: ${redactSensitiveText(data.error_msg ?? "")}`);
     }
     // Baidu splits on newlines into separate segments; rejoin in order.
     const text = (data.trans_result ?? []).map((r) => r.dst).join("\n");

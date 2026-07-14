@@ -1,8 +1,8 @@
 // Converting between text ranges (anchoring space) and page-space rectangles
 // (rendering space). Quads are stored in PDF user space so they are
 // independent of zoom; the view layer scales them with the page viewport.
-import type { PageTextIndex } from "./document";
-import type { QuadRect } from "./anchor-types";
+import type { PageTextIndex } from "./document.js";
+import type { QuadRect } from "./anchor-types.js";
 
 /**
  * Computes PDF-user-space rects covering a text range [start, end) of a page's

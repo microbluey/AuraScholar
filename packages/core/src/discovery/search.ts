@@ -16,8 +16,9 @@ import {
   type ConnectorSearchFilters,
   type NormalizedWork,
 } from "@aurascholar/connectors";
-import { clueFromInput } from "../ingest/clues";
-import { stripBoolean } from "./query";
+import { describeSafeError } from "@aurascholar/platform";
+import { clueFromInput } from "../ingest/clues.js";
+import { stripBoolean } from "./query.js";
 
 export type DiscoverySource = "crossref" | "openalex" | "s2" | "arxiv";
 
@@ -362,7 +363,7 @@ function classifyError(error: unknown): DiscoverySourceStatus {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return describeSafeError(error);
 }
 
 function reportFromOutcomes(

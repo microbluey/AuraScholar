@@ -2,7 +2,7 @@
 // schema-validated output. No RAG — single-document summarization doesn't
 // need a vector store.
 import { z } from "zod";
-import type { AIProvider } from "./provider";
+import type { AIProvider } from "./provider.js";
 
 export const PROMPT_VERSION = "flashcards-v1";
 

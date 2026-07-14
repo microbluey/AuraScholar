@@ -6,9 +6,9 @@
 // nothing written) and surfaced to a confirmation card — the user picks/edits
 // before anything reaches the library; citation files (.bib etc.) are
 // authoritative and imported directly. No per-site scraping required.
-import { tauriFs } from "./tauri-platform";
-import { analyzePdf, analyzePdfWithIdentity, type IngestDraft } from "./library";
-import { importReferences, previewReferences } from "./import-refs";
+import { auraFs } from "./aura-platform";
+import { describeSafeError } from "./sensitive-text";
+import type { IngestDraft } from "./library-types";
 import type { ScholarIdentity } from "../../electron/shared";
 
 function hasIdentity(s?: ScholarIdentity): s is ScholarIdentity {
@@ -43,11 +43,12 @@ async function ingestDownloadedFile(
   const display = fileName.replace(/^\d+-/, "");
   const ext = extOf(display);
   try {
-    const bytes = await tauriFs.readFile(relPath);
+    const bytes = await auraFs.readFile(relPath);
     if (ext === ".pdf") {
       // Analyze only — never auto-write. The page identity (citation_* meta) is
       // preferred over guessing a DOI from the PDF body. The temp file is kept
       // until the user confirms or cancels (handled by the caller).
+      const { analyzePdf, analyzePdfWithIdentity } = await import("./library");
       const draft = hasIdentity(scholar)
         ? await analyzePdfWithIdentity(display, bytes, scholar, relPath)
         : await analyzePdf(display, bytes);
@@ -55,13 +56,14 @@ async function ingestDownloadedFile(
     }
     if (REFERENCE_EXTS.includes(ext)) {
       const text = new TextDecoder().decode(bytes);
+      const { importReferences, previewReferences } = await import("./import-refs");
       // .txt / .json may not actually be references — bail quietly if nothing parses.
       if (previewReferences(text).length === 0) {
-        void tauriFs.deleteFile(relPath).catch(() => {});
+        void auraFs.deleteFile(relPath).catch(() => {});
         return { kind: "ignored", fileName: display };
       }
       const summary = await importReferences(text);
-      void tauriFs.deleteFile(relPath).catch(() => {});
+      void auraFs.deleteFile(relPath).catch(() => {});
       return {
         kind: "references",
         fileName: display,
@@ -69,11 +71,11 @@ async function ingestDownloadedFile(
         deduped: summary.deduped > 0,
       };
     }
-    void tauriFs.deleteFile(relPath).catch(() => {});
+    void auraFs.deleteFile(relPath).catch(() => {});
     return { kind: "ignored", fileName: display };
   } catch (e) {
-    void tauriFs.deleteFile(relPath).catch(() => {});
-    return { kind: "error", fileName: display, error: e instanceof Error ? e.message : String(e) };
+    void auraFs.deleteFile(relPath).catch(() => {});
+    return { kind: "error", fileName: display, error: describeSafeError(e) };
   }
 }
 

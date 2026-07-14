@@ -117,9 +117,10 @@ function waitFor(ms: number, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Callbacks only run after the synchronous body below finishes, so
+    // `timer` is always initialized by the time cleanup executes.
     const cleanup = () => {
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     };
     const onAbort = () => {
@@ -127,7 +128,7 @@ function waitFor(ms: number, signal?: AbortSignal): Promise<void> {
       reject(abortError());
     };
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       cleanup();
       resolve();
     }, ms);

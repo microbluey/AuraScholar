@@ -1,7 +1,7 @@
 // Minimal parameterized-SQL interface the repositories build on. Implemented
 // by: tauri-plugin-sql (desktop), @sqlite.org/sqlite-wasm in a Worker (web),
 // better-sqlite3 (tests). Kept deliberately tiny so every driver is ~30 lines.
-import type { SqlExecutor } from "./migrations";
+import type { SqlExecutor } from "./migrations.js";
 
 export interface Database extends SqlExecutor {
   /** SELECT — returns row objects keyed by column name. */

@@ -1,5 +1,5 @@
-export { themes, themeNames, highlightColors } from "./generated";
-export type { ThemeName, TokenName, HighlightColor } from "./generated";
+export { themes, themeNames, highlightColors } from "./generated.js";
+export type { ThemeName, TokenName, HighlightColor } from "./generated.js";
 
 /** Reads a semantic token's current value from the DOM (theme-aware). */
 export function getTokenValue(token: string, el?: HTMLElement): string {

@@ -1,17 +1,18 @@
-// Importers: parse the formats reference managers export (BibTeX, RIS, CSL-JSON)
-// into CslItems. Zotero/EndNote/Mendeley all export at least one of these, so
-// these three cover library migration. Parsers are intentionally lenient —
-// real-world .bib/.ris files are messy.
-import type { CslItem, CslName } from "./csl";
-import { splitName } from "./csl";
+// Importers: parse the formats reference managers export (BibTeX, RIS,
+// PubMed NBIB, EndNote tagged ENW, CSL-JSON) into CslItems. Parsers are
+// intentionally lenient — real-world reference files are messy.
+import type { CslItem, CslName } from "./csl.js";
+import { splitName } from "./csl.js";
 
-export type ImportFormat = "bibtex" | "ris" | "csljson";
+export type ImportFormat = "bibtex" | "ris" | "nbib" | "enw" | "csljson";
 
 /** Sniffs the format from content; falls back to bibtex. */
 export function detectFormat(text: string): ImportFormat {
   const t = text.trimStart();
   if (t.startsWith("[") || t.startsWith("{")) return "csljson";
   if (/^TY {2}- /m.test(t)) return "ris";
+  if (/^PMID- /m.test(t)) return "nbib";
+  if (/^%0\s+/m.test(t)) return "enw";
   if (/^@\w+\s*\{/m.test(t)) return "bibtex";
   return "bibtex";
 }
@@ -23,6 +24,10 @@ export function parseReferences(text: string, format?: ImportFormat): CslItem[] 
       return parseCslJson(text);
     case "ris":
       return parseRis(text);
+    case "nbib":
+      return parseNbib(text);
+    case "enw":
+      return parseEnw(text);
     default:
       return parseBibTeX(text);
   }
@@ -31,24 +36,46 @@ export function parseReferences(text: string, format?: ImportFormat): CslItem[] 
 // --- CSL-JSON ----------------------------------------------------------------
 
 function parseCslJson(text: string): CslItem[] {
-  const data = JSON.parse(text);
+  const data: unknown = JSON.parse(text);
   const arr = Array.isArray(data) ? data : [data];
-  return arr.map((raw, i) => ({
-    id: String(raw.id ?? `import-${i}`),
-    type: String(raw.type ?? "article-journal"),
+  return arr
+    .map((raw, i) => (isRecord(raw) ? cslJsonRecordToItem(raw, i) : null))
+    .filter((item): item is CslItem => item !== null);
+}
+
+function cslJsonRecordToItem(raw: Record<string, unknown>, i: number): CslItem {
+  return {
+    id: scalarString(raw.id) ?? `import-${i}`,
+    type: scalarString(raw.type) ?? "article-journal",
     title: pickStr(raw.title),
-    author: Array.isArray(raw.author) ? (raw.author as CslName[]) : undefined,
-    editor: Array.isArray(raw.editor) ? (raw.editor as CslName[]) : undefined,
+    author: normalizeCslNames(raw.author),
+    editor: normalizeCslNames(raw.editor),
     "container-title": pickStr(raw["container-title"]),
-    issued: raw.issued,
+    issued: isRecord(raw.issued) ? (raw.issued as CslItem["issued"]) : undefined,
     volume: pickStr(raw.volume),
     issue: pickStr(raw.issue),
     page: pickStr(raw.page),
     publisher: pickStr(raw.publisher),
     DOI: pickStr(raw.DOI),
+    PMID: pickStr(raw.PMID),
     URL: pickStr(raw.URL),
     abstract: pickStr(raw.abstract),
-  }));
+  };
+}
+
+function normalizeCslNames(value: unknown): CslName[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const names = value
+    .map((raw): CslName | null => {
+      if (!isRecord(raw)) return null;
+      const family = pickStr(raw.family);
+      const given = pickStr(raw.given);
+      const literal = pickStr(raw.literal);
+      if (!family && !given && !literal) return null;
+      return { family, given, literal };
+    })
+    .filter((name): name is CslName => name !== null);
+  return names.length ? names : undefined;
 }
 
 // --- BibTeX ------------------------------------------------------------------
@@ -87,18 +114,32 @@ function parseBibFields(body: string): Record<string, string> {
   while (i < body.length) {
     const eq = body.indexOf("=", i);
     if (eq < 0) break;
-    const name = body.slice(i, eq).replace(/[\s,]/g, "").toLowerCase();
+    const name = body
+      .slice(i, eq)
+      .replace(/\\r\\n|\\n|\\r/g, "")
+      .replace(/[\s,]/g, "")
+      .toLowerCase();
     i = eq + 1;
     while (i < body.length && /\s/.test(body[i]!)) i++;
     let value: string;
     if (body[i] === "{") {
       const end = matchBrace(body, i);
-      value = body.slice(i + 1, end);
-      i = end + 1;
+      if (end < 0) {
+        value = body.slice(i + 1);
+        i = body.length;
+      } else {
+        value = body.slice(i + 1, end);
+        i = end + 1;
+      }
     } else if (body[i] === '"') {
       const end = body.indexOf('"', i + 1);
-      value = body.slice(i + 1, end);
-      i = end + 1;
+      if (end < 0) {
+        value = body.slice(i + 1);
+        i = body.length;
+      } else {
+        value = body.slice(i + 1, end);
+        i = end + 1;
+      }
     } else {
       let end = i;
       while (end < body.length && body[end] !== "," && body[end] !== "\n") end++;
@@ -132,6 +173,7 @@ function bibEntryToCsl(type: string, key: string, f: Record<string, string>): Cs
     ISBN: f.isbn,
     language: f.language,
     DOI: f.doi,
+    PMID: f.pmid,
     URL: f.url,
     abstract: f.abstract,
   };
@@ -175,7 +217,7 @@ export function parseRis(text: string): CslItem[] {
   const items: CslItem[] = [];
   let cur: Record<string, string[]> | null = null;
   for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^([A-Z][A-Z0-9])  - ?(.*)$/);
+    const m = line.match(/^([A-Z][A-Z0-9]) {2}- ?(.*)$/);
     if (!m) continue;
     const tag = m[1]!;
     const val = m[2]!.trim();
@@ -220,9 +262,15 @@ function risToCsl(f: Record<string, string[]>): CslItem {
     ISBN: snAs(first("SN"), "isbn"),
     language: first("LA"),
     DOI: first("DO"),
+    PMID: risPmid(f),
     URL: first("UR"),
     abstract: first("AB") ?? first("N2"),
   };
+}
+
+function risPmid(f: Record<string, string[]>): string | undefined {
+  const raw = f.AN?.find((value) => /(?:^|\b)PMID[:\s]/i.test(value)) ?? f.ID?.[0];
+  return raw?.replace(/^PMID[:\s]*/i, "").trim() || undefined;
 }
 
 /** RIS SN is overloaded (ISSN or ISBN); classify by shape. */
@@ -238,6 +286,152 @@ function risName(raw: string): CslName {
     return { family: family!.trim(), given: given?.trim() || undefined };
   }
   return splitName(raw);
+}
+
+// --- PubMed NBIB / MEDLINE ----------------------------------------------------
+
+export function parseNbib(text: string): CslItem[] {
+  const records: Array<Record<string, string[]>> = [];
+  let cur: Record<string, string[]> | null = null;
+  let lastTag: string | null = null;
+
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) {
+      if (cur) records.push(cur);
+      cur = null;
+      lastTag = null;
+      continue;
+    }
+
+    const m = line.match(/^([A-Z0-9]{2,4})\s*-\s?(.*)$/);
+    if (m) {
+      const tag = m[1]!;
+      const value = m[2]!.trim();
+      cur ??= {};
+      (cur[tag] ??= []).push(value);
+      lastTag = tag;
+      continue;
+    }
+
+    if (cur && lastTag && /^\s+/.test(line)) {
+      const values = cur[lastTag]!;
+      values[values.length - 1] = `${values[values.length - 1]} ${line.trim()}`.trim();
+    }
+  }
+  if (cur) records.push(cur);
+
+  return records.map(nbibToCsl);
+}
+
+function nbibToCsl(f: Record<string, string[]>): CslItem {
+  const first = (t: string) => f[t]?.[0];
+  const year = (first("DP") ?? first("DEP") ?? first("DA"))?.match(/\d{4}/)?.[0];
+  const doi = nbibDoi(f);
+  const pages = first("PG")?.replace(/--/g, "-");
+  return {
+    id: first("PMID") ?? doi ?? `nbib-${Math.abs(hash(JSON.stringify(f)))}`,
+    type: "article-journal",
+    title: cleanNbibTitle(first("TI") ?? first("BTI")),
+    author: (f.FAU ?? f.AU ?? []).map(risName),
+    editor: (f.ED ?? []).map(risName),
+    "container-title": first("JT") ?? first("TA") ?? first("JID"),
+    issued: year ? { "date-parts": [[Number(year)]] } : undefined,
+    volume: first("VI"),
+    issue: first("IP"),
+    page: pages,
+    publisher: first("PB"),
+    "publisher-place": first("PL"),
+    ISSN: first("IS"),
+    language: first("LA"),
+    DOI: doi,
+    PMID: first("PMID"),
+    URL: first("URL") ?? (first("PMID") ? `https://pubmed.ncbi.nlm.nih.gov/${first("PMID")}/` : undefined),
+    abstract: joinSentences(f.AB),
+  };
+}
+
+function nbibDoi(f: Record<string, string[]>): string | undefined {
+  for (const value of [...(f.LID ?? []), ...(f.AID ?? [])]) {
+    const doi = value.match(/10\.\d{4,9}\/\S+/)?.[0]?.replace(/[).,;]+$/, "");
+    if (doi && /\[doi\]/i.test(value)) return doi;
+  }
+  return undefined;
+}
+
+function cleanNbibTitle(value: string | undefined): string | undefined {
+  return value?.replace(/\s*\[[^\]]+\]\s*\.?$/, "").replace(/\.$/, "").trim() || undefined;
+}
+
+function joinSentences(values: string[] | undefined): string | undefined {
+  return values?.map((value) => value.trim()).filter(Boolean).join(" ") || undefined;
+}
+
+// --- EndNote tagged ENW -------------------------------------------------------
+
+const ENW_TO_CSL: Record<string, string> = {
+  "Book": "book",
+  "Book Section": "chapter",
+  "Conference Paper": "paper-conference",
+  "Journal Article": "article-journal",
+  "Thesis": "thesis",
+};
+
+export function parseEnw(text: string): CslItem[] {
+  const records: Array<Record<string, string[]>> = [];
+  let cur: Record<string, string[]> | null = null;
+  let lastTag: string | null = null;
+
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^%([A-Z0-9@])\s?(.*)$/);
+    if (m) {
+      const tag = m[1]!;
+      const value = m[2]!.trim();
+      if (tag === "0") {
+        if (cur) records.push(cur);
+        cur = { "0": [value] };
+      } else {
+        cur ??= {};
+        (cur[tag] ??= []).push(value);
+      }
+      lastTag = tag;
+      continue;
+    }
+
+    if (cur && lastTag && line.trim()) {
+      const values = cur[lastTag]!;
+      values[values.length - 1] = `${values[values.length - 1]} ${line.trim()}`.trim();
+    }
+  }
+  if (cur) records.push(cur);
+
+  return records.map(enwToCsl);
+}
+
+function enwToCsl(f: Record<string, string[]>): CslItem {
+  const first = (t: string) => f[t]?.[0];
+  const refType = first("0");
+  const year = first("D")?.match(/\d{4}/)?.[0];
+  const pages = first("P")?.replace(/--/g, "-");
+  const serial = first("@");
+  return {
+    id: first("R") ?? first("U") ?? `enw-${Math.abs(hash(JSON.stringify(f)))}`,
+    type: ENW_TO_CSL[refType ?? ""] ?? "article-journal",
+    title: first("T"),
+    author: (f.A ?? []).map(risName),
+    editor: (f.E ?? []).map(risName),
+    "container-title": first("J") ?? first("B"),
+    issued: year ? { "date-parts": [[Number(year)]] } : undefined,
+    volume: first("V"),
+    issue: first("N"),
+    page: pages,
+    publisher: first("I"),
+    "publisher-place": first("C"),
+    ISBN: snAs(serial, "isbn"),
+    ISSN: snAs(serial, "issn"),
+    DOI: first("R"),
+    URL: first("U"),
+    abstract: joinSentences(f.X),
+  };
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -259,6 +453,16 @@ function pickStr(v: unknown): string | undefined {
   if (typeof v === "string") return v;
   if (Array.isArray(v) && typeof v[0] === "string") return v[0];
   return undefined;
+}
+
+function scalarString(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hash(s: string): number {

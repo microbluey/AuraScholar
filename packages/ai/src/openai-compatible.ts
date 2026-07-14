@@ -1,9 +1,10 @@
 // OpenAI-compatible chat completions client. Goes through the platform
 // HttpClient so desktop bypasses CORS and tests can stub responses. Covers
 // OpenAI, DeepSeek, Moonshot, Ollama, vLLM, and any relay endpoint.
-import type { HttpClient } from "@aurascholar/platform";
+import { redactSensitiveText, type HttpClient } from "@aurascholar/platform";
 import type { z } from "zod";
-import type { AIProvider, GenerateOptions, GenerateResult } from "./provider";
+import { normalizeHttpBaseUrl } from "./base-url.js";
+import type { AIProvider, GenerateOptions, GenerateResult } from "./provider.js";
 
 export interface OpenAICompatibleOptions {
   http: HttpClient;
@@ -21,7 +22,7 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   constructor(opts: OpenAICompatibleOptions) {
     this.http = opts.http;
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = normalizeHttpBaseUrl("AI API", opts.baseUrl);
     this.model = opts.model;
     this.apiKey = opts.apiKey;
   }
@@ -43,7 +44,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       timeoutMs: 120_000,
     });
     if (res.status !== 200) {
-      throw new Error(`AI request failed (${res.status}): ${decode(res.body).slice(0, 500)}`);
+      throw new Error(`AI request failed (${res.status}): ${safeResponseSnippet(res.body, 500)}`);
     }
     const data = JSON.parse(decode(res.body));
     const text: string = data.choices?.[0]?.message?.content ?? "";
@@ -74,12 +75,18 @@ export class OpenAICompatibleProvider implements AIProvider {
         lastError = e;
       }
     }
-    throw new Error(`AI structured output failed validation after retry: ${String(lastError)}`);
+    throw new Error(
+      `AI structured output failed validation after retry: ${redactSensitiveText(String(lastError))}`,
+    );
   }
 }
 
 function decode(body: Uint8Array): string {
   return new TextDecoder().decode(body);
+}
+
+function safeResponseSnippet(body: Uint8Array, limit: number): string {
+  return redactSensitiveText(decode(body)).slice(0, limit);
 }
 
 /** Strips markdown fences and leading/trailing prose around a JSON object. */

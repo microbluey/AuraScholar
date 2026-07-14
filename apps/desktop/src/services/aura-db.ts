@@ -1,7 +1,6 @@
 // Desktop Database driver. Runs in the renderer but every call is forwarded to
 // the better-sqlite3 connection in the Electron main process via the preload
 // bridge (window.aura.db). Migrations run main-side at startup.
-// TODO(rename): rename to db.ts once the migration settles.
 import type { Database as AppDatabase } from "@aurascholar/db";
 
 let instance: Promise<AppDatabase> | null = null;

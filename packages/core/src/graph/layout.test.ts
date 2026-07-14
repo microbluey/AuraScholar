@@ -51,6 +51,13 @@ describe("layoutTimeline", () => {
     expect(heavily.size).toBeGreaterThan(lightly.size);
   });
 
+  it("caps highly cited nodes so they cannot overwhelm the canvas", () => {
+    const graph = makeGraph();
+    graph.nodes[0]!.citedByCount = 10_000_000;
+    const layout = layoutTimeline(graph);
+    expect(layout.nodes.find((node) => node.id === "W1")!.size).toBeLessThanOrEqual(22);
+  });
+
   it("keeps all nodes inside the canvas", () => {
     const layout = layoutTimeline(makeGraph());
     for (const n of layout.nodes) {

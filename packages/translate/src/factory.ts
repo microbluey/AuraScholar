@@ -2,11 +2,11 @@
 // concrete Translator. The LLM engine needs an AIProvider; DeepL/Baidu need the
 // platform HttpClient + the user's keys.
 import type { AIProvider } from "@aurascholar/ai";
-import type { HttpClient } from "@aurascholar/platform";
-import { LlmTranslator } from "./llm";
-import { DeepLTranslator } from "./deepl";
-import { BaiduTranslator } from "./baidu";
-import type { Translator } from "./types";
+import { describeSafeError, type HttpClient } from "@aurascholar/platform";
+import { LlmTranslator } from "./llm.js";
+import { DeepLTranslator } from "./deepl.js";
+import { BaiduTranslator } from "./baidu.js";
+import type { Translator } from "./types.js";
 
 export type TranslateEngine = "llm" | "deepl" | "baidu";
 
@@ -37,13 +37,17 @@ export function makeTranslator(
       return { translator: new LlmTranslator(deps.provider) };
     case "deepl":
       if (!config.deepl?.apiKey) return { error: "请先在设置页填写 DeepL API Key" };
-      return {
-        translator: new DeepLTranslator({
-          http: deps.http,
-          apiKey: config.deepl.apiKey,
-          baseUrl: config.deepl.baseUrl,
-        }),
-      };
+      try {
+        return {
+          translator: new DeepLTranslator({
+            http: deps.http,
+            apiKey: config.deepl.apiKey,
+            baseUrl: config.deepl.baseUrl,
+          }),
+        };
+      } catch (error) {
+        return { error: describeSafeError(error) };
+      }
     case "baidu":
       if (!config.baidu?.appid || !config.baidu?.key)
         return { error: "请先在设置页填写百度翻译 APPID 与密钥" };

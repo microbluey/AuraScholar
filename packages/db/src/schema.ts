@@ -85,6 +85,10 @@ export const works = sqliteTable(
   (t) => [
     uniqueIndex("works_doi_uq").on(t.doi),
     index("works_fingerprint_idx").on(t.fingerprint),
+    index("works_arxiv_idx").on(t.arxivId),
+    index("works_openalex_idx").on(t.openalexId),
+    index("works_s2_idx").on(t.s2Id),
+    index("works_pmid_idx").on(t.pmid),
     index("works_year_idx").on(t.year),
   ],
 );
@@ -277,6 +281,7 @@ export const savedSearches = sqliteTable(
     newCount: integer("new_count").notNull().default(0),
     lastRunAt: integer("last_run_at"),
     nextRunAt: integer("next_run_at"),
+    lastError: text("last_error"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
@@ -374,6 +379,7 @@ export const sentinelTasks = sqliteTable(
     nextPollAt: integer("next_poll_at").notNull(),
     lastPolledAt: integer("last_polled_at"),
     errorCount: integer("error_count").notNull().default(0),
+    lastError: text("last_error"),
     status: text("status").notNull().default("active"), // active | paused | done
     createdAt: createdAt(),
     updatedAt: updatedAt(),

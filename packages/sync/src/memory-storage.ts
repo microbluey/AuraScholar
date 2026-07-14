@@ -1,12 +1,21 @@
 // In-memory SyncStorage — reference semantics for driver implementations
 // and the engine test harness.
-import type { ChangeEntry } from "./types";
-import type { ConflictRecord, SyncStorage } from "./engine";
+import type { ChangeEntry } from "./types.js";
+import type { ConflictRecord, MarkPushedOptions, SyncStorage } from "./engine.js";
 
 interface Row {
   values: Record<string, unknown>;
   clocks: Record<string, string>;
   deleted?: boolean;
+}
+
+interface Snapshot {
+  conflicts: ConflictRecord[];
+  cursors: Map<string, number>;
+  log: ChangeEntry[];
+  nextSeq: number;
+  pushedSeq: number;
+  rows: Map<string, Row>;
 }
 
 export class MemorySyncStorage implements SyncStorage {
@@ -45,8 +54,10 @@ export class MemorySyncStorage implements SyncStorage {
 
   deleteRow(table: string, rowId: string, hlc: string): void {
     const key = `${table}/${rowId}`;
-    const row = this.rows.get(key);
-    if (row) row.deleted = true;
+    const row = this.rows.get(key) ?? { values: {}, clocks: {} };
+    row.deleted = true;
+    row.clocks["deleted_at"] = hlc;
+    this.rows.set(key, row);
     this.log.push({
       seq: this.nextSeq++,
       table,
@@ -69,7 +80,7 @@ export class MemorySyncStorage implements SyncStorage {
   async unsyncedChanges(afterSeq: number): Promise<ChangeEntry[]> {
     return this.log.filter((e) => e.seq > afterSeq);
   }
-  async markPushed(uptoSeq: number): Promise<void> {
+  async markPushed(uptoSeq: number, _options: MarkPushedOptions = {}): Promise<void> {
     this.pushedSeq = Math.max(this.pushedSeq, uptoSeq);
   }
   async lastPushedSeq(): Promise<number> {
@@ -77,7 +88,10 @@ export class MemorySyncStorage implements SyncStorage {
   }
   async rowClocks(table: string, rowId: string): Promise<Record<string, string> | null> {
     const row = this.rows.get(`${table}/${rowId}`);
-    return row && !row.deleted ? row.clocks : null;
+    return row ? row.clocks : null;
+  }
+  async rowDeleted(table: string, rowId: string): Promise<boolean> {
+    return Boolean(this.rows.get(`${table}/${rowId}`)?.deleted);
   }
   async applyUpsert(
     table: string,
@@ -86,15 +100,20 @@ export class MemorySyncStorage implements SyncStorage {
     columnHlcs: Record<string, string>,
   ): Promise<void> {
     const key = `${table}/${rowId}`;
-    const row = this.rows.get(key) ?? { values: {}, clocks: {} };
+    const row = this.rows.get(key) ?? { values: {}, clocks: {}, deleted: false };
     Object.assign(row.values, values);
     Object.assign(row.clocks, columnHlcs);
-    row.deleted = false;
+    if (Object.prototype.hasOwnProperty.call(values, "deleted_at")) {
+      row.deleted = values["deleted_at"] != null;
+    }
     this.rows.set(key, row);
   }
-  async applyDelete(table: string, rowId: string): Promise<void> {
-    const row = this.rows.get(`${table}/${rowId}`);
-    if (row) row.deleted = true;
+  async applyDelete(table: string, rowId: string, hlc: string): Promise<void> {
+    const key = `${table}/${rowId}`;
+    const row = this.rows.get(key) ?? { values: {}, clocks: {} };
+    row.deleted = true;
+    row.clocks["deleted_at"] = hlc;
+    this.rows.set(key, row);
   }
   async getCursor(deviceId: string): Promise<number> {
     return this.cursors.get(deviceId) ?? 0;
@@ -104,5 +123,49 @@ export class MemorySyncStorage implements SyncStorage {
   }
   async recordConflict(conflict: ConflictRecord): Promise<void> {
     this.conflicts.push(conflict);
+  }
+
+  async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    const snapshot = this.snapshot();
+    try {
+      return await fn();
+    } catch (error) {
+      this.restore(snapshot);
+      throw error;
+    }
+  }
+
+  private snapshot(): Snapshot {
+    return {
+      conflicts: this.conflicts.map((conflict) => ({ ...conflict })),
+      cursors: new Map(this.cursors),
+      log: this.log.map((entry) => ({
+        ...entry,
+        columnHlcs: { ...entry.columnHlcs },
+        values: { ...entry.values },
+      })),
+      nextSeq: this.nextSeq,
+      pushedSeq: this.pushedSeq,
+      rows: new Map(
+        [...this.rows.entries()].map(([key, row]) => [
+          key,
+          {
+            clocks: { ...row.clocks },
+            deleted: row.deleted,
+            values: { ...row.values },
+          },
+        ]),
+      ),
+    };
+  }
+
+  private restore(snapshot: Snapshot): void {
+    this.conflicts.splice(0, this.conflicts.length, ...snapshot.conflicts);
+    this.log.splice(0, this.log.length, ...snapshot.log);
+    this.rows.clear();
+    for (const [key, row] of snapshot.rows) this.rows.set(key, row);
+    this.cursors = new Map(snapshot.cursors);
+    this.nextSeq = snapshot.nextSeq;
+    this.pushedSeq = snapshot.pushedSeq;
   }
 }

@@ -1,7 +1,7 @@
 // Crossref REST API — bibliographic source of truth for DOI-registered works.
 // https://api.crossref.org — polite pool via mailto query param.
-import { getJson, type ConnectorContext, type ConnectorRequestOptions } from "./client";
-import type { ConnectorSearchFilters, NormalizedAuthor, NormalizedWork } from "./types";
+import { getJson, type ConnectorContext, type ConnectorRequestOptions } from "./client.js";
+import type { ConnectorSearchFilters, NormalizedAuthor, NormalizedWork } from "./types.js";
 
 const BASE = "https://api.crossref.org";
 
