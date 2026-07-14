@@ -2,11 +2,11 @@
 // (with roles) for the detail panel and editor, and persist edits.
 import {
   WorksRepo,
-  type WorkRow,
   type WorkAuthorDetail,
   type WorkPatch,
-} from "@aurascholar/db";
-import { getDb } from "./tauri-db";
+  type WorkRow,
+} from "@aurascholar/db/repos/works";
+import { getDb } from "./aura-db";
 
 export interface WorkMetadata {
   work: WorkRow;

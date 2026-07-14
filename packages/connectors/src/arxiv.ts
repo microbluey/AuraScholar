@@ -1,7 +1,7 @@
 // arXiv API — metadata + guaranteed-legal PDF for preprints.
 // Atom XML response, parsed with regex to avoid an XML dependency.
-import { getRaw, type ConnectorContext, type ConnectorRequestOptions } from "./client";
-import type { ConnectorSearchFilters, NormalizedWork } from "./types";
+import { getRaw, type ConnectorContext, type ConnectorRequestOptions } from "./client.js";
+import type { ConnectorSearchFilters, NormalizedWork } from "./types.js";
 
 const ARXIV_ID_RE = /(?:arxiv[:/])?(\d{4}\.\d{4,5})(v\d+)?/i;
 

@@ -1,6 +1,6 @@
 // Unpaywall — legal OA PDF discovery by DOI. Requires a contact email.
 // https://unpaywall.org/products/api
-import { getJson, type ConnectorContext } from "./client";
+import { getJson, type ConnectorContext } from "./client.js";
 
 interface UnpaywallResponse {
   is_oa: boolean;

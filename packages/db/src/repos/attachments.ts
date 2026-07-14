@@ -1,5 +1,5 @@
-import type { Database } from "../database";
-import { newId } from "../ids";
+import type { Database } from "../database.js";
+import { newId } from "../ids.js";
 
 export interface AttachmentInput {
   workId: string;
@@ -27,8 +27,17 @@ export interface AttachmentRow {
 export class AttachmentsRepo {
   constructor(private readonly db: Database) {}
 
+  private async assertActiveWork(workId: string): Promise<void> {
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+      [workId],
+    );
+    if (!rows[0]) throw new Error(`Work ${workId} is missing or removed`);
+  }
+
   /** Returns existing attachment id if this exact file (sha256) is already linked to the work. */
   async create(input: AttachmentInput): Promise<{ id: string; deduped: boolean }> {
+    await this.assertActiveWork(input.workId);
     const existing = await this.db.query<{ id: string }>(
       `SELECT id FROM attachments WHERE work_id = ? AND sha256 = ? AND deleted_at IS NULL`,
       [input.workId, input.sha256],
@@ -60,7 +69,10 @@ export class AttachmentsRepo {
 
   async forWork(workId: string): Promise<AttachmentRow[]> {
     return this.db.query<AttachmentRow>(
-      `SELECT * FROM attachments WHERE work_id = ? AND deleted_at IS NULL`,
+      `SELECT a.*
+       FROM attachments a
+       JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+       WHERE a.work_id = ? AND a.deleted_at IS NULL`,
       [workId],
     );
   }
@@ -68,7 +80,11 @@ export class AttachmentsRepo {
   /** Find any attachment with this content hash (cross-work duplicate check). */
   async bySha(sha256: string): Promise<AttachmentRow | null> {
     const rows = await this.db.query<AttachmentRow>(
-      `SELECT * FROM attachments WHERE sha256 = ? AND deleted_at IS NULL LIMIT 1`,
+      `SELECT a.*
+       FROM attachments a
+       JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+       WHERE a.sha256 = ? AND a.deleted_at IS NULL
+       LIMIT 1`,
       [sha256],
     );
     return rows[0] ?? null;

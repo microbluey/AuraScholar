@@ -45,6 +45,36 @@ describe("AnthropicProvider", () => {
     expect(out.text).toBe("ab");
   });
 
+  it("normalizes custom base URLs before appending the messages path", async () => {
+    const http = new StubHttpClient();
+    http.on("https://anthropic.example/custom/v1/messages", () =>
+      jsonResponse(200, { content: [{ type: "text", text: "custom" }] }),
+    );
+    const p = new AnthropicProvider({
+      http,
+      baseUrl: "https://anthropic.example/custom///",
+      model: "claude-x",
+      apiKey: "k",
+    });
+    const out = await p.generateText({ messages: [{ role: "user", content: "x" }] });
+    expect(out.text).toBe("custom");
+    expect(http.requests[0]?.url).toBe("https://anthropic.example/custom/v1/messages");
+  });
+
+  it("rejects unsafe custom base URLs", () => {
+    const http = new StubHttpClient();
+    const make = (baseUrl: string) =>
+      new AnthropicProvider({
+        http,
+        baseUrl,
+        model: "claude-x",
+        apiKey: "k",
+      });
+    expect(() => make("file:///tmp/anthropic")).toThrow("仅支持 http:// 或 https://");
+    expect(() => make("https://sk-secret@anthropic.example")).toThrow("不要包含密钥或账号");
+    expect(() => make("https://anthropic.example?api_key=inline")).toThrow("不要包含查询参数");
+  });
+
   it("generateObject parses JSON and validates against schema", async () => {
     const http = new StubHttpClient();
     http.on(/anthropic/, () =>
@@ -60,10 +90,19 @@ describe("AnthropicProvider", () => {
 
   it("throws on non-200", async () => {
     const http = new StubHttpClient();
-    http.on(/anthropic/, () => jsonResponse(401, { error: "bad key" }));
+    http.on(/anthropic/, () =>
+      jsonResponse(401, {
+        error: "bad key",
+        client_secret: "anthropic-secret",
+        authorization: "Bearer sk-ant-secret",
+      }),
+    );
     const p = new AnthropicProvider({ http, model: "claude-x", apiKey: "bad" });
     await expect(p.generateText({ messages: [{ role: "user", content: "x" }] })).rejects.toThrow(
-      /401/,
+      /401.*client_secret": "\[redacted\]".*authorization": "\[redacted\]"/,
+    );
+    await expect(p.generateText({ messages: [{ role: "user", content: "x" }] })).rejects.not.toThrow(
+      /anthropic-secret|sk-ant-secret/,
     );
   });
 });

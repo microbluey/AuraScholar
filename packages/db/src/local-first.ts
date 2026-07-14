@@ -1,5 +1,5 @@
-import type { Database } from "./database";
-import { newId } from "./ids";
+import type { Database } from "./database.js";
+import { newId } from "./ids.js";
 
 const LIBRARY_ID_KEY = "local.library_id";
 const DEVICE_ID_KEY = "local.device_id";

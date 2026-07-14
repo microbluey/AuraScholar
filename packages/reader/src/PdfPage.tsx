@@ -3,11 +3,11 @@
 import { clsx } from "clsx";
 import { memo, useEffect, useRef, useState } from "react";
 import type { PDFPageProxy } from "pdfjs-dist";
-import type { PdfDocument, PageTextIndex } from "./document";
-import type { QuadRect } from "./anchor-types";
-import type { ReaderAnnotation } from "./annotations";
-import { resolveAnchor } from "./anchoring";
-import { rectsForTextRange } from "./quads";
+import type { PdfDocument, PageTextIndex } from "./document.js";
+import type { QuadRect } from "./anchor-types.js";
+import type { ReaderAnnotation } from "./annotations.js";
+import { resolveAnchor } from "./anchoring.js";
+import { rectsForTextRange } from "./quads.js";
 
 export interface PageProps {
   doc: PdfDocument;

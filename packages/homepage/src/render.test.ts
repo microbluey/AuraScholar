@@ -55,8 +55,37 @@ describe("renderSite", () => {
     expect(html).toContain("<strong>Xiaoming Wang</strong>"); // self highlighted
     expect(html).toContain("CCF-A");
     expect(html).toContain("教育经历");
+    expect(html).toContain('rel="noopener noreferrer">AuraScholar</a>');
     expect(html).not.toContain("<script"); // truly static
     expect(html).not.toMatch(/src=["']http/); // no external requests
+  });
+
+  it("normalizes publication DOI links and omits invalid DOI links", () => {
+    const site = renderSite({
+      ...PROFILE,
+      publications: [
+        {
+          title: "Normalized DOI Paper",
+          authors: ["Wang Xiao"],
+          year: 2026,
+          doi: " https://DX.doi.org/10.5555/Foo.Bar ",
+        },
+        {
+          title: "Invalid DOI Paper",
+          authors: ["Wang Xiao"],
+          year: 2026,
+          doi: "https://example.com/not-a-doi",
+        },
+      ],
+      sections: [],
+    });
+    const html = site.files.get("index.html")!;
+
+    expect(html).toContain(
+      'href="https://doi.org/10.5555/foo.bar" target="_blank" rel="noopener noreferrer">[DOI]</a>',
+    );
+    expect(html).not.toContain("https://doi.org/https://");
+    expect(html).not.toContain("https://example.com/not-a-doi");
   });
 
   it("renders the nocturne template when selected", () => {
@@ -76,6 +105,63 @@ describe("renderSite", () => {
     const html = site.files.get("index.html")!;
     expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
+  });
+
+  it("omits unsafe profile links from exported HTML", () => {
+    const site = renderSite({
+      ...PROFILE,
+      email: "",
+      links: [
+        { label: "Lab", url: "https://example.edu/profile?q=<x>" },
+        { label: "Email", url: "mailto:wang@example.edu" },
+        { label: "Script", url: "javascript:alert(1)" },
+        { label: "Data", url: "data:text/html,<h1>x</h1>" },
+        { label: "Credential", url: "https://user:pass@example.edu/profile" },
+        { label: "Broken", url: "https://javascript:alert(1)" },
+      ],
+      publications: [],
+      sections: [],
+    });
+    const html = site.files.get("index.html")!;
+    expect(html).toContain(
+      'href="https://example.edu/profile?q=%3Cx%3E" target="_blank" rel="noopener noreferrer">Lab</a>',
+    );
+    expect(html).toContain('href="mailto:wang@example.edu" rel="noopener noreferrer">Email</a>');
+    expect(html).not.toContain("Script");
+    expect(html).not.toContain("Data");
+    expect(html).not.toContain("Credential");
+    expect(html).not.toContain("user:pass");
+    expect(html).not.toContain("Broken");
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("data:text/html");
+  });
+
+  it("does not add a leading separator when only email is rendered", () => {
+    const site = renderSite({
+      ...PROFILE,
+      email: "wang@example.edu",
+      links: [{ label: "Script", url: "javascript:alert(1)" }],
+      publications: [],
+      sections: [],
+    });
+    const html = site.files.get("index.html")!;
+    expect(html).toContain('<nav class="links"><a href="mailto:wang@example.edu">wang@example.edu</a></nav>');
+  });
+
+  it("omits invalid profile email links from exported HTML", () => {
+    const site = renderSite({
+      ...PROFILE,
+      email: 'wang@example.edu?subject="x"',
+      links: [{ label: "Script", url: "javascript:alert(1)" }],
+      publications: [],
+      sections: [],
+    });
+    const html = site.files.get("index.html")!;
+
+    expect(html).toContain('<nav class="links"></nav>');
+    expect(html).not.toContain("mailto:");
+    expect(html).not.toContain("subject=");
+    expect(html).not.toContain('<span class="sep">');
   });
 
   it("omits empty sections", () => {

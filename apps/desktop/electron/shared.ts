@@ -11,6 +11,9 @@ export const CH = {
   fsListDir: "platform:fs:listDir",
   fsMkdirp: "platform:fs:mkdirp",
   notify: "platform:notify",
+  clipboardReadText: "platform:clipboard:readText",
+  clipboardWriteText: "platform:clipboard:writeText",
+  openExternal: "platform:openExternal",
   secretGet: "platform:secret:get",
   secretSet: "platform:secret:set",
   secretDelete: "platform:secret:delete",
@@ -61,6 +64,12 @@ export interface HttpResponseDTO {
   headers: Record<string, string>;
   body: Uint8Array;
 }
+
+export interface HttpAbortedDTO {
+  aborted: true;
+}
+
+export type HttpResultDTO = HttpResponseDTO | HttpAbortedDTO;
 
 export interface ResearchTab {
   tabId: string;

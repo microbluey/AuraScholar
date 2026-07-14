@@ -1,7 +1,5 @@
 // Desktop Platform implementation, backed by the Electron preload bridge
-// (window.aura). Export names are kept (tauriHttp/tauriFs/tauriNotifier) so the
-// many call sites don't churn during the migration; they no longer touch Tauri.
-// TODO(rename): rename this module to electron-platform.ts once the dust settles.
+// (window.aura): CORS-free HTTP, app-data FS, notifications, and helpers.
 import type {
   FileSystem,
   HttpClient,
@@ -11,7 +9,13 @@ import type {
   Notifier,
 } from "@aurascholar/platform";
 
-export const tauriHttp: HttpClient = {
+
+/** True when running inside the Electron shell (the preload bridge exists). */
+export function isDesktopRuntime(): boolean {
+  return "aura" in window;
+}
+
+export const auraHttp: HttpClient = {
   async request(req: HttpRequest): Promise<HttpResponse> {
     if (req.signal?.aborted) throw abortError();
     const requestId = req.signal ? crypto.randomUUID() : undefined;
@@ -29,6 +33,7 @@ export const tauriHttp: HttpClient = {
         timeoutMs: req.timeoutMs,
       })
       .finally(() => req.signal?.removeEventListener("abort", onAbort));
+    if ("aborted" in res) throw abortError();
     if (req.signal?.aborted) throw abortError();
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(res.headers)) headers[k.toLowerCase()] = v;
@@ -42,7 +47,7 @@ function abortError(): Error {
   return error;
 }
 
-export const tauriFs: FileSystem = {
+export const auraFs: FileSystem = {
   readFile(path) {
     return window.aura.fs.readFile(path);
   },
@@ -63,11 +68,40 @@ export const tauriFs: FileSystem = {
   },
 };
 
-export const tauriNotifier: Notifier = {
+export const auraNotifier: Notifier = {
   async notify(options: NotificationOptions): Promise<void> {
     await window.aura.notify(options.title, options.body);
   },
 };
+
+const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
+export function normalizeExternalUrl(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("无效的外部链接");
+  }
+  if (!EXTERNAL_PROTOCOLS.has(url.protocol)) {
+    throw new Error(`不允许打开 ${url.protocol || "未知"} 链接`);
+  }
+  if (url.username || url.password) {
+    throw new Error("外部链接不能包含用户名或密码");
+  }
+  return url.toString();
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  const safeUrl = normalizeExternalUrl(url);
+  const aura = (window as Window & { aura?: Window["aura"] }).aura;
+  if (aura) {
+    await aura.openExternal(safeUrl);
+    return;
+  }
+  const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
+  if (!opened) throw new Error("浏览器阻止了外部链接弹窗");
+}
 
 /** sha256 of file bytes — content addressing for the blob store. */
 export async function sha256Hex(data: Uint8Array): Promise<string> {

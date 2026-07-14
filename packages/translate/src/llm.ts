@@ -3,7 +3,7 @@
 // extra setup. Academic-tuned prompt: preserve terminology, keep structure,
 // never add commentary or invent content.
 import type { AIProvider } from "@aurascholar/ai";
-import { langLabel, type TranslateInput, type TranslateOptions, type TranslateResult, type Translator } from "./types";
+import { langLabel, type TranslateInput, type TranslateOptions, type TranslateResult, type Translator } from "./types.js";
 
 export class LlmTranslator implements Translator {
   readonly id = "llm";

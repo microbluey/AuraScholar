@@ -1,19 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { ThemeToggle } from "@aurascholar/ui";
-import { hideResearchViews } from "./services/research-browser";
-import { startSentinelLoop } from "./services/sentinel";
-import { startSavedSearchLoop } from "./services/saved-searches";
-import { getDb } from "./services/tauri-db";
-import { LibraryPage } from "./pages/LibraryPage";
-import { DiscoveryPage } from "./pages/DiscoveryPage";
-import { ReaderPage } from "./pages/ReaderPage";
-import { GraphPage } from "./pages/GraphPage";
-import { FlashcardsPage } from "./pages/FlashcardsPage";
-import { SentinelPage } from "./pages/SentinelPage";
-import { HomepagePage } from "./pages/HomepagePage";
-import { SnippetsPage } from "./pages/SnippetsPage";
-import { SettingsPage } from "./pages/SettingsPage";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { useModalFocusTrap } from "./components/useModalFocusTrap";
+import { isImeComposing } from "./keyboard";
+import { isPlatformShortcut, shortcutLabel } from "./shortcut-labels";
+import { readLocalStorageJson } from "./storage";
+import { isDesktopRuntime } from "./services/aura-platform";
+import { describeSafeError } from "./services/sensitive-text";
 
 // 阅读器不在导航中 — 它是文献库里点击一篇文献后进入的页面。
 // /graph 路由保留供深链使用。
@@ -36,9 +37,36 @@ interface LibraryShellStats {
   annotations: number;
   flashcards: number;
   snippets: number;
-  collections: Array<{ id: string; name: string; count: number }>;
-  tags: Array<{ name: string; count: number }>;
+  collections: Array<{ id: string; name: string; count: number; parentId: string | null }>;
+  tags: Array<{ name: string; color: string | null; count: number }>;
 }
+
+const PREVIEW_LIBRARY_STATS: LibraryShellStats = {
+  total: 4,
+  trash: 0,
+  reading: 2,
+  unread: 1,
+  starred: 1,
+  annotations: 13,
+  flashcards: 30,
+  snippets: 5,
+  collections: [
+    { id: "preview-projects", name: "研究项目", count: 1, parentId: null },
+    {
+      id: "preview-transformer",
+      name: "Transformer 综述",
+      count: 2,
+      parentId: "preview-projects",
+    },
+    { id: "preview-life-science", name: "生命科学", count: 1, parentId: null },
+  ],
+  tags: [
+    { name: "Transformer", color: "#7566f0", count: 1 },
+    { name: "深度学习", color: "#ff8a5b", count: 1 },
+    { name: "LLM", color: "#42b8d5", count: 1 },
+    { name: "待阅读", color: "#d89b38", count: 1 },
+  ],
+};
 
 interface LibraryViewDetail {
   filter?: "all" | "reading" | "unread" | "noted" | "starred" | "trash";
@@ -48,19 +76,132 @@ interface LibraryViewDetail {
 
 type LibraryViewState = Required<LibraryViewDetail>;
 
-function isTauriRuntime(): boolean {
-  return "aura" in window;
+type LibraryActionEventName =
+  | "aurascholar:create-collection"
+  | "aurascholar:create-tag"
+  | "aurascholar:manage-collections"
+  | "aurascholar:manage-tags";
+
+type PendingLibraryCommand =
+  | { detail: LibraryViewDetail; kind: "view" }
+  | { eventName: LibraryActionEventName; kind: "event" };
+
+interface RuntimeIssue {
+  detail?: string;
+  id: number;
+  message: string;
+  title: string;
 }
 
-function readAiModelLabel() {
-  const raw = localStorage.getItem("ai-settings");
-  if (!raw) return "AI 未配置";
-  try {
-    const parsed = JSON.parse(raw) as { model?: string };
-    return parsed.model?.trim() || "AI 未配置";
-  } catch {
-    return "AI 未配置";
+interface AiShellStatus {
+  checking: boolean;
+  error?: string;
+  model: string;
+  preview?: boolean;
+  ready: boolean;
+}
+
+interface SmokeRouteCrashProbe {
+  message?: string;
+  pathPrefix?: string;
+}
+
+type SmokeProbeWindow = Window & {
+  __AURASCHOLAR_SMOKE_ROUTE_CRASH__?: SmokeRouteCrashProbe | null;
+};
+
+interface AppStatsSmokeWindow extends Window {
+  __AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_DELAY_MS__?: number;
+  __AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_COUNT__?: number;
+}
+
+interface AppCommand {
+  description: string;
+  group: string;
+  icon: (typeof NAV)[number]["icon"];
+  id: string;
+  keywords: string[];
+  run: () => void;
+  title: string;
+}
+
+const NAV_DESCRIPTIONS: Record<(typeof NAV)[number]["to"], string> = {
+  "/library": "导入、整理、阅读和引用你的论文库。",
+  "/discovery": "检索开放学术来源并把结果沉淀到文献库。",
+  "/flashcards": "进入间隔复习队列，把论文变成长期记忆。",
+  "/snippets": "整理摘录、批注和可复制的写作素材。",
+  "/sentinel": "订阅检索任务，持续追踪新论文。",
+  "/homepage": "编辑个人学术主页并导出发布内容。",
+  "/settings": "配置 AI、翻译、同步、备份和外观。",
+};
+
+const AI_UNCONFIGURED_LABEL = "AI 未配置";
+const AI_CHECKING_LABEL = "AI 检查中";
+const AI_PREVIEW_MODEL_LABEL = "deepseek-chat";
+
+function readStoredAiModelLabel(): string {
+  const parsed = readLocalStorageJson<{ model?: unknown } | null>("ai-settings", null);
+  return typeof parsed?.model === "string" ? parsed.model.trim() : "";
+}
+
+function initialAiShellStatus(): AiShellStatus {
+  if (!isDesktopRuntime()) {
+    return {
+      checking: false,
+      model: readStoredAiModelLabel() || AI_PREVIEW_MODEL_LABEL,
+      preview: true,
+      ready: true,
+    };
   }
+  const storedModel = readStoredAiModelLabel();
+  return {
+    checking: true,
+    model: storedModel || AI_UNCONFIGURED_LABEL,
+    ready: false,
+  };
+}
+
+async function readAiShellStatus(): Promise<AiShellStatus> {
+  if (!isDesktopRuntime()) {
+    return {
+      checking: false,
+      model: readStoredAiModelLabel() || AI_PREVIEW_MODEL_LABEL,
+      preview: true,
+      ready: true,
+    };
+  }
+  try {
+    const { loadAiSettings } = await import("./services/ai");
+    const settings = await loadAiSettings();
+    if (settings) {
+      return {
+        checking: false,
+        model: settings.model.trim() || AI_UNCONFIGURED_LABEL,
+        ready: true,
+      };
+    }
+    return {
+      checking: false,
+      model: readStoredAiModelLabel() || AI_UNCONFIGURED_LABEL,
+      ready: false,
+    };
+  } catch (error) {
+    return {
+      checking: false,
+      error: describeUnknownError(error),
+      model: readStoredAiModelLabel() || AI_UNCONFIGURED_LABEL,
+      ready: false,
+    };
+  }
+}
+
+async function waitForAppStatsSmokeAfterReadDelay(): Promise<void> {
+  const smokeWindow = window as AppStatsSmokeWindow;
+  const delayMs = smokeWindow.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_DELAY_MS__;
+  if (typeof delayMs !== "number" || delayMs <= 0) return;
+  smokeWindow.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_COUNT__ =
+    (smokeWindow.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_COUNT__ ?? 0) + 1;
+  await new Promise((resolve) => window.setTimeout(resolve, delayMs));
 }
 
 function normalizeLibraryView(detail: LibraryViewDetail = {}): LibraryViewState {
@@ -80,179 +221,765 @@ function sameLibraryView(a: LibraryViewState, b: LibraryViewDetail): boolean {
   );
 }
 
+function sidebarViewLabel(label: string, count: number, active: boolean): string {
+  return `${label}，${count.toLocaleString("zh-CN")} 篇文献${active ? "，当前视图" : ""}`;
+}
+
+function dispatchLibraryView(detail: LibraryViewDetail) {
+  window.dispatchEvent(new CustomEvent("aurascholar:library-view", { detail }));
+}
+
+function dispatchLibraryEvent(eventName: LibraryActionEventName) {
+  window.dispatchEvent(new Event(eventName));
+}
+
+function commandElementId(id: string): string {
+  return `command-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+function scoreCommandAction(action: AppCommand, parts: string[]): number | null {
+  const title = action.title.toLowerCase();
+  const description = action.description.toLowerCase();
+  const group = action.group.toLowerCase();
+  const keywords = action.keywords.map((keyword) => keyword.toLowerCase());
+  const haystack = [title, description, group, ...keywords].join(" ");
+
+  if (!parts.every((part) => haystack.includes(part))) return null;
+
+  return parts.reduce((score, part) => {
+    let nextScore = score;
+    if (title === part) nextScore += 60;
+    else if (title.includes(part)) nextScore += 30;
+    if (keywords.some((keyword) => keyword === part)) nextScore += 24;
+    else if (keywords.some((keyword) => keyword.includes(part))) nextScore += 16;
+    if (group.includes(part)) nextScore += 8;
+    if (description.includes(part)) nextScore += 4;
+    return nextScore;
+  }, 0);
+}
+
+function activeRouteLabel(pathname: string): string {
+  if (pathname.startsWith("/reader")) return "PDF 阅读器";
+  const active = NAV.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`));
+  return active?.label ?? "工作台";
+}
+
+function runtimeLabel(): string {
+  return isDesktopRuntime() ? "桌面运行时" : "浏览器预览";
+}
+
+function describeUnknownError(value: unknown): string {
+  return describeSafeError(value);
+}
+
+function runtimeIssueFromErrorEvent(event: ErrorEvent): RuntimeIssue {
+  const location = event.filename ? `${event.filename}:${event.lineno}:${event.colno}` : undefined;
+  return {
+    detail: location,
+    id: Date.now(),
+    message: describeUnknownError(event.error ?? event.message),
+    title: "应用捕获到运行时异常",
+  };
+}
+
+function runtimeIssueFromRejection(event: PromiseRejectionEvent): RuntimeIssue {
+  return {
+    id: Date.now(),
+    message: describeUnknownError(event.reason),
+    title: "后台任务遇到异常",
+  };
+}
+
 export function App() {
-  // Catch-up poll on startup, then hourly while the app is open.
-  useEffect(() => {
-    if ("aura" in window) {
-      startSentinelLoop();
-      startSavedSearchLoop();
-    }
-  }, []);
   const location = useLocation();
   const navigate = useNavigate();
+  const previousPathRef = useRef(location.pathname);
   // The reader needs edge-to-edge layout; other pages keep comfortable padding.
   const flush = location.pathname.startsWith("/reader");
   const showLibraryMeta = location.pathname.startsWith("/library");
+  const currentLabel = activeRouteLabel(location.pathname);
+  const currentRuntime = runtimeLabel();
+  const commandShortcut = useMemo(() => shortcutLabel("K", { compactApple: true }), []);
   const [libraryStats, setLibraryStats] = useState<LibraryShellStats | null>(null);
-  const [aiModel, setAiModel] = useState(() => readAiModelLabel());
+  const [aiStatus, setAiStatus] = useState<AiShellStatus>(() => initialAiShellStatus());
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandSession, setCommandSession] = useState(0);
+  const [runtimeIssue, setRuntimeIssue] = useState<RuntimeIssue | null>(null);
+  const [pendingLibraryCommand, setPendingLibraryCommand] = useState<PendingLibraryCommand | null>(
+    null,
+  );
   const [activeLibraryView, setActiveLibraryView] = useState<LibraryViewState>(() =>
     normalizeLibraryView(),
   );
+  const commandReturnFocusRef = useRef<HTMLElement | null>(null);
+  const libraryStatsRefreshSeqRef = useRef(0);
+  const aiStatusRefreshSeqRef = useRef(0);
+  const openSettingsSection = useCallback(
+    (section: "ai" | "sync" | "translate") => navigate(`/settings?section=${section}`),
+    [navigate],
+  );
+  const openAiSettings = useCallback(() => openSettingsSection("ai"), [openSettingsSection]);
+
+  const rememberCommandReturnFocus = useCallback((target?: HTMLElement | null) => {
+    const candidate = target ?? document.activeElement;
+    commandReturnFocusRef.current =
+      candidate instanceof HTMLElement && candidate !== document.body ? candidate : null;
+  }, []);
+
+  const restoreCommandReturnFocus = useCallback(() => {
+    window.setTimeout(() => {
+      const target = commandReturnFocusRef.current;
+      commandReturnFocusRef.current = null;
+      if (target?.isConnected) {
+        target.focus({ preventScroll: true });
+      }
+    }, 0);
+  }, []);
+
+  const openCommandPalette = useCallback(
+    (target?: HTMLElement | null) => {
+      rememberCommandReturnFocus(target);
+      setCommandSession((session) => session + 1);
+      setCommandOpen(true);
+    },
+    [rememberCommandReturnFocus],
+  );
+
+  const closeCommandPalette = useCallback(() => {
+    setCommandOpen(false);
+    restoreCommandReturnFocus();
+  }, [restoreCommandReturnFocus]);
+
+  const toggleCommandPalette = useCallback(() => {
+    if (commandOpen) {
+      setCommandOpen(false);
+      restoreCommandReturnFocus();
+      return;
+    }
+    rememberCommandReturnFocus();
+    setCommandSession((session) => session + 1);
+    setCommandOpen(true);
+  }, [commandOpen, rememberCommandReturnFocus, restoreCommandReturnFocus]);
+
+  // Catch-up poll on startup, then hourly while the app is open. These services
+  // pull network/connectors code, so load them after the shell is interactive.
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    void import("./services/sentinel")
+      .then(({ startSentinelLoop }) => startSentinelLoop())
+      .catch((error) =>
+        setRuntimeIssue({
+          id: Date.now(),
+          message: describeUnknownError(error),
+          title: "检索哨兵启动失败",
+        }),
+      );
+    void import("./services/saved-searches")
+      .then(({ startSavedSearchLoop }) => startSavedSearchLoop())
+      .catch((error) =>
+        setRuntimeIssue({
+          id: Date.now(),
+          message: describeUnknownError(error),
+          title: "检索订阅启动失败",
+        }),
+      );
+  }, []);
 
   useEffect(() => {
-    if (!location.pathname.startsWith("/discovery")) {
-      void hideResearchViews();
+    const previousPath = previousPathRef.current;
+    previousPathRef.current = location.pathname;
+    if (
+      isDesktopRuntime() &&
+      previousPath.startsWith("/discovery") &&
+      !location.pathname.startsWith("/discovery")
+    ) {
+      void import("./services/research-browser")
+        .then(({ hideResearchViews }) => hideResearchViews())
+        .catch((error) =>
+          setRuntimeIssue({
+            id: Date.now(),
+            message: describeUnknownError(error),
+            title: "内置浏览器视图隐藏失败",
+          }),
+        );
     }
   }, [location.pathname]);
 
+  useEffect(() => {
+    const onRuntimeError = (event: ErrorEvent) => {
+      setRuntimeIssue(runtimeIssueFromErrorEvent(event));
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      setRuntimeIssue(runtimeIssueFromRejection(event));
+    };
+    window.addEventListener("error", onRuntimeError);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", onRuntimeError);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    };
+  }, []);
+
   const refreshLibraryStats = useCallback(async () => {
-    if (!showLibraryMeta || !isTauriRuntime()) {
-      setLibraryStats(null);
+    const seq = libraryStatsRefreshSeqRef.current + 1;
+    libraryStatsRefreshSeqRef.current = seq;
+    if (!isDesktopRuntime()) {
+      if (libraryStatsRefreshSeqRef.current !== seq) return;
+      setLibraryStats(PREVIEW_LIBRARY_STATS);
       return;
     }
-    const db = await getDb();
-    const [
-      totalRows,
-      trashRows,
-      readingRows,
-      unreadRows,
-      starredRows,
-      annotationRows,
-      flashcardRows,
-      snippetRows,
-      collections,
-      tags,
-    ] = await Promise.all([
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL`),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
-      db.query<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'reading'`,
-      ),
-      db.query<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'unread'`,
-      ),
-      db.query<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND starred = 1`,
-      ),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM annotations WHERE deleted_at IS NULL`),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM flashcards WHERE deleted_at IS NULL`),
-      db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM snippets WHERE deleted_at IS NULL`),
-      db.query<{ id: string; name: string; count: number }>(
-        `SELECT c.id, c.name, COUNT(w.id) AS count
-         FROM collections c
-         LEFT JOIN collection_items ci ON ci.collection_id = c.id
-         LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
-         WHERE c.deleted_at IS NULL
-         GROUP BY c.id, c.name
-         ORDER BY c.name`,
-      ),
-      db.query<{ name: string; count: number }>(
-        `SELECT t.name, COUNT(w.id) AS count
-         FROM tags t
-         JOIN work_tags wt ON wt.tag_id = t.id
-         JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
-         WHERE t.deleted_at IS NULL
-         GROUP BY t.id, t.name
-         ORDER BY count DESC, t.name
-         LIMIT 6`,
-      ),
-    ]);
-    setLibraryStats({
-      total: totalRows[0]?.n ?? 0,
-      trash: trashRows[0]?.n ?? 0,
-      reading: readingRows[0]?.n ?? 0,
-      unread: unreadRows[0]?.n ?? 0,
-      starred: starredRows[0]?.n ?? 0,
-      annotations: annotationRows[0]?.n ?? 0,
-      flashcards: flashcardRows[0]?.n ?? 0,
-      snippets: snippetRows[0]?.n ?? 0,
-      collections,
-      tags,
-    });
-  }, [showLibraryMeta]);
+    try {
+      const { getDb } = await import("./services/aura-db");
+      const db = await getDb();
+      const [
+        totalRows,
+        trashRows,
+        readingRows,
+        unreadRows,
+        starredRows,
+        annotationRows,
+        flashcardRows,
+        snippetRows,
+        collections,
+        tags,
+      ] = await Promise.all([
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL`),
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'reading'`,
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'unread'`,
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND starred = 1`,
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM annotations a
+           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           WHERE a.deleted_at IS NULL`,
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM flashcards f
+           JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+           WHERE f.deleted_at IS NULL`,
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM snippets s
+           JOIN works w ON w.id = s.work_id AND w.deleted_at IS NULL
+           WHERE s.deleted_at IS NULL`,
+        ),
+        db.query<{ id: string; name: string; parent_id: string | null; count: number }>(
+          `SELECT c.id, c.name, c.parent_id, COUNT(w.id) AS count
+           FROM collections c
+           LEFT JOIN collection_items ci ON ci.collection_id = c.id
+           LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
+           WHERE c.deleted_at IS NULL
+           GROUP BY c.id, c.name, c.parent_id, c.sort_order
+           ORDER BY c.name`,
+        ),
+        db.query<{ name: string; color: string | null; count: number }>(
+          `SELECT t.name, t.color, COUNT(DISTINCT w.id) AS count
+           FROM tags t
+           LEFT JOIN work_tags wt ON wt.tag_id = t.id
+           LEFT JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
+           WHERE t.deleted_at IS NULL
+           GROUP BY t.id, t.name, t.color
+           ORDER BY count DESC, t.name`,
+        ),
+      ]);
+      await waitForAppStatsSmokeAfterReadDelay();
+      if (libraryStatsRefreshSeqRef.current !== seq) return;
+      setLibraryStats({
+        total: totalRows[0]?.n ?? 0,
+        trash: trashRows[0]?.n ?? 0,
+        reading: readingRows[0]?.n ?? 0,
+        unread: unreadRows[0]?.n ?? 0,
+        starred: starredRows[0]?.n ?? 0,
+        annotations: annotationRows[0]?.n ?? 0,
+        flashcards: flashcardRows[0]?.n ?? 0,
+        snippets: snippetRows[0]?.n ?? 0,
+        collections: collections.map((collection) => ({
+          id: collection.id,
+          name: collection.name,
+          count: collection.count,
+          parentId: collection.parent_id,
+        })),
+        tags,
+      });
+    } catch {
+      if (libraryStatsRefreshSeqRef.current !== seq) return;
+      setLibraryStats(null);
+    }
+  }, []);
 
   useEffect(() => {
-    void refreshLibraryStats();
+    const refreshId = window.setTimeout(() => {
+      void refreshLibraryStats();
+    }, 0);
+    return () => {
+      window.clearTimeout(refreshId);
+      libraryStatsRefreshSeqRef.current += 1;
+    };
   }, [refreshLibraryStats]);
+
+  const refreshAiStatus = useCallback(async () => {
+    const seq = aiStatusRefreshSeqRef.current + 1;
+    aiStatusRefreshSeqRef.current = seq;
+    setAiStatus((current) => ({
+      ...current,
+      checking: true,
+      error: undefined,
+    }));
+    const next = await readAiShellStatus();
+    if (aiStatusRefreshSeqRef.current !== seq) return;
+    setAiStatus(next);
+  }, []);
+
+  useEffect(() => {
+    const refreshId = window.setTimeout(() => {
+      void refreshAiStatus();
+    }, 0);
+    return () => {
+      window.clearTimeout(refreshId);
+      aiStatusRefreshSeqRef.current += 1;
+    };
+  }, [refreshAiStatus]);
 
   const openLibraryView = useCallback(
     (detail: LibraryViewDetail) => {
       setActiveLibraryView(normalizeLibraryView(detail));
-      navigate("/library");
-      window.dispatchEvent(new CustomEvent("aurascholar:library-view", { detail }));
+      if (location.pathname.startsWith("/library")) {
+        setPendingLibraryCommand(null);
+        dispatchLibraryView(detail);
+      } else {
+        setPendingLibraryCommand({ detail, kind: "view" });
+        navigate("/library");
+      }
     },
-    [navigate],
+    [location.pathname, navigate],
   );
+
+  const dispatchLibraryAction = useCallback(
+    (eventName: LibraryActionEventName) => {
+      if (location.pathname.startsWith("/library")) {
+        setPendingLibraryCommand(null);
+        dispatchLibraryEvent(eventName);
+      } else {
+        setPendingLibraryCommand({ eventName, kind: "event" });
+        navigate("/library");
+      }
+    },
+    [location.pathname, navigate],
+  );
+
+  useEffect(() => {
+    if (!pendingLibraryCommand || !location.pathname.startsWith("/library")) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (pendingLibraryCommand.kind === "view") {
+        dispatchLibraryView(pendingLibraryCommand.detail);
+      } else {
+        dispatchLibraryEvent(pendingLibraryCommand.eventName);
+      }
+      setPendingLibraryCommand(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.pathname, pendingLibraryCommand]);
+
+  const commandActions = useMemo<AppCommand[]>(
+    () => [
+      ...NAV.map((item) => ({
+        description: NAV_DESCRIPTIONS[item.to],
+        group: "工作区",
+        icon: item.icon,
+        id: `nav:${item.to}`,
+        keywords: [item.label, item.to.replace("/", ""), "打开", "跳转"],
+        run: () => navigate(item.to),
+        title: item.label,
+      })),
+      {
+        description: "回到全部文献，查看所有未删除内容。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:all",
+        keywords: ["全部", "文献", "library", "all"],
+        run: () => openLibraryView({ filter: "all", collectionId: null, tag: null }),
+        title: "全部文献",
+      },
+      {
+        description: "只看正在阅读的论文，继续未完成的研究流。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:reading",
+        keywords: ["阅读中", "继续", "reading"],
+        run: () => openLibraryView({ filter: "reading", collectionId: null, tag: null }),
+        title: "阅读中文献",
+      },
+      {
+        description: "查看尚未处理的新文献。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:unread",
+        keywords: ["未读", "新文献", "unread"],
+        run: () => openLibraryView({ filter: "unread", collectionId: null, tag: null }),
+        title: "未读文献",
+      },
+      {
+        description: "快速回到标记为重点的论文。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:starred",
+        keywords: ["重点", "收藏", "starred"],
+        run: () => openLibraryView({ filter: "starred", collectionId: null, tag: null }),
+        title: "重点文献",
+      },
+      {
+        description: "查看被移入回收站的文献并恢复。",
+        group: "文献库视图",
+        icon: "library",
+        id: "library:trash",
+        keywords: ["回收站", "删除", "trash"],
+        run: () => openLibraryView({ filter: "trash", collectionId: null, tag: null }),
+        title: "回收站",
+      },
+      {
+        description: "创建新的文献文件夹，用于课题、项目或综述。",
+        group: "整理动作",
+        icon: "library",
+        id: "library:create-collection",
+        keywords: ["新建文件夹", "分组", "集合", "collection"],
+        run: () => dispatchLibraryAction("aurascholar:create-collection"),
+        title: "新建目录",
+      },
+      {
+        description: "查看目录层级，重命名、移动或删除目录。",
+        group: "整理动作",
+        icon: "library",
+        id: "library:manage-collections",
+        keywords: ["目录", "文件夹", "分组", "管理目录", "collection"],
+        run: () => dispatchLibraryAction("aurascholar:manage-collections"),
+        title: "管理目录",
+      },
+      {
+        description: "创建一个可跨目录使用的新标签。",
+        group: "整理动作",
+        icon: "library",
+        id: "library:create-tag",
+        keywords: ["新建标签", "标签", "tag", "标记"],
+        run: () => dispatchLibraryAction("aurascholar:create-tag"),
+        title: "新建标签",
+      },
+      {
+        description: "打开标签管理，合并、重命名或清理标签。",
+        group: "整理动作",
+        icon: "library",
+        id: "library:manage-tags",
+        keywords: ["标签", "tag", "管理标签"],
+        run: () => dispatchLibraryAction("aurascholar:manage-tags"),
+        title: "管理标签",
+      },
+      {
+        description: "配置模型服务，让摘要、重点、翻译和闪卡开始工作。",
+        group: "配置",
+        icon: "settings",
+        id: "settings:ai",
+        keywords: ["ai", "模型", "api key", "配置"],
+        run: () => openAiSettings(),
+        title: "配置 AI 服务",
+      },
+      {
+        description: "选择翻译引擎、目标语言，或清除本地翻译缓存。",
+        group: "配置",
+        icon: "settings",
+        id: "settings:translate",
+        keywords: ["翻译", "translate", "deepl", "百度", "缓存", "配置"],
+        run: () => openSettingsSection("translate"),
+        title: "配置阅读翻译",
+      },
+      {
+        description: "配置 WebDAV、导出整库备份或导入 JSON 备份。",
+        group: "配置",
+        icon: "settings",
+        id: "settings:sync",
+        keywords: ["同步", "备份", "webdav", "backup", "导出", "导入", "配置"],
+        run: () => openSettingsSection("sync"),
+        title: "配置同步与备份",
+      },
+    ],
+    [dispatchLibraryAction, navigate, openAiSettings, openLibraryView, openSettingsSection],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isPlatformShortcut(event, "k")) {
+        event.preventDefault();
+        toggleCommandPalette();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toggleCommandPalette]);
 
   useEffect(() => {
     const onLibraryUpdated = () => void refreshLibraryStats();
     const onLibraryViewState = (event: Event) => {
       setActiveLibraryView(normalizeLibraryView((event as CustomEvent<LibraryViewDetail>).detail));
     };
-    const onStorage = () => setAiModel(readAiModelLabel());
+    const onStorage = () => void refreshAiStatus();
+    const onAiSettingsUpdated = () => void refreshAiStatus();
     window.addEventListener("aurascholar:library-updated", onLibraryUpdated);
+    window.addEventListener("aurascholar:flashcards-updated", onLibraryUpdated);
     window.addEventListener("aurascholar:library-view-state", onLibraryViewState);
     window.addEventListener("aurascholar:snippets-updated", onLibraryUpdated);
+    window.addEventListener("aurascholar:ai-settings-updated", onAiSettingsUpdated);
     window.addEventListener("storage", onStorage);
     return () => {
+      libraryStatsRefreshSeqRef.current += 1;
+      aiStatusRefreshSeqRef.current += 1;
       window.removeEventListener("aurascholar:library-updated", onLibraryUpdated);
+      window.removeEventListener("aurascholar:flashcards-updated", onLibraryUpdated);
       window.removeEventListener("aurascholar:library-view-state", onLibraryViewState);
       window.removeEventListener("aurascholar:snippets-updated", onLibraryUpdated);
+      window.removeEventListener("aurascholar:ai-settings-updated", onAiSettingsUpdated);
       window.removeEventListener("storage", onStorage);
     };
-  }, [refreshLibraryStats]);
+  }, [refreshAiStatus, refreshLibraryStats]);
 
   return (
-    <div className="app-frame">
+    <div className={flush ? "app-frame app-frame--immersive" : "app-frame"}>
+      <a className="app-skip-link" href="#app-main">
+        跳到内容
+      </a>
+      {runtimeIssue && (
+        <RuntimeIssueBanner issue={runtimeIssue} onDismiss={() => setRuntimeIssue(null)} />
+      )}
       <div className="app-shell">
-        <aside className="app-sidebar">
+        <aside
+          className={`app-sidebar ${showLibraryMeta ? "app-sidebar--library" : ""}`}
+          aria-label="主导航"
+        >
           <div className="app-sidebar__brand">
             <span className="app-sidebar__mark">A</span>
-            <span>
-              Aura<span className="accent">Scholar</span>
+            <span className="app-sidebar__wordmark">
+              <span>
+                Aura<span className="accent">Scholar</span>
+              </span>
+              <small>Research, your way</small>
             </span>
           </div>
-          {NAV.map((item) => (
-            <NavLink key={item.to} to={item.to} className="app-nav-item">
-              <NavIcon name={item.icon} />
-              <span>{item.label}</span>
-            </NavLink>
-          ))}
+          {!showLibraryMeta && (
+            <ShellWorkspaceCard
+              activeLabel={currentLabel}
+              runtime={currentRuntime}
+              stats={libraryStats}
+              aiStatus={aiStatus}
+              onConfigureAi={openAiSettings}
+            />
+          )}
+          <button
+            type="button"
+            className="app-command-trigger"
+            onClick={(event) => openCommandPalette(event.currentTarget)}
+          >
+            <span>快速打开</span>
+            <kbd>{commandShortcut}</kbd>
+          </button>
+          <nav className="app-nav" aria-label="主导航">
+            {NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className="app-nav-item"
+                aria-label={item.label}
+                title={item.label}
+              >
+                <NavIcon name={item.icon} />
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
           {showLibraryMeta && libraryStats && (
             <LibrarySidebarMeta
               stats={libraryStats}
               activeView={activeLibraryView}
               onSelect={openLibraryView}
-              onCreateCollection={() =>
-                window.dispatchEvent(new Event("aurascholar:create-collection"))
+              onCreateCollection={(parentId) =>
+                window.dispatchEvent(
+                  new CustomEvent("aurascholar:create-collection", {
+                    detail: { parentId: parentId ?? null },
+                  }),
+                )
+              }
+              onManageCollections={() =>
+                window.dispatchEvent(new Event("aurascholar:manage-collections"))
               }
             />
           )}
           <div className="app-sidebar__footer">
+            {!showLibraryMeta && (
+              <ShellHealth
+                stats={libraryStats}
+                aiStatus={aiStatus}
+                runtime={currentRuntime}
+                onConfigureAi={openAiSettings}
+              />
+            )}
             <ThemeToggle />
           </div>
         </aside>
-        <main className={flush ? "app-main app-main--flush" : "app-main"}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/library" replace />} />
-            <Route path="/library" element={<LibraryPage />} />
-            <Route path="/discovery" element={<DiscoveryPage />} />
-            <Route path="/reader" element={<ReaderPage />} />
-            <Route path="/graph" element={<GraphPage />} />
-            <Route path="/flashcards" element={<FlashcardsPage />} />
-            <Route path="/snippets" element={<SnippetsPage />} />
-            <Route path="/sentinel" element={<SentinelPage />} />
-            <Route path="/homepage" element={<HomepagePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Routes>
+        <main
+          id="app-main"
+          className={flush ? "app-main app-main--flush" : "app-main"}
+          tabIndex={-1}
+        >
+          <AppErrorBoundary
+            level="route"
+            resetKey={`${location.pathname}${location.search}`}
+            scope={currentLabel}
+          >
+            <SmokeRouteCrashProbe locationKey={`${location.pathname}${location.search}`} />
+            <Outlet />
+          </AppErrorBoundary>
         </main>
       </div>
-      <StatusBar stats={showLibraryMeta ? libraryStats : null} aiModel={aiModel} />
+      <StatusBar
+        stats={libraryStats}
+        aiStatus={aiStatus}
+        runtime={currentRuntime}
+        activeLabel={currentLabel}
+        onConfigureAi={openAiSettings}
+      />
+      <MobileDock onCommand={openCommandPalette} />
+      <AppCommandPalette
+        key={commandSession}
+        actions={commandActions}
+        onClose={closeCommandPalette}
+        open={commandOpen}
+      />
     </div>
   );
 }
 
-function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiModel: string }) {
+function SmokeRouteCrashProbe({ locationKey }: { locationKey: string }) {
+  const probe = (window as SmokeProbeWindow).__AURASCHOLAR_SMOKE_ROUTE_CRASH__;
+  if (!probe) return null;
+  if (!locationKey.startsWith(probe.pathPrefix ?? "/")) return null;
+  throw new Error(probe.message ?? "AURASCHOLAR_SMOKE_ROUTE_CRASH");
+}
+
+function RuntimeIssueBanner({ issue, onDismiss }: { issue: RuntimeIssue; onDismiss: () => void }) {
+  return (
+    <aside className="app-runtime-issue" role="status" aria-live="polite">
+      <div>
+        <strong>{issue.title}</strong>
+        <span>{issue.message}</span>
+        {issue.detail && <small>{issue.detail}</small>}
+      </div>
+      <button type="button" onClick={onDismiss}>
+        关闭
+      </button>
+    </aside>
+  );
+}
+
+function ShellWorkspaceCard({
+  activeLabel,
+  runtime,
+  stats,
+  aiStatus,
+  onConfigureAi,
+}: {
+  activeLabel: string;
+  runtime: string;
+  stats: LibraryShellStats | null;
+  aiStatus: AiShellStatus;
+  onConfigureAi: () => void;
+}) {
+  return (
+    <section className="app-workspace-card" aria-label="当前工作区">
+      <span className="app-workspace-card__eyebrow">当前工作区</span>
+      <strong>{activeLabel}</strong>
+      <div className="app-workspace-card__chips">
+        <span>{runtime}</span>
+        {aiStatus.preview ? (
+          <span title={aiStatus.model}>AI 预览</span>
+        ) : aiStatus.ready ? (
+          <span>AI 就绪</span>
+        ) : aiStatus.checking ? (
+          <span>{AI_CHECKING_LABEL}</span>
+        ) : (
+          <button type="button" onClick={onConfigureAi} title={aiStatus.error}>
+            AI 待配置
+          </button>
+        )}
+      </div>
+      <div className="app-workspace-card__meter" aria-hidden="true">
+        <span style={{ width: `${Math.min(100, Math.max(18, stats ? stats.total * 4 : 24))}%` }} />
+      </div>
+    </section>
+  );
+}
+
+function ShellHealth({
+  stats,
+  aiStatus,
+  runtime,
+  onConfigureAi,
+}: {
+  stats: LibraryShellStats | null;
+  aiStatus: AiShellStatus;
+  runtime: string;
+  onConfigureAi: () => void;
+}) {
+  return (
+    <div className="app-shell-health" aria-label="状态摘要">
+      <div>
+        <span>文献</span>
+        <strong>{stats ? stats.total.toLocaleString("zh-CN") : "--"}</strong>
+      </div>
+      <div>
+        <span>素材</span>
+        <strong>{stats ? stats.snippets.toLocaleString("zh-CN") : "--"}</strong>
+      </div>
+      <div>
+        <span>{runtime}</span>
+        {aiStatus.preview ? (
+          <strong title={aiStatus.model}>AI 预览</strong>
+        ) : aiStatus.ready ? (
+          <strong>AI 就绪</strong>
+        ) : aiStatus.checking ? (
+          <strong>{AI_CHECKING_LABEL}</strong>
+        ) : (
+          <button
+            type="button"
+            className="app-shell-health__action"
+            onClick={onConfigureAi}
+            title={aiStatus.error}
+          >
+            配置 AI
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatusBar({
+  stats,
+  aiStatus,
+  runtime,
+  activeLabel,
+  onConfigureAi,
+}: {
+  stats: LibraryShellStats | null;
+  aiStatus: AiShellStatus;
+  runtime: string;
+  activeLabel: string;
+  onConfigureAi: () => void;
+}) {
   return (
     <footer className="app-statusbar">
       <div className="app-statusbar__cluster">
@@ -261,7 +988,7 @@ function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiMode
       </div>
       <div className="app-statusbar__cluster">
         <span className="app-statusbar__check" />
-        <strong>本地库</strong>
+        <strong>{runtime}</strong>
       </div>
       {stats && (
         <div className="app-statusbar__metrics">
@@ -280,11 +1007,362 @@ function StatusBar({ stats, aiModel }: { stats: LibraryShellStats | null; aiMode
         </div>
       )}
       <div className="app-statusbar__cluster app-statusbar__cluster--end">
-        <span>AI 模型</span>
-        <strong>{aiModel}</strong>
+        <span>{activeLabel}</span>
+        {aiStatus.preview ? (
+          <strong title={aiStatus.model}>AI 预览</strong>
+        ) : aiStatus.ready ? (
+          <strong title={aiStatus.model}>{aiStatus.model}</strong>
+        ) : aiStatus.checking ? (
+          <strong>{AI_CHECKING_LABEL}</strong>
+        ) : (
+          <button
+            type="button"
+            className="app-statusbar__ai-action"
+            onClick={onConfigureAi}
+            title={aiStatus.error}
+          >
+            配置 AI
+          </button>
+        )}
       </div>
     </footer>
   );
+}
+
+function MobileDock({ onCommand }: { onCommand: (target?: HTMLElement | null) => void }) {
+  return (
+    <nav className="app-mobile-dock" aria-label="移动主导航">
+      <button
+        type="button"
+        className="app-mobile-dock__item app-mobile-dock__item--command"
+        onClick={(event) => onCommand(event.currentTarget)}
+      >
+        <NavIcon name="search" />
+        <span>快捷</span>
+      </button>
+      {NAV.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          className="app-mobile-dock__item"
+          aria-label={item.label}
+          title={item.label}
+        >
+          <NavIcon name={item.icon} />
+          <span>{item.label}</span>
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
+function AppCommandPalette({
+  actions,
+  onClose,
+  open,
+}: {
+  actions: AppCommand[];
+  onClose: () => void;
+  open: boolean;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [query, setQuery] = useState("");
+  const activeOptionRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const filteredActions = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return actions;
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    return actions
+      .map((action, index) => ({ action, index, score: scoreCommandAction(action, parts) }))
+      .filter((result): result is { action: AppCommand; index: number; score: number } => {
+        return result.score !== null;
+      })
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((result) => result.action);
+  }, [actions, query]);
+  const boundedActiveIndex =
+    filteredActions.length === 0 ? 0 : Math.min(activeIndex, filteredActions.length - 1);
+
+  useModalFocusTrap(dialogRef, {
+    active: open,
+    initialFocusSelector: "[data-autofocus]",
+    onEscape: onClose,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    activeOptionRef.current?.scrollIntoView({ block: "nearest" });
+  }, [boundedActiveIndex, filteredActions, open]);
+
+  if (!open) return null;
+
+  const runAction = (action: AppCommand) => {
+    action.run();
+    onClose();
+  };
+
+  const clearCommandSearch = () => {
+    setQuery("");
+    setActiveIndex(0);
+    inputRef.current?.focus();
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (isImeComposing(event)) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => (index + 1) % Math.max(1, filteredActions.length));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex(
+        (index) =>
+          (index - 1 + Math.max(1, filteredActions.length)) % Math.max(1, filteredActions.length),
+      );
+      return;
+    }
+    if (event.key === "Enter" && filteredActions[boundedActiveIndex]) {
+      event.preventDefault();
+      runAction(filteredActions[boundedActiveIndex]);
+    }
+  };
+
+  return (
+    <div className="app-command-overlay" role="presentation" onMouseDown={onClose}>
+      <section
+        ref={dialogRef}
+        aria-label="全局命令"
+        aria-modal="true"
+        className="app-command-palette"
+        data-modal-root="true"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="app-command-palette__search">
+          <NavIcon name="search" />
+          <input
+            ref={inputRef}
+            aria-activedescendant={
+              filteredActions[boundedActiveIndex]
+                ? commandElementId(filteredActions[boundedActiveIndex].id)
+                : undefined
+            }
+            aria-autocomplete="list"
+            aria-controls="app-command-list"
+            aria-expanded={open}
+            aria-label="搜索命令"
+            autoComplete="off"
+            data-autofocus="true"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActiveIndex(0);
+            }}
+            onKeyDown={onKeyDown}
+            placeholder="搜索工作区、文献视图或动作..."
+            role="combobox"
+            value={query}
+          />
+          <kbd>Esc</kbd>
+        </div>
+        <div className="app-command-palette__meta">
+          <span>全局命令</span>
+          <span>{filteredActions.length} 项</span>
+        </div>
+        <div className="app-command-list" id="app-command-list" role="listbox">
+          {filteredActions.length > 0 ? (
+            filteredActions.map((action, index) => (
+              <button
+                key={action.id}
+                id={commandElementId(action.id)}
+                className={`app-command-item ${
+                  index === boundedActiveIndex ? "app-command-item--active" : ""
+                }`}
+                onClick={() => runAction(action)}
+                onMouseEnter={() => setActiveIndex(index)}
+                ref={index === boundedActiveIndex ? activeOptionRef : undefined}
+                role="option"
+                type="button"
+                aria-selected={index === boundedActiveIndex}
+              >
+                <span className="app-command-item__icon">
+                  <NavIcon name={action.icon} />
+                </span>
+                <span className="app-command-item__body">
+                  <strong>{action.title}</strong>
+                  <small>{action.description}</small>
+                </span>
+                <span className="app-command-item__group">{action.group}</span>
+              </button>
+            ))
+          ) : (
+            <div className="app-command-empty" role="note">
+              <strong>没有匹配命令</strong>
+              <span>试试“文献”“AI”“回收站”或“设置”。</span>
+              <button
+                type="button"
+                className="app-command-empty__clear"
+                aria-label="清空命令搜索"
+                onClick={clearCommandSearch}
+              >
+                清空搜索
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type LibraryShellCollection = LibraryShellStats["collections"][number];
+
+interface LibraryCollectionTreeNode extends LibraryShellCollection {
+  children: LibraryCollectionTreeNode[];
+}
+
+function buildLibraryCollectionTree(
+  collections: LibraryShellCollection[],
+): LibraryCollectionTreeNode[] {
+  const byId = new Map(collections.map((collection) => [collection.id, collection]));
+  const nodes = new Map<string, LibraryCollectionTreeNode>(
+    collections.map((collection) => [
+      collection.id,
+      { ...collection, children: [] } as LibraryCollectionTreeNode,
+    ]),
+  );
+  const roots: LibraryCollectionTreeNode[] = [];
+
+  const hasValidParent = (collection: LibraryShellCollection) => {
+    if (!collection.parentId || collection.parentId === collection.id) return false;
+    let cursor: string | null = collection.parentId;
+    const seen = new Set([collection.id]);
+    while (cursor) {
+      if (seen.has(cursor)) return false;
+      seen.add(cursor);
+      cursor = byId.get(cursor)?.parentId ?? null;
+    }
+    return byId.has(collection.parentId);
+  };
+
+  for (const collection of collections) {
+    const node = nodes.get(collection.id)!;
+    if (hasValidParent(collection)) {
+      nodes.get(collection.parentId!)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const sortTree = (items: LibraryCollectionTreeNode[]) => {
+    items.sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+    items.forEach((item) => sortTree(item.children));
+  };
+  sortTree(roots);
+  return roots;
+}
+
+function CollectionTreeBranch({
+  nodes,
+  depth,
+  activeView,
+  collapsedIds,
+  onCreateCollection,
+  onSelect,
+  onToggle,
+}: {
+  nodes: LibraryCollectionTreeNode[];
+  depth: number;
+  activeView: LibraryViewState;
+  collapsedIds: Set<string>;
+  onCreateCollection: (parentId?: string) => void;
+  onSelect: (detail: LibraryViewDetail) => void;
+  onToggle: (id: string) => void;
+}) {
+  return nodes.map((node) => {
+    const detail: LibraryViewDetail = { filter: "all", collectionId: node.id, tag: null };
+    const isActive = sameLibraryView(activeView, detail);
+    const hasChildren = node.children.length > 0;
+    const expanded = hasChildren && !collapsedIds.has(node.id);
+    return (
+      <div
+        className="app-sidebar-treeitem"
+        key={node.id}
+        role="treeitem"
+        aria-expanded={hasChildren ? expanded : undefined}
+      >
+        <div
+          className={`app-sidebar-collection ${
+            isActive ? "app-sidebar-collection--active" : ""
+          }`}
+          style={{ paddingLeft: 6 + depth * 14 }}
+        >
+          {hasChildren ? (
+            <button
+              type="button"
+              className={`app-sidebar-collection__toggle ${
+                expanded ? "app-sidebar-collection__toggle--expanded" : ""
+              }`}
+              aria-label={`${expanded ? "收起" : "展开"}文件夹 ${node.name}`}
+              onClick={() => onToggle(node.id)}
+            >
+              ›
+            </button>
+          ) : (
+            <span className="app-sidebar-collection__spacer" aria-hidden="true" />
+          )}
+          <button
+            type="button"
+            className="app-sidebar-collection__main"
+            aria-current={isActive ? "page" : undefined}
+            aria-label={sidebarViewLabel(node.name, node.count, isActive)}
+            aria-pressed={isActive}
+            onClick={() => onSelect(detail)}
+            title={node.name}
+          >
+            <span className="app-sidebar-collection__folder" aria-hidden="true">
+              <svg viewBox="0 0 20 20">
+                <path d="M2.8 5.2h5l1.5 1.7h7.9v7.9H2.8z" />
+              </svg>
+            </span>
+            <span className="app-sidebar-collection__name">{node.name}</span>
+          </button>
+          <small>{node.count.toLocaleString("zh-CN")}</small>
+          <button
+            type="button"
+            className="app-sidebar-collection__add"
+            aria-label={`在 ${node.name} 中新建子文件夹`}
+            title="新建子文件夹"
+            onClick={() => onCreateCollection(node.id)}
+          >
+            +
+          </button>
+        </div>
+        {expanded && (
+          <div role="group">
+            <CollectionTreeBranch
+              nodes={node.children}
+              depth={depth + 1}
+              activeView={activeView}
+              collapsedIds={collapsedIds}
+              onCreateCollection={onCreateCollection}
+              onSelect={onSelect}
+              onToggle={onToggle}
+            />
+          </div>
+        )}
+      </div>
+    );
+  });
 }
 
 function LibrarySidebarMeta({
@@ -292,118 +1370,76 @@ function LibrarySidebarMeta({
   activeView,
   onSelect,
   onCreateCollection,
+  onManageCollections,
 }: {
   stats: LibraryShellStats;
   activeView: LibraryViewState;
   onSelect: (detail: LibraryViewDetail) => void;
-  onCreateCollection: () => void;
+  onCreateCollection: (parentId?: string) => void;
+  onManageCollections: () => void;
 }) {
-  const groups: Array<{
-    key: string;
-    label: string;
-    count: number;
-    detail: LibraryViewDetail;
-  }> = [
-    {
-      key: "all",
-      label: "全部文献",
-      count: stats.total,
-      detail: { filter: "all", collectionId: null },
-    },
-    {
-      key: "reading",
-      label: "阅读中",
-      count: stats.reading,
-      detail: { filter: "reading", collectionId: null },
-    },
-    {
-      key: "unread",
-      label: "未读",
-      count: stats.unread,
-      detail: { filter: "unread", collectionId: null },
-    },
-    {
-      key: "starred",
-      label: "重点文献",
-      count: stats.starred,
-      detail: { filter: "starred", collectionId: null },
-    },
-    {
-      key: "trash",
-      label: "回收站",
-      count: stats.trash,
-      detail: { filter: "trash", collectionId: null },
-    },
-    ...stats.collections.map((c) => ({
-      key: c.id,
-      label: c.name,
-      count: c.count,
-      detail: { filter: "all" as const, collectionId: c.id },
-    })),
-  ];
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+  const collectionTree = useMemo(
+    () => buildLibraryCollectionTree(stats.collections),
+    [stats.collections],
+  );
+  const toggleCollection = (id: string) => {
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="app-sidebar-meta">
-      <div className="app-sidebar-section">
+      <section className="app-sidebar-section app-sidebar-section--collections">
         <div className="app-sidebar-section__head">
-          <span>我的分组</span>
-          <button type="button" title="新建分组" onClick={onCreateCollection}>
-            +
-          </button>
-        </div>
-        {groups.map(({ key, label, count, detail }) => (
-          <button
-            key={key}
-            className={`app-sidebar-subitem ${sameLibraryView(activeView, detail) ? "app-sidebar-subitem--active" : ""}`}
-            type="button"
-            onClick={() => onSelect(detail)}
-          >
-            <span>{label}</span>
-            <small>{count.toLocaleString("zh-CN")}</small>
-          </button>
-        ))}
-        <button
-          className="app-sidebar-subitem app-sidebar-subitem--muted"
-          type="button"
-          onClick={onCreateCollection}
-        >
-          <span>新建分组</span>
-        </button>
-      </div>
-      <div className="app-sidebar-section">
-        <div className="app-sidebar-section__head">
-          <span>标签</span>
-        </div>
-        {stats.tags.length > 0 ? (
-          stats.tags.map((tag, index) => (
+          <span>文件夹</span>
+          <div className="app-sidebar-section__actions">
             <button
-              key={tag.name}
-              className={`app-sidebar-tag ${activeView.tag === tag.name ? "app-sidebar-tag--active" : ""}`}
               type="button"
-              onClick={() => onSelect({ filter: "all", collectionId: null, tag: tag.name })}
-            >
-              <span className={`app-sidebar-tag__dot app-sidebar-tag__dot--${tagTone(index)}`} />
-              <span>{tag.name}</span>
-              <small>{tag.count.toLocaleString("zh-CN")}</small>
+              aria-label="新建目录"
+              title="新建目录"
+              onClick={() => onCreateCollection()}
+          >
+              ＋
             </button>
-          ))
+            <button
+              type="button"
+              aria-label="管理文件夹"
+              onClick={onManageCollections}
+              title="管理文件夹"
+            >
+              •••
+            </button>
+          </div>
+        </div>
+        {collectionTree.length > 0 ? (
+          <div className="app-sidebar-collection-tree" role="tree" aria-label="文件夹树">
+            <CollectionTreeBranch
+              nodes={collectionTree}
+              depth={0}
+              activeView={activeView}
+              collapsedIds={collapsedIds}
+              onCreateCollection={onCreateCollection}
+              onSelect={onSelect}
+              onToggle={toggleCollection}
+            />
+          </div>
         ) : (
-          <span className="app-sidebar-empty">暂无标签</span>
+          <button
+            className="app-sidebar-empty-action"
+            type="button"
+            onClick={() => onCreateCollection()}
+          >
+            新建第一个文件夹
+          </button>
         )}
-        <button
-          className="app-sidebar-subitem app-sidebar-subitem--muted"
-          type="button"
-          onClick={() => window.dispatchEvent(new Event("aurascholar:manage-tags"))}
-        >
-          <span>管理标签</span>
-        </button>
-      </div>
+      </section>
     </div>
   );
-}
-
-function tagTone(index: number) {
-  return ["teal", "amber", "blue", "green", "purple"][index % 5] ?? "teal";
 }
 
 function NavIcon({ name }: { name: (typeof NAV)[number]["icon"] }) {

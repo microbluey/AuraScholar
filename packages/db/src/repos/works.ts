@@ -1,7 +1,9 @@
-import type { Database } from "../database";
-import { newId, normalizeDoi, workFingerprint } from "../ids";
+import type { Database } from "../database.js";
+import { buildWorksFtsQuery } from "../fts.js";
+import { newId, normalizeDoi, workFingerprint } from "../ids.js";
 
 export type AuthorRole = "author" | "editor" | "translator";
+export type ReadingStatus = "unread" | "reading" | "read";
 
 export interface WorkAuthorInput {
   displayName: string;
@@ -79,6 +81,7 @@ export interface WorkRow {
   openalex_id: string | null;
   s2_id: string | null;
   pmid: string | null;
+  fingerprint: string | null;
   volume: string | null;
   issue: string | null;
   pages: string | null;
@@ -124,6 +127,18 @@ export interface MergeWorksResult {
   merged: number;
   movedAttachments: number;
 }
+
+export interface UpsertWorksSummary {
+  total: number;
+  imported: number;
+  deduped: number;
+}
+
+export interface WorkBatchOptions {
+  afterEach?: (workId: string, index: number) => void | Promise<void>;
+}
+
+const workWriteQueues = new WeakMap<Database, Promise<void>>();
 
 // camelCase WorkInput key → works column. Single source of truth for which
 // rich fields exist and how they map; used by insert, update, and backfill.
@@ -183,12 +198,71 @@ function isUniqueConstraint(error: unknown): boolean {
 export class WorksRepo {
   constructor(private readonly db: Database) {}
 
+  private assertChanged(changed: number, message: string): void {
+    if (changed === 0) throw new Error(message);
+  }
+
+  private async withSavepoint<T>(name: string, fn: () => Promise<T>): Promise<T> {
+    await this.db.exec(`SAVEPOINT ${name}`);
+    try {
+      const result = await fn();
+      await this.db.exec(`RELEASE SAVEPOINT ${name}`);
+      return result;
+    } catch (e) {
+      try {
+        await this.db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+      } finally {
+        try {
+          await this.db.exec(`RELEASE SAVEPOINT ${name}`);
+        } catch {
+          // Ignore release errors after rollback; preserve the original failure.
+        }
+      }
+      throw e;
+    }
+  }
+
+  private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = workWriteQueues.get(this.db) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(fn);
+    workWriteQueues.set(
+      this.db,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return next;
+  }
+
   /**
    * Insert or merge a work. Dedup order: DOI → fingerprint. Returns the
    * existing row's id when a duplicate is found (metadata is backfilled
    * for fields the existing row is missing).
    */
   async upsert(input: WorkInput): Promise<{ id: string; deduped: boolean }> {
+    return this.withWriteLock(() => this.upsertUnlocked(input));
+  }
+
+  async upsertMany(inputs: WorkInput[]): Promise<UpsertWorksSummary> {
+    return this.withWriteLock(() => this.upsertManyUnlocked(inputs));
+  }
+
+  private async upsertManyUnlocked(inputs: WorkInput[]): Promise<UpsertWorksSummary> {
+    let imported = 0;
+    let deduped = 0;
+    const savepoint = `works_upsert_many_${newId().replace(/-/g, "_")}`;
+    await this.withSavepoint(savepoint, async () => {
+      for (const input of inputs) {
+        const result = await this.upsertUnlocked(input);
+        if (result.deduped) deduped++;
+        else imported++;
+      }
+    });
+    return { total: inputs.length, imported, deduped };
+  }
+
+  private async upsertUnlocked(input: WorkInput): Promise<{ id: string; deduped: boolean }> {
     const now = Date.now();
     const doi = inputDoi(input);
     const firstAuthor = input.authors?.[0]?.displayName?.split(/\s+/).pop() ?? null;
@@ -219,37 +293,44 @@ export class WorksRepo {
     }
     cols.push("created_at", "updated_at");
     vals.push(now, now);
+    const createSavepoint = `works_upsert_create_${id.replace(/-/g, "_")}`;
     try {
-      await this.db.run(
-        `INSERT INTO works (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
-        vals,
-      );
+      await this.withSavepoint(createSavepoint, async () => {
+        await this.db.run(
+          `INSERT INTO works (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
+          vals,
+        );
+
+        for (const author of input.authors ?? []) {
+          const authorId = await this.upsertAuthor(author.displayName, author.orcid);
+          await this.db.run(
+            `INSERT OR IGNORE INTO work_authors (work_id, author_id, position, raw_name, role) VALUES (?, ?, ?, ?, ?)`,
+            [id, authorId, author.position, author.displayName, author.role ?? "author"],
+          );
+        }
+      });
     } catch (e) {
       // Concurrent capture/import can race between the preflight SELECT and
       // INSERT. If the unique DOI wins elsewhere, merge into the winner.
-      if (isUniqueConstraint(e)) {
-        const conflict = await this.findExisting(input, doi, fingerprint);
-        if (conflict.length > 0) {
-          const existingId = conflict[0]!.id;
-          await this.mergeExisting(existingId, input, doi, now);
-          return { id: existingId, deduped: true };
-        }
-      }
-      throw e;
-    }
-
-    for (const author of input.authors ?? []) {
-      const authorId = await this.upsertAuthor(author.displayName, author.orcid);
-      await this.db.run(
-        `INSERT OR IGNORE INTO work_authors (work_id, author_id, position, raw_name, role) VALUES (?, ?, ?, ?, ?)`,
-        [id, authorId, author.position, author.displayName, author.role ?? "author"],
-      );
+      if (!isUniqueConstraint(e)) throw e;
+      const conflict = await this.findExisting(input, doi, fingerprint);
+      if (conflict.length === 0) throw e;
+      const existingId = conflict[0]!.id;
+      await this.mergeExisting(existingId, input, doi, now);
+      return { id: existingId, deduped: true };
     }
 
     return { id, deduped: false };
   }
 
   async mergeInto(primaryId: string, duplicateIds: string[]): Promise<MergeWorksResult> {
+    return this.withWriteLock(() => this.mergeIntoUnlocked(primaryId, duplicateIds));
+  }
+
+  private async mergeIntoUnlocked(
+    primaryId: string,
+    duplicateIds: string[],
+  ): Promise<MergeWorksResult> {
     const duplicates = [...new Set(duplicateIds)].filter((id) => id && id !== primaryId);
     if (duplicates.length === 0) return { primaryId, merged: 0, movedAttachments: 0 };
 
@@ -297,16 +378,24 @@ export class WorksRepo {
 
     for (const [value, column] of stableIds) {
       if (!value) continue;
-      const rows = await this.db.query<{ id: string }>(
-        `SELECT id FROM works WHERE ${column} = ? LIMIT 1`,
-        [value],
-      );
+      const rows = await this.findExistingByColumn(column, value);
       if (rows.length > 0) return rows;
     }
 
-    return this.db.query<{ id: string }>(`SELECT id FROM works WHERE fingerprint = ? LIMIT 1`, [
-      fingerprint,
-    ]);
+    return this.findExistingByColumn("fingerprint", fingerprint);
+  }
+
+  private async findExistingByColumn(
+    column: string,
+    value: unknown,
+  ): Promise<Array<{ id: string }>> {
+    return this.db.query<{ id: string }>(
+      `SELECT id FROM works
+       WHERE ${column} = ?
+       ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, updated_at DESC
+       LIMIT 1`,
+      [value],
+    );
   }
 
   private async mergeExisting(
@@ -553,6 +642,13 @@ export class WorksRepo {
    * written, so partial saves don't clobber untouched fields.
    */
   async update(id: string, patch: WorkPatch): Promise<void> {
+    return this.withWriteLock(() => this.updateUnlocked(id, patch));
+  }
+
+  private async updateUnlocked(id: string, patch: WorkPatch): Promise<void> {
+    const now = Date.now();
+    const needsFingerprint =
+      patch.title !== undefined || patch.year !== undefined || patch.authors !== undefined;
     const sets: string[] = [];
     const params: unknown[] = [];
     const scalar: Array<[keyof WorkPatch, string]> = [
@@ -577,24 +673,92 @@ export class WorksRepo {
       sets.push(`keywords_json = ?`);
       params.push(patch.keywords?.length ? JSON.stringify(patch.keywords) : null);
     }
-    if (sets.length > 0) {
-      await this.db.run(`UPDATE works SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [
-        ...params,
-        Date.now(),
-        id,
-      ]);
+    if (needsFingerprint) {
+      const currentRows = await this.db.query<WorkRow>(
+        `SELECT * FROM works WHERE id = ? AND deleted_at IS NULL`,
+        [id],
+      );
+      const current = currentRows[0];
+      if (!current) throw new Error(`Work ${id} is missing or removed`);
+      const nextTitle = patch.title ?? current.title;
+      const nextYear = patch.year !== undefined ? (patch.year ?? null) : current.year;
+      const currentAuthors =
+        patch.authors ??
+        (await this.authorsOf(id)).map((author) => ({
+          displayName: author.displayName,
+          orcid: author.orcid ?? undefined,
+          position: author.position,
+          role: author.role as AuthorRole,
+        }));
+      const firstAuthor = currentAuthors[0]?.displayName?.split(/\s+/).pop() ?? null;
+      sets.push(`fingerprint = ?`);
+      params.push(workFingerprint(nextTitle, nextYear, firstAuthor));
     }
 
-    if (patch.authors) {
-      await this.db.run(`DELETE FROM work_authors WHERE work_id = ?`, [id]);
-      for (const author of patch.authors) {
-        const authorId = await this.upsertAuthor(author.displayName, author.orcid);
-        await this.db.run(
-          `INSERT OR IGNORE INTO work_authors (work_id, author_id, position, raw_name, role) VALUES (?, ?, ?, ?, ?)`,
-          [id, authorId, author.position, author.displayName, author.role ?? "author"],
+    await this.db.exec("BEGIN");
+    try {
+      if (sets.length > 0) {
+        const changed = await this.db.run(
+          `UPDATE works SET ${sets.join(", ")}, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+          [...params, now, id],
         );
+        this.assertChanged(changed, `Work ${id} is missing or removed`);
       }
+
+      if (patch.authors) {
+        await this.db.run(`DELETE FROM work_authors WHERE work_id = ?`, [id]);
+        for (const author of patch.authors) {
+          const authorId = await this.upsertAuthor(author.displayName, author.orcid);
+          await this.db.run(
+            `INSERT OR IGNORE INTO work_authors (work_id, author_id, position, raw_name, role) VALUES (?, ?, ?, ?, ?)`,
+            [id, authorId, author.position, author.displayName, author.role ?? "author"],
+          );
+        }
+      }
+      await this.db.exec("COMMIT");
+    } catch (e) {
+      await this.db.exec("ROLLBACK");
+      throw e;
     }
+  }
+
+  async setReadingStatus(id: string, status: ReadingStatus): Promise<void> {
+    return this.withWriteLock(() => this.setReadingStatusUnlocked(id, status));
+  }
+
+  async markReadingStarted(id: string): Promise<boolean> {
+    return this.withWriteLock(async () => {
+      const changed = await this.db.run(
+        `UPDATE works
+         SET reading_status = 'reading', updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL AND reading_status = 'unread'`,
+        [Date.now(), id],
+      );
+      return changed > 0;
+    });
+  }
+
+  private async setReadingStatusUnlocked(id: string, status: ReadingStatus): Promise<void> {
+    if (!["unread", "reading", "read"].includes(status)) {
+      throw new Error("阅读状态无效");
+    }
+    const changed = await this.db.run(
+      `UPDATE works SET reading_status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+      [status, Date.now(), id],
+    );
+    this.assertChanged(changed, `Work ${id} is missing or removed`);
+  }
+
+  async setStarred(id: string, starred: boolean): Promise<void> {
+    return this.withWriteLock(() => this.setStarredUnlocked(id, starred));
+  }
+
+  private async setStarredUnlocked(id: string, starred: boolean): Promise<void> {
+    const changed = await this.db.run(
+      `UPDATE works SET starred = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+      [starred ? 1 : 0, Date.now(), id],
+    );
+    this.assertChanged(changed, `Work ${id} is missing or removed`);
   }
 
   private async upsertAuthor(displayName: string, orcid?: string): Promise<string> {
@@ -630,25 +794,23 @@ export class WorksRepo {
   }): Promise<WorkWithAuthors[]> {
     const limit = opts?.limit ?? 200;
     const collectionJoin = opts?.collectionId
-      ? `JOIN collection_items ci ON ci.work_id = w.id AND ci.collection_id = ?`
+      ? `JOIN collection_items ci ON ci.work_id = w.id AND ci.collection_id = ?
+         JOIN collections c ON c.id = ci.collection_id AND c.deleted_at IS NULL`
       : "";
     const collectionParams = opts?.collectionId ? [opts.collectionId] : [];
     let rows: WorkRow[];
     if (opts?.search?.trim()) {
-      // FTS5 prefix query; quote tokens to avoid syntax errors from user input.
-      const ftsQuery = opts.search
-        .trim()
-        .split(/\s+/)
-        .map((t) => `"${t.replace(/"/g, "")}"*`)
-        .join(" ");
-      rows = await this.db.query<WorkRow>(
-        `SELECT w.* FROM works w
-         JOIN works_fts f ON f.rowid = w.rowid
-         ${collectionJoin}
-         WHERE works_fts MATCH ? AND w.deleted_at IS NULL
-         ORDER BY rank LIMIT ?`,
-        [...collectionParams, ftsQuery, limit],
-      );
+      const ftsQuery = buildWorksFtsQuery(opts.search);
+      rows = ftsQuery
+        ? await this.db.query<WorkRow>(
+            `SELECT w.* FROM works w
+             JOIN works_fts f ON f.rowid = w.rowid
+             ${collectionJoin}
+             WHERE works_fts MATCH ? AND w.deleted_at IS NULL
+             ORDER BY rank LIMIT ?`,
+            [...collectionParams, ftsQuery, limit],
+          )
+        : [];
     } else {
       rows = await this.db.query<WorkRow>(
         `SELECT w.* FROM works w
@@ -664,18 +826,16 @@ export class WorksRepo {
     const limit = opts?.limit ?? 200;
     let rows: WorkRow[];
     if (opts?.search?.trim()) {
-      const ftsQuery = opts.search
-        .trim()
-        .split(/\s+/)
-        .map((t) => `"${t.replace(/"/g, "")}"*`)
-        .join(" ");
-      rows = await this.db.query<WorkRow>(
-        `SELECT w.* FROM works w
-         JOIN works_fts f ON f.rowid = w.rowid
-         WHERE works_fts MATCH ? AND w.deleted_at IS NOT NULL
-         ORDER BY rank LIMIT ?`,
-        [ftsQuery, limit],
-      );
+      const ftsQuery = buildWorksFtsQuery(opts.search);
+      rows = ftsQuery
+        ? await this.db.query<WorkRow>(
+            `SELECT w.* FROM works w
+             JOIN works_fts f ON f.rowid = w.rowid
+             WHERE works_fts MATCH ? AND w.deleted_at IS NOT NULL
+             ORDER BY rank LIMIT ?`,
+            [ftsQuery, limit],
+          )
+        : [];
     } else {
       rows = await this.db.query<WorkRow>(
         `SELECT w.* FROM works w
@@ -705,18 +865,70 @@ export class WorksRepo {
   }
 
   async softDelete(id: string): Promise<void> {
-    await this.db.run(`UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
-      Date.now(),
-      Date.now(),
-      id,
-    ]);
+    return this.withWriteLock(() => this.softDeleteUnlocked(id));
+  }
+
+  async softDeleteMany(ids: string[], options: WorkBatchOptions = {}): Promise<number> {
+    return this.withWriteLock(() => this.softDeleteManyUnlocked(ids, options));
+  }
+
+  private async softDeleteUnlocked(id: string): Promise<void> {
+    const now = Date.now();
+    const changed = await this.db.run(
+      `UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+      [now, now, id],
+    );
+    this.assertChanged(changed, `Work ${id} is missing or already removed`);
+  }
+
+  private async softDeleteManyUnlocked(
+    ids: string[],
+    options: WorkBatchOptions = {},
+  ): Promise<number> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return 0;
+    const savepoint = `works_soft_delete_many_${newId().replace(/-/g, "_")}`;
+    await this.withSavepoint(savepoint, async () => {
+      for (let index = 0; index < uniqueIds.length; index += 1) {
+        const id = uniqueIds[index]!;
+        await this.softDeleteUnlocked(id);
+        await options.afterEach?.(id, index);
+      }
+    });
+    return uniqueIds.length;
   }
 
   async restore(id: string): Promise<void> {
-    await this.db.run(`UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ?`, [
-      Date.now(),
-      id,
-    ]);
+    return this.withWriteLock(() => this.restoreUnlocked(id));
+  }
+
+  async restoreMany(ids: string[], options: WorkBatchOptions = {}): Promise<number> {
+    return this.withWriteLock(() => this.restoreManyUnlocked(ids, options));
+  }
+
+  private async restoreUnlocked(id: string): Promise<void> {
+    const changed = await this.db.run(
+      `UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL`,
+      [Date.now(), id],
+    );
+    this.assertChanged(changed, `Work ${id} is missing or already active`);
+  }
+
+  private async restoreManyUnlocked(
+    ids: string[],
+    options: WorkBatchOptions = {},
+  ): Promise<number> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return 0;
+    const savepoint = `works_restore_many_${newId().replace(/-/g, "_")}`;
+    await this.withSavepoint(savepoint, async () => {
+      for (let index = 0; index < uniqueIds.length; index += 1) {
+        const id = uniqueIds[index]!;
+        await this.restoreUnlocked(id);
+        await options.afterEach?.(id, index);
+      }
+    });
+    return uniqueIds.length;
   }
 
   /**
@@ -725,21 +937,36 @@ export class WorksRepo {
    * be shared; a future blob compactor can remove unreferenced files safely.
    */
   async purgeDeleted(id: string): Promise<void> {
-    const target = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NOT NULL LIMIT 1`,
-      [id],
+    await this.purgeDeletedMany([id]);
+  }
+
+  /** Permanently removes multiple recycle-bin works in a single transaction. */
+  async purgeDeletedMany(ids: string[]): Promise<number> {
+    return this.withWriteLock(() => this.purgeDeletedManyUnlocked(ids));
+  }
+
+  private async purgeDeletedManyUnlocked(ids: string[]): Promise<number> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return 0;
+    const placeholders = uniqueIds.map(() => "?").join(",");
+    const targets = await this.db.query<{ id: string }>(
+      `SELECT id FROM works WHERE id IN (${placeholders}) AND deleted_at IS NOT NULL ORDER BY id`,
+      uniqueIds,
     );
-    if (target.length === 0) return;
+    if (targets.length === 0) return 0;
 
     await this.db.exec("BEGIN");
     try {
-      await this.purgeWorkArtifacts(id);
-      await this.db.run(`DELETE FROM works WHERE id = ?`, [id]);
+      for (const { id } of targets) {
+        await this.purgeWorkArtifacts(id);
+        await this.db.run(`DELETE FROM works WHERE id = ?`, [id]);
+      }
       await this.db.exec("COMMIT");
     } catch (e) {
       await this.db.exec("ROLLBACK");
       throw e;
     }
+    return targets.length;
   }
 
   /** Full author list with roles, ordered by position — for the editor. */

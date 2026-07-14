@@ -1,5 +1,5 @@
-import type { Database } from "../database";
-import { newId } from "../ids";
+import type { Database } from "../database.js";
+import { newId } from "../ids.js";
 
 export interface AnnotationInput {
   attachmentId: string;
@@ -31,7 +31,28 @@ export interface AnnotationRow {
 export class AnnotationsRepo {
   constructor(private readonly db: Database) {}
 
+  private assertChanged(changed: number, message: string): void {
+    if (changed === 0) throw new Error(message);
+  }
+
+  private async assertWritableTarget(input: AnnotationInput): Promise<void> {
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT a.id
+       FROM attachments a
+       JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+       WHERE a.id = ? AND a.work_id = ? AND a.deleted_at IS NULL
+       LIMIT 1`,
+      [input.attachmentId, input.workId],
+    );
+    if (!rows[0]) {
+      throw new Error(
+        `Attachment ${input.attachmentId} is missing, removed, or not active for work ${input.workId}`,
+      );
+    }
+  }
+
   async create(input: AnnotationInput): Promise<string> {
+    await this.assertWritableTarget(input);
     const id = newId();
     const now = Date.now();
     // sort_key: page-major ordering; y position refinement happens on update
@@ -63,32 +84,81 @@ export class AnnotationsRepo {
 
   async listForAttachment(attachmentId: string): Promise<AnnotationRow[]> {
     return this.db.query<AnnotationRow>(
-      `SELECT * FROM annotations WHERE attachment_id = ? AND deleted_at IS NULL ORDER BY sort_key`,
+      `SELECT an.*
+       FROM annotations an
+       JOIN attachments a ON a.id = an.attachment_id AND a.deleted_at IS NULL
+       JOIN works w ON w.id = an.work_id AND w.id = a.work_id AND w.deleted_at IS NULL
+       WHERE an.attachment_id = ? AND an.deleted_at IS NULL
+       ORDER BY an.sort_key`,
       [attachmentId],
     );
   }
 
   async updateContent(id: string, contentMd: string): Promise<void> {
-    await this.db.run(`UPDATE annotations SET content_md = ?, updated_at = ? WHERE id = ?`, [
-      contentMd,
-      Date.now(),
-      id,
-    ]);
+    const changed = await this.db.run(
+      `UPDATE annotations SET content_md = ?, updated_at = ?
+       WHERE id = ? AND deleted_at IS NULL
+         AND EXISTS (
+           SELECT 1
+           FROM attachments a
+           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           WHERE a.id = annotations.attachment_id
+             AND a.work_id = annotations.work_id
+             AND a.deleted_at IS NULL
+         )`,
+      [contentMd, Date.now(), id],
+    );
+    this.assertChanged(changed, `Annotation ${id} is missing or removed`);
   }
 
   async setOrphaned(id: string, orphaned: boolean): Promise<void> {
-    await this.db.run(`UPDATE annotations SET orphaned = ?, updated_at = ? WHERE id = ?`, [
-      orphaned ? 1 : 0,
-      Date.now(),
-      id,
-    ]);
+    const changed = await this.db.run(
+      `UPDATE annotations SET orphaned = ?, updated_at = ?
+       WHERE id = ? AND deleted_at IS NULL
+         AND EXISTS (
+           SELECT 1
+           FROM attachments a
+           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           WHERE a.id = annotations.attachment_id
+             AND a.work_id = annotations.work_id
+             AND a.deleted_at IS NULL
+         )`,
+      [orphaned ? 1 : 0, Date.now(), id],
+    );
+    this.assertChanged(changed, `Annotation ${id} is missing or removed`);
   }
 
   async softDelete(id: string): Promise<void> {
-    await this.db.run(`UPDATE annotations SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
-      Date.now(),
-      Date.now(),
-      id,
-    ]);
+    const changed = await this.db.run(
+      `UPDATE annotations SET deleted_at = ?, updated_at = ?
+       WHERE id = ? AND deleted_at IS NULL
+         AND EXISTS (
+           SELECT 1
+           FROM attachments a
+           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           WHERE a.id = annotations.attachment_id
+             AND a.work_id = annotations.work_id
+             AND a.deleted_at IS NULL
+         )`,
+      [Date.now(), Date.now(), id],
+    );
+    this.assertChanged(changed, `Annotation ${id} is missing or already removed`);
+  }
+
+  async restore(id: string): Promise<void> {
+    const changed = await this.db.run(
+      `UPDATE annotations SET deleted_at = NULL, updated_at = ?
+       WHERE id = ? AND deleted_at IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+           FROM attachments a
+           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           WHERE a.id = annotations.attachment_id
+             AND a.work_id = annotations.work_id
+             AND a.deleted_at IS NULL
+         )`,
+      [Date.now(), id],
+    );
+    this.assertChanged(changed, `Annotation ${id} is missing or already active`);
   }
 }

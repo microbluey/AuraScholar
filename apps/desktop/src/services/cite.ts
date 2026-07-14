@@ -11,12 +11,14 @@ import {
   type CslItem,
   type WorkLike,
 } from "@aurascholar/cite";
-import { getDb } from "./tauri-db";
+import { downloadBlob } from "../download";
+import { getDb } from "./aura-db";
 
 interface CiteRow {
   id: string;
   title: string;
   doi: string | null;
+  pmid: string | null;
   year: number | null;
   publication_date: string | null;
   venue_name: string | null;
@@ -40,7 +42,7 @@ export async function cslItemsForWorks(workIds: string[]): Promise<CslItem[]> {
   const db = await getDb();
   const placeholders = workIds.map(() => "?").join(",");
   const rows = await db.query<CiteRow>(
-    `SELECT id, title, doi, year, publication_date, venue_name, type, csl_json,
+    `SELECT id, title, doi, pmid, year, publication_date, venue_name, type, csl_json,
             volume, issue, pages, publisher, place_published, edition, issn, isbn, language, url
      FROM works WHERE id IN (${placeholders}) AND deleted_at IS NULL`,
     workIds,
@@ -67,6 +69,7 @@ export async function cslItemsForWorks(workIds: string[]): Promise<CslItem[]> {
       id: row.id,
       title: row.title,
       doi: row.doi,
+      pmid: row.pmid,
       year: row.year,
       publicationDate: row.publication_date,
       venueName: row.venue_name,
@@ -100,11 +103,7 @@ export async function exportWorks(workIds: string[], format: ExportFormat): Prom
   const mime =
     format === "csljson" ? "application/json" : "text/plain;charset=utf-8";
   const blob = new Blob([content], { type: mime });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `aurascholar-references.${EXT[format]}`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(blob, `aurascholar-references.${EXT[format]}`);
 }
 
 /** Returns a numbered reference list as plain text, for clipboard copy. */
@@ -119,7 +118,7 @@ export async function referenceForWork(workId: string, styleId: string): Promise
   return item ? formatEntry(item, styleId) : "";
 }
 
-// csl_json may arrive as a string (raw tauri-sql driver) or already-parsed
+// csl_json may arrive as a string (raw SQL driver) or already-parsed
 // object (drizzle json mode) depending on the driver — handle both.
 function parseJson(value: unknown): unknown {
   if (!value) return null;

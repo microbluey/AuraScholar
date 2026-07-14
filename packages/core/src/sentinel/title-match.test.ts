@@ -22,6 +22,24 @@ function ctx(crossrefItems: unknown[], openalexResults: unknown[] = []): Connect
   };
 }
 
+function routedCtx(
+  route: (url: string) => { status: number; body?: unknown },
+): ConnectorContext {
+  return {
+    mailto: "t@t.io",
+    http: {
+      async request(req: { url: string }) {
+        const response = route(req.url);
+        return {
+          status: response.status,
+          headers: {},
+          body: new TextEncoder().encode(JSON.stringify(response.body ?? {})),
+        };
+      },
+    },
+  };
+}
+
 const CR_HIT = {
   DOI: "10.1109/test.2026.1",
   title: ["Adaptive Graph Learning for Traffic Forecasting"],
@@ -78,6 +96,26 @@ describe("findDoiByTitle", () => {
 
   it("returns null when both sources are empty", async () => {
     expect(await findDoiByTitle(ctx([], []), "anything")).toBeNull();
+  });
+
+  it("reports a failed title lookup when all sources fail", async () => {
+    await expect(
+      findDoiByTitle(routedCtx(() => ({ status: 403 })), "Unreachable Sentinel Title"),
+    ).rejects.toThrow(/标题 DOI 检索失败:.*Crossref.*OpenAlex/);
+  });
+
+  it("continues when one title source fails but the other returns a confident hit", async () => {
+    const r = await findDoiByTitle(
+      routedCtx((url) =>
+        url.includes("crossref.org")
+          ? { status: 403 }
+          : { status: 200, body: { results: [OA_HIT] } },
+      ),
+      "Attention Is All You Need",
+    );
+
+    expect(r?.doi).toBe("10.48550/arxiv.1706.03762");
+    expect(r?.source).toBe("openalex");
   });
 
   it("keeps evidence including the winning source", async () => {

@@ -1,8 +1,8 @@
 // Timeline hybrid layout — the readable alternative to force-directed hairballs:
 //   x = publication year (fixed; missing years interpolate to the median)
 //   y = collision-avoiding relaxation that pulls connected nodes together
-// Node size = sqrt(citations), color = relation to center (view layer decides).
-import type { CitationGraph, GraphEdge, GraphNode } from "./build";
+// Node size uses a capped log scale so highly cited papers remain legible.
+import type { CitationGraph, GraphEdge, GraphNode } from "./build.js";
 
 export interface PositionedNode extends GraphNode {
   x: number;
@@ -24,6 +24,12 @@ const WIDTH = 1000;
 const HEIGHT = 600;
 const MARGIN = 60;
 const ITERATIONS = 60;
+const MIN_NODE_SIZE = 5;
+const MAX_NODE_SIZE = 22;
+
+function nodeSize(citedByCount: number): number {
+  return Math.min(MAX_NODE_SIZE, MIN_NODE_SIZE + Math.log10(citedByCount + 1) * 3);
+}
 
 export function layoutTimeline(graph: CitationGraph): GraphLayout {
   const known = graph.nodes.filter((n) => n.year).map((n) => n.year!);
@@ -45,7 +51,7 @@ export function layoutTimeline(graph: CitationGraph): GraphLayout {
     ...n,
     x: xFor(n.year),
     y: HEIGHT * laneOf(n) + ((i * 37) % 120) - 60, // deterministic jitter
-    size: 4 + Math.sqrt(n.citedByCount + 1) * 1.2,
+    size: nodeSize(n.citedByCount),
   }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const center = byId.get(graph.centerId);

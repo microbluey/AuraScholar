@@ -1,7 +1,11 @@
 // Snippet service: capture excerpts while reading, browse them across the
-// library for writing. Thin wrapper over SnippetsRepo + the Tauri DB.
-import { SnippetsRepo, type SnippetInput, type SnippetWithWork } from "@aurascholar/db";
-import { getDb } from "./tauri-db";
+// library for writing. Thin wrapper over SnippetsRepo + the desktop DB.
+import {
+  SnippetsRepo,
+  type SnippetInput,
+  type SnippetWithWork,
+} from "@aurascholar/db/repos/snippets";
+import { getDb } from "./aura-db";
 
 export async function addSnippet(input: SnippetInput): Promise<void> {
   const db = await getDb();
@@ -23,5 +27,11 @@ export async function updateSnippetNote(id: string, noteMd: string | null): Prom
 export async function deleteSnippet(id: string): Promise<void> {
   const db = await getDb();
   await new SnippetsRepo(db).softDelete(id);
+  window.dispatchEvent(new Event("aurascholar:snippets-updated"));
+}
+
+export async function restoreSnippet(id: string): Promise<void> {
+  const db = await getDb();
+  await new SnippetsRepo(db).restore(id);
   window.dispatchEvent(new Event("aurascholar:snippets-updated"));
 }

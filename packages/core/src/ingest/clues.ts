@@ -200,6 +200,7 @@ function addCandidate(
 function cleanTitleCandidate(raw: string | undefined): string | null {
   if (!raw) return null;
   const cleaned = raw
+    // eslint-disable-next-line no-control-regex -- PDF text streams can embed NULs
     .replace(/\u0000/g, "")
     .replace(/\s+/g, " ")
     .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, "")

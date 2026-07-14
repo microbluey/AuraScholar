@@ -78,4 +78,5 @@ export interface Platform {
   deviceId(): Promise<string>;
 }
 
-export * from "./memory";
+export * from "./memory.js";
+export * from "./sensitive-text.js";

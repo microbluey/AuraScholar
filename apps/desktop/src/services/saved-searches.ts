@@ -1,11 +1,17 @@
 // Saved-search runner: re-runs stored open-source queries on a schedule and
 // surfaces newly-published matches. The discovery analogue of the sentinel
 // loop (services/sentinel.ts) — startup catch-up + hourly in-app timer.
-import { SavedSearchesRepo, workFingerprint, type SavedSearchRow } from "@aurascholar/db";
+import { workFingerprint } from "@aurascholar/db/ids";
+import {
+  SavedSearchInactiveError,
+  SavedSearchesRepo,
+  type SavedSearchRow,
+} from "@aurascholar/db/repos/saved-searches";
 import type { NormalizedWork } from "@aurascholar/connectors";
-import { getDb } from "./tauri-db";
-import { tauriNotifier } from "./tauri-platform";
-import { searchDiscovery } from "./discovery";
+import { getDb } from "./aura-db";
+import { auraNotifier } from "./aura-platform";
+import { describeSafeError } from "./sensitive-text";
+import type { DiscoveryResultWithLibrary } from "./discovery";
 import type { DiscoverySource } from "@aurascholar/core";
 
 // How long until a saved search is polled again. Conservative — new
@@ -19,16 +25,73 @@ export interface SavedSearchView {
   sources: DiscoverySource[] | null;
   newCount: number;
   lastRunAt: number | null;
+  lastError: string | null;
 }
+
+export interface CreateSavedSearchResult {
+  created: boolean;
+  id: string;
+}
+
+const ALL_DISCOVERY_SOURCES: DiscoverySource[] = ["arxiv", "crossref", "openalex", "s2"];
 
 function toView(row: SavedSearchRow): SavedSearchView {
   return {
     id: row.id,
     query: row.query,
-    sources: row.sources_json ? (JSON.parse(row.sources_json) as DiscoverySource[]) : null,
+    sources: parseSources(row.sources_json),
     newCount: row.new_count,
     lastRunAt: row.last_run_at,
+    lastError: row.last_error ? describeSafeError(row.last_error) : null,
   };
+}
+
+function parseSources(value: string | null): DiscoverySource[] | null {
+  if (!value) return null;
+  const parsed = parseJsonValue(value);
+  if (!Array.isArray(parsed)) return null;
+  const sources = parsed.filter(isDiscoverySource);
+  return sources.length ? [...new Set(sources)] : null;
+}
+
+function parseSeenIds(value: string): { ids: string[]; recovered: boolean } {
+  const parsed = parseJsonValue(value);
+  if (!Array.isArray(parsed)) return { ids: [], recovered: true };
+  return { ids: parsed.filter((item): item is string => typeof item === "string"), recovered: false };
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function isDiscoverySource(value: unknown): value is DiscoverySource {
+  return (
+    value === "arxiv" ||
+    value === "crossref" ||
+    value === "openalex" ||
+    value === "s2"
+  );
+}
+
+function normalizeQuery(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function canonicalSources(sources?: DiscoverySource[] | null): DiscoverySource[] {
+  const selected = sources && sources.length > 0 ? sources : ALL_DISCOVERY_SOURCES;
+  const unique = [...new Set(selected)];
+  const allSelected =
+    unique.length === ALL_DISCOVERY_SOURCES.length &&
+    ALL_DISCOVERY_SOURCES.every((source) => unique.includes(source));
+  return [...(allSelected ? ALL_DISCOVERY_SOURCES : unique)].sort();
+}
+
+function sameSources(a?: DiscoverySource[] | null, b?: DiscoverySource[] | null): boolean {
+  return JSON.stringify(canonicalSources(a)) === JSON.stringify(canonicalSources(b));
 }
 
 /** Stable identity for a result, matching the discovery dedupe keys. */
@@ -50,18 +113,34 @@ export async function listSavedSearches(): Promise<SavedSearchView[]> {
 export async function createSavedSearch(
   query: string,
   sources?: DiscoverySource[],
-): Promise<string> {
+): Promise<CreateSavedSearchResult> {
   const repo = new SavedSearchesRepo(await getDb());
-  const id = await repo.create({ query, sources: sources ?? null });
+  const normalizedQuery = normalizeQuery(query);
+  const existing = (await repo.list()).find(
+    (row) =>
+      normalizeQuery(row.query) === normalizedQuery && sameSources(parseSources(row.sources_json), sources),
+  );
+  if (existing) return { created: false, id: existing.id };
+
+  const storedSources = sameSources(sources, null) ? null : canonicalSources(sources);
+  const id = await repo.create({
+    query: query.trim().replace(/\s+/g, " "),
+    sources: storedSources,
+  });
   // Seed the baseline immediately so the first scheduled run only reports
   // genuinely new papers rather than the entire current result set.
   await runSavedSearch(id, { silent: true });
-  return id;
+  return { created: true, id };
 }
 
 export async function deleteSavedSearch(id: string): Promise<void> {
   const repo = new SavedSearchesRepo(await getDb());
   await repo.softDelete(id);
+}
+
+export async function restoreSavedSearch(id: string): Promise<void> {
+  const repo = new SavedSearchesRepo(await getDb());
+  await repo.restore(id);
 }
 
 export async function clearSavedSearchBadge(id: string): Promise<void> {
@@ -78,45 +157,110 @@ export async function runSavedSearch(
   const rows = await repo.list();
   const row = rows.find((r) => r.id === id);
   if (!row) return 0;
-  return runRow(repo, row, opts.silent ?? false);
+  return runRow(repo, row, {
+    silent: opts.silent ?? false,
+    throwOnError: !(opts.silent ?? false),
+  });
 }
 
 async function runRow(
   repo: SavedSearchesRepo,
   row: SavedSearchRow,
-  silent: boolean,
+  options: { silent: boolean; throwOnError: boolean },
 ): Promise<number> {
-  const sources = row.sources_json
-    ? (JSON.parse(row.sources_json) as DiscoverySource[])
-    : undefined;
-  let results;
+  const sources = parseSources(row.sources_json) ?? undefined;
+  let results: DiscoveryResultWithLibrary[];
   try {
-    results = await searchDiscovery(row.query, sources);
-  } catch {
+    const { searchDiscoveryDetailed } = await import("./discovery");
+    const report = await searchDiscoveryDetailed(row.query, sources);
+    if (isDiscoveryReportUnavailable(report)) {
+      throw new Error(discoveryReportErrorMessage(report));
+    }
+    results = report.results;
+  } catch (error) {
     // A transient failure shouldn't reset the baseline — reschedule and bail.
-    await repo.recordRun(row.id, JSON.parse(row.seen_ids_json), 0, Date.now() + POLL_INTERVAL_MS);
+    const message = describeSafeError(error);
+    try {
+      await repo.recordError(row.id, message, Date.now() + POLL_INTERVAL_MS);
+      notifySavedSearchesUpdated();
+    } catch (recordError) {
+      if (recordError instanceof SavedSearchInactiveError) return 0;
+      throw recordError;
+    }
+    if (options.throwOnError) throw new Error(message, { cause: error });
     return 0;
   }
 
-  const seen = new Set<string>(JSON.parse(row.seen_ids_json) as string[]);
+  const parsedSeen = parseSeenIds(row.seen_ids_json);
+  const seen = new Set<string>(parsedSeen.ids);
   const currentIds = results.map((r) => stableId(r.work));
-  const isFirstRun = seen.size === 0 && row.last_run_at == null;
+  const isFirstRun = parsedSeen.recovered || (seen.size === 0 && row.last_run_at == null);
   const fresh = isFirstRun ? [] : currentIds.filter((key) => !seen.has(key));
 
   // The new baseline is the union of what we've ever seen and what's here now,
   // so a paper dropping out of the top results doesn't re-alert when it returns.
   const nextSeen = [...new Set([...seen, ...currentIds])];
-  await repo.recordRun(row.id, nextSeen, fresh.length, Date.now() + POLL_INTERVAL_MS);
+  try {
+    await repo.recordRun(row.id, nextSeen, fresh.length, Date.now() + POLL_INTERVAL_MS);
+  } catch (error) {
+    if (error instanceof SavedSearchInactiveError) return 0;
+    throw error;
+  }
 
-  if (!silent && fresh.length > 0) {
-    await tauriNotifier.notify({
+  notifySavedSearchesUpdated();
+
+  if (!options.silent && fresh.length > 0) {
+    await auraNotifier.notify({
       title: `🔎 检索订阅有 ${fresh.length} 篇新结果`,
       body: row.query,
       tag: `saved-search:${row.id}`,
     });
-    window.dispatchEvent(new CustomEvent("aurascholar:saved-searches-updated"));
   }
   return fresh.length;
+}
+
+function isDiscoveryReportUnavailable(report: { sources: DiscoverySearchReportSources }): boolean {
+  const sources = sourceReports(report.sources);
+  return sources.length > 0 && sources.every((source) => SOURCE_FAILURE_STATUSES.has(source.status));
+}
+
+function discoveryReportErrorMessage(report: { sources: DiscoverySearchReportSources }): string {
+  const details = sourceReports(report.sources)
+    .filter((source) => SOURCE_FAILURE_STATUSES.has(source.status))
+    .map((source) => `${sourceLabel(source.source)} ${sourceStatusLabel(source.status)}`)
+    .join("; ");
+  return details ? `检索源暂时不可用:${details}` : "检索源暂时不可用";
+}
+
+type DiscoverySearchSourceReport = { source: DiscoverySource; status: string; error?: string };
+type DiscoverySearchReportSources = Partial<Record<DiscoverySource, DiscoverySearchSourceReport>>;
+
+const SOURCE_FAILURE_STATUSES = new Set(["timeout", "error", "rate_limited", "aborted"]);
+
+function sourceReports(sources: DiscoverySearchReportSources): DiscoverySearchSourceReport[] {
+  return Object.values(sources).filter((source): source is DiscoverySearchSourceReport =>
+    Boolean(source),
+  );
+}
+
+function sourceLabel(source: DiscoverySource): string {
+  switch (source) {
+    case "crossref":
+      return "Crossref";
+    case "openalex":
+      return "OpenAlex";
+    case "s2":
+      return "Semantic Scholar";
+    case "arxiv":
+      return "arXiv";
+  }
+}
+
+function sourceStatusLabel(status: string): string {
+  if (status === "timeout") return "超时";
+  if (status === "rate_limited") return "限流";
+  if (status === "aborted") return "已停止";
+  return "失败";
 }
 
 /** Poll every due saved search once. Returns total new results found. */
@@ -124,8 +268,14 @@ export async function runDueSavedSearches(): Promise<number> {
   const repo = new SavedSearchesRepo(await getDb());
   const due = await repo.due();
   let total = 0;
-  for (const row of due) total += await runRow(repo, row, false);
+  for (const row of due) {
+    total += await runRow(repo, row, { silent: false, throwOnError: false });
+  }
   return total;
+}
+
+function notifySavedSearchesUpdated(): void {
+  window.dispatchEvent(new CustomEvent("aurascholar:saved-searches-updated"));
 }
 
 let started = false;

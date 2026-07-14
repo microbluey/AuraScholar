@@ -22,6 +22,14 @@ async function columnExists(table: string, column: string): Promise<boolean> {
   return rows.some((row) => row.name === column);
 }
 
+async function indexExists(name: string): Promise<boolean> {
+  const rows = await db.query<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type='index' AND name=?`,
+    [name],
+  );
+  return rows.length > 0;
+}
+
 describe("migrations", () => {
   it("records the latest version", async () => {
     const max = await db.queryScalar(`SELECT MAX(version) FROM _migrations`);
@@ -84,6 +92,11 @@ describe("migrations", () => {
     expect(await columnExists("saved_searches", "seen_ids_json")).toBe(true);
     expect(await columnExists("saved_searches", "new_count")).toBe(true);
     expect(await columnExists("saved_searches", "next_run_at")).toBe(true);
+    expect(await columnExists("saved_searches", "last_error")).toBe(true);
+  });
+
+  it("tracks the latest sentinel polling error", async () => {
+    expect(await columnExists("sentinel_tasks", "last_error")).toBe(true);
   });
 
   it("creates local-first cloud/sync foundation tables", async () => {
@@ -96,5 +109,46 @@ describe("migrations", () => {
     expect(await columnExists("sync_log", "library_id")).toBe(true);
     expect(await columnExists("sync_log", "values_json")).toBe(true);
     expect(await columnExists("sync_state", "library_id")).toBe(true);
+  });
+
+  it("indexes stable academic identifiers used by import dedup", async () => {
+    expect(await indexExists("works_arxiv_idx")).toBe(true);
+    expect(await indexExists("works_openalex_idx")).toBe(true);
+    expect(await indexExists("works_s2_idx")).toBe(true);
+    expect(await indexExists("works_pmid_idx")).toBe(true);
+  });
+
+  it("backfills FTS for works that existed before the search migration", async () => {
+    const legacyDb = await createNodeDatabase(":memory:");
+    const now = Date.now();
+    await legacyDb.exec(MIGRATIONS[0]!.sql);
+    await legacyDb.exec(
+      `CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)`,
+    );
+    await legacyDb.run(
+      `INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)`,
+      [1, MIGRATIONS[0]!.name, now],
+    );
+    await legacyDb.run(
+      `INSERT INTO works (id, title, abstract, type, created_at, updated_at)
+       VALUES (?, ?, ?, 'article', ?, ?)`,
+      [
+        "legacy-before-fts",
+        "Legacy Searchable Work",
+        "This record existed before FTS was installed.",
+        now,
+        now,
+      ],
+    );
+
+    await runMigrations(legacyDb);
+
+    const rows = await legacyDb.query<{ id: string }>(
+      `SELECT w.id FROM works w
+       JOIN works_fts f ON f.rowid = w.rowid
+       WHERE works_fts MATCH ?`,
+      ['"Legacy"* "Searchable"*'],
+    );
+    expect(rows.map((row) => row.id)).toEqual(["legacy-before-fts"]);
   });
 });

@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.pnpm-store/
 
 # Build outputs
 dist/
@@ -29,6 +30,8 @@ pnpm-debug.log*
 
 # Test
 coverage/
+.playwright-cli/
+output/
 
 # Storybook
 storybook-static/

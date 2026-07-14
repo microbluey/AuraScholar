@@ -2,8 +2,8 @@
 // independent title-search corroboration source. https://api.semanticscholar.org
 // The public (keyless) endpoint is heavily rate-limited; the shared interval
 // limiter in client.ts uses the conservative 250ms default for this host.
-import { getJson, ApiError, type ConnectorContext, type ConnectorRequestOptions } from "./client";
-import type { ConnectorSearchFilters, NormalizedWork } from "./types";
+import { getJson, ApiError, type ConnectorContext, type ConnectorRequestOptions } from "./client.js";
+import type { ConnectorSearchFilters, NormalizedWork } from "./types.js";
 
 const BASE = "https://api.semanticscholar.org/graph/v1";
 

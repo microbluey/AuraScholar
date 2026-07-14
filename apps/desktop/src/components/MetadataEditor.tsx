@@ -2,11 +2,15 @@
 // modal over the library; loads the work's complete field set + author list
 // (with roles), lets the user correct/complete every field, and saves via
 // WorksRepo.update (partial — only edited fields are written).
-import { useCallback, useEffect, useState } from "react";
-import { Button, Input } from "@aurascholar/ui";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useBlocker } from "react-router-dom";
+import { Badge, Button, Input } from "@aurascholar/ui";
 import type { WorkPatch, AuthorRole } from "@aurascholar/db";
 import type { NormalizedWork } from "@aurascholar/connectors";
 import { loadWorkMetadata, saveWorkMetadata } from "../services/metadata";
+import { describeSafeError } from "../services/sensitive-text";
+import { useConfirmDialog, type ConfirmFunction } from "./ConfirmDialog";
+import { useModalFocusTrap } from "./useModalFocusTrap";
 
 interface AuthorDraft {
   displayName: string;
@@ -141,6 +145,33 @@ const ROLES: Array<{ value: AuthorRole; label: string }> = [
   { value: "editor", label: "编者" },
   { value: "translator", label: "译者" },
 ];
+const MIN_METADATA_SAVE_BUSY_MS = 250;
+
+interface MetadataSmokeWindow extends Window {
+  __AURASCHOLAR_SMOKE_METADATA_FAIL_NEXT_SAVE__?: string;
+}
+
+async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
+  const remaining = minimumMs - (Date.now() - startedAt);
+  if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
+}
+
+async function waitForNextRenderFrame(): Promise<void> {
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function consumeMetadataSmokeSaveFailure(): string | null {
+  const smokeWindow = window as MetadataSmokeWindow;
+  const message = smokeWindow.__AURASCHOLAR_SMOKE_METADATA_FAIL_NEXT_SAVE__;
+  if (!message) return null;
+  delete smokeWindow.__AURASCHOLAR_SMOKE_METADATA_FAIL_NEXT_SAVE__;
+  return message;
+}
+
+function formatMetadataSaveError(error: unknown): string {
+  const message = describeSafeError(error);
+  return `保存失败，修改仍保留：${message}`;
+}
 
 export function MetadataEditor({
   workId,
@@ -160,8 +191,21 @@ export function MetadataEditor({
   onCommit?: (patch: WorkPatch) => void;
 }) {
   const [draft, setDraft] = useState<Draft | null>(workId ? null : (initialDraft ?? emptyDraft()));
+  const [savedDraft, setSavedDraft] = useState<Draft | null>(
+    workId ? null : (initialDraft ?? emptyDraft()),
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const { confirm, confirmDialog } = useConfirmDialog();
+  const modalRef = useRef<HTMLElement | null>(null);
+  const savingRef = useRef(false);
+  const titleId = useId();
+
+  const hasUnsavedChanges = useMemo(
+    () => Boolean(draft && savedDraft && !sameDraft(draft, savedDraft)),
+    [draft, savedDraft],
+  );
 
   useEffect(() => {
     if (!workId) return; // draft mode: initialized from initialDraft, no DB load
@@ -170,7 +214,7 @@ export function MetadataEditor({
       .then((m) => {
         if (cancelled || !m) return;
         const w = m.work;
-        setDraft({
+        const nextDraft = {
           title: w.title ?? "",
           type: w.type ?? "article",
           doi: w.doi ?? "",
@@ -203,19 +247,35 @@ export function MetadataEditor({
             displayName: a.displayName,
             role: (a.role as AuthorRole) ?? "author",
           })),
-        });
+        };
+        setDraft(nextDraft);
+        setSavedDraft(nextDraft);
       })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => !cancelled && setError(describeSafeError(e)));
     return () => {
       cancelled = true;
     };
   }, [workId]);
 
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   const set = useCallback(<K extends keyof Draft>(key: K, value: Draft[K]) => {
+    setError(null);
+    setNotice(null);
     setDraft((d) => (d ? { ...d, [key]: value } : d));
   }, []);
 
   const setAuthor = useCallback((i: number, patch: Partial<AuthorDraft>) => {
+    setError(null);
+    setNotice(null);
     setDraft((d) => {
       if (!d) return d;
       const authors = d.authors.map((a, idx) => (idx === i ? { ...a, ...patch } : a));
@@ -224,27 +284,66 @@ export function MetadataEditor({
   }, []);
 
   const addAuthor = useCallback(() => {
-    setDraft((d) => (d ? { ...d, authors: [...d.authors, { displayName: "", role: "author" }] } : d));
+    setError(null);
+    setNotice(null);
+    setDraft((d) =>
+      d ? { ...d, authors: [...d.authors, { displayName: "", role: "author" }] } : d,
+    );
   }, []);
 
   const removeAuthor = useCallback((i: number) => {
+    setError(null);
+    setNotice(null);
     setDraft((d) => (d ? { ...d, authors: d.authors.filter((_, idx) => idx !== i) } : d));
   }, []);
 
+  const requestClose = useCallback(async () => {
+    if (saving) return;
+    if (hasUnsavedChanges) {
+      const confirmed = await confirm({
+        cancelLabel: "继续编辑",
+        confirmLabel: "放弃修改",
+        description: "这份题录里还有尚未保存的修改。",
+        details: ["放弃后会恢复到打开编辑器前的元数据。"],
+        eyebrow: "未保存",
+        title: "放弃元数据修改吗？",
+        tone: "warning",
+      });
+      if (!confirmed) {
+        setNotice("已继续编辑，未保存修改仍在。");
+        return;
+      }
+    }
+    onClose();
+  }, [confirm, hasUnsavedChanges, onClose, saving]);
+
+  useModalFocusTrap(modalRef, {
+    active: Boolean(draft),
+    initialFocusSelector: "[data-autofocus]",
+    onEscape: () => {
+      void requestClose();
+    },
+  });
+
   const save = useCallback(async () => {
-    if (!draft) return;
-    if (!draft.title.trim()) {
-      setError("标题不能为空");
+    if (!draft || savingRef.current) return;
+    const validationError = validateDraftForSave(draft);
+    if (validationError) {
+      setError(validationError);
       return;
     }
+    const startedAt = Date.now();
+    savingRef.current = true;
     setSaving(true);
     setError(null);
+    setNotice(null);
     const orNull = (s: string) => (s.trim() ? s.trim() : null);
+    const year = parseDraftYear(draft.year);
     const patch: WorkPatch = {
       title: draft.title.trim(),
       type: draft.type.trim() || "article",
       doi: orNull(draft.doi),
-      year: draft.year.trim() ? Number(draft.year.trim()) : null,
+      year,
       publicationDate: orNull(draft.publicationDate),
       venueName: orNull(draft.venueName),
       volume: orNull(draft.volume),
@@ -277,140 +376,305 @@ export function MetadataEditor({
         .map((a, position) => ({ displayName: a.displayName.trim(), role: a.role, position })),
     };
     try {
+      await waitForNextRenderFrame();
+      const smokeFailure = consumeMetadataSmokeSaveFailure();
+      if (smokeFailure) throw new Error(smokeFailure);
       if (workId) {
         await saveWorkMetadata(workId, patch);
+        await waitForMinimumElapsed(startedAt, MIN_METADATA_SAVE_BUSY_MS);
+        setSavedDraft(draft);
         onSaved?.();
       } else {
+        await waitForMinimumElapsed(startedAt, MIN_METADATA_SAVE_BUSY_MS);
+        setSavedDraft(draft);
         onCommit?.(patch);
       }
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      await waitForMinimumElapsed(startedAt, MIN_METADATA_SAVE_BUSY_MS);
+      setError(formatMetadataSaveError(e));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [draft, workId, onSaved, onCommit, onClose]);
 
   return (
-    <div className="library-modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
+    <>
+      {hasUnsavedChanges && <MetadataNavigationGuard confirm={confirm} />}
       <div
-        className="library-modal library-modal--wide"
-        onClick={(e) => e.stopPropagation()}
+        className="library-modal-overlay"
+        role="presentation"
+        onMouseDown={() => void requestClose()}
       >
-        <div className="library-modal__head">
-          <h2>编辑文献元信息</h2>
-          <button type="button" className="library-modal__close" onClick={onClose} aria-label="关闭">
-            ×
-          </button>
-        </div>
-
-        {!draft ? (
-          <p className="au-text-muted">{error ?? "读取中…"}</p>
-        ) : (
-          <div className="meta-editor">
-            <label className="meta-field meta-field--full">
-              <span>标题 Title</span>
-              <Input value={draft.title} onChange={(e) => set("title", e.target.value)} />
-            </label>
-            <label className="meta-field">
-              <span>类型 Type</span>
-              <select
-                className="au-input"
-                value={draft.type}
-                onChange={(e) => set("type", e.target.value)}
-              >
-                <option value="article">期刊论文 article</option>
-                <option value="conference">会议论文 conference</option>
-                <option value="preprint">预印本 preprint</option>
-                <option value="book">书 book</option>
-                <option value="book-chapter">书章 chapter</option>
-                <option value="thesis">学位论文 thesis</option>
-                <option value="report">报告 report</option>
-                <option value="webpage">网页 webpage</option>
-              </select>
-            </label>
-
-            {/* Authors / editors / translators */}
-            <div className="meta-authors">
-              <div className="meta-authors__head">
-                <span>作者 / 编者 / 译者</span>
-                <button type="button" onClick={addAuthor}>
-                  + 添加
-                </button>
-              </div>
-              {draft.authors.length === 0 && (
-                <p className="au-text-muted" style={{ fontSize: 12 }}>
-                  暂无,点「添加」录入。
+        <section
+          ref={modalRef}
+          aria-labelledby={titleId}
+          aria-busy={saving || undefined}
+          aria-modal="true"
+          className="library-modal library-modal--wide"
+          data-modal-root="true"
+          onMouseDown={(e) => e.stopPropagation()}
+          role="dialog"
+          tabIndex={-1}
+        >
+          <div className="library-modal__head">
+            <div>
+              <h2 id={titleId}>编辑文献元信息</h2>
+              {draft && (
+                <p className="library-modal__subhead">
+                  {hasUnsavedChanges ? "有修改尚未保存。" : "当前题录已同步到打开时的版本。"}
                 </p>
               )}
-              {draft.authors.map((a, i) => (
-                <div className="meta-author-row" key={i}>
-                  <Input
-                    placeholder="姓名(如 Ada Lovelace 或 Lovelace, Ada)"
-                    value={a.displayName}
-                    onChange={(e) => setAuthor(i, { displayName: e.target.value })}
-                  />
-                  <select
-                    className="au-input"
-                    value={a.role}
-                    onChange={(e) => setAuthor(i, { role: e.target.value as AuthorRole })}
+            </div>
+            {draft && (
+              <Badge variant={hasUnsavedChanges ? "warning" : "neutral"}>
+                {hasUnsavedChanges ? "未保存" : "已同步"}
+              </Badge>
+            )}
+            <button
+              type="button"
+              className="library-modal__close"
+              onClick={() => void requestClose()}
+              aria-label="关闭编辑文献元信息"
+              title="关闭编辑文献元信息"
+              disabled={saving}
+            >
+              ×
+            </button>
+          </div>
+
+          {!draft ? (
+            <p className="au-text-muted">{error ?? "读取中…"}</p>
+          ) : (
+            <div className="meta-editor">
+              {hasUnsavedChanges && (
+                <div className="meta-editor__draft-banner" role="status" aria-live="polite">
+                  <Badge variant="warning">未保存</Badge>
+                  <div>
+                    <strong>题录修改尚未保存</strong>
+                    <p>保存后，新的作者、摘要和标识符才会进入检索、引用和同步流程。</p>
+                  </div>
+                </div>
+              )}
+              <label className="meta-field meta-field--full">
+                <span>标题 Title</span>
+                <Input
+                  data-autofocus="true"
+                  value={draft.title}
+                  disabled={saving}
+                  onChange={(e) => set("title", e.target.value)}
+                />
+              </label>
+              <label className="meta-field">
+                <span>类型 Type</span>
+                <select
+                  className="au-input"
+                  value={draft.type}
+                  disabled={saving}
+                  onChange={(e) => set("type", e.target.value)}
+                >
+                  <option value="article">期刊论文 article</option>
+                  <option value="conference">会议论文 conference</option>
+                  <option value="preprint">预印本 preprint</option>
+                  <option value="book">书 book</option>
+                  <option value="book-chapter">书章 chapter</option>
+                  <option value="thesis">学位论文 thesis</option>
+                  <option value="report">报告 report</option>
+                  <option value="webpage">网页 webpage</option>
+                </select>
+              </label>
+
+              {/* Authors / editors / translators */}
+              <div className="meta-authors">
+                <div className="meta-authors__head">
+                  <span>作者 / 编者 / 译者</span>
+                  <button
+                    type="button"
+                    onClick={addAuthor}
+                    disabled={saving}
+                    aria-label="添加作者、编者或译者"
+                    title="添加作者、编者或译者"
                   >
-                    {ROLES.map((r) => (
-                      <option key={r.value} value={r.value}>
-                        {r.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" onClick={() => removeAuthor(i)} title="删除">
-                    ×
+                    + 添加
                   </button>
                 </div>
-              ))}
-            </div>
-
-            {GROUPS.map((group) => (
-              <div className="meta-group" key={group}>
-                <h4 className="meta-group__title">{group}</h4>
-                <div className="meta-grid">
-                  {TEXT_FIELDS.filter((f) => f.group === group).map((f) => (
-                    <label className="meta-field" key={f.key}>
-                      <span>{f.label}</span>
+                {draft.authors.length === 0 && (
+                  <p className="au-text-muted" style={{ fontSize: 12 }}>
+                    暂无，点「添加」录入。
+                  </p>
+                )}
+                {draft.authors.map((a, i) => {
+                  const authorLabel = a.displayName.trim() || `第 ${i + 1} 位作者`;
+                  return (
+                    <div
+                      className="meta-author-row"
+                      key={i}
+                      role="group"
+                      aria-label={`${authorLabel} 信息`}
+                    >
                       <Input
-                        value={draft[f.key] as string}
-                        onChange={(e) => set(f.key, e.target.value as Draft[typeof f.key])}
+                        placeholder="姓名(如 Ada Lovelace 或 Lovelace, Ada)"
+                        value={a.displayName}
+                        disabled={saving}
+                        aria-label={`${authorLabel} 姓名`}
+                        onChange={(e) => setAuthor(i, { displayName: e.target.value })}
                       />
-                    </label>
-                  ))}
-                </div>
+                      <select
+                        className="au-input"
+                        value={a.role}
+                        disabled={saving}
+                        aria-label={`${authorLabel} 角色`}
+                        onChange={(e) => setAuthor(i, { role: e.target.value as AuthorRole })}
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r.value} value={r.value}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => removeAuthor(i)}
+                        aria-label={`删除作者 ${authorLabel}`}
+                        title={`删除作者 ${authorLabel}`}
+                        disabled={saving}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
 
-            <label className="meta-field meta-field--full">
-              <span>关键词 Keywords(逗号分隔)</span>
-              <Input value={draft.keywords} onChange={(e) => set("keywords", e.target.value)} />
-            </label>
-            <label className="meta-field meta-field--full">
-              <span>摘要 Abstract</span>
-              <textarea
-                className="au-input"
-                rows={4}
-                value={draft.abstract}
-                onChange={(e) => set("abstract", e.target.value)}
-              />
-            </label>
+              {GROUPS.map((group) => (
+                <div className="meta-group" key={group}>
+                  <h4 className="meta-group__title">{group}</h4>
+                  <div className="meta-grid">
+                    {TEXT_FIELDS.filter((f) => f.group === group).map((f) => (
+                      <label className="meta-field" key={f.key}>
+                        <span>{f.label}</span>
+                        <Input
+                          value={draft[f.key] as string}
+                          disabled={saving}
+                          onChange={(e) => set(f.key, e.target.value as Draft[typeof f.key])}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
 
-            {error && <p style={{ color: "var(--color-danger)", fontSize: 13 }}>{error}</p>}
-            <div className="meta-editor__actions">
-              <Button onClick={() => void save()} disabled={saving}>
-                {saving ? "保存中…" : "保存"}
-              </Button>
-              <Button variant="secondary" onClick={onClose} disabled={saving}>
-                取消
-              </Button>
+              <label className="meta-field meta-field--full">
+                <span>关键词 Keywords(逗号分隔)</span>
+                <Input
+                  value={draft.keywords}
+                  disabled={saving}
+                  onChange={(e) => set("keywords", e.target.value)}
+                />
+              </label>
+              <label className="meta-field meta-field--full">
+                <span>摘要 Abstract</span>
+                <textarea
+                  className="au-input"
+                  rows={4}
+                  value={draft.abstract}
+                  disabled={saving}
+                  onChange={(e) => set("abstract", e.target.value)}
+                />
+              </label>
+
+              {error && (
+                <p role="alert" style={{ color: "var(--color-danger)", fontSize: 13 }}>
+                  {error}
+                </p>
+              )}
+              {notice && (
+                <p role="status" style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
+                  {notice}
+                </p>
+              )}
+              <div className="meta-editor__actions">
+                <Button
+                  onClick={() => void save()}
+                  disabled={saving}
+                  aria-busy={saving || undefined}
+                >
+                  {saving ? "保存中…" : "保存"}
+                </Button>
+                <Button variant="secondary" onClick={() => void requestClose()} disabled={saving}>
+                  取消
+                </Button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </section>
       </div>
-    </div>
+      {confirmDialog}
+    </>
   );
+}
+
+function MetadataNavigationGuard({ confirm }: { confirm: ConfirmFunction }) {
+  const blockerDialogOpenRef = useRef(false);
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      currentLocation.pathname !== nextLocation.pathname ||
+      currentLocation.search !== nextLocation.search,
+  );
+
+  useEffect(() => {
+    if (blocker.state === "unblocked") {
+      blockerDialogOpenRef.current = false;
+    }
+  }, [blocker.state]);
+
+  useEffect(() => {
+    if (blocker.state !== "blocked" || blockerDialogOpenRef.current) return;
+    blockerDialogOpenRef.current = true;
+    void confirm({
+      cancelLabel: "继续编辑",
+      confirmLabel: "离开页面",
+      description: "离开编辑器会丢失尚未保存的题录修改。",
+      details: ["保存后，新的题录会用于检索、引用、写作素材和同步。"],
+      eyebrow: "未保存",
+      title: "要离开元数据编辑器吗？",
+      tone: "warning",
+    }).then((confirmed) => {
+      blockerDialogOpenRef.current = false;
+      if (confirmed) {
+        blocker.proceed();
+      } else {
+        blocker.reset();
+      }
+    });
+  }, [blocker, confirm]);
+
+  return null;
+}
+
+function parseDraftYear(value: string): number | null {
+  const trimmed = value.trim();
+  return trimmed ? Number(trimmed) : null;
+}
+
+function validateDraftForSave(draft: Draft): string | null {
+  if (!draft.title.trim()) return "标题不能为空";
+  const year = draft.year.trim();
+  if (year && !/^\d{4}$/.test(year)) return "年份必须是四位数字，例如 2026。";
+  return null;
+}
+
+function normalizeDraft(draft: Draft): Draft {
+  return {
+    ...draft,
+    authors: draft.authors.map((author) => ({
+      displayName: author.displayName,
+      role: author.role,
+    })),
+  };
+}
+
+function sameDraft(a: Draft, b: Draft): boolean {
+  return JSON.stringify(normalizeDraft(a)) === JSON.stringify(normalizeDraft(b));
 }

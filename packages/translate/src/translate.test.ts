@@ -88,6 +88,19 @@ describe("makeTranslator", () => {
     expect("error" in r).toBe(true);
   });
 
+  it("returns a config error when DeepL base URL is unsafe", () => {
+    const r = makeTranslator(
+      {
+        engine: "deepl",
+        targetLang: "zh",
+        deepl: { apiKey: "k", baseUrl: "https://secret@api.deepl.example" },
+      },
+      { http },
+    );
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.error).toContain("不要包含密钥或账号");
+  });
+
   it("errors when Baidu credentials missing", () => {
     const r = makeTranslator({ engine: "baidu", targetLang: "zh" }, { http });
     expect("error" in r).toBe(true);
@@ -107,6 +120,61 @@ describe("DeepLTranslator", () => {
     expect(out.text).toBe("你好世界");
     expect(out.detectedSourceLang).toBe("en");
   });
+
+  it("normalizes custom base URLs before appending the translate path", async () => {
+    const http = new StubHttpClient();
+    http.on("https://api.deepl.example/custom/v2/translate", () =>
+      jsonResponse(200, {
+        translations: [{ text: "自定义端点" }],
+      }),
+    );
+    const t = new DeepLTranslator({
+      http,
+      apiKey: "k",
+      baseUrl: "https://api.deepl.example/custom///",
+    });
+    const out = await t.translate({ text: "hello", targetLang: "zh" });
+    expect(out.text).toBe("自定义端点");
+    expect(http.requests[0]?.url).toBe("https://api.deepl.example/custom/v2/translate");
+  });
+
+  it("rejects unsafe custom base URLs", () => {
+    const http = new StubHttpClient();
+    expect(
+      () =>
+        new DeepLTranslator({
+          http,
+          apiKey: "k",
+          baseUrl: "file:///tmp/deepl",
+        }),
+    ).toThrow("仅支持 http:// 或 https://");
+    expect(
+      () =>
+        new DeepLTranslator({
+          http,
+          apiKey: "k",
+          baseUrl: "https://api.deepl.example?token=inline",
+        }),
+    ).toThrow("不要包含查询参数");
+  });
+
+  it("redacts provider error bodies before throwing", async () => {
+    const http = new StubHttpClient();
+    http.on(/deepl\.com\/v2\/translate/, () =>
+      jsonResponse(403, {
+        message:
+          "auth failed Authorization: DeepL-Auth-Key deepl-secret and apiKey=deepl-inline",
+      }),
+    );
+    const t = new DeepLTranslator({ http, apiKey: "local-deepl-key" });
+
+    await expect(t.translate({ text: "hello", targetLang: "zh" })).rejects.toThrow(
+      /DeepL 翻译失败 \(403\).*Authorization: \[redacted\].*apiKey=\[redacted\]/,
+    );
+    await expect(t.translate({ text: "hello", targetLang: "zh" })).rejects.not.toThrow(
+      /deepl-secret|deepl-inline/,
+    );
+  });
 });
 
 describe("BaiduTranslator", () => {
@@ -123,5 +191,23 @@ describe("BaiduTranslator", () => {
     const t = new BaiduTranslator({ http, appid: "app1", key: "secret", salt: "1234" });
     const out = await t.translate({ text: "a\nb", targetLang: "zh" });
     expect(out.text).toBe("甲\n乙");
+  });
+
+  it("redacts provider error messages before throwing", async () => {
+    const http = new StubHttpClient();
+    http.on(/fanyi-api\.baidu\.com/, () =>
+      jsonResponse(200, {
+        error_code: "52003",
+        error_msg: "invalid credential client_secret=baidu-secret",
+      }),
+    );
+    const t = new BaiduTranslator({ http, appid: "app1", key: "local-baidu-key", salt: "1234" });
+
+    await expect(t.translate({ text: "a", targetLang: "zh" })).rejects.toThrow(
+      /百度翻译错误 52003: invalid credential client_secret=\[redacted\]/,
+    );
+    await expect(t.translate({ text: "a", targetLang: "zh" })).rejects.not.toThrow(
+      /baidu-secret/,
+    );
   });
 });
