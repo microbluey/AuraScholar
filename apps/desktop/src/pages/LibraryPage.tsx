@@ -45,7 +45,6 @@ import { isImeComposing } from "../keyboard";
 import { isPlatformShortcut, shortcutLabel } from "../shortcut-labels";
 import {
   blobPath,
-  openExternalUrl,
   sha256Hex,
   auraFs,
   isDesktopRuntime,
