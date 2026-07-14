@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { writeClipboardText } from "../clipboard";
+import { describeSafeError, redactSensitiveText } from "../services/sensitive-text";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
@@ -55,10 +56,12 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
       `Scope: ${this.props.scope ?? "App"}`,
       `Level: ${this.props.level ?? "route"}`,
       `Time: ${occurredAt ?? new Date().toISOString()}`,
-      `URL: ${window.location.href}`,
-      `Message: ${error?.message ?? "Unknown error"}`,
-      error?.stack ? `Stack:\n${error.stack}` : null,
-      errorInfo?.componentStack ? `Component stack:\n${errorInfo.componentStack}` : null,
+      `URL: ${redactSensitiveText(window.location.href)}`,
+      `Message: ${error ? describeSafeError(error) : "Unknown error"}`,
+      error?.stack ? `Stack:\n${redactSensitiveText(error.stack)}` : null,
+      errorInfo?.componentStack
+        ? `Component stack:\n${redactSensitiveText(errorInfo.componentStack)}`
+        : null,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -92,6 +95,10 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     if (!error) return children;
 
     const isRoot = level === "root";
+    const safeErrorMessage = describeSafeError(error);
+    const safeComponentStack = errorInfo?.componentStack
+      ? redactSensitiveText(errorInfo.componentStack)
+      : null;
     const title = isRoot ? "AuraScholar 启动时遇到问题" : `${scope ?? "当前页面"} 暂时不可用`;
     const message = isRoot
       ? "应用没有进入可用状态。你可以重载应用，或复制诊断信息给开发者定位。"
@@ -135,10 +142,10 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
               </div>
               <div>
                 <dt>信息</dt>
-                <dd>{error.message}</dd>
+                <dd>{safeErrorMessage}</dd>
               </div>
             </dl>
-            {errorInfo?.componentStack && <pre>{errorInfo.componentStack}</pre>}
+            {safeComponentStack && <pre>{safeComponentStack}</pre>}
           </details>
         </div>
       </section>

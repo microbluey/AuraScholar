@@ -3,9 +3,10 @@
 // x-api-key + anthropic-version headers, and the response content is a block
 // array. Goes through the platform HttpClient so desktop bypasses CORS and tests
 // can stub responses.
-import type { HttpClient } from "@aurascholar/platform";
+import { redactSensitiveText, type HttpClient } from "@aurascholar/platform";
 import type { z } from "zod";
-import type { AIProvider, AIMessage, GenerateOptions, GenerateResult } from "./provider";
+import { normalizeHttpBaseUrl } from "./base-url.js";
+import type { AIProvider, AIMessage, GenerateOptions, GenerateResult } from "./provider.js";
 
 export interface AnthropicOptions {
   http: HttpClient;
@@ -30,7 +31,7 @@ export class AnthropicProvider implements AIProvider {
 
   constructor(opts: AnthropicOptions) {
     this.http = opts.http;
-    this.baseUrl = (opts.baseUrl || DEFAULT_BASE).replace(/\/+$/, "");
+    this.baseUrl = normalizeHttpBaseUrl("Anthropic API", opts.baseUrl, DEFAULT_BASE);
     this.model = opts.model;
     this.apiKey = opts.apiKey;
     this.version = opts.anthropicVersion || DEFAULT_VERSION;
@@ -57,7 +58,9 @@ export class AnthropicProvider implements AIProvider {
       timeoutMs: 120_000,
     });
     if (res.status !== 200) {
-      throw new Error(`Anthropic request failed (${res.status}): ${decode(res.body).slice(0, 500)}`);
+      throw new Error(
+        `Anthropic request failed (${res.status}): ${safeResponseSnippet(res.body, 500)}`,
+      );
     }
     const data = JSON.parse(decode(res.body));
     // content is an array of blocks; concatenate the text blocks.
@@ -96,7 +99,9 @@ export class AnthropicProvider implements AIProvider {
         lastError = e;
       }
     }
-    throw new Error(`AI structured output failed validation after retry: ${String(lastError)}`);
+    throw new Error(
+      `AI structured output failed validation after retry: ${redactSensitiveText(String(lastError))}`,
+    );
   }
 }
 
@@ -116,6 +121,10 @@ function splitSystem(messages: AIMessage[]): { system: string; messages: AIMessa
 
 function decode(body: Uint8Array): string {
   return new TextDecoder().decode(body);
+}
+
+function safeResponseSnippet(body: Uint8Array, limit: number): string {
+  return redactSensitiveText(decode(body)).slice(0, limit);
 }
 
 /** Strips markdown fences and surrounding prose around a JSON object. */

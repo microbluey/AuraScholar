@@ -1,12 +1,13 @@
 // Standalone citation graph page. The reader's 脉络 tab is the primary entry,
 // but this route remains important for deep links from the library.
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
 import { CitationGraphView } from "../components/CitationGraphView";
 import { InlineNotice } from "../components/InlineNotice";
 import { isImeComposing } from "../keyboard";
 import { isDesktopRuntime } from "../services/aura-platform";
+import { listWorks } from "../services/library-list";
 
 const EXAMPLE_DOIS = [
   {
@@ -23,7 +24,6 @@ const EXAMPLE_DOIS = [
   },
 ] as const;
 
-
 function normalizeDoi(input: string): string {
   return input
     .trim()
@@ -39,15 +39,56 @@ function doiIsLikelyValid(value: string): boolean {
 export function GraphPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const initial = normalizeDoi(params.get("doi") ?? "");
-  const [input, setInput] = useState(initial);
-  const [doi, setDoi] = useState(initial);
+  const routeDoi = normalizeDoi(params.get("doi") ?? "");
+  const [input, setInput] = useState(routeDoi);
+  const [doi, setDoi] = useState(routeDoi);
+  const [latestDoiWork, setLatestDoiWork] = useState<{ doi: string; title: string } | null>(null);
   const [message, setMessage] = useState("");
+  const submittedRouteDoiRef = useRef<string | null>(null);
 
   const desktopRuntime = isDesktopRuntime();
   const normalizedInput = useMemo(() => normalizeDoi(input), [input]);
   const hasGraph = doi.length > 0;
   const inputReady = doiIsLikelyValid(normalizedInput);
+
+  useEffect(() => {
+    if (routeDoi === doi) return;
+    const routeSyncId = window.setTimeout(() => {
+      const submittedRouteDoi = submittedRouteDoiRef.current === routeDoi;
+      submittedRouteDoiRef.current = null;
+      setInput(routeDoi);
+      setDoi(routeDoi);
+      if (!submittedRouteDoi) setMessage("");
+    }, 0);
+    return () => window.clearTimeout(routeSyncId);
+  }, [doi, routeDoi]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!desktopRuntime) {
+      const resetId = window.setTimeout(() => {
+        if (!cancelled) setLatestDoiWork(null);
+      }, 0);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(resetId);
+      };
+    }
+    void listWorks(undefined, undefined, 30)
+      .then((rows) => {
+        if (cancelled) return;
+        const recentWithDoi = rows.find((work) => work.doi?.trim());
+        setLatestDoiWork(
+          recentWithDoi?.doi ? { doi: recentWithDoi.doi, title: recentWithDoi.title } : null,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setLatestDoiWork(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopRuntime]);
 
   const submit = useCallback(() => {
     const next = normalizeDoi(input);
@@ -55,10 +96,22 @@ export function GraphPage() {
       setMessage("请输入 DOI 后再生成图谱。");
       return;
     }
+    submittedRouteDoiRef.current = next !== routeDoi ? next : null;
+    setInput(next);
     setDoi(next);
     setParams({ doi: next }, { replace: true });
     setMessage(doiIsLikelyValid(next) ? "" : "这个 DOI 看起来不标准，仍会尝试查询。");
-  }, [input, setParams]);
+  }, [input, routeDoi, setParams]);
+
+  const openLatestDoiGraph = useCallback(() => {
+    if (!latestDoiWork) return;
+    const next = normalizeDoi(latestDoiWork.doi);
+    submittedRouteDoiRef.current = next !== routeDoi ? next : null;
+    setInput(next);
+    setDoi(next);
+    setParams({ doi: next }, { replace: true });
+    setMessage("");
+  }, [latestDoiWork, routeDoi, setParams]);
 
   const fillExample = useCallback((value: string) => {
     const next = normalizeDoi(value);
@@ -132,7 +185,7 @@ export function GraphPage() {
       {hasGraph ? (
         <section className="graph-workspace">
           <Card className="graph-card graph-card--canvas">
-            <CitationGraphView doi={doi} height={620} />
+            <CitationGraphView key={doi} doi={doi} height={620} />
           </Card>
           <aside className="graph-side-panel">
             <Card className="graph-card">
@@ -170,6 +223,9 @@ export function GraphPage() {
           <Badge variant="neutral">Ready</Badge>
           <h2>用一篇论文打开它的学术邻域</h2>
           <p>输入 DOI 后，AuraScholar 会拉取参考文献和施引文献，按年份组织成可探索的时间线。</p>
+          {latestDoiWork && (
+            <small title={latestDoiWork.title}>最近可构建：{latestDoiWork.title}</small>
+          )}
           <div className="graph-empty__steps">
             <span>
               <strong>01</strong>
@@ -183,6 +239,20 @@ export function GraphPage() {
               <strong>03</strong>
               收进文献库
             </span>
+          </div>
+          <div className="graph-empty__actions">
+            {latestDoiWork ? (
+              <>
+                <Button onClick={openLatestDoiGraph}>生成最近文献图谱</Button>
+                <Button variant="secondary" onClick={() => navigate("/library")}>
+                  选择其他文献
+                </Button>
+              </>
+            ) : (
+              <Button variant="secondary" onClick={() => navigate("/library")}>
+                去文献库选择文献
+              </Button>
+            )}
           </div>
         </Card>
       )}

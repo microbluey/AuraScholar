@@ -29,6 +29,7 @@ import {
   getProxyAddress,
   listSites,
   removeSite,
+  restoreSite,
   setEzproxyPrefix,
   setHidden,
   setProxyAddress,
@@ -40,16 +41,19 @@ import {
 import { subscribeResearchDownloads } from "../services/research-downloads";
 import type { IngestDraft } from "../services/library-types";
 import { openExternalUrl, auraFs, isDesktopRuntime } from "../services/aura-platform";
+import { fulltextLandingUrl } from "../services/fulltext";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { useModalFocusTrap } from "../components/useModalFocusTrap";
 import { isImeComposing } from "../keyboard";
+import { describeSafeError } from "../services/sensitive-text";
 import {
   clearSavedSearchBadge,
   createSavedSearch,
   deleteSavedSearch,
   listSavedSearches,
+  restoreSavedSearch,
   runSavedSearch,
   type SavedSearchView,
 } from "../services/saved-searches";
@@ -67,6 +71,8 @@ const SOURCES: Array<{ id: DiscoverySource; label: string; hint: string }> = [
   { id: "arxiv", label: "arXiv", hint: "预印本 ID 精确检索" },
 ];
 
+const DEFAULT_DISCOVERY_SOURCES = SOURCES.map((source) => source.id);
+
 const SUGGESTED_QUERIES = [
   "retrieval augmented generation",
   "human-centered AI",
@@ -78,6 +84,7 @@ const MIN_SITE_ACTION_BUSY_MS = 250;
 const MIN_SITE_PROXY_BUSY_MS = 250;
 const MIN_SITE_RESTORE_BUSY_MS = 250;
 const MIN_PROXY_CONFIG_SAVE_BUSY_MS = 250;
+const MIN_SAVED_SEARCH_SAVE_BUSY_MS = 350;
 const MIN_SAVED_SEARCH_CHECK_BUSY_MS = 350;
 const MIN_SAVED_SEARCH_OPEN_BUSY_MS = 350;
 const MIN_SAVED_SEARCH_DELETE_BUSY_MS = 350;
@@ -103,7 +110,6 @@ const SOURCE_STATUS_ORDER: SourceStatus[] = [
   "idle",
 ];
 
-
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -113,14 +119,7 @@ function hostOf(url: string): string {
 }
 
 function describeUnknownError(value: unknown): string {
-  if (value instanceof Error) return value.message || value.name;
-  if (typeof value === "string") return value;
-  if (value == null) return "未知错误";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
+  return describeSafeError(value);
 }
 
 function faviconUrl(homeUrl: string): string {
@@ -140,12 +139,222 @@ type Mode = "home" | "opensource" | "browser";
 type SortKey = "relevance" | "year" | "citations";
 type SiteManagementAction = "remove" | "hide" | "clear";
 
+const PREVIEW_DISCOVERY_QUERY = "human-centered AI";
+
+const PREVIEW_DISCOVERY_RESULTS: DiscoveryResultWithLibrary[] = [
+  {
+    id: "preview-discovery-human-centered-ai",
+    inLibrary: false,
+    matchedSources: ["openalex", "s2", "crossref"],
+    score: 98,
+    source: "openalex",
+    work: {
+      abstract:
+        "A practical overview of human-centered AI methods, covering evaluation, collaboration patterns, and the risks of deploying automated systems without user feedback loops.",
+      authors: [
+        { displayName: "Zhiwei Lin", family: "Lin", given: "Zhiwei", position: 0 },
+        { displayName: "Maya Chen", family: "Chen", given: "Maya", position: 1 },
+        { displayName: "Nora Patel", family: "Patel", given: "Nora", position: 2 },
+      ],
+      citedByCount: 184,
+      doi: "10.1145/preview.hcai.2024",
+      oaPdfUrl: "https://example.edu/papers/human-centered-ai.pdf",
+      openalexId: "W-preview-hcai",
+      s2Id: "preview-hcai-s2",
+      source: "openalex",
+      title: "Human-Centered AI Systems for Research Workflows",
+      venueName: "CHI",
+      venueType: "conference",
+      year: 2024,
+    },
+  },
+  {
+    id: "preview-discovery-literature-sensemaking",
+    inLibrary: false,
+    matchedSources: ["s2", "openalex"],
+    score: 94,
+    source: "s2",
+    work: {
+      abstract:
+        "Studies how researchers build evidence maps from large paper collections, with design implications for search, citation triage, and writing-oriented note reuse.",
+      authors: [
+        { displayName: "Elena Rossi", family: "Rossi", given: "Elena", position: 0 },
+        { displayName: "Jun Park", family: "Park", given: "Jun", position: 1 },
+      ],
+      citedByCount: 96,
+      doi: "10.48550/arXiv.2402.01234",
+      openalexId: "W-preview-sensemaking",
+      s2Id: "preview-sensemaking-s2",
+      source: "s2",
+      title: "Literature Sensemaking with Retrieval-Augmented Assistants",
+      venueName: "arXiv",
+      venueType: "repository",
+      year: 2024,
+    },
+  },
+  {
+    id: "preview-discovery-evaluation",
+    inLibrary: false,
+    matchedSources: ["crossref"],
+    score: 87,
+    source: "crossref",
+    work: {
+      abstract:
+        "Compares evaluation protocols for AI-assisted scholarly writing tools, emphasizing provenance, citation grounding, and researcher control.",
+      authors: [
+        { displayName: "Samira Haddad", family: "Haddad", given: "Samira", position: 0 },
+        { displayName: "Leo Martins", family: "Martins", given: "Leo", position: 1 },
+        { displayName: "Zhiwei Lin", family: "Lin", given: "Zhiwei", position: 2 },
+      ],
+      citedByCount: 41,
+      doi: "10.1145/preview.eval.2023",
+      source: "crossref",
+      title: "Evaluating AI Writing Support for Scholarly Knowledge Work",
+      venueName: "CSCW",
+      venueType: "conference",
+      year: 2023,
+    },
+  },
+];
+
+function previewDiscoverySourceStatus(
+  activeSources: DiscoverySource[] = DEFAULT_DISCOVERY_SOURCES,
+): Record<DiscoverySource, SourceStatus> {
+  const active = new Set(activeSources);
+  return Object.fromEntries(
+    SOURCES.map((source) => [
+      source.id,
+      active.has(source.id) ? (source.id === "arxiv" ? "empty" : "done") : "idle",
+    ]),
+  ) as Record<DiscoverySource, SourceStatus>;
+}
+
+function initialDiscoveryMode(): Mode {
+  return isDesktopRuntime() ? "home" : "opensource";
+}
+
+function initialPendingFulltextTarget(): { id: string; title: string } | null {
+  if (isDesktopRuntime() || typeof window === "undefined") return null;
+  const hash = window.location.hash;
+  const queryIndex = hash.indexOf("?");
+  if (queryIndex < 0) return null;
+  const params = new URLSearchParams(hash.slice(queryIndex + 1));
+  const id = params.get("pendingWorkId");
+  if (!id) return null;
+  return { id, title: params.get("pendingTitle") ?? "" };
+}
+
+function initialDiscoveryQuery(): string {
+  const pending = initialPendingFulltextTarget();
+  if (pending?.title.trim()) return pending.title.trim();
+  return isDesktopRuntime() ? "" : PREVIEW_DISCOVERY_QUERY;
+}
+
+function initialDiscoveryResults(): DiscoveryResultWithLibrary[] {
+  if (initialPendingFulltextTarget()) return [];
+  return isDesktopRuntime() ? [] : PREVIEW_DISCOVERY_RESULTS;
+}
+
+function initialDiscoverySelectedId(): string | null {
+  if (initialPendingFulltextTarget()) return null;
+  return isDesktopRuntime() ? null : (PREVIEW_DISCOVERY_RESULTS[0]?.id ?? null);
+}
+
+function initialDiscoverySourceStatus(): Record<DiscoverySource, SourceStatus> {
+  if (initialPendingFulltextTarget()) {
+    return Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
+      DiscoverySource,
+      SourceStatus
+    >;
+  }
+  return isDesktopRuntime()
+    ? (Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
+        DiscoverySource,
+        SourceStatus
+      >)
+    : previewDiscoverySourceStatus();
+}
+
+interface SavedSearchUndoState {
+  id: string;
+  message: string;
+}
+
+interface SiteRemoveUndoState {
+  message: string;
+  site: DiscoverySite;
+}
+
 interface DiscoverySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_REMOVE_SITE__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SITE__?: unknown;
+  __AURASCHOLAR_SMOKE_DISCOVERY_REPLACED_ACTIVE_SEARCH__?: boolean;
   __AURASCHOLAR_SMOKE_RUN_DISCOVERY_SEARCH__?: (
     query: string,
     sources?: DiscoverySource[],
   ) => Promise<boolean>;
+}
+
+function consumeDiscoverySmokeSearchFailure(): Error | null {
+  const target = window as DiscoverySmokeWindow;
+  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__;
+  if (failure == null) return null;
+  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__;
+  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
+}
+
+function consumeDiscoverySmokeSaveSearchFailure(): Error | null {
+  const target = window as DiscoverySmokeWindow;
+  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__;
+  if (failure == null) return null;
+  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__;
+  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
+}
+
+function consumeDiscoverySmokeDeleteSearchFailure(): Error | null {
+  const target = window as DiscoverySmokeWindow;
+  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__;
+  if (failure == null) return null;
+  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__;
+  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
+}
+
+function consumeDiscoverySmokeRestoreSearchFailure(): Error | null {
+  const target = window as DiscoverySmokeWindow;
+  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__;
+  if (failure == null) return null;
+  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__;
+  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
+}
+
+function consumeDiscoverySmokeRemoveSiteFailure(): Error | null {
+  const target = window as DiscoverySmokeWindow;
+  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_REMOVE_SITE__;
+  if (failure == null) return null;
+  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_REMOVE_SITE__;
+  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
+}
+
+function consumeDiscoverySmokeRestoreSiteFailure(): Error | null {
+  const target = window as DiscoverySmokeWindow;
+  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SITE__;
+  if (failure == null) return null;
+  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SITE__;
+  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
+}
+
+function consumeDiscoverySmokeLoadMoreFailure(): Error | null {
+  const target = window as DiscoverySmokeWindow;
+  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__;
+  if (failure == null) return null;
+  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__;
+  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
 }
 
 function lastRunLabel(value: number | null): string {
@@ -173,7 +382,9 @@ function discoverySearchMessage(
 ): string {
   const sourceReports = reports.flatMap((report) => Object.values(report.sources));
   const failed = sourceReports.filter((report) => DISCOVERY_FAILURE_STATUSES.has(report.status));
-  const completed = sourceReports.filter((report) => report.status === "done" || report.status === "empty");
+  const completed = sourceReports.filter(
+    (report) => report.status === "done" || report.status === "empty",
+  );
 
   if (resultCount > 0) {
     const suffix = failed.length > 0 ? `；${sourceFailureSummary(failed)} 暂时不可用` : "";
@@ -321,7 +532,9 @@ function discoveryImportMessage(
   imported: { deduped: boolean; pdfFetched: boolean; title: string },
 ): string {
   if (imported.deduped) {
-    return imported.pdfFetched ? `已在库中:${imported.title}，PDF 已可用` : `已在库中:${imported.title}`;
+    return imported.pdfFetched
+      ? `已在库中:${imported.title}，PDF 已可用`
+      : `已在库中:${imported.title}`;
   }
   if (imported.pdfFetched) {
     return `已入库:${imported.title}，开放 PDF 已挂载`;
@@ -332,10 +545,20 @@ function discoveryImportMessage(
   return `已入库:${imported.title}；暂无开放 PDF，可去找全文`;
 }
 
+function PendingFulltextTarget({ detail, title }: { detail: string; title: string }) {
+  return (
+    <div className="research-pending-work" role="status" aria-live="polite">
+      <span>补全文目标</span>
+      <strong title={title}>{title || "待补全文文献"}</strong>
+      <small>{detail}</small>
+    </div>
+  );
+}
+
 export function DiscoveryPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>("home");
-  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<Mode>(() => initialDiscoveryMode());
+  const [query, setQuery] = useState(() => initialDiscoveryQuery());
 
   // Sites
   const [sites, setSites] = useState<DiscoverySite[]>([]);
@@ -365,9 +588,12 @@ export function DiscoveryPage() {
   const [selectedSources, setSelectedSources] = useState<Set<DiscoverySource>>(
     () => new Set(SOURCES.map((s) => s.id)),
   );
-  const [results, setResults] = useState<DiscoveryResultWithLibrary[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [results, setResults] = useState<DiscoveryResultWithLibrary[]>(() =>
+    initialDiscoveryResults(),
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialDiscoverySelectedId());
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [importingId, setImportingId] = useState<string | null>(null);
   // Advanced query fields (sent to the API, not just client filtering).
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -380,30 +606,37 @@ export function DiscoveryPage() {
   // Per-source pagination cursors for "load more"; plus a client-only OA filter.
   const [cursors, setCursors] = useState<Partial<Record<DiscoverySource, SourceCursor>>>({});
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [oaOnly, setOaOnly] = useState(false);
   // Saved searches ("检索订阅").
   const [savedSearches, setSavedSearches] = useState<SavedSearchView[]>([]);
   const [savingSearch, setSavingSearch] = useState(false);
   const [openingSavedSearchIds, setOpeningSavedSearchIds] = useState<Set<string>>(() => new Set());
   const openingSavedSearchIdsRef = useRef<Set<string>>(new Set());
-  const [checkingSavedSearchIds, setCheckingSavedSearchIds] = useState<Set<string>>(() => new Set());
+  const [checkingSavedSearchIds, setCheckingSavedSearchIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const checkingSavedSearchIdsRef = useRef<Set<string>>(new Set());
-  const [deletingSavedSearchIds, setDeletingSavedSearchIds] = useState<Set<string>>(() => new Set());
+  const [deletingSavedSearchIds, setDeletingSavedSearchIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const deletingSavedSearchIdsRef = useRef<Set<string>>(new Set());
-  const [sourceStatus, setSourceStatus] = useState<Record<DiscoverySource, SourceStatus>>(
-    () =>
-      Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
-        DiscoverySource,
-        SourceStatus
-      >,
+  const [savedSearchUndo, setSavedSearchUndo] = useState<SavedSearchUndoState | null>(null);
+  const [savedSearchUndoBusy, setSavedSearchUndoBusy] = useState(false);
+  const [siteRemoveUndo, setSiteRemoveUndo] = useState<SiteRemoveUndoState | null>(null);
+  const [siteRemoveUndoBusy, setSiteRemoveUndoBusy] = useState(false);
+  const [sourceStatus, setSourceStatus] = useState<Record<DiscoverySource, SourceStatus>>(() =>
+    initialDiscoverySourceStatus(),
   );
 
   // Browser (multi-tab; views live in the Electron main process)
   const [tabs, setTabs] = useState<ResearchTab[]>([]);
+  const [openingBrowserTab, setOpeningBrowserTab] = useState(false);
   const [webImporting, setWebImporting] = useState(false);
   const [referenceImportPreview, setReferenceImportPreview] = useState<{
     count: number;
     fileName?: string;
+    previewOnly: boolean;
     text: string;
   } | null>(null);
 
@@ -413,14 +646,16 @@ export function DiscoveryPage() {
   // Pending import confirmation from a browser download (analyze → confirm).
   const [confirmDraft, setConfirmDraft] = useState<IngestDraft | null>(null);
   // "Find full text" target: a downloaded PDF should attach to this work.
-  const [pendingWork, setPendingWork] = useState<{ id: string; title: string } | null>(null);
+  const [pendingWork, setPendingWork] = useState<{ id: string; title: string } | null>(() =>
+    initialPendingFulltextTarget(),
+  );
   // Mirror in a ref so the download subscription (deps: [mode]) reads it fresh.
   const pendingWorkRef = useRef(pendingWork);
-  pendingWorkRef.current = pendingWork;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchTokenRef = useRef(0);
   const searchAbortRef = useRef<AbortController | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const openSourceSearchInputRef = useRef<HTMLInputElement>(null);
   const boundsErrorReportedRef = useRef(false);
 
   const desktopRuntime = isDesktopRuntime();
@@ -437,6 +672,16 @@ export function DiscoveryPage() {
   );
   const recentSavedSearches = useMemo(() => savedSearches.slice(0, 3), [savedSearches]);
   const activeSourceStatus = useMemo(() => sourceStatusSummary(sourceStatus), [sourceStatus]);
+  const hasOpenSourceSearchRun =
+    query.trim().length > 0 &&
+    Object.values(sourceStatus).some((status) => status !== "idle" && status !== "searching");
+  const showOpenSourceSearchError = !searching && results.length === 0 && Boolean(searchError);
+  const showOpenSourceNoResults =
+    !showOpenSourceSearchError && !searching && results.length === 0 && hasOpenSourceSearchRun;
+
+  useEffect(() => {
+    pendingWorkRef.current = pendingWork;
+  }, [pendingWork]);
 
   const hideBrowserViewsWithFeedback = useCallback(async (): Promise<boolean> => {
     try {
@@ -448,27 +693,33 @@ export function DiscoveryPage() {
     }
   }, []);
 
-  const runBrowserAction = useCallback(
-    (label: string, operation: () => Promise<void>) => {
-      void operation().catch((error) =>
-        setMessage(`${label}失败:${describeUnknownError(error)}`),
-      );
-    },
-    [],
-  );
+  const runBrowserAction = useCallback((label: string, operation: () => Promise<void>) => {
+    void operation().catch((error) => setMessage(`${label}失败:${describeUnknownError(error)}`));
+  }, []);
 
   const openResearchTabWithFeedback = useCallback(
-    (siteId: string, url: string, tabProxy?: string) => {
+    (
+      siteId: string,
+      url: string,
+      tabProxy?: string,
+      options: { keepBrowserOnFailure?: boolean } = {},
+    ) => {
+      setOpeningBrowserTab(true);
       void openResearchTab(siteId, url, tabProxy)
         .then((tabId) => {
           if (!tabId) {
             setMessage("内置浏览器仅在桌面应用中可用");
-            setMode("home");
+            if (!options.keepBrowserOnFailure) setMode("home");
+            return;
           }
+          return listResearchTabs().then(setTabs);
         })
         .catch((error) => {
           setMessage(`打开站点失败:${describeUnknownError(error)}`);
-          setMode("home");
+          if (!options.keepBrowserOnFailure) setMode("home");
+        })
+        .finally(() => {
+          setOpeningBrowserTab(false);
         });
     },
     [],
@@ -486,30 +737,55 @@ export function DiscoveryPage() {
   }, []);
 
   useEffect(() => {
-    void refreshSites();
-    void getProxyAddress().then((value) => {
-      proxyRef.current = value;
-      setProxy(value);
-    });
-    void getEzproxyPrefix().then((value) => {
-      ezproxyRef.current = value;
-      setEzproxy(value);
-    });
+    let cancelled = false;
+    const initId = window.setTimeout(() => {
+      void refreshSites();
+      void getProxyAddress().then((value) => {
+        if (cancelled) return;
+        proxyRef.current = value;
+        setProxy(value);
+      });
+      void getEzproxyPrefix().then((value) => {
+        if (cancelled) return;
+        ezproxyRef.current = value;
+        setEzproxy(value);
+      });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initId);
+    };
   }, [refreshSites]);
 
   // Open the browser at a paper's landing page (publisher via DOI, else Scholar
   // title search), remembering the target work so the download attaches to it.
   const openFulltextBrowser = useCallback(
-    (target: { id: string; title: string; doi?: string }) => {
-      const url = target.doi
-        ? `https://doi.org/${target.doi}`
-        : `https://scholar.google.com/scholar?q=${encodeURIComponent(target.title)}`;
+    (target: { id: string; title: string; doi?: string; arxivId?: string; url?: string }) => {
+      const url = fulltextLandingUrl(target);
       setPendingWork({ id: target.id, title: target.title });
+      if (!desktopRuntime) {
+        setMode("opensource");
+        setQuery(target.title);
+        setResults([]);
+        setSelectedId(null);
+        setCursors({});
+        setSearchError(null);
+        setLoadMoreError(null);
+        setSourceStatus(
+          Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
+            DiscoverySource,
+            SourceStatus
+          >,
+        );
+        setMessage(`已保留《${target.title}》的补全文目标；浏览器预览不会打开内置站点浏览器。`);
+        return;
+      }
       setMode("browser");
+      setMessage(`正在为《${target.title}》打开全文来源...`);
       const dest = ezproxy.trim() ? (ezproxyRewrite(ezproxy, url) ?? url) : url;
-      openResearchTabWithFeedback("_fulltext", dest, proxy);
+      openResearchTabWithFeedback("_fulltext", dest, proxy, { keepBrowserOnFailure: true });
     },
-    [ezproxy, openResearchTabWithFeedback, proxy],
+    [desktopRuntime, ezproxy, openResearchTabWithFeedback, proxy],
   );
 
   // "Find full text" hand-off from the library (via query params).
@@ -517,14 +793,40 @@ export function DiscoveryPage() {
   useEffect(() => {
     const workId = searchParams.get("pendingWorkId");
     const url = searchParams.get("url");
-    if (!workId || !url || !isDesktopRuntime()) return;
+    if (!workId || !url) return;
     const title = searchParams.get("pendingTitle") ?? "";
-    setPendingWork({ id: workId, title });
-    setMode("browser");
-    const target = ezproxy.trim() ? (ezproxyRewrite(ezproxy, url) ?? url) : url;
-    openResearchTabWithFeedback("_fulltext", target, proxy);
-    // Consume the params so a refresh/back doesn't reopen.
-    setSearchParams({}, { replace: true });
+    const handoffId = window.setTimeout(() => {
+      setPendingWork({ id: workId, title });
+      if (!isDesktopRuntime()) {
+        setMode("opensource");
+        if (title.trim()) setQuery(title.trim());
+        setResults([]);
+        setSelectedId(null);
+        setCursors({});
+        setSearchError(null);
+        setLoadMoreError(null);
+        setSourceStatus(
+          Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
+            DiscoverySource,
+            SourceStatus
+          >,
+        );
+        setMessage(
+          title
+            ? `已保留《${title}》的补全文目标；浏览器预览不会打开内置站点浏览器。`
+            : "已保留补全文目标；浏览器预览不会打开内置站点浏览器。",
+        );
+        return;
+      }
+      setPendingWork({ id: workId, title });
+      setMode("browser");
+      setMessage(title ? `正在为《${title}》打开全文来源...` : "正在打开全文来源...");
+      const target = ezproxy.trim() ? (ezproxyRewrite(ezproxy, url) ?? url) : url;
+      openResearchTabWithFeedback("_fulltext", target, proxy, { keepBrowserOnFailure: true });
+      // Consume the params so a refresh/back doesn't reopen.
+      setSearchParams({}, { replace: true });
+    }, 0);
+    return () => window.clearTimeout(handoffId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, ezproxy, proxy, openResearchTabWithFeedback]);
 
@@ -559,14 +861,16 @@ export function DiscoveryPage() {
     try {
       const result = await captureResearchTab();
       if (result.kind === "none") {
-        setMessage(`抓取失败:${result.error ?? "当前没有可抓取的页面"}`);
+        setMessage(
+          `抓取失败:${result.error ? describeUnknownError(result.error) : "当前没有可抓取的页面"}`,
+        );
       } else if (result.kind === "print") {
         setMessage("已将当前页面渲染为 PDF,正在入库...");
       } else {
         setMessage("正在下载并入库...");
       }
     } catch (e) {
-      setMessage(`抓取失败:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`抓取失败:${describeUnknownError(e)}`);
     } finally {
       setWebImporting(false);
     }
@@ -582,7 +886,7 @@ export function DiscoveryPage() {
       await waitForMinimumElapsed(startedAt, MIN_PROXY_CONFIG_SAVE_BUSY_MS);
       setMessage("已保存代理地址");
     } catch (e) {
-      setMessage(`代理配置无效:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`代理配置无效:${describeUnknownError(e)}`);
     } finally {
       savingProxyRef.current = false;
       setSavingProxy(false);
@@ -599,7 +903,7 @@ export function DiscoveryPage() {
       await waitForMinimumElapsed(startedAt, MIN_PROXY_CONFIG_SAVE_BUSY_MS);
       setMessage("已保存图书馆前缀");
     } catch (e) {
-      setMessage(`图书馆前缀无效:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`图书馆前缀无效:${describeUnknownError(e)}`);
     } finally {
       savingEzproxyRef.current = false;
       setSavingEzproxy(false);
@@ -653,10 +957,15 @@ export function DiscoveryPage() {
 
   // ---- Saved searches: load on mount, refresh when the loop posts updates ----
   useEffect(() => {
-    void refreshSavedSearches();
+    const refreshId = window.setTimeout(() => {
+      void refreshSavedSearches();
+    }, 0);
     const onUpdate = () => void refreshSavedSearches();
     window.addEventListener("aurascholar:saved-searches-updated", onUpdate);
-    return () => window.removeEventListener("aurascholar:saved-searches-updated", onUpdate);
+    return () => {
+      window.clearTimeout(refreshId);
+      window.removeEventListener("aurascholar:saved-searches-updated", onUpdate);
+    };
   }, [refreshSavedSearches]);
 
   // ---- Browser: tab list sync + bounds reporting + downloads ----
@@ -671,11 +980,14 @@ export function DiscoveryPage() {
   // Closing the last tab returns to the site grid rather than stranding the
   // user on an empty "opening..." spinner.
   useEffect(() => {
-    if (mode === "browser" && tabs.length === 0) {
-      void hideBrowserViewsWithFeedback();
-      setMode("home");
+    if (mode === "browser" && tabs.length === 0 && !openingBrowserTab && !pendingWork) {
+      const closeId = window.setTimeout(() => {
+        void hideBrowserViewsWithFeedback();
+        setMode("home");
+      }, 0);
+      return () => window.clearTimeout(closeId);
     }
-  }, [hideBrowserViewsWithFeedback, mode, tabs.length]);
+  }, [hideBrowserViewsWithFeedback, mode, openingBrowserTab, pendingWork, tabs.length]);
 
   // Report the content-area rectangle to main, which positions the active view
   // exactly there. This is the whole reason the embedded view never overlaps.
@@ -713,11 +1025,19 @@ export function DiscoveryPage() {
 
   // Detach the native views from the window when we leave the browser view.
   useEffect(() => {
-    if (mode !== "browser") void hideBrowserViewsWithFeedback();
+    if (mode === "browser") return;
+    const detachId = window.setTimeout(() => {
+      void hideBrowserViewsWithFeedback();
+    }, 0);
+    return () => window.clearTimeout(detachId);
   }, [hideBrowserViewsWithFeedback, mode]);
 
   useEffect(() => {
-    if (mode === "browser" && message) setBrowserToastKey((key) => key + 1);
+    if (mode !== "browser" || !message) return;
+    const toastId = window.setTimeout(() => {
+      setBrowserToastKey((key) => key + 1);
+    }, 0);
+    return () => window.clearTimeout(toastId);
   }, [message, mode]);
 
   // Toggle a body class so App can collapse its sidebar while browsing.
@@ -740,7 +1060,7 @@ export function DiscoveryPage() {
         attached = true;
         pdfMessage = attachment.deduped ? "PDF 已经挂过" : "PDF 已挂到该文献";
       } catch (e) {
-        pdfMessage = `PDF 挂载失败:${e instanceof Error ? e.message : String(e)}`;
+        pdfMessage = `PDF 挂载失败:${describeUnknownError(e)}`;
       }
     }
     if (draft.pdf?.relPath && attached) void auraFs.deleteFile(draft.pdf.relPath).catch(() => {});
@@ -758,7 +1078,7 @@ export function DiscoveryPage() {
       (result) => {
         if (result.kind === "ignored") return;
         if (result.kind === "error") {
-          setMessage(`捕获下载失败:${result.error ?? "未知错误"}`);
+          setMessage(`捕获下载失败:${describeUnknownError(result.error)}`);
         } else if (result.kind === "references") {
           setMessage(`引用文件已导入:新增 ${result.imported ?? 0} 篇`);
         } else if (result.kind === "pdf" && result.draft) {
@@ -803,9 +1123,8 @@ export function DiscoveryPage() {
   const handleBrowserCommit = useCallback(
     async (decision: ImportDecision) => {
       const draft = confirmDraft;
-      const { attachStagedPdf, commitIngest, restoreDedup } = await import(
-        "../services/library-actions"
-      );
+      const { attachStagedPdf, commitIngest, restoreDedup } =
+        await import("../services/library-actions");
       if (decision.mode === "attach") {
         await restoreDedup(decision.workId);
         if (decision.pdf) await attachStagedPdf(decision.workId, decision.pdf);
@@ -831,6 +1150,7 @@ export function DiscoveryPage() {
 
   const exitBrowser = useCallback(() => {
     setMessage(null);
+    setPendingWork(null);
     void hideBrowserViewsWithFeedback();
     setMode("home");
   }, [hideBrowserViewsWithFeedback]);
@@ -838,14 +1158,35 @@ export function DiscoveryPage() {
   const runSearch = useCallback(
     async (options: { query?: string; sources?: DiscoverySource[] } = {}): Promise<boolean> => {
       const searchText = options.query ?? query;
-      if (!searchText.trim() || searching) return false;
+      if (!searchText.trim()) return false;
       if (!isDesktopRuntime()) {
-        setMessage("开放检索需要桌面应用的网络能力;浏览器预览仅用于查看界面。");
-        return false;
+        const requestedSources = options.sources ?? Array.from(selectedSources);
+        const sources = requestedSources.length > 0 ? requestedSources : DEFAULT_DISCOVERY_SOURCES;
+        searchTokenRef.current += 1;
+        searchAbortRef.current?.abort();
+        searchAbortRef.current = null;
+        setQuery(searchText.trim());
+        setResults(PREVIEW_DISCOVERY_RESULTS);
+        setSelectedId(PREVIEW_DISCOVERY_RESULTS[0]?.id ?? null);
+        setCursors({});
+        setSearching(false);
+        setSearchError(null);
+        setLoadMoreError(null);
+        setSourceStatus(previewDiscoverySourceStatus(sources));
+        setMessage(
+          "浏览器预览正在展示一组聚合检索样例；桌面应用会实时查询 OpenAlex、Crossref、Semantic Scholar 和 arXiv。",
+        );
+        return true;
       }
-      const sources = options.sources ?? Array.from(selectedSources);
+      const requestedSources = options.sources ?? Array.from(selectedSources);
+      const sources = requestedSources.length > 0 ? requestedSources : DEFAULT_DISCOVERY_SOURCES;
       const startedAt = Date.now();
-      searchAbortRef.current?.abort();
+      const previousController = searchAbortRef.current;
+      previousController?.abort();
+      if (previousController) {
+        (window as DiscoverySmokeWindow).__AURASCHOLAR_SMOKE_DISCOVERY_REPLACED_ACTIVE_SEARCH__ =
+          true;
+      }
       const controller = new AbortController();
       searchAbortRef.current = controller;
       const token = searchTokenRef.current + 1;
@@ -854,6 +1195,8 @@ export function DiscoveryPage() {
       setResults([]);
       setSelectedId(null);
       setCursors({}); // fresh search resets pagination
+      setSearchError(null);
+      setLoadMoreError(null);
       setSourceStatus(
         Object.fromEntries(
           SOURCES.map((source) => [source.id, sources.includes(source.id) ? "searching" : "idle"]),
@@ -862,9 +1205,10 @@ export function DiscoveryPage() {
       setMessage(null);
       const structured = buildQuery(searchText);
       try {
-        const { mergeDiscoveryResults, searchDiscoveryDetailed } = await import(
-          "../services/discovery"
-        );
+        const smokeFailure = consumeDiscoverySmokeSearchFailure();
+        if (smokeFailure) throw smokeFailure;
+        const { mergeDiscoveryResults, searchDiscoveryDetailed } =
+          await import("../services/discovery");
         const mergeResults = (items: DiscoveryResultWithLibrary[]) =>
           mergeDiscoveryResults(items, mergeStatus);
         const reports = await Promise.all(
@@ -887,17 +1231,25 @@ export function DiscoveryPage() {
           }),
         );
         if (searchTokenRef.current !== token) return false;
-        const activeReports = reports.filter(
-          (report): report is DiscoverySearchReportWithLibrary => Boolean(report),
+        const activeReports = reports.filter((report): report is DiscoverySearchReportWithLibrary =>
+          Boolean(report),
         );
         const finalResults = mergeResults(activeReports.flatMap((report) => report.results));
         setResults(finalResults);
         setSelectedId((current) => current ?? finalResults[0]?.id ?? null);
+        setSearchError(null);
         setMessage(discoverySearchMessage(finalResults.length, activeReports));
         return true;
       } catch (e) {
         if (searchTokenRef.current !== token) return false;
-        setMessage(`检索失败:${e instanceof Error ? e.message : String(e)}`);
+        const detail = describeUnknownError(e);
+        setSearchError(detail);
+        setSourceStatus(
+          Object.fromEntries(
+            SOURCES.map((source) => [source.id, sources.includes(source.id) ? "error" : "idle"]),
+          ) as Record<DiscoverySource, SourceStatus>,
+        );
+        setMessage(`检索失败:${detail}`);
         return false;
       } finally {
         if (searchTokenRef.current === token) {
@@ -907,7 +1259,7 @@ export function DiscoveryPage() {
         }
       }
     },
-    [query, selectedSources, searching, buildQuery, sortBy],
+    [query, selectedSources, buildQuery, sortBy],
   );
 
   // Fetch the next page from each selected source that still has more, then
@@ -918,12 +1270,14 @@ export function DiscoveryPage() {
     if (sources.length === 0) return;
     const startedAt = Date.now();
     setLoadingMore(true);
+    setLoadMoreError(null);
     const controller = new AbortController();
     const structured = buildQuery();
     try {
-      const { mergeDiscoveryResults, searchDiscoveryDetailed } = await import(
-        "../services/discovery"
-      );
+      const smokeFailure = consumeDiscoverySmokeLoadMoreFailure();
+      if (smokeFailure) throw smokeFailure;
+      const { mergeDiscoveryResults, searchDiscoveryDetailed } =
+        await import("../services/discovery");
       const mergeResults = (items: DiscoveryResultWithLibrary[]) =>
         mergeDiscoveryResults(items, mergeStatus);
       await Promise.all(
@@ -936,8 +1290,11 @@ export function DiscoveryPage() {
           setResults((prev) => mergeResults([...prev, ...report.results]));
         }),
       );
+      setLoadMoreError(null);
     } catch (e) {
-      setMessage(`加载更多失败:${e instanceof Error ? e.message : String(e)}`);
+      const detail = describeUnknownError(e);
+      setLoadMoreError(detail);
+      setMessage(`加载更多失败:${detail}`);
     } finally {
       await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_LOAD_MORE_BUSY_MS);
       setLoadingMore(false);
@@ -952,7 +1309,12 @@ export function DiscoveryPage() {
       sortInitRef.current = false;
       return;
     }
-    if (query.trim() && results.length > 0 && !searching) void runSearch();
+    if (query.trim() && results.length > 0 && !searching) {
+      const searchId = window.setTimeout(() => {
+        void runSearch();
+      }, 0);
+      return () => window.clearTimeout(searchId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortBy]);
 
@@ -971,6 +1333,27 @@ export function DiscoveryPage() {
         ) as Record<DiscoverySource, SourceStatus>,
     );
     setMessage("已停止检索");
+  }, []);
+
+  const clearOpenSourceSearch = useCallback(() => {
+    searchTokenRef.current += 1;
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = null;
+    setSearching(false);
+    setQuery("");
+    setResults([]);
+    setSelectedId(null);
+    setCursors({});
+    setSearchError(null);
+    setLoadMoreError(null);
+    setMessage(null);
+    setSourceStatus(
+      Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
+        DiscoverySource,
+        SourceStatus
+      >,
+    );
+    window.setTimeout(() => openSourceSearchInputRef.current?.focus(), 0);
   }, []);
 
   const toggleSource = useCallback((source: DiscoverySource) => {
@@ -995,17 +1378,23 @@ export function DiscoveryPage() {
   const saveCurrentSearch = useCallback(async () => {
     const q = query.trim();
     if (!q || !isDesktopRuntime()) return;
+    const startedAt = Date.now();
     setSavingSearch(true);
     try {
+      const smokeFailure = consumeDiscoverySmokeSaveSearchFailure();
+      if (smokeFailure) {
+        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_SAVE_BUSY_MS);
+        throw smokeFailure;
+      }
       const result = await createSavedSearch(q, [...selectedSources]);
+      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_SAVE_BUSY_MS);
       await refreshSavedSearches();
       setMessage(
-        result.created
-          ? `已保存检索订阅:“${q}”,有新结果时会通知你`
-          : `检索订阅已存在:“${q}”`,
+        result.created ? `已保存检索订阅:“${q}”,有新结果时会通知你` : `检索订阅已存在:“${q}”`,
       );
     } catch (e) {
-      setMessage(`保存订阅失败:${e instanceof Error ? e.message : String(e)}`);
+      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_SAVE_BUSY_MS);
+      setMessage(`保存订阅失败，检索条件仍保留，可重新保存:${describeUnknownError(e)}`);
     } finally {
       setSavingSearch(false);
     }
@@ -1025,7 +1414,8 @@ export function DiscoveryPage() {
       nextOpening.add(saved.id);
       openingSavedSearchIdsRef.current = nextOpening;
       setOpeningSavedSearchIds(nextOpening);
-      const sources = saved.sources ?? SOURCES.map((source) => source.id);
+      const sources =
+        saved.sources && saved.sources.length > 0 ? saved.sources : DEFAULT_DISCOVERY_SOURCES;
       setMode("opensource");
       setQuery(saved.query);
       setSelectedSources(new Set(sources));
@@ -1038,7 +1428,7 @@ export function DiscoveryPage() {
           await refreshSavedSearches();
         }
       } catch (e) {
-        setMessage(`打开订阅失败:${e instanceof Error ? e.message : String(e)}`);
+        setMessage(`打开订阅失败:${describeUnknownError(e)}`);
       } finally {
         const updatedOpening = new Set(openingSavedSearchIdsRef.current);
         updatedOpening.delete(saved.id);
@@ -1053,7 +1443,7 @@ export function DiscoveryPage() {
     const target = window as DiscoverySmokeWindow;
     const runSmokeSearch = async (text: string, sources?: DiscoverySource[]): Promise<boolean> => {
       if (!target.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__) return false;
-      const nextSources = sources && sources.length > 0 ? sources : SOURCES.map((source) => source.id);
+      const nextSources = sources && sources.length > 0 ? sources : DEFAULT_DISCOVERY_SOURCES;
       setMode("opensource");
       setQuery(text);
       setSelectedSources(new Set(nextSources));
@@ -1087,15 +1477,23 @@ export function DiscoveryPage() {
       const startedAt = Date.now();
       deletingSavedSearchIdsRef.current.add(saved.id);
       setDeletingSavedSearchIds(new Set(deletingSavedSearchIdsRef.current));
+      setSavedSearchUndo(null);
       setMessage(`正在删除检索订阅:“${saved.query}”...`);
       try {
+        const smokeFailure = consumeDiscoverySmokeDeleteSearchFailure();
+        if (smokeFailure) {
+          await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
+          throw smokeFailure;
+        }
         await deleteSavedSearch(saved.id);
         await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
         await refreshSavedSearches();
-        setMessage(`已删除检索订阅:“${saved.query}”`);
+        const undoMessage = `已删除检索订阅:“${saved.query}”`;
+        setSavedSearchUndo({ id: saved.id, message: undoMessage });
+        setMessage(undoMessage);
       } catch (e) {
         await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
-        setMessage(`删除订阅失败:${e instanceof Error ? e.message : String(e)}`);
+        setMessage(`删除订阅失败，订阅仍保留，可重新删除:${describeUnknownError(e)}`);
       } finally {
         deletingSavedSearchIdsRef.current.delete(saved.id);
         setDeletingSavedSearchIds(new Set(deletingSavedSearchIdsRef.current));
@@ -1104,9 +1502,58 @@ export function DiscoveryPage() {
     [confirm, refreshSavedSearches],
   );
 
+  const undoSavedSearchDelete = useCallback(async () => {
+    if (!savedSearchUndo || savedSearchUndoBusy || !desktopRuntime) return;
+    const startedAt = Date.now();
+    setSavedSearchUndoBusy(true);
+    setMessage("正在撤销删除检索订阅...");
+    try {
+      const smokeFailure = consumeDiscoverySmokeRestoreSearchFailure();
+      if (smokeFailure) {
+        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
+        throw smokeFailure;
+      }
+      await restoreSavedSearch(savedSearchUndo.id);
+      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
+      await refreshSavedSearches();
+      setSavedSearchUndo(null);
+      setMessage("已撤销删除检索订阅");
+    } catch (e) {
+      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
+      setMessage(`撤销删除订阅失败，撤销入口仍保留，可重新撤销:${describeUnknownError(e)}`);
+    } finally {
+      setSavedSearchUndoBusy(false);
+    }
+  }, [desktopRuntime, refreshSavedSearches, savedSearchUndo, savedSearchUndoBusy]);
+
+  const undoSiteRemove = useCallback(async () => {
+    if (!siteRemoveUndo || siteRemoveUndoBusy || !desktopRuntime) return;
+    const startedAt = Date.now();
+    setSiteRemoveUndoBusy(true);
+    setMessage("正在撤销删除站点...");
+    try {
+      const smokeFailure = consumeDiscoverySmokeRestoreSiteFailure();
+      if (smokeFailure) {
+        await waitForMinimumElapsed(startedAt, MIN_SITE_ACTION_BUSY_MS);
+        throw smokeFailure;
+      }
+      await restoreSite(siteRemoveUndo.site);
+      await waitForMinimumElapsed(startedAt, MIN_SITE_ACTION_BUSY_MS);
+      await refreshSites();
+      setSiteRemoveUndo(null);
+      setMessage(`已恢复站点:${siteRemoveUndo.site.name}`);
+    } catch (e) {
+      await waitForMinimumElapsed(startedAt, MIN_SITE_ACTION_BUSY_MS);
+      setMessage(`撤销删除站点失败，撤销入口仍保留，可重新撤销:${describeUnknownError(e)}`);
+    } finally {
+      setSiteRemoveUndoBusy(false);
+    }
+  }, [desktopRuntime, refreshSites, siteRemoveUndo, siteRemoveUndoBusy]);
+
   const runSavedSearchNow = useCallback(
     async (id: string) => {
-      if (checkingSavedSearchIdsRef.current.has(id) || deletingSavedSearchIdsRef.current.has(id)) return;
+      if (checkingSavedSearchIdsRef.current.has(id) || deletingSavedSearchIdsRef.current.has(id))
+        return;
       checkingSavedSearchIdsRef.current.add(id);
       setCheckingSavedSearchIds(new Set(checkingSavedSearchIdsRef.current));
       setMessage("正在检查订阅的新结果...");
@@ -1118,7 +1565,7 @@ export function DiscoveryPage() {
         setMessage(n > 0 ? `发现 ${n} 篇新结果` : "暂无新结果");
       } catch (e) {
         await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_CHECK_BUSY_MS);
-        setMessage(`检查订阅失败:${e instanceof Error ? e.message : String(e)}`);
+        setMessage(`检查订阅失败:${describeUnknownError(e)}`);
       } finally {
         checkingSavedSearchIdsRef.current.delete(id);
         setCheckingSavedSearchIds(new Set(checkingSavedSearchIdsRef.current));
@@ -1129,7 +1576,25 @@ export function DiscoveryPage() {
 
   const importResult = useCallback(async (result: DiscoveryResultWithLibrary) => {
     if (!isDesktopRuntime()) {
-      setMessage("浏览器预览模式下不会写入本地文献库");
+      const startedAt = Date.now();
+      setImportingId(result.id);
+      setMessage("正在演示入库状态...");
+      await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
+      setResults((prev) =>
+        prev.map((item) =>
+          item.id === result.id
+            ? {
+                ...item,
+                inLibrary: true,
+                libraryWorkId: `preview-library:${result.id}`,
+                needsFulltext: !result.work.oaPdfUrl,
+              }
+            : item,
+        ),
+      );
+      setSelectedId(result.id);
+      setImportingId(null);
+      setMessage("预览已标记为已入库；真实入库会在桌面应用中写入本地文献库。");
       return;
     }
     const startedAt = Date.now();
@@ -1156,18 +1621,26 @@ export function DiscoveryPage() {
       window.dispatchEvent(new Event("aurascholar:library-updated"));
     } catch (e) {
       await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
-      setMessage(`入库失败:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`入库失败:${describeUnknownError(e)}`);
     } finally {
       setImportingId(null);
     }
   }, []);
 
+  const openLibraryResult = useCallback(
+    (result: DiscoveryResultWithLibrary) => {
+      if (!result.libraryWorkId) return;
+      if (!desktopRuntime) {
+        navigate(`/reader?work=${encodeURIComponent(result.libraryWorkId)}`);
+        return;
+      }
+      navigate(`/reader?work=${encodeURIComponent(result.libraryWorkId)}`);
+    },
+    [desktopRuntime, navigate],
+  );
+
   const importReferenceText = useCallback(async (text: string, fileName?: string) => {
     if (!text.trim()) return;
-    if (!isDesktopRuntime()) {
-      setMessage("浏览器预览模式下不会写入本地文献库");
-      return;
-    }
     setWebImporting(true);
     try {
       const { previewReferences } = await import("../services/import-refs");
@@ -1176,10 +1649,15 @@ export function DiscoveryPage() {
         setMessage("没有解析出文献。请选择 BibTeX、RIS、NBIB、ENW 或 CSL-JSON 文件。");
         return;
       }
-      setReferenceImportPreview({ count: preview.length, fileName, text });
-      setMessage(`已解析出 ${preview.length} 条文献，请确认后入库`);
+      const previewOnly = !isDesktopRuntime();
+      setReferenceImportPreview({ count: preview.length, fileName, previewOnly, text });
+      setMessage(
+        previewOnly
+          ? `已解析出 ${preview.length} 条文献；确认后会在本页模拟导入，不写入真实文献库。`
+          : `已解析出 ${preview.length} 条文献，请确认后入库`,
+      );
     } catch (e) {
-      setMessage(`解析失败:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`解析失败:${describeUnknownError(e)}`);
     } finally {
       setWebImporting(false);
     }
@@ -1190,6 +1668,14 @@ export function DiscoveryPage() {
     const startedAt = Date.now();
     setWebImporting(true);
     try {
+      if (referenceImportPreview.previewOnly) {
+        await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS);
+        setReferenceImportPreview(null);
+        setMessage(
+          `预览已模拟导入 ${referenceImportPreview.count} 条引用；真实写入、去重和附件关联会在桌面应用中完成。`,
+        );
+        return;
+      }
       const { importReferences } = await import("../services/import-refs");
       const summary = await importReferences(referenceImportPreview.text);
       await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS);
@@ -1200,7 +1686,7 @@ export function DiscoveryPage() {
       window.dispatchEvent(new Event("aurascholar:library-updated"));
     } catch (e) {
       await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS);
-      setMessage(`导入失败:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`导入失败，当前文献库未写入部分导入，可重新导入:${describeUnknownError(e)}`);
     } finally {
       setWebImporting(false);
     }
@@ -1224,11 +1710,12 @@ export function DiscoveryPage() {
       const url = siteUrl(site, query);
       if (!isDesktopRuntime()) {
         void openExternalUrl(url).catch((error) =>
-          setMessage(`打开外部链接失败:${error instanceof Error ? error.message : String(error)}`),
+          setMessage(`打开外部链接失败:${describeUnknownError(error)}`),
         );
         return;
       }
       setMessage(null);
+      setPendingWork(null);
       setMode("browser");
       openResearchTabWithFeedback(site.id, url, site.useProxy ? proxy : "");
     },
@@ -1266,7 +1753,7 @@ export function DiscoveryPage() {
       setMessage(feedback);
     } catch (e) {
       await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_SITE_ADD_BUSY_MS);
-      setMessage(`添加站点失败:${e instanceof Error ? e.message : String(e)}`);
+      setMessage(`添加站点失败:${describeUnknownError(e)}`);
     } finally {
       setAddingSiteBusy(false);
     }
@@ -1287,7 +1774,7 @@ export function DiscoveryPage() {
         await refreshSites();
         setMessage(`已恢复站点:${site.name}`);
       } catch (e) {
-        setMessage(`恢复站点失败:${e instanceof Error ? e.message : String(e)}`);
+        setMessage(`恢复站点失败:${describeUnknownError(e)}`);
       } finally {
         const updatedRestoring = new Set(restoringSiteIdsRef.current);
         updatedRestoring.delete(site.id);
@@ -1314,7 +1801,7 @@ export function DiscoveryPage() {
         await refreshSites();
         setMessage(`${nextUseProxy ? "已开启" : "已关闭"}站点代理:${site.name}`);
       } catch (e) {
-        setMessage(`更新站点代理失败:${e instanceof Error ? e.message : String(e)}`);
+        setMessage(`更新站点代理失败:${describeUnknownError(e)}`);
       } finally {
         const updatedProxying = new Set(proxyingSiteIdsRef.current);
         updatedProxying.delete(site.id);
@@ -1366,21 +1853,40 @@ export function DiscoveryPage() {
       siteActionsRef.current = nextActions;
       setSiteActions(nextActions);
       setMessage(null);
+      let removedSiteUndo: SiteRemoveUndoState | null = null;
       try {
         if (action === "remove") {
+          const smokeFailure = consumeDiscoverySmokeRemoveSiteFailure();
+          if (smokeFailure) {
+            await waitForMinimumElapsed(startedAt, MIN_SITE_ACTION_BUSY_MS);
+            throw smokeFailure;
+          }
           await removeSite(site.id);
-          setMessage(`已删除站点:${site.name}`);
+          const undoMessage = `已删除站点:${site.name}`;
+          removedSiteUndo = { message: undoMessage, site };
+          setSiteRemoveUndo(removedSiteUndo);
+          setMessage(undoMessage);
         } else if (action === "hide") {
+          setSiteRemoveUndo(null);
           await setHidden(site.id, true);
           setMessage(`已隐藏站点:${site.name}`);
         } else if (action === "clear") {
+          setSiteRemoveUndo(null);
           await clearSiteData(site);
           setMessage(`已清除 ${site.name} 的网站数据`);
         }
         await waitForMinimumElapsed(startedAt, MIN_SITE_ACTION_BUSY_MS);
         await refreshSites();
       } catch (e) {
-        setMessage(`操作失败:${e instanceof Error ? e.message : String(e)}`);
+        await waitForMinimumElapsed(startedAt, MIN_SITE_ACTION_BUSY_MS);
+        if (action === "remove" && !removedSiteUndo) {
+          setMessage(`删除站点失败，站点仍保留，可重新删除:${describeUnknownError(e)}`);
+        } else if (action === "remove" && removedSiteUndo) {
+          setSiteRemoveUndo(removedSiteUndo);
+          setMessage(`删除站点后刷新失败，撤销入口已保留:${describeUnknownError(e)}`);
+        } else {
+          setMessage(`操作失败:${describeUnknownError(e)}`);
+        }
       } finally {
         const updatedActions = new Map(siteActionsRef.current);
         updatedActions.delete(site.id);
@@ -1480,17 +1986,19 @@ export function DiscoveryPage() {
             }}
           />
         </div>
+        {pendingWork && (
+          <PendingFulltextTarget
+            title={pendingWork.title}
+            detail="下载或抓取到的 PDF 会优先挂回这篇文献。"
+          />
+        )}
         <div ref={hostRef} className="research-browser-host">
           {!activeTab && <span>正在打开...</span>}
           {activeTab?.archived && (
             <span>正在恢复 {activeTab.title || hostOf(activeTab.url)}...</span>
           )}
         </div>
-        <InlineNotice
-          key={browserToastKey}
-          className="research-browser-status"
-          message={message}
-        />
+        <InlineNotice key={browserToastKey} className="research-browser-status" message={message} />
         {confirmDraft && (
           <Suspense
             fallback={
@@ -1518,6 +2026,17 @@ export function DiscoveryPage() {
         <button type="button" className="discovery-back-link" onClick={() => setMode("home")}>
           ← 返回学术检索
         </button>
+
+        {pendingWork && (
+          <PendingFulltextTarget
+            title={pendingWork.title}
+            detail={
+              desktopRuntime
+                ? "可继续检索开放 PDF 线索，或切到站点浏览后把下载 PDF 挂回这篇文献。"
+                : "浏览器预览已保留目标；桌面应用会打开全文来源并把 PDF 挂回这篇文献。"
+            }
+          />
+        )}
 
         <section className="discovery-search-hero">
           <div>
@@ -1562,11 +2081,14 @@ export function DiscoveryPage() {
                 </Badge>
               </div>
               <div className="discovery-command">
-                <Input
+                <input
+                  ref={openSourceSearchInputRef}
+                  className="au-input"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && !isImeComposing(e) && void runSearch()}
                   placeholder="输入关键词、论文标题、DOI 或 arXiv ID"
+                  aria-label="开放源检索关键词"
                   disabled={searching}
                 />
                 <Button
@@ -1689,12 +2211,12 @@ export function DiscoveryPage() {
                             opening
                               ? "正在打开订阅"
                               : checking
-                              ? "正在检查新结果"
-                              : deleting
-                                ? "正在删除订阅"
-                              : saved.lastError
-                                ? `最近检查失败:${saved.lastError}`
-                                : "点击重新运行此检索"
+                                ? "正在检查新结果"
+                                : deleting
+                                  ? "正在删除订阅"
+                                  : saved.lastError
+                                    ? `最近检查失败:${saved.lastError}`
+                                    : "点击重新运行此检索"
                           }
                           disabled={checking || opening || deleting}
                           aria-busy={opening || deleting ? "true" : undefined}
@@ -1751,7 +2273,26 @@ export function DiscoveryPage() {
               </div>
             )}
 
-            <InlineNotice className="library-command__message" message={message} />
+            {savedSearchUndo &&
+            (message === savedSearchUndo.message ||
+              savedSearchUndoBusy ||
+              message?.startsWith("撤销删除订阅失败，撤销入口仍保留")) ? (
+              <InlineNotice className="library-command__message" message={message}>
+                <span className="library-command__message-text">{message}</span>
+                <button
+                  type="button"
+                  className="library-command__message-action"
+                  onClick={() => void undoSavedSearchDelete()}
+                  disabled={savedSearchUndoBusy}
+                  aria-busy={savedSearchUndoBusy ? "true" : undefined}
+                  aria-label="撤销删除检索订阅"
+                >
+                  {savedSearchUndoBusy ? "撤销中..." : "撤销"}
+                </button>
+              </InlineNotice>
+            ) : (
+              <InlineNotice className="library-command__message" message={message} />
+            )}
 
             {results.length > 0 && (
               <div className="discovery-refine">
@@ -1784,23 +2325,77 @@ export function DiscoveryPage() {
             <div className="discovery-results">
               {results.length === 0 ? (
                 <div className="discovery-search-empty au-surface">
-                  <Badge variant="neutral">Ready</Badge>
-                  <h3>从开放数据源发现文献</h3>
-                  <p>结果会自动去重、标记库中状态，并保留开放 PDF 线索，适合作为调研起点。</p>
-                  <div className="discovery-empty-steps">
-                    <span>
-                      <strong>01</strong>
-                      填主题或 DOI
-                    </span>
-                    <span>
-                      <strong>02</strong>
-                      筛选数据源
-                    </span>
-                    <span>
-                      <strong>03</strong>
-                      一键入库
-                    </span>
-                  </div>
+                  {showOpenSourceSearchError ? (
+                    <>
+                      <Badge variant="danger">Search failed</Badge>
+                      <h3>检索没有完成</h3>
+                      <p>
+                        {searchError}
+                        <br />
+                        当前数据源暂时不可用，重试会保留关键词和筛选条件。
+                      </p>
+                      <div className="discovery-empty-actions">
+                        <Button
+                          type="button"
+                          onClick={() => void runSearch()}
+                          disabled={!query.trim()}
+                        >
+                          重试检索
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          type="button"
+                          aria-label="清空开放源检索"
+                          onClick={clearOpenSourceSearch}
+                        >
+                          清空搜索
+                        </Button>
+                      </div>
+                    </>
+                  ) : showOpenSourceNoResults ? (
+                    <>
+                      <Badge variant="warning">No matches</Badge>
+                      <h3>没有找到匹配文献</h3>
+                      <p>换一个关键词、放宽高级检索条件，或稍后重试当前数据源。</p>
+                      <div className="discovery-empty-actions">
+                        <Button
+                          type="button"
+                          onClick={() => void runSearch()}
+                          disabled={!query.trim()}
+                        >
+                          重试检索
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          type="button"
+                          aria-label="清空开放源检索"
+                          onClick={clearOpenSourceSearch}
+                        >
+                          清空搜索
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <Badge variant="neutral">Ready</Badge>
+                      <h3>从开放数据源发现文献</h3>
+                      <p>结果会自动去重、标记库中状态，并保留开放 PDF 线索，适合作为调研起点。</p>
+                      <div className="discovery-empty-steps">
+                        <span>
+                          <strong>01</strong>
+                          填主题或 DOI
+                        </span>
+                        <span>
+                          <strong>02</strong>
+                          筛选数据源
+                        </span>
+                        <span>
+                          <strong>03</strong>
+                          一键入库
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : displayedResults.length === 0 ? (
                 <div className="discovery-search-empty discovery-search-empty--compact au-surface">
@@ -1817,7 +2412,7 @@ export function DiscoveryPage() {
                     onSelect={() => setSelectedId(result.id)}
                     onPrimaryAction={() => {
                       if (result.inLibrary && result.libraryWorkId) {
-                        navigate(`/reader?work=${encodeURIComponent(result.libraryWorkId)}`);
+                        openLibraryResult(result);
                       } else {
                         void importResult(result);
                       }
@@ -1828,22 +2423,43 @@ export function DiscoveryPage() {
                           id: result.libraryWorkId,
                           title: result.work.title,
                           doi: result.work.doi,
+                          arxivId: result.work.arxivId,
+                          url: result.work.url,
                         });
                       }
                     }}
                   />
                 ))
               )}
-              {results.length > 0 && canLoadMore && (
+              {results.length > 0 && (canLoadMore || loadMoreError) && (
                 <div className="discovery-load-more">
-                  <Button
-                    variant="secondary"
-                    onClick={() => void loadMore()}
-                    disabled={loadingMore}
-                    aria-busy={loadingMore || undefined}
-                  >
-                    {loadingMore ? "加载中…" : "加载更多"}
-                  </Button>
+                  {loadMoreError && (
+                    <div className="discovery-load-more__error" role="alert">
+                      <div>
+                        <strong>加载更多没有完成</strong>
+                        <span>{loadMoreError}</span>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        onClick={() => void loadMore()}
+                        disabled={loadingMore || !canLoadMore}
+                        aria-busy={loadingMore || undefined}
+                        aria-label="重试加载更多结果"
+                      >
+                        {loadingMore ? "重试中…" : "重试加载更多"}
+                      </Button>
+                    </div>
+                  )}
+                  {canLoadMore && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => void loadMore()}
+                      disabled={loadingMore}
+                      aria-busy={loadingMore || undefined}
+                    >
+                      {loadingMore ? "加载中…" : "加载更多"}
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -1863,7 +2479,7 @@ export function DiscoveryPage() {
                   importing={importingId === selectedResult.id}
                   onPrimaryAction={() =>
                     selectedResult.inLibrary && selectedResult.libraryWorkId
-                      ? navigate(`/reader?work=${encodeURIComponent(selectedResult.libraryWorkId)}`)
+                      ? openLibraryResult(selectedResult)
                       : void importResult(selectedResult)
                   }
                   onFindFulltext={() => {
@@ -1872,6 +2488,8 @@ export function DiscoveryPage() {
                         id: selectedResult.libraryWorkId,
                         title: selectedResult.work.title,
                         doi: selectedResult.work.doi,
+                        arxivId: selectedResult.work.arxivId,
+                        url: selectedResult.work.url,
                       });
                     }
                   }}
@@ -1917,7 +2535,26 @@ export function DiscoveryPage() {
         </div>
       </section>
 
-      <InlineNotice className="library-command__message" message={message} />
+      {siteRemoveUndo &&
+      (message === siteRemoveUndo.message ||
+        siteRemoveUndoBusy ||
+        message?.startsWith("撤销删除站点失败，撤销入口仍保留")) ? (
+        <InlineNotice className="library-command__message" message={message}>
+          <span className="library-command__message-text">{message}</span>
+          <button
+            type="button"
+            className="library-command__message-action"
+            onClick={() => void undoSiteRemove()}
+            disabled={siteRemoveUndoBusy}
+            aria-busy={siteRemoveUndoBusy ? "true" : undefined}
+            aria-label="撤销删除站点"
+          >
+            {siteRemoveUndoBusy ? "撤销中..." : "撤销"}
+          </button>
+        </InlineNotice>
+      ) : (
+        <InlineNotice className="library-command__message" message={message} />
+      )}
 
       <Card className="discovery-launch-card">
         <div className="discovery-launch-card__head">
@@ -2060,9 +2697,9 @@ export function DiscoveryPage() {
                     ? "打开中..."
                     : deleting
                       ? "删除中..."
-                    : saved.newCount
-                      ? `${saved.newCount} 新`
-                      : lastRunLabel(saved.lastRunAt)}
+                      : saved.newCount
+                        ? `${saved.newCount} 新`
+                        : lastRunLabel(saved.lastRunAt)}
                 </small>
               </button>
             );
@@ -2225,7 +2862,11 @@ export function DiscoveryPage() {
             >
               {addingSiteBusy ? "添加中..." : "添加"}
             </Button>
-            <Button variant="secondary" onClick={() => setAddingSite(false)} disabled={addingSiteBusy}>
+            <Button
+              variant="secondary"
+              onClick={() => setAddingSite(false)}
+              disabled={addingSiteBusy}
+            >
               取消
             </Button>
           </div>
@@ -2263,6 +2904,7 @@ export function DiscoveryPage() {
           count={referenceImportPreview.count}
           fileName={referenceImportPreview.fileName}
           importing={webImporting}
+          previewOnly={referenceImportPreview.previewOnly}
           onClose={cancelReferenceImport}
           onConfirm={() => void confirmReferenceImport()}
         />
@@ -2291,12 +2933,14 @@ function ReferenceImportPreviewDialog({
   count,
   fileName,
   importing,
+  previewOnly,
   onClose,
   onConfirm,
 }: {
   count: number;
   fileName?: string;
   importing: boolean;
+  previewOnly: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }) {
@@ -2335,15 +2979,18 @@ function ReferenceImportPreviewDialog({
             type="button"
             className="library-modal__close"
             onClick={requestClose}
-            aria-label="关闭"
+            aria-label="关闭确认导入引用文件"
+            title="关闭确认导入引用文件"
             disabled={importing}
           >
             ×
           </button>
         </div>
         <p className="au-text-muted" id={descriptionId} style={{ fontSize: 13 }}>
-          已解析出 <strong>{count}</strong> 条文献。确认后才会写入文献库，导入时会按 DOI
-          与标题自动去重。
+          已解析出 <strong>{count}</strong> 条文献。
+          {previewOnly
+            ? "当前是浏览器预览，确认后只会模拟导入结果，不写入真实文献库。"
+            : "确认后才会写入文献库，导入时会按 DOI 与标题自动去重。"}
         </p>
         {fileName && (
           <div className="reference-import-preview__file">
@@ -2363,7 +3010,7 @@ function ReferenceImportPreviewDialog({
             disabled={importing}
             aria-busy={importing || undefined}
           >
-            {importing ? "导入中..." : `导入 ${count} 条`}
+            {importing ? "导入中..." : previewOnly ? `模拟导入 ${count} 条` : `导入 ${count} 条`}
           </Button>
           <Button variant="secondary" onClick={requestClose} disabled={importing}>
             取消
@@ -2438,11 +3085,7 @@ function ResultCard({
           }}
           disabled={importing}
         >
-          {result.inLibrary
-            ? "打开"
-            : importing
-              ? discoveryImportBusyLabel(result)
-              : "加入文献库"}
+          {result.inLibrary ? "打开" : importing ? discoveryImportBusyLabel(result) : "加入文献库"}
         </button>
         {result.inLibrary && result.needsFulltext && (
           <button

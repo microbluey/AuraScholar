@@ -50,7 +50,7 @@ export async function searchDiscoveryDetailed(
     limit?: number;
   },
 ): Promise<DiscoverySearchReportWithLibrary> {
-  const smokeReport = smokeDiscoveryReport(query, sources);
+  const smokeReport = await smokeDiscoveryReport(query, sources, signal);
   if (smokeReport) return smokeReport;
   const report = await searchOpenSourcesDetailed(ctx, query, {
     sources,
@@ -187,6 +187,8 @@ interface DiscoverySmokeImportFixture {
 
 interface DiscoverySmokeFixture {
   acceptAnyQuery?: boolean;
+  delayMs?: number;
+  empty?: boolean;
   query: string;
   title: string;
   doi?: string;
@@ -195,7 +197,9 @@ interface DiscoverySmokeFixture {
   venueName?: string;
   oaPdfUrl?: string;
   citedByCount?: number;
+  hasMore?: boolean;
   importResult?: DiscoverySmokeImportFixture;
+  page?: number;
 }
 
 interface DiscoverySmokeWindow extends Window {
@@ -219,16 +223,43 @@ async function smokeDiscoveryImportResult(work: NormalizedWork): Promise<IngestR
   };
 }
 
-function smokeDiscoveryReport(
+async function smokeDiscoveryReport(
   query: string | DiscoveryQuery,
   sources?: DiscoverySource[],
-): DiscoverySearchReportWithLibrary | null {
+  signal?: AbortSignal,
+): Promise<DiscoverySearchReportWithLibrary | null> {
   const fixture = (window as DiscoverySmokeWindow).__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
   const text = (typeof query === "string" ? query : query.text).trim();
   if (!fixture || (!fixture.acceptAnyQuery && text !== fixture.query)) return null;
+  if (fixture.delayMs && fixture.delayMs > 0) {
+    await waitForSmokeDelay(fixture.delayMs, signal);
+  }
 
   const requestedSources: DiscoverySource[] =
     sources && sources.length > 0 ? sources : ["crossref", "openalex", "s2", "arxiv"];
+  const page = fixture.page ?? 1;
+  const cursor = {
+    page: Number.isFinite(page) && page > 0 ? Math.trunc(page) : 1,
+    hasMore: Boolean(fixture.hasMore),
+  };
+  if (fixture.empty) {
+    return {
+      results: [],
+      sources: Object.fromEntries(
+        requestedSources.map((source) => [
+          source,
+          {
+            source,
+            status: "empty",
+            count: 0,
+          },
+        ]),
+      ) as DiscoverySearchReportWithLibrary["sources"],
+      cursors: Object.fromEntries(
+        requestedSources.map((source) => [source, cursor]),
+      ) as DiscoverySearchReportWithLibrary["cursors"],
+    };
+  }
   const activeSources = new Set<DiscoverySource>(
     requestedSources.filter((source) => source !== "arxiv"),
   );
@@ -266,9 +297,26 @@ function smokeDiscoveryReport(
       ]),
     ) as DiscoverySearchReportWithLibrary["sources"],
     cursors: Object.fromEntries(
-      requestedSources.map((source) => [source, { page: 1, hasMore: false }]),
+      requestedSources.map((source) => [source, cursor]),
     ) as DiscoverySearchReportWithLibrary["cursors"],
   };
+}
+
+function waitForSmokeDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error("smoke discovery search aborted"));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      cleanup();
+      reject(new Error("smoke discovery search aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function fingerprintForWork(work: NormalizedWork): string | null {

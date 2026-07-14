@@ -8,6 +8,7 @@ import { Badge, Button, Input } from "@aurascholar/ui";
 import type { WorkPatch, AuthorRole } from "@aurascholar/db";
 import type { NormalizedWork } from "@aurascholar/connectors";
 import { loadWorkMetadata, saveWorkMetadata } from "../services/metadata";
+import { describeSafeError } from "../services/sensitive-text";
 import { useConfirmDialog, type ConfirmFunction } from "./ConfirmDialog";
 import { useModalFocusTrap } from "./useModalFocusTrap";
 
@@ -146,9 +147,30 @@ const ROLES: Array<{ value: AuthorRole; label: string }> = [
 ];
 const MIN_METADATA_SAVE_BUSY_MS = 250;
 
+interface MetadataSmokeWindow extends Window {
+  __AURASCHOLAR_SMOKE_METADATA_FAIL_NEXT_SAVE__?: string;
+}
+
 async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
   const remaining = minimumMs - (Date.now() - startedAt);
   if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
+}
+
+async function waitForNextRenderFrame(): Promise<void> {
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function consumeMetadataSmokeSaveFailure(): string | null {
+  const smokeWindow = window as MetadataSmokeWindow;
+  const message = smokeWindow.__AURASCHOLAR_SMOKE_METADATA_FAIL_NEXT_SAVE__;
+  if (!message) return null;
+  delete smokeWindow.__AURASCHOLAR_SMOKE_METADATA_FAIL_NEXT_SAVE__;
+  return message;
+}
+
+function formatMetadataSaveError(error: unknown): string {
+  const message = describeSafeError(error);
+  return `保存失败，修改仍保留：${message}`;
 }
 
 export function MetadataEditor({
@@ -174,6 +196,7 @@ export function MetadataEditor({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const { confirm, confirmDialog } = useConfirmDialog();
   const modalRef = useRef<HTMLElement | null>(null);
   const savingRef = useRef(false);
@@ -228,7 +251,7 @@ export function MetadataEditor({
         setDraft(nextDraft);
         setSavedDraft(nextDraft);
       })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => !cancelled && setError(describeSafeError(e)));
     return () => {
       cancelled = true;
     };
@@ -246,11 +269,13 @@ export function MetadataEditor({
 
   const set = useCallback(<K extends keyof Draft>(key: K, value: Draft[K]) => {
     setError(null);
+    setNotice(null);
     setDraft((d) => (d ? { ...d, [key]: value } : d));
   }, []);
 
   const setAuthor = useCallback((i: number, patch: Partial<AuthorDraft>) => {
     setError(null);
+    setNotice(null);
     setDraft((d) => {
       if (!d) return d;
       const authors = d.authors.map((a, idx) => (idx === i ? { ...a, ...patch } : a));
@@ -260,6 +285,7 @@ export function MetadataEditor({
 
   const addAuthor = useCallback(() => {
     setError(null);
+    setNotice(null);
     setDraft((d) =>
       d ? { ...d, authors: [...d.authors, { displayName: "", role: "author" }] } : d,
     );
@@ -267,6 +293,7 @@ export function MetadataEditor({
 
   const removeAuthor = useCallback((i: number) => {
     setError(null);
+    setNotice(null);
     setDraft((d) => (d ? { ...d, authors: d.authors.filter((_, idx) => idx !== i) } : d));
   }, []);
 
@@ -282,7 +309,10 @@ export function MetadataEditor({
         title: "放弃元数据修改吗？",
         tone: "warning",
       });
-      if (!confirmed) return;
+      if (!confirmed) {
+        setNotice("已继续编辑，未保存修改仍在。");
+        return;
+      }
     }
     onClose();
   }, [confirm, hasUnsavedChanges, onClose, saving]);
@@ -306,6 +336,7 @@ export function MetadataEditor({
     savingRef.current = true;
     setSaving(true);
     setError(null);
+    setNotice(null);
     const orNull = (s: string) => (s.trim() ? s.trim() : null);
     const year = parseDraftYear(draft.year);
     const patch: WorkPatch = {
@@ -345,6 +376,9 @@ export function MetadataEditor({
         .map((a, position) => ({ displayName: a.displayName.trim(), role: a.role, position })),
     };
     try {
+      await waitForNextRenderFrame();
+      const smokeFailure = consumeMetadataSmokeSaveFailure();
+      if (smokeFailure) throw new Error(smokeFailure);
       if (workId) {
         await saveWorkMetadata(workId, patch);
         await waitForMinimumElapsed(startedAt, MIN_METADATA_SAVE_BUSY_MS);
@@ -358,7 +392,7 @@ export function MetadataEditor({
       onClose();
     } catch (e) {
       await waitForMinimumElapsed(startedAt, MIN_METADATA_SAVE_BUSY_MS);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatMetadataSaveError(e));
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -402,7 +436,8 @@ export function MetadataEditor({
               type="button"
               className="library-modal__close"
               onClick={() => void requestClose()}
-              aria-label="关闭"
+              aria-label="关闭编辑文献元信息"
+              title="关闭编辑文献元信息"
               disabled={saving}
             >
               ×
@@ -454,45 +489,62 @@ export function MetadataEditor({
               <div className="meta-authors">
                 <div className="meta-authors__head">
                   <span>作者 / 编者 / 译者</span>
-                  <button type="button" onClick={addAuthor} disabled={saving}>
+                  <button
+                    type="button"
+                    onClick={addAuthor}
+                    disabled={saving}
+                    aria-label="添加作者、编者或译者"
+                    title="添加作者、编者或译者"
+                  >
                     + 添加
                   </button>
                 </div>
                 {draft.authors.length === 0 && (
                   <p className="au-text-muted" style={{ fontSize: 12 }}>
-                    暂无,点「添加」录入。
+                    暂无，点「添加」录入。
                   </p>
                 )}
-                {draft.authors.map((a, i) => (
-                  <div className="meta-author-row" key={i}>
-                    <Input
-                      placeholder="姓名(如 Ada Lovelace 或 Lovelace, Ada)"
-                      value={a.displayName}
-                      disabled={saving}
-                      onChange={(e) => setAuthor(i, { displayName: e.target.value })}
-                    />
-                    <select
-                      className="au-input"
-                      value={a.role}
-                      disabled={saving}
-                      onChange={(e) => setAuthor(i, { role: e.target.value as AuthorRole })}
+                {draft.authors.map((a, i) => {
+                  const authorLabel = a.displayName.trim() || `第 ${i + 1} 位作者`;
+                  return (
+                    <div
+                      className="meta-author-row"
+                      key={i}
+                      role="group"
+                      aria-label={`${authorLabel} 信息`}
                     >
-                      {ROLES.map((r) => (
-                        <option key={r.value} value={r.value}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => removeAuthor(i)}
-                      title="删除"
-                      disabled={saving}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
+                      <Input
+                        placeholder="姓名(如 Ada Lovelace 或 Lovelace, Ada)"
+                        value={a.displayName}
+                        disabled={saving}
+                        aria-label={`${authorLabel} 姓名`}
+                        onChange={(e) => setAuthor(i, { displayName: e.target.value })}
+                      />
+                      <select
+                        className="au-input"
+                        value={a.role}
+                        disabled={saving}
+                        aria-label={`${authorLabel} 角色`}
+                        onChange={(e) => setAuthor(i, { role: e.target.value as AuthorRole })}
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r.value} value={r.value}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => removeAuthor(i)}
+                        aria-label={`删除作者 ${authorLabel}`}
+                        title={`删除作者 ${authorLabel}`}
+                        disabled={saving}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
 
               {GROUPS.map((group) => (
@@ -537,8 +589,17 @@ export function MetadataEditor({
                   {error}
                 </p>
               )}
+              {notice && (
+                <p role="status" style={{ color: "var(--color-text-secondary)", fontSize: 13 }}>
+                  {notice}
+                </p>
+              )}
               <div className="meta-editor__actions">
-                <Button onClick={() => void save()} disabled={saving} aria-busy={saving || undefined}>
+                <Button
+                  onClick={() => void save()}
+                  disabled={saving}
+                  aria-busy={saving || undefined}
+                >
                   {saving ? "保存中…" : "保存"}
                 </Button>
                 <Button variant="secondary" onClick={() => void requestClose()} disabled={saving}>

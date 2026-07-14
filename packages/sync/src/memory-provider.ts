@@ -1,5 +1,5 @@
 // In-memory SyncProvider for tests and as the reference implementation.
-import type { RemoteObject, SyncProvider } from "./provider";
+import type { RemoteObject, SyncProvider } from "./provider.js";
 
 export class MemorySyncProvider implements SyncProvider {
   readonly id = "memory";

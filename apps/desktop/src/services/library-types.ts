@@ -14,6 +14,7 @@ export interface AttachPdfResult {
   attachmentId: string;
   deduped: boolean;
   pageCount: number;
+  restoredAnnotationCount: number;
 }
 
 /**

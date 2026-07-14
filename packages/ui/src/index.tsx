@@ -56,8 +56,14 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: "primary" | "secondary" | "ghost" | "danger";
 }
 
-export function Button({ variant = "primary", className, ...props }: ButtonProps) {
-  return <button className={clsx("au-button", `au-button--${variant}`, className)} {...props} />;
+export function Button({ type = "button", variant = "primary", className, ...props }: ButtonProps) {
+  return (
+    <button
+      type={type}
+      className={clsx("au-button", `au-button--${variant}`, className)}
+      {...props}
+    />
+  );
 }
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {

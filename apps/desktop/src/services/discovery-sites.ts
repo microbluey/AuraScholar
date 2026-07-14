@@ -35,7 +35,6 @@ interface SiteRow {
   use_proxy: number;
 }
 
-
 function fromRow(row: SiteRow): DiscoverySite {
   return {
     id: row.id,
@@ -49,25 +48,41 @@ function fromRow(row: SiteRow): DiscoverySite {
   };
 }
 
+function assertChanged(changes: number, message: string): void {
+  if (changes === 0) throw new Error(message);
+}
+
 function normalizeHttpUrl(input: string, label: string): string {
   const raw = input.trim();
   const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return parseHttpUrl(candidate, label).toString();
+}
+
+function parseHttpUrl(input: string, label: string): URL {
   let parsed: URL;
   try {
-    parsed = new URL(candidate);
+    parsed = new URL(input);
   } catch {
     throw new Error(`${label} 不是有效 URL`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`${label} 只支持 http/https`);
   }
-  return parsed.toString();
+  assertNoUrlCredentials(parsed, label);
+  return parsed;
 }
 
-function isHttpUrl(input: string): boolean {
+function assertNoUrlCredentials(url: URL, label: string): void {
+  if (url.username || url.password) {
+    const separator = /[a-z]$/i.test(label) ? " 中" : "中";
+    throw new Error(`${label}${separator}不能包含用户名或密码`);
+  }
+}
+
+function isSafeHttpUrl(input: string): boolean {
   try {
-    const parsed = new URL(input);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+    parseHttpUrl(input, "URL");
+    return true;
   } catch {
     return false;
   }
@@ -86,6 +101,7 @@ function normalizeProxyAddress(input: string): string {
     throw new Error("代理地址只支持 http/https/socks4/socks5");
   }
   if (!parsed.hostname) throw new Error("代理地址缺少主机名");
+  assertNoUrlCredentials(parsed, "代理地址");
   return parsed.toString();
 }
 
@@ -94,10 +110,17 @@ function normalizeEzproxyPrefix(input: string): string {
   if (!raw) return "";
   const probe = encodeURIComponent("https://example.com/article");
   const candidate = raw.includes("{url}") ? raw.replace("{url}", probe) : `${raw}${probe}`;
-  if (!isHttpUrl(candidate)) {
-    throw new Error("图书馆前缀必须能组成 http/https URL");
-  }
+  parseHttpUrl(candidate, "图书馆前缀");
   return raw;
+}
+
+function parseSettingString(valueJson: string): string {
+  try {
+    const parsed: unknown = JSON.parse(valueJson);
+    return typeof parsed === "string" ? parsed : "";
+  } catch {
+    return "";
+  }
 }
 
 /** All sites, in display order. Includes hidden ones (filter in the UI). */
@@ -143,10 +166,11 @@ export async function addSite(input: {
     );
     if (existing[0]) {
       if (existing[0].hidden === 1) {
-        await db.run(`UPDATE discovery_sites SET hidden = 0, updated_at = ? WHERE id = ?`, [
-          now,
-          existing[0].id,
-        ]);
+        const restored = await db.run(
+          `UPDATE discovery_sites SET hidden = 0, updated_at = ? WHERE id = ?`,
+          [now, existing[0].id],
+        );
+        assertChanged(restored, `站点不存在或已被移除:${existing[0].name}`);
         return { created: false, status: "restored", site: fromRow({ ...existing[0], hidden: 0 }) };
       }
       return { created: false, status: "existing", site: fromRow(existing[0]) };
@@ -172,11 +196,11 @@ export async function addSite(input: {
 /** Toggle whether a site's embedded browser routes through the configured proxy. */
 export async function setSiteProxy(id: string, useProxy: boolean): Promise<void> {
   const db = await getDb();
-  await db.run(`UPDATE discovery_sites SET use_proxy = ?, updated_at = ? WHERE id = ?`, [
-    useProxy ? 1 : 0,
-    Date.now(),
-    id,
-  ]);
+  const changed = await db.run(
+    `UPDATE discovery_sites SET use_proxy = ?, updated_at = ? WHERE id = ?`,
+    [useProxy ? 1 : 0, Date.now(), id],
+  );
+  assertChanged(changed, `站点不存在或已被移除:${id}`);
 }
 
 /** Global proxy address (e.g. "http://127.0.0.1:7890"), stored in settings. */
@@ -188,7 +212,7 @@ export async function getProxyAddress(): Promise<string> {
   );
   if (!rows[0]) return "";
   try {
-    return JSON.parse(rows[0].value_json) as string;
+    return normalizeProxyAddress(parseSettingString(rows[0].value_json));
   } catch {
     return "";
   }
@@ -218,7 +242,7 @@ export async function getEzproxyPrefix(): Promise<string> {
   );
   if (!rows[0]) return "";
   try {
-    return JSON.parse(rows[0].value_json) as string;
+    return normalizeEzproxyPrefix(parseSettingString(rows[0].value_json));
   } catch {
     return "";
   }
@@ -243,26 +267,57 @@ export async function setEzproxyPrefix(prefix: string): Promise<void> {
 export function ezproxyRewrite(prefix: string, url: string): string | null {
   const p = prefix.trim();
   if (!p) return null;
-  if (!isHttpUrl(url)) return null;
+  if (!isSafeHttpUrl(url)) return null;
   const rewritten = p.includes("{url}")
     ? p.replace("{url}", encodeURIComponent(url))
     : `${p}${encodeURIComponent(url)}`;
-  return isHttpUrl(rewritten) ? rewritten : null;
+  return isSafeHttpUrl(rewritten) ? rewritten : null;
 }
 
 /** Remove a custom site. Built-in sites are hidden instead (see setHidden). */
 export async function removeSite(id: string): Promise<void> {
   const db = await getDb();
-  await db.run(`DELETE FROM discovery_sites WHERE id = ? AND builtin = 0`, [id]);
+  const changed = await db.run(`DELETE FROM discovery_sites WHERE id = ? AND builtin = 0`, [id]);
+  assertChanged(changed, `站点不存在、已被删除或为内置站点:${id}`);
+}
+
+export async function restoreSite(site: DiscoverySite): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.run(
+    `INSERT INTO discovery_sites
+       (id, name, home_url, search_url, builtin, hidden, sort_order, use_proxy, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       home_url = excluded.home_url,
+       search_url = excluded.search_url,
+       builtin = excluded.builtin,
+       hidden = 0,
+       sort_order = excluded.sort_order,
+       use_proxy = excluded.use_proxy,
+       updated_at = excluded.updated_at`,
+    [
+      site.id,
+      site.name,
+      site.homeUrl,
+      site.searchUrl ?? null,
+      site.builtin ? 1 : 0,
+      site.sortOrder,
+      site.useProxy ? 1 : 0,
+      now,
+      now,
+    ],
+  );
 }
 
 export async function setHidden(id: string, hidden: boolean): Promise<void> {
   const db = await getDb();
-  await db.run(`UPDATE discovery_sites SET hidden = ?, updated_at = ? WHERE id = ?`, [
-    hidden ? 1 : 0,
-    Date.now(),
-    id,
-  ]);
+  const changed = await db.run(
+    `UPDATE discovery_sites SET hidden = ?, updated_at = ? WHERE id = ?`,
+    [hidden ? 1 : 0, Date.now(), id],
+  );
+  assertChanged(changed, `站点不存在或已被移除:${id}`);
 }
 
 /** Clear a site's stored cookies/cache (its Electron session partition). */

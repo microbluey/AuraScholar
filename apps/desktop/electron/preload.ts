@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { describeSafeError } from "@aurascholar/platform";
 import {
   CH,
   EV,
@@ -6,14 +7,14 @@ import {
   type CaptureResult,
   type DownloadFinishedPayload,
   type HttpRequestDTO,
-  type HttpResponseDTO,
+  type HttpResultDTO,
   type ResearchTab,
 } from "./shared";
 
 // The single, whitelisted surface the renderer may touch. No nodeIntegration;
 // everything funnels through these typed calls.
 const api = {
-  http(req: HttpRequestDTO): Promise<HttpResponseDTO> {
+  http(req: HttpRequestDTO): Promise<HttpResultDTO> {
     return ipcRenderer.invoke(CH.http, req);
   },
   cancelHttp(requestId: string): Promise<void> {
@@ -52,7 +53,7 @@ const api = {
   },
   async openExternal(url: string): Promise<void> {
     const error = await ipcRenderer.invoke(CH.openExternal, url);
-    if (error) throw new Error(String(error));
+    if (error) throw new Error(describeSafeError(error));
   },
   secrets: {
     get(key: string): Promise<string | null> {

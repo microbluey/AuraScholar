@@ -4,6 +4,8 @@ import { useModalFocusTrap } from "./useModalFocusTrap";
 
 export interface ConfirmDialogOptions {
   cancelLabel?: string;
+  confirmationHelp?: ReactNode;
+  confirmationPhrase?: string;
   confirmLabel?: string;
   description: ReactNode;
   details?: ReactNode[];
@@ -64,8 +66,12 @@ function ConfirmDialog({
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLElement | null>(null);
+  const [confirmationValue, setConfirmationValue] = useState("");
   const tone = options.tone ?? "warning";
   const details = options.details?.filter(Boolean) ?? [];
+  const phrase = options.confirmationPhrase;
+  const requiresPhrase = Boolean(phrase);
+  const confirmationMatches = !requiresPhrase || confirmationValue.trim() === phrase;
 
   useModalFocusTrap(dialogRef, {
     initialFocusSelector: "[data-autofocus]",
@@ -98,7 +104,8 @@ function ConfirmDialog({
             type="button"
             className="library-modal__close"
             onClick={() => onResolve(false)}
-            aria-label="关闭"
+            aria-label={`关闭${options.title}`}
+            title={`关闭${options.title}`}
           >
             ×
           </button>
@@ -113,10 +120,24 @@ function ConfirmDialog({
             ))}
           </ul>
         )}
+        {requiresPhrase && (
+          <label className="library-confirm-modal__phrase">
+            <span>{options.confirmationHelp ?? <>输入“{phrase}”以继续。</>}</span>
+            <input
+              data-autofocus="true"
+              type="text"
+              value={confirmationValue}
+              onChange={(event) => setConfirmationValue(event.target.value)}
+              aria-label={`输入 ${phrase} 以确认`}
+              autoComplete="off"
+            />
+          </label>
+        )}
         <div className="library-modal-actions">
           <Button
-            autoFocus
-            data-autofocus="true"
+            autoFocus={!requiresPhrase}
+            data-autofocus={!requiresPhrase ? "true" : undefined}
+            disabled={!confirmationMatches}
             type="button"
             variant={tone === "danger" ? "danger" : "primary"}
             onClick={() => onResolve(true)}

@@ -4,7 +4,8 @@
 // citeproc-js engine (with the thousands of upstream CSL styles) can be slotted
 // in later without changing call sites. Styles covered: APA 7th, GB/T 7714,
 // IEEE, Vancouver, MLA, Nature, Chicago.
-import { cslYear, type CslItem, type CslName } from "./csl";
+import { cslYear, type CslItem, type CslName } from "./csl.js";
+import { normalizedDoiUrl } from "./doi.js";
 
 export interface CitationStyle {
   id: string;
@@ -75,8 +76,9 @@ function apa(it: CslItem): string {
   const vol = it.volume ? `, ${it.volume}` : "";
   const issue = it.issue ? `(${it.issue})` : "";
   const pages = it.page ? `, ${it.page}` : "";
-  const doi = it.DOI ? ` https://doi.org/${it.DOI}` : "";
-  return `${authors}${year}${title}${venue}${vol}${issue}${pages}.${doi}`.trim();
+  const doi = it.DOI ? normalizedDoiUrl(it.DOI) : null;
+  const doiText = doi ? ` ${doi}` : "";
+  return `${authors}${year}${title}${venue}${vol}${issue}${pages}.${doiText}`.trim();
 }
 
 function gb7714(it: CslItem): string {

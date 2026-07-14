@@ -67,6 +67,40 @@ describe("detectFormat", () => {
   });
 });
 
+describe("parseCslJson", () => {
+  it("skips non-object entries and normalizes noisy names", () => {
+    const items = parseReferences(
+      JSON.stringify([
+        null,
+        42,
+        "bad row",
+        {
+          id: 100,
+          type: "article-journal",
+          title: ["Array Title"],
+          author: [{ family: "Wang", given: "Xiao" }, null, "bad author", {}, { literal: "AI Lab" }],
+          editor: ["bad editor", { family: "Zhang" }],
+          DOI: "10.1000/csl",
+        },
+      ]),
+      "csljson",
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: "100",
+      type: "article-journal",
+      title: "Array Title",
+      DOI: "10.1000/csl",
+    });
+    expect(items[0]?.author).toEqual([
+      { family: "Wang", given: "Xiao", literal: undefined },
+      { family: undefined, given: undefined, literal: "AI Lab" },
+    ]);
+    expect(items[0]?.editor).toEqual([{ family: "Zhang", given: undefined, literal: undefined }]);
+  });
+});
+
 describe("parseBibTeX", () => {
   it("parses fields and authors", () => {
     const [item] = parseBibTeX(BIB);
@@ -89,6 +123,25 @@ describe("parseBibTeX", () => {
   it("parses multiple entries", () => {
     const items = parseBibTeX(BIB + "\n\n" + BIB.replace("vaswani2017attention", "x2020"));
     expect(items).toHaveLength(2);
+  });
+
+  it("does not hang on malformed quoted fields and continues with later entries", () => {
+    const items = parseBibTeX(`@article{broken,
+  title = "Unclosed title,
+  year = {2024}
+}
+
+@article{good2025paper,
+  title = {Good Paper},
+  author = {Doe, Jane},
+  year = {2025},
+  doi = {10.1000/good}
+}`);
+
+    expect(items.map((item) => item.id)).toEqual(["broken", "good2025paper"]);
+    expect(items[0]?.title).toContain("Unclosed title");
+    expect(items[1]?.title).toBe("Good Paper");
+    expect(items[1]?.DOI).toBe("10.1000/good");
   });
 });
 
@@ -137,7 +190,7 @@ describe("round-trip", () => {
   const item = toCslItem({
     id: "w1",
     title: "Round Trip Paper",
-    doi: "10.1/abc",
+    doi: "10.1000/abc",
     pmid: "41000001",
     year: 2020,
     venueName: "Journal X",
@@ -149,7 +202,7 @@ describe("round-trip", () => {
     const [back] = parseReferences(toBibTeX([item]));
     expect(back?.title).toBe("Round Trip Paper");
     expect(back?.author?.map((a) => a.family)).toEqual(["Smith", "Jones"]);
-    expect(back?.DOI).toBe("10.1/abc");
+    expect(back?.DOI).toBe("10.1000/abc");
     expect(back?.PMID).toBe("41000001");
   });
 
@@ -165,7 +218,7 @@ describe("round-trip", () => {
     const rich = toCslItem({
       id: "w2",
       title: "Rich Paper",
-      doi: "10.1/rich",
+      doi: "10.1000/rich",
       year: 2019,
       venueName: "J. Rich",
       type: "article",

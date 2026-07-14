@@ -12,6 +12,7 @@ import { Badge, Button } from "@aurascholar/ui";
 import type { NormalizedWork } from "@aurascholar/connectors";
 import type { WorkInput, WorkPatch } from "@aurascholar/db";
 import type { IngestDraft, LocalMatch, PdfFields, PendingPdf } from "../services/library-types";
+import { describeSafeError } from "../services/sensitive-text";
 import { toWorkInput } from "../services/work-input";
 import { MetadataEditor, emptyDraft, normalizedWorkToDraft, type Draft } from "./MetadataEditor";
 import { useModalFocusTrap } from "./useModalFocusTrap";
@@ -125,7 +126,7 @@ export function ImportConfirmDialog({
       await waitForMinimumElapsed(startedAt, MIN_IMPORT_CONFIRM_BUSY_MS);
       await onCommit(decision);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeSafeError(e));
       committingRef.current = false;
       setBusy(false);
     }
@@ -156,6 +157,7 @@ export function ImportConfirmDialog({
 
   const primaryBusyLabel = isAttach && !edited ? "挂载中..." : "入库中...";
   const primaryLabel = isAttach && !edited ? "挂到该文献" : "确认入库";
+  const closeLabel = draft.targetWorkId ? "关闭确认补充全文" : "关闭确认入库";
 
   return (
     <div className="library-modal-overlay" role="presentation" onMouseDown={requestCancel}>
@@ -182,7 +184,8 @@ export function ImportConfirmDialog({
             type="button"
             className="library-modal__close"
             onClick={requestCancel}
-            aria-label="关闭"
+            aria-label={closeLabel}
+            title={closeLabel}
             disabled={busy}
           >
             ×

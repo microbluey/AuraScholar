@@ -1,8 +1,8 @@
 // Importers: parse the formats reference managers export (BibTeX, RIS,
 // PubMed NBIB, EndNote tagged ENW, CSL-JSON) into CslItems. Parsers are
 // intentionally lenient — real-world reference files are messy.
-import type { CslItem, CslName } from "./csl";
-import { splitName } from "./csl";
+import type { CslItem, CslName } from "./csl.js";
+import { splitName } from "./csl.js";
 
 export type ImportFormat = "bibtex" | "ris" | "nbib" | "enw" | "csljson";
 
@@ -36,16 +36,22 @@ export function parseReferences(text: string, format?: ImportFormat): CslItem[] 
 // --- CSL-JSON ----------------------------------------------------------------
 
 function parseCslJson(text: string): CslItem[] {
-  const data = JSON.parse(text);
+  const data: unknown = JSON.parse(text);
   const arr = Array.isArray(data) ? data : [data];
-  return arr.map((raw, i) => ({
-    id: String(raw.id ?? `import-${i}`),
-    type: String(raw.type ?? "article-journal"),
+  return arr
+    .map((raw, i) => (isRecord(raw) ? cslJsonRecordToItem(raw, i) : null))
+    .filter((item): item is CslItem => item !== null);
+}
+
+function cslJsonRecordToItem(raw: Record<string, unknown>, i: number): CslItem {
+  return {
+    id: scalarString(raw.id) ?? `import-${i}`,
+    type: scalarString(raw.type) ?? "article-journal",
     title: pickStr(raw.title),
-    author: Array.isArray(raw.author) ? (raw.author as CslName[]) : undefined,
-    editor: Array.isArray(raw.editor) ? (raw.editor as CslName[]) : undefined,
+    author: normalizeCslNames(raw.author),
+    editor: normalizeCslNames(raw.editor),
     "container-title": pickStr(raw["container-title"]),
-    issued: raw.issued,
+    issued: isRecord(raw.issued) ? (raw.issued as CslItem["issued"]) : undefined,
     volume: pickStr(raw.volume),
     issue: pickStr(raw.issue),
     page: pickStr(raw.page),
@@ -54,7 +60,22 @@ function parseCslJson(text: string): CslItem[] {
     PMID: pickStr(raw.PMID),
     URL: pickStr(raw.URL),
     abstract: pickStr(raw.abstract),
-  }));
+  };
+}
+
+function normalizeCslNames(value: unknown): CslName[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const names = value
+    .map((raw): CslName | null => {
+      if (!isRecord(raw)) return null;
+      const family = pickStr(raw.family);
+      const given = pickStr(raw.given);
+      const literal = pickStr(raw.literal);
+      if (!family && !given && !literal) return null;
+      return { family, given, literal };
+    })
+    .filter((name): name is CslName => name !== null);
+  return names.length ? names : undefined;
 }
 
 // --- BibTeX ------------------------------------------------------------------
@@ -103,12 +124,22 @@ function parseBibFields(body: string): Record<string, string> {
     let value: string;
     if (body[i] === "{") {
       const end = matchBrace(body, i);
-      value = body.slice(i + 1, end);
-      i = end + 1;
+      if (end < 0) {
+        value = body.slice(i + 1);
+        i = body.length;
+      } else {
+        value = body.slice(i + 1, end);
+        i = end + 1;
+      }
     } else if (body[i] === '"') {
       const end = body.indexOf('"', i + 1);
-      value = body.slice(i + 1, end);
-      i = end + 1;
+      if (end < 0) {
+        value = body.slice(i + 1);
+        i = body.length;
+      } else {
+        value = body.slice(i + 1, end);
+        i = end + 1;
+      }
     } else {
       let end = i;
       while (end < body.length && body[end] !== "," && body[end] !== "\n") end++;
@@ -422,6 +453,16 @@ function pickStr(v: unknown): string | undefined {
   if (typeof v === "string") return v;
   if (Array.isArray(v) && typeof v[0] === "string") return v[0];
   return undefined;
+}
+
+function scalarString(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hash(s: string): number {

@@ -65,6 +65,12 @@ export interface HttpResponseDTO {
   body: Uint8Array;
 }
 
+export interface HttpAbortedDTO {
+  aborted: true;
+}
+
+export type HttpResultDTO = HttpResponseDTO | HttpAbortedDTO;
+
 export interface ResearchTab {
   tabId: string;
   siteId: string;

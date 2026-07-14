@@ -9,7 +9,7 @@ import type {
   Platform,
   SecretStore,
   BackgroundScheduler,
-} from "./index";
+} from "./index.js";
 
 export class MemoryFileSystem implements FileSystem {
   readonly files = new Map<string, Uint8Array>();

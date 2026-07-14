@@ -29,3 +29,9 @@ export async function deleteSnippet(id: string): Promise<void> {
   await new SnippetsRepo(db).softDelete(id);
   window.dispatchEvent(new Event("aurascholar:snippets-updated"));
 }
+
+export async function restoreSnippet(id: string): Promise<void> {
+  const db = await getDb();
+  await new SnippetsRepo(db).restore(id);
+  window.dispatchEvent(new Event("aurascholar:snippets-updated"));
+}

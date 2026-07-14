@@ -1,6 +1,7 @@
 import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
 import { getDb } from "./aura-db";
 import { blobPath, auraFs } from "./aura-platform";
+import { describeSafeError } from "./sensitive-text";
 
 export async function loadPdfForWork(
   workId: string,
@@ -29,6 +30,6 @@ export async function loadPdfForWork(
     }
   }
 
-  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  const detail = describeSafeError(lastError);
   throw new Error(`PDF 附件文件无法读取:${detail}`);
 }

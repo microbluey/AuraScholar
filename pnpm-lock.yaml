@@ -211,6 +211,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@aurascholar/platform':
+        specifier: workspace:*
+        version: link:../platform
       drizzle-orm:
         specifier: ^0.38.3
         version: 0.38.4(@types/better-sqlite3@7.6.13)(@types/react@19.2.17)(better-sqlite3@11.10.0)(react@19.2.7)

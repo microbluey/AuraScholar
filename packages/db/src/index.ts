@@ -1,11 +1,11 @@
-export * as schema from "./schema";
-export { MIGRATIONS, runMigrations } from "./migrations";
-export type { SqlExecutor, Migration } from "./migrations";
-export { newId, workFingerprint, normalizeDoi } from "./ids";
-export { ensureLocalFirstState } from "./local-first";
-export type { LocalFirstState, EnsureLocalFirstOptions } from "./local-first";
-export type { Database } from "./database";
-export { WorksRepo } from "./repos/works";
+export * as schema from "./schema.js";
+export { MIGRATIONS, runMigrations } from "./migrations.js";
+export type { SqlExecutor, Migration } from "./migrations.js";
+export { newId, workFingerprint, normalizeDoi } from "./ids.js";
+export { ensureLocalFirstState } from "./local-first.js";
+export type { LocalFirstState, EnsureLocalFirstOptions } from "./local-first.js";
+export type { Database } from "./database.js";
+export { WorksRepo } from "./repos/works.js";
 export type {
   WorkInput,
   WorkRow,
@@ -16,20 +16,20 @@ export type {
   AuthorRole,
   ReadingStatus,
   RichBibFields,
-} from "./repos/works";
-export { AnnotationsRepo } from "./repos/annotations";
-export type { AnnotationInput, AnnotationRow } from "./repos/annotations";
-export { AttachmentsRepo } from "./repos/attachments";
-export type { AttachmentInput, AttachmentRow } from "./repos/attachments";
-export { FlashcardsRepo, Rating } from "./repos/flashcards";
-export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards";
-export { SentinelRepo } from "./repos/sentinel";
-export type { SentinelTaskRow, SentinelEventRow } from "./repos/sentinel";
-export { CollectionsRepo } from "./repos/collections";
-export type { CollectionRow } from "./repos/collections";
-export { TagsRepo } from "./repos/tags";
-export type { TagRow } from "./repos/tags";
-export { SnippetsRepo } from "./repos/snippets";
-export type { SnippetRow, SnippetInput, SnippetWithWork } from "./repos/snippets";
-export { SavedSearchesRepo } from "./repos/saved-searches";
-export type { SavedSearchRow, SavedSearchInput } from "./repos/saved-searches";
+} from "./repos/works.js";
+export { AnnotationsRepo } from "./repos/annotations.js";
+export type { AnnotationInput, AnnotationRow } from "./repos/annotations.js";
+export { AttachmentsRepo } from "./repos/attachments.js";
+export type { AttachmentInput, AttachmentRow } from "./repos/attachments.js";
+export { FlashcardsRepo, Rating } from "./repos/flashcards.js";
+export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards.js";
+export { SentinelRepo } from "./repos/sentinel.js";
+export type { SentinelTaskRow, SentinelEventRow } from "./repos/sentinel.js";
+export { CollectionsRepo } from "./repos/collections.js";
+export type { CollectionRow } from "./repos/collections.js";
+export { TagsRepo } from "./repos/tags.js";
+export type { TagRow } from "./repos/tags.js";
+export { SnippetsRepo } from "./repos/snippets.js";
+export type { SnippetRow, SnippetInput, SnippetWithWork } from "./repos/snippets.js";
+export { SavedSearchesRepo } from "./repos/saved-searches.js";
+export type { SavedSearchRow, SavedSearchInput } from "./repos/saved-searches.js";

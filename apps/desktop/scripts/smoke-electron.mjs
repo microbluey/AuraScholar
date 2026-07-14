@@ -13,6 +13,15 @@ const appDir = resolve(scriptDir, "..");
 const repoDir = resolve(appDir, "..", "..");
 const keepUserData = process.env.AURASCHOLAR_SMOKE_KEEP === "1";
 const restoreNodeAbi = process.env.AURASCHOLAR_SMOKE_RESTORE_NODE_ABI !== "0";
+const DEFAULT_RENDERER_SMOKE_TIMEOUT_MS = 120_000;
+const parsedSmokeTimeoutMs = Number(
+  process.env.AURASCHOLAR_SMOKE_TIMEOUT_MS ?? DEFAULT_RENDERER_SMOKE_TIMEOUT_MS,
+);
+const rendererSmokeTimeoutMs =
+  Number.isFinite(parsedSmokeTimeoutMs) && parsedSmokeTimeoutMs > 0
+    ? parsedSmokeTimeoutMs
+    : DEFAULT_RENDERER_SMOKE_TIMEOUT_MS;
+const smokeTimeoutMs = rendererSmokeTimeoutMs + 10_000;
 
 function electronBinary() {
   const binaryName = process.platform === "win32" ? "electron.cmd" : "electron";
@@ -97,8 +106,8 @@ const child = spawn(electronBinary(), ["."], {
 
 const timeout = setTimeout(() => {
   child.kill("SIGTERM");
-  console.error("Electron smoke timed out after 55s.");
-}, 55_000);
+  console.error(`Electron smoke timed out after ${Math.round(smokeTimeoutMs / 1000)}s.`);
+}, smokeTimeoutMs);
 
 const capture = (chunk, stream) => {
   const text = chunk.toString();

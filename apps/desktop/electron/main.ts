@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { app, BrowserWindow } from "electron";
 import { CH } from "./shared";
 import { handle, setTrustedSender } from "./main/ipc";
@@ -14,6 +15,7 @@ import { startCitationBridge, citationBridgePort } from "./main/citation-bridge"
 const DEV_URL = process.env.ELECTRON_RENDERER_URL;
 const USER_DATA_DIR = process.env.AURASCHOLAR_USER_DATA_DIR;
 const SMOKE_MODE = process.env.AURASCHOLAR_SMOKE === "1";
+const RENDERER_ENTRY = join(__dirname, "../renderer/index.html");
 
 if (USER_DATA_DIR) {
   app.setPath("userData", USER_DATA_DIR);
@@ -45,6 +47,11 @@ async function createWindow(): Promise<void> {
     void openExternalUrl(url).catch(() => {});
     return { action: "deny" };
   });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (isAllowedAppNavigation(url)) return;
+    event.preventDefault();
+    void openExternalUrl(url).catch(() => {});
+  });
 
   setTrustedSender(win.webContents);
 
@@ -57,7 +64,7 @@ async function createWindow(): Promise<void> {
   if (DEV_URL) {
     void win.loadURL(DEV_URL);
   } else {
-    void win.loadFile(join(__dirname, "../renderer/index.html"));
+    void win.loadFile(RENDERER_ENTRY);
   }
 
   initResearchBrowser(win);
@@ -80,3 +87,27 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+function isAllowedAppNavigation(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  if (DEV_URL) {
+    try {
+      return url.origin === new URL(DEV_URL).origin;
+    } catch {
+      return false;
+    }
+  }
+
+  if (url.protocol !== "file:") return false;
+  try {
+    return fileURLToPath(url) === RENDERER_ENTRY;
+  } catch {
+    return false;
+  }
+}

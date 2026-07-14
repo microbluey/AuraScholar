@@ -4,11 +4,13 @@ import { runMigrations } from "../migrations";
 import { WorksRepo } from "./works";
 import { AnnotationsRepo } from "./annotations";
 import { AttachmentsRepo } from "./attachments";
+import { CollectionsRepo } from "./collections";
 
 let db: Database;
 let works: WorksRepo;
 let annotations: AnnotationsRepo;
 let attachments: AttachmentsRepo;
+let collections: CollectionsRepo;
 
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
@@ -16,6 +18,7 @@ beforeEach(async () => {
   works = new WorksRepo(db);
   annotations = new AnnotationsRepo(db);
   attachments = new AttachmentsRepo(db);
+  collections = new CollectionsRepo(db);
 });
 
 const ATTENTION = {
@@ -59,6 +62,119 @@ describe("WorksRepo", () => {
     expect(await works.list()).toHaveLength(1);
   });
 
+  it("serializes mixed work writes on a shared database connection", async () => {
+    const primary = await works.upsert({ title: "Queue Primary", doi: "10.9/queue-primary" });
+    const duplicate = await works.upsert({
+      title: "Queue Duplicate",
+      doi: "10.9/queue-duplicate",
+      abstract: "Metadata from duplicate",
+      authors: [{ displayName: "Duplicate Author", position: 0 }],
+    });
+
+    const [, , imported] = await Promise.all([
+      works.mergeInto(primary.id, [duplicate.id]),
+      works.update(primary.id, {
+        title: "Queue Primary Updated",
+        authors: [{ displayName: "Queue Author", position: 0 }],
+      }),
+      works.upsert({
+        title: "Queue Imported",
+        doi: "10.9/queue-imported",
+        authors: [{ displayName: "Import Author", position: 0 }],
+      }),
+    ]);
+
+    const activeRows = await works.list();
+    expect(activeRows.map((work) => work.id).sort()).toEqual([primary.id, imported.id].sort());
+    expect((await works.get(primary.id))?.title).toBe("Queue Primary Updated");
+    expect((await works.get(primary.id))?.abstract).toBe("Metadata from duplicate");
+    expect((await works.get(duplicate.id))?.deleted_at).not.toBeNull();
+    expect(await works.authorsOf(primary.id)).toEqual([
+      expect.objectContaining({ displayName: "Queue Author" }),
+    ]);
+    expect(await works.authorsOf(imported.id)).toEqual([
+      expect.objectContaining({ displayName: "Import Author" }),
+    ]);
+  });
+
+  it("rolls back a new work import when author linking fails", async () => {
+    await db.exec(
+      `CREATE TEMP TRIGGER fail_author_link
+       BEFORE INSERT ON work_authors
+       WHEN NEW.raw_name = 'Broken Author'
+       BEGIN
+         SELECT RAISE(FAIL, 'forced author link failure');
+       END;`,
+    );
+
+    try {
+      await expect(
+        works.upsert({
+          title: "Atomic Author Import",
+          doi: "10.9/atomic-author-import",
+          authors: [
+            { displayName: "Good Author", position: 0 },
+            { displayName: "Broken Author", position: 1 },
+          ],
+        }),
+      ).rejects.toThrow("forced author link failure");
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS fail_author_link");
+    }
+
+    const workRows = await db.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM works WHERE doi = ?`,
+      ["10.9/atomic-author-import"],
+    );
+    const authorRows = await db.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM authors WHERE display_name IN (?, ?)`,
+      ["Good Author", "Broken Author"],
+    );
+    expect(workRows[0]!.n).toBe(0);
+    expect(authorRows[0]!.n).toBe(0);
+  });
+
+  it("rolls back a batch import when a later work fails", async () => {
+    await db.exec(
+      `CREATE TEMP TRIGGER fail_batch_author_link
+       BEFORE INSERT ON work_authors
+       WHEN NEW.raw_name = 'Broken Batch Author'
+       BEGIN
+         SELECT RAISE(FAIL, 'forced batch author failure');
+       END;`,
+    );
+
+    try {
+      await expect(
+        works.upsertMany([
+          {
+            title: "Batch Import Alpha",
+            doi: "10.9/batch-import-alpha",
+            authors: [{ displayName: "Batch Alpha Author", position: 0 }],
+          },
+          {
+            title: "Batch Import Broken",
+            doi: "10.9/batch-import-broken",
+            authors: [{ displayName: "Broken Batch Author", position: 0 }],
+          },
+        ]),
+      ).rejects.toThrow("forced batch author failure");
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS fail_batch_author_link");
+    }
+
+    const workRows = await db.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM works WHERE doi IN (?, ?)`,
+      ["10.9/batch-import-alpha", "10.9/batch-import-broken"],
+    );
+    const authorRows = await db.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM authors WHERE display_name IN (?, ?)`,
+      ["Batch Alpha Author", "Broken Batch Author"],
+    );
+    expect(workRows[0]!.n).toBe(0);
+    expect(authorRows[0]!.n).toBe(0);
+  });
+
   it("restores a soft-deleted work when the same DOI is imported again", async () => {
     const first = await works.upsert(ATTENTION);
     await works.softDelete(first.id);
@@ -69,6 +185,31 @@ describe("WorksRepo", () => {
     const listed = await works.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]!.abstract).toContain("Restored");
+  });
+
+  it("dedups to an active stable-id match before restoring a removed duplicate", async () => {
+    const removed = await works.upsert({
+      title: "Removed Preprint Copy",
+      arxivId: "2401.99999",
+    });
+    await works.softDelete(removed.id);
+    const active = await works.upsert({ title: "Active Library Copy", year: 2025 });
+    await db.run(`UPDATE works SET arxiv_id = ?, updated_at = ? WHERE id = ?`, [
+      "2401.99999",
+      Date.now(),
+      active.id,
+    ]);
+
+    const imported = await works.upsert({
+      title: "Incoming Preprint Metadata",
+      arxivId: "2401.99999",
+      abstract: "Fresh metadata for the visible work",
+    });
+
+    expect(imported).toEqual({ id: active.id, deduped: true });
+    expect((await works.get(active.id))?.abstract).toBe("Fresh metadata for the visible work");
+    expect((await works.get(removed.id))?.deleted_at).not.toBeNull();
+    expect(await works.list()).toHaveLength(1);
   });
 
   it("restore() makes a soft-deleted work visible again", async () => {
@@ -97,6 +238,42 @@ describe("WorksRepo", () => {
     expect(await works.listDeleted()).toHaveLength(0);
   });
 
+  it("rolls back bulk soft delete when a caller hook fails", async () => {
+    const first = await works.upsert({ title: "Bulk Delete Alpha", doi: "10.9/bulk-delete-a" });
+    const second = await works.upsert({ title: "Bulk Delete Beta", doi: "10.9/bulk-delete-b" });
+
+    await expect(
+      works.softDeleteMany([first.id, second.id], {
+        afterEach: (_workId, index) => {
+          if (index === 0) throw new Error("forced bulk delete hook failure");
+        },
+      }),
+    ).rejects.toThrow("forced bulk delete hook failure");
+
+    expect(await works.listDeleted()).toHaveLength(0);
+    expect((await works.get(first.id))?.deleted_at).toBeNull();
+    expect((await works.get(second.id))?.deleted_at).toBeNull();
+  });
+
+  it("rolls back bulk restore when a caller hook fails", async () => {
+    const first = await works.upsert({ title: "Bulk Restore Alpha", doi: "10.9/bulk-restore-a" });
+    const second = await works.upsert({ title: "Bulk Restore Beta", doi: "10.9/bulk-restore-b" });
+    await works.softDeleteMany([first.id, second.id]);
+
+    await expect(
+      works.restoreMany([first.id, second.id], {
+        afterEach: (_workId, index) => {
+          if (index === 0) throw new Error("forced bulk restore hook failure");
+        },
+      }),
+    ).rejects.toThrow("forced bulk restore hook failure");
+
+    const deletedIds = (await works.listDeleted()).map((work) => work.id).sort();
+    expect(deletedIds).toEqual([first.id, second.id].sort());
+    expect((await works.get(first.id))?.deleted_at).not.toBeNull();
+    expect((await works.get(second.id))?.deleted_at).not.toBeNull();
+  });
+
   it("purges a deleted work and its direct library artifacts", async () => {
     const { id: workId } = await works.upsert(ATTENTION);
     const attachment = await attachments.create({
@@ -119,6 +296,31 @@ describe("WorksRepo", () => {
     expect(await works.get(workId)).toBeNull();
     expect(await works.listDeleted()).toHaveLength(0);
     expect(await attachments.forWork(workId)).toHaveLength(0);
+  });
+
+  it("rolls back a multi-work purge when one delete fails", async () => {
+    const first = await works.upsert({ title: "Purge Rollback Alpha", doi: "10.9/purge-alpha" });
+    const second = await works.upsert({ title: "Purge Rollback Beta", doi: "10.9/purge-beta" });
+    await works.softDelete(first.id);
+    await works.softDelete(second.id);
+    await db.exec(
+      `CREATE TEMP TRIGGER fail_second_purge BEFORE DELETE ON works
+       WHEN OLD.id = '${second.id}'
+       BEGIN
+         SELECT RAISE(FAIL, 'forced purge failure');
+       END;`,
+    );
+
+    try {
+      await expect(works.purgeDeletedMany([first.id, second.id])).rejects.toThrow(
+        "forced purge failure",
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS fail_second_purge");
+    }
+
+    const deleted = await works.listDeleted();
+    expect(deleted.map((work) => work.id).sort()).toEqual([first.id, second.id].sort());
   });
 
   it("normalizes DOI input before storing", async () => {
@@ -182,6 +384,22 @@ describe("WorksRepo", () => {
     const hits = await works.list({ search: "atten" });
     expect(hits).toHaveLength(1);
     expect(hits[0]!.title).toContain("Attention");
+  });
+
+  it("keeps list searches stable for punctuation-only and quoted input", async () => {
+    const active = await works.upsert(ATTENTION);
+    const deleted = await works.upsert({ title: "Deleted Attention Paper", year: 2016 });
+    await works.softDelete(deleted.id);
+
+    await expect(works.list({ search: `"" !!! ***` })).resolves.toEqual([]);
+    await expect(works.listDeleted({ search: `"" !!! ***` })).resolves.toEqual([]);
+
+    expect((await works.list({ search: `"atten"!!!` })).map((row) => row.id)).toEqual([
+      active.id,
+    ]);
+    expect((await works.listDeleted({ search: `"deleted"!!!` })).map((row) => row.id)).toEqual([
+      deleted.id,
+    ]);
   });
 
   it("excludes soft-deleted works from lists", async () => {
@@ -308,6 +526,38 @@ describe("WorksRepo", () => {
     expect(got?.issue).toBe("3");
   });
 
+  it("fails work edits and state changes when the target is missing or removed", async () => {
+    const { id } = await works.upsert({ title: "Stale Target", volume: "5" });
+    await works.softDelete(id);
+
+    await expect(works.update(id, { issue: "stale edit" })).rejects.toThrow(
+      `Work ${id} is missing or removed`,
+    );
+    await expect(works.setReadingStatus(id, "read")).rejects.toThrow(
+      `Work ${id} is missing or removed`,
+    );
+    await expect(works.setStarred(id, true)).rejects.toThrow(
+      `Work ${id} is missing or removed`,
+    );
+    await expect(works.softDelete(id)).rejects.toThrow(
+      `Work ${id} is missing or already removed`,
+    );
+    await expect(works.update("missing-work", { issue: "missing edit" })).rejects.toThrow(
+      "Work missing-work is missing or removed",
+    );
+    await expect(works.restore("missing-work")).rejects.toThrow(
+      "Work missing-work is missing or already active",
+    );
+
+    await works.restore(id);
+    await expect(works.restore(id)).rejects.toThrow(`Work ${id} is missing or already active`);
+    const got = await works.get(id);
+    expect(got?.volume).toBe("5");
+    expect(got?.issue).toBeNull();
+    expect(got?.reading_status).toBe("unread");
+    expect(got?.starred).toBe(0);
+  });
+
   it("sets reading status and starred state", async () => {
     const { id } = await works.upsert({ title: "Workflow Paper" });
 
@@ -318,6 +568,18 @@ describe("WorksRepo", () => {
     expect(got?.reading_status).toBe("reading");
     expect(got?.starred).toBe(1);
   });
+
+  it("promotes unread works when reading starts without downgrading completed works", async () => {
+    const { id } = await works.upsert({ title: "Reader Session Paper" });
+
+    await expect(works.markReadingStarted(id)).resolves.toBe(true);
+    expect((await works.get(id))?.reading_status).toBe("reading");
+    await expect(works.markReadingStarted(id)).resolves.toBe(false);
+
+    await works.setReadingStatus(id, "read");
+    await expect(works.markReadingStarted(id)).resolves.toBe(false);
+    expect((await works.get(id))?.reading_status).toBe("read");
+  });
 });
 
 describe("AttachmentsRepo + AnnotationsRepo", () => {
@@ -327,6 +589,105 @@ describe("AttachmentsRepo + AnnotationsRepo", () => {
     const a2 = await attachments.create({ workId, sha256: "abc123", byteSize: 1000 });
     expect(a2.deduped).toBe(true);
     expect(a2.id).toBe(a1.id);
+  });
+
+  it("only dedups and attaches PDFs against active works", async () => {
+    const archived = await works.upsert({ title: "Archived PDF Work" });
+    await attachments.create({ workId: archived.id, sha256: "archived-pdf", byteSize: 1000 });
+    await works.softDelete(archived.id);
+
+    await expect(
+      attachments.create({ workId: archived.id, sha256: "second-pdf", byteSize: 1000 }),
+    ).rejects.toThrow(`Work ${archived.id} is missing or removed`);
+    await expect(
+      attachments.create({ workId: "missing-work", sha256: "missing-pdf", byteSize: 1000 }),
+    ).rejects.toThrow("Work missing-work is missing or removed");
+    expect(await attachments.bySha("archived-pdf")).toBeNull();
+    expect(await attachments.forWork(archived.id)).toHaveLength(0);
+
+    const active = await works.upsert({ title: "Active PDF Work" });
+    const attached = await attachments.create({
+      workId: active.id,
+      sha256: "archived-pdf",
+      byteSize: 1000,
+    });
+
+    expect(attached.deduped).toBe(false);
+    expect(await attachments.forWork(active.id)).toHaveLength(1);
+  });
+
+  it("fails annotation creation when the attachment target is stale or mismatched", async () => {
+    const first = await works.upsert({ title: "First Annotated Work" });
+    const second = await works.upsert({ title: "Second Annotated Work" });
+    const firstAttachment = await attachments.create({
+      workId: first.id,
+      sha256: "first-annotation-pdf",
+      byteSize: 1000,
+    });
+
+    await expect(
+      annotations.create({
+        attachmentId: firstAttachment.id,
+        workId: second.id,
+        type: "note",
+        pageIndex: 0,
+      }),
+    ).rejects.toThrow(
+      `Attachment ${firstAttachment.id} is missing, removed, or not active for work ${second.id}`,
+    );
+
+    await works.softDelete(first.id);
+
+    await expect(
+      annotations.create({
+        attachmentId: firstAttachment.id,
+        workId: first.id,
+        type: "note",
+        pageIndex: 0,
+      }),
+    ).rejects.toThrow(
+      `Attachment ${firstAttachment.id} is missing, removed, or not active for work ${first.id}`,
+    );
+  });
+
+  it("hides and rejects annotation operations when the source work is removed", async () => {
+    const { id: workId } = await works.upsert({ title: "Archived Annotated Work" });
+    const { id: attachmentId } = await attachments.create({
+      workId,
+      sha256: "archived-annotations",
+      byteSize: 1000,
+    });
+    const annId = await annotations.create({
+      attachmentId,
+      workId,
+      type: "note",
+      pageIndex: 0,
+      contentMd: "original",
+    });
+
+    await works.softDelete(workId);
+
+    expect(await attachments.forWork(workId)).toHaveLength(0);
+    expect(await annotations.listForAttachment(attachmentId)).toHaveLength(0);
+    await expect(annotations.updateContent(annId, "stale edit")).rejects.toThrow(
+      `Annotation ${annId} is missing or removed`,
+    );
+    await expect(annotations.setOrphaned(annId, true)).rejects.toThrow(
+      `Annotation ${annId} is missing or removed`,
+    );
+    await expect(annotations.softDelete(annId)).rejects.toThrow(
+      `Annotation ${annId} is missing or already removed`,
+    );
+
+    await db.run(`UPDATE annotations SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
+      Date.now(),
+      Date.now(),
+      annId,
+    ]);
+
+    await expect(annotations.restore(annId)).rejects.toThrow(
+      `Annotation ${annId} is missing or already active`,
+    );
   });
 
   it("persists annotations with anchors and orders by sort_key", async () => {
@@ -379,5 +740,306 @@ describe("AttachmentsRepo + AnnotationsRepo", () => {
     });
     await annotations.softDelete(annId);
     expect(await annotations.listForAttachment(attachmentId)).toHaveLength(0);
+  });
+
+  it("fails annotation edits and deletes when the target is missing or removed", async () => {
+    const { id: workId } = await works.upsert(ATTENTION);
+    const { id: attachmentId } = await attachments.create({
+      workId,
+      sha256: "missing-ann",
+      byteSize: 1,
+    });
+    const annId = await annotations.create({
+      attachmentId,
+      workId,
+      type: "note",
+      pageIndex: 0,
+      contentMd: "original",
+    });
+
+    await annotations.softDelete(annId);
+
+    await expect(annotations.updateContent(annId, "stale edit")).rejects.toThrow(
+      `Annotation ${annId} is missing or removed`,
+    );
+    await expect(annotations.softDelete(annId)).rejects.toThrow(
+      `Annotation ${annId} is missing or already removed`,
+    );
+    await expect(annotations.restore("missing-annotation")).rejects.toThrow(
+      "Annotation missing-annotation is missing or already active",
+    );
+    const rows = await db.query<{ content_md: string | null }>(
+      `SELECT content_md FROM annotations WHERE id = ?`,
+      [annId],
+    );
+    expect(rows[0]!.content_md).toBe("original");
+  });
+
+  it("restores soft-deleted annotations", async () => {
+    const { id: workId } = await works.upsert(ATTENTION);
+    const { id: attachmentId } = await attachments.create({ workId, sha256: "z", byteSize: 1 });
+    const annId = await annotations.create({
+      attachmentId,
+      workId,
+      type: "note",
+      pageIndex: 0,
+      contentMd: "可恢复想法",
+    });
+    await annotations.softDelete(annId);
+    await annotations.restore(annId);
+
+    const list = await annotations.listForAttachment(attachmentId);
+    expect(list).toHaveLength(1);
+    expect(list[0]!.id).toBe(annId);
+    expect(list[0]!.content_md).toBe("可恢复想法");
+    await expect(annotations.restore(annId)).rejects.toThrow(
+      `Annotation ${annId} is missing or already active`,
+    );
+  });
+});
+
+describe("CollectionsRepo", () => {
+  it("creates nested collections only under an active parent", async () => {
+    const parentId = await collections.create("研究项目");
+    const childId = await collections.create("Transformer 综述", parentId);
+
+    const rows = await collections.list();
+    expect(rows.find((row) => row.id === childId)?.parent_id).toBe(parentId);
+    await expect(collections.create("孤立文件夹", "missing-parent")).rejects.toThrow(
+      "Collection missing-parent is missing or removed",
+    );
+    await expect(collections.create("   ")).rejects.toThrow("分组名称不能为空");
+  });
+
+  it("restores a deleted collection with its previous works", async () => {
+    const { id: workId } = await works.upsert(ATTENTION);
+    const collectionId = await collections.create("可恢复文件夹");
+    await collections.setWorkCollection(workId, collectionId);
+
+    const workIds = await collections.workIds(collectionId);
+    await collections.softDelete(collectionId);
+    expect(await collections.list()).toHaveLength(0);
+    expect(await collections.collectionOf(workId)).toBeNull();
+
+    await collections.restore(collectionId, workIds);
+
+    const list = await collections.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]!.id).toBe(collectionId);
+    expect(list[0]!.count).toBe(1);
+    expect(await collections.collectionOf(workId)).toBe(collectionId);
+  });
+
+  it("fails collection edits, moves, and state changes when targets are stale", async () => {
+    const { id: workId } = await works.upsert({ title: "Stale Collection Work" });
+    const collectionId = await collections.create("过期文件夹");
+    await collections.softDelete(collectionId);
+
+    await expect(collections.rename(collectionId, "新名称")).rejects.toThrow(
+      `Collection ${collectionId} is missing or removed`,
+    );
+    await expect(collections.softDelete(collectionId)).rejects.toThrow(
+      `Collection ${collectionId} is missing or already removed`,
+    );
+    await expect(collections.setWorkCollection(workId, collectionId)).rejects.toThrow(
+      `Collection ${collectionId} is missing or removed`,
+    );
+    await expect(collections.rename("missing-collection", "新名称")).rejects.toThrow(
+      "Collection missing-collection is missing or removed",
+    );
+    await expect(collections.restore("missing-collection")).rejects.toThrow(
+      "Collection missing-collection is missing or already active",
+    );
+    await expect(collections.setWorkCollection(workId, "missing-collection")).rejects.toThrow(
+      "Collection missing-collection is missing or removed",
+    );
+
+    await collections.restore(collectionId);
+
+    await expect(collections.restore(collectionId)).rejects.toThrow(
+      `Collection ${collectionId} is missing or already active`,
+    );
+
+    await works.softDelete(workId);
+
+    await expect(collections.setWorkCollection(workId, collectionId)).rejects.toThrow(
+      `Work ${workId} is missing or removed`,
+    );
+  });
+
+  it("ignores stale collection links for removed works and removed folders", async () => {
+    const active = await works.upsert({ title: "Active Collection Link" });
+    const removed = await works.upsert({ title: "Removed Collection Link" });
+    const visibleCollectionId = await collections.create("可见文件夹");
+    const removedCollectionId = await collections.create("已删除文件夹");
+    await collections.setWorkCollection(active.id, visibleCollectionId);
+    await collections.setWorkCollection(removed.id, visibleCollectionId);
+
+    await works.softDelete(removed.id);
+    await db.run(`UPDATE collections SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
+      Date.now(),
+      Date.now(),
+      removedCollectionId,
+    ]);
+    await db.run(`INSERT INTO collection_items (collection_id, work_id) VALUES (?, ?)`, [
+      removedCollectionId,
+      active.id,
+    ]);
+
+    expect(await collections.workIds(visibleCollectionId)).toEqual([active.id]);
+    expect(await collections.workIds(removedCollectionId)).toEqual([]);
+    expect(await collections.collectionOf(active.id)).toBe(visibleCollectionId);
+    expect(await collections.collectionOf(removed.id)).toBeNull();
+    expect(await collections.collectionsOf([active.id, removed.id])).toEqual(
+      new Map([[active.id, visibleCollectionId]]),
+    );
+  });
+
+  it("rolls back collection deletion when marking the folder deleted fails", async () => {
+    const { id: workId } = await works.upsert(ATTENTION);
+    const collectionId = await collections.create("删除失败文件夹");
+    await collections.setWorkCollection(workId, collectionId);
+    await db.exec(`
+      CREATE TEMP TRIGGER fail_collection_soft_delete
+      BEFORE UPDATE OF deleted_at ON collections
+      WHEN NEW.deleted_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(FAIL, 'forced collection delete failure');
+      END;
+    `);
+
+    try {
+      await expect(collections.softDelete(collectionId)).rejects.toThrow(
+        "forced collection delete failure",
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS fail_collection_soft_delete");
+    }
+
+    const list = await collections.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]!.id).toBe(collectionId);
+    expect(await collections.collectionOf(workId)).toBe(collectionId);
+  });
+
+  it("rolls back collection restore when a work reassignment fails", async () => {
+    const first = await works.upsert({ title: "Restore Rollback Alpha", doi: "10.9/restore-a" });
+    const second = await works.upsert({ title: "Restore Rollback Beta", doi: "10.9/restore-b" });
+    const collectionId = await collections.create("恢复失败文件夹");
+    await collections.setWorkCollection(first.id, collectionId);
+    await collections.setWorkCollection(second.id, collectionId);
+
+    const workIds = await collections.workIds(collectionId);
+    await collections.softDelete(collectionId);
+    await db.exec(`
+      CREATE TEMP TRIGGER fail_collection_restore_item
+      BEFORE INSERT ON collection_items
+      WHEN NEW.work_id = '${second.id}'
+      BEGIN
+        SELECT RAISE(FAIL, 'forced collection restore failure');
+      END;
+    `);
+
+    try {
+      await expect(collections.restore(collectionId, workIds)).rejects.toThrow(
+        "forced collection restore failure",
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS fail_collection_restore_item");
+    }
+
+    const list = await collections.list();
+    const itemRows = await db.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM collection_items WHERE collection_id = ?`,
+      [collectionId],
+    );
+    expect(list.some((collection) => collection.id === collectionId)).toBe(false);
+    expect(itemRows[0]!.n).toBe(0);
+    expect(await collections.collectionOf(first.id)).toBeNull();
+    expect(await collections.collectionOf(second.id)).toBeNull();
+  });
+
+  it("rolls back a work move when assigning the target folder fails", async () => {
+    const { id: workId } = await works.upsert(ATTENTION);
+    const currentCollectionId = await collections.create("当前文件夹");
+    const targetCollectionId = await collections.create("目标文件夹");
+    await collections.setWorkCollection(workId, currentCollectionId);
+    await db.exec(`
+      CREATE TEMP TRIGGER fail_collection_move_item
+      BEFORE INSERT ON collection_items
+      WHEN NEW.collection_id = '${targetCollectionId}'
+      BEGIN
+        SELECT RAISE(FAIL, 'forced collection move failure');
+      END;
+    `);
+
+    try {
+      await expect(collections.setWorkCollection(workId, targetCollectionId)).rejects.toThrow(
+        "forced collection move failure",
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS fail_collection_move_item");
+    }
+
+    expect(await collections.collectionOf(workId)).toBe(currentCollectionId);
+  });
+
+  it("rolls back bulk collection moves when a caller hook fails", async () => {
+    const first = await works.upsert({ title: "Bulk Move Alpha", doi: "10.9/bulk-move-a" });
+    const second = await works.upsert({ title: "Bulk Move Beta", doi: "10.9/bulk-move-b" });
+    const currentCollectionId = await collections.create("批量移动当前文件夹");
+    const targetCollectionId = await collections.create("批量移动目标文件夹");
+    await collections.setWorksCollection([first.id, second.id], currentCollectionId);
+
+    await expect(
+      collections.setWorksCollection([first.id, second.id], targetCollectionId, {
+        afterEach: (_workId, index) => {
+          if (index === 0) throw new Error("forced bulk collection move hook failure");
+        },
+      }),
+    ).rejects.toThrow("forced bulk collection move hook failure");
+
+    expect(await collections.collectionOf(first.id)).toBe(currentCollectionId);
+    expect(await collections.collectionOf(second.id)).toBe(currentCollectionId);
+  });
+
+  it("rolls back bulk collection clears when a caller hook fails", async () => {
+    const first = await works.upsert({ title: "Bulk Clear Alpha", doi: "10.9/bulk-clear-a" });
+    const second = await works.upsert({ title: "Bulk Clear Beta", doi: "10.9/bulk-clear-b" });
+    const collectionId = await collections.create("批量移出文件夹");
+    await collections.setWorksCollection([first.id, second.id], collectionId);
+
+    await expect(
+      collections.setWorksCollection([first.id, second.id], null, {
+        afterEach: (_workId, index) => {
+          if (index === 0) throw new Error("forced bulk collection clear hook failure");
+        },
+      }),
+    ).rejects.toThrow("forced bulk collection clear hook failure");
+
+    expect(await collections.collectionOf(first.id)).toBe(collectionId);
+    expect(await collections.collectionOf(second.id)).toBe(collectionId);
+  });
+
+  it("can move a work inside an existing outer transaction", async () => {
+    const { id: workId } = await works.upsert(ATTENTION);
+    const collectionId = await collections.create("外层事务文件夹");
+    let committed = false;
+    await db.exec("BEGIN");
+    try {
+      await collections.setWorkCollection(workId, collectionId);
+      await db.exec("COMMIT");
+      committed = true;
+    } finally {
+      if (!committed) {
+        try {
+          await db.exec("ROLLBACK");
+        } catch {
+          // Ignore cleanup errors; the assertion should surface the original failure.
+        }
+      }
+    }
+
+    expect(await collections.collectionOf(workId)).toBe(collectionId);
   });
 });

@@ -1,7 +1,7 @@
-export type { CslItem, CslName, CslDate, WorkLike } from "./csl";
-export { toCslItem, splitName, cslYear } from "./csl";
-export { toCslJson, toBibTeX, toRIS } from "./export";
-export type { CitationStyle } from "./styles";
-export { STYLES, formatBibliography, formatEntry, formatCitation } from "./styles";
-export type { ImportFormat } from "./import";
-export { parseReferences, parseBibTeX, parseRis, parseNbib, parseEnw, detectFormat } from "./import";
+export type { CslItem, CslName, CslDate, WorkLike } from "./csl.js";
+export { toCslItem, splitName, cslYear } from "./csl.js";
+export { toCslJson, toBibTeX, toRIS } from "./export.js";
+export type { CitationStyle } from "./styles.js";
+export { STYLES, formatBibliography, formatEntry, formatCitation } from "./styles.js";
+export type { ImportFormat } from "./import.js";
+export { parseReferences, parseBibTeX, parseRis, parseNbib, parseEnw, detectFormat } from "./import.js";

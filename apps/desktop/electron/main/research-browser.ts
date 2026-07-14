@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { app, BrowserWindow, session, WebContentsView, type Session } from "electron";
+import { describeSafeError } from "@aurascholar/platform";
 import { handle } from "./ipc";
 import {
   CH,
@@ -21,6 +22,7 @@ import {
 
 const ARCHIVE_MS = 30 * 60 * 1000; // 30 minutes idle → archive
 const DOWNLOAD_SUBDIR = "research-downloads";
+const RESEARCH_PROTOCOLS = new Set(["http:", "https:"]);
 
 interface Tab {
   tabId: string;
@@ -46,6 +48,31 @@ const identityByPdfUrl = new Map<string, ScholarIdentity>();
 
 function partitionFor(siteId: string): string {
   return `persist:research-${siteId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+function validateResearchUrl(rawUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("无效的研究浏览器地址");
+  }
+  if (!RESEARCH_PROTOCOLS.has(url.protocol)) {
+    throw new Error(`研究浏览器不允许打开 ${url.protocol || "未知"} 协议`);
+  }
+  if (url.username || url.password) {
+    throw new Error("研究浏览器地址不能包含用户名或密码");
+  }
+  return url;
+}
+
+function isAllowedResearchUrl(rawUrl: string): boolean {
+  try {
+    validateResearchUrl(rawUrl);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function snapshot(): ResearchTab[] {
@@ -249,8 +276,12 @@ function createView(tab: Tab): WebContentsView {
     // window. Open them in a fresh tab (same site session, so login/cookies
     // carry over) instead of hijacking the current page, which would strip the
     // user of their search-results context with no way back.
-    if (/^https?:\/\//i.test(url)) spawnTab(tab.siteId, url, tab.proxy);
+    if (isAllowedResearchUrl(url)) spawnTab(tab.siteId, url, tab.proxy);
     return { action: "deny" };
+  });
+  view.webContents.on("will-navigate", (event, url) => {
+    if (isAllowedResearchUrl(url)) return;
+    event.preventDefault();
   });
   view.webContents.on("page-title-updated", (_e, title) => {
     tab.title = title;
@@ -286,18 +317,19 @@ function createView(tab: Tab): WebContentsView {
  * external links open beside the current page instead of replacing it.
  */
 function spawnTab(siteId: string, url: string, proxy: string): string {
+  const safeUrl = validateResearchUrl(url).toString();
   const tabId = randomUUID();
   tabs.set(tabId, {
     tabId,
     siteId,
-    url,
+    url: safeUrl,
     title: "",
     proxy,
     lastActiveAt: Date.now(),
     view: null,
     // Opening a known full-text URL in a new tab (target=_blank "Paper" link)
     // inherits the abstract page's identity so its download attaches correctly.
-    scholar: identityForUrl(url),
+    scholar: identityForUrl(safeUrl),
   });
   showTab(tabId);
   return tabId;
@@ -383,9 +415,10 @@ export function registerResearchHandlers(): void {
     if (url === null) {
       return tab.view ? tab.view.webContents.getURL() : tab.url;
     }
-    tab.url = url;
-    if (tab.view) void tab.view.webContents.loadURL(url);
-    return url;
+    const safeUrl = validateResearchUrl(url).toString();
+    tab.url = safeUrl;
+    if (tab.view) void tab.view.webContents.loadURL(safeUrl);
+    return safeUrl;
   });
 
   handle(CH.researchClose, (_e, tabId: string) => {
@@ -453,7 +486,7 @@ export function registerResearchHandlers(): void {
       });
       return { kind: "print", relPath, fileName };
     } catch (e) {
-      return { kind: "none", error: e instanceof Error ? e.message : String(e) };
+      return { kind: "none", error: describeSafeError(e) };
     }
   });
 

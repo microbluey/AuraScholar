@@ -1,8 +1,9 @@
 // Saved searches ("检索订阅"): a stored open-source aggregate query the app
 // re-runs on a schedule to surface newly-published matches. The discovery
 // analogue of the sentinel — see migration v11.
-import type { Database } from "../database";
-import { newId } from "../ids";
+import type { Database } from "../database.js";
+import { summarizePersistedError } from "../error-summary.js";
+import { newId } from "../ids.js";
 
 export interface SavedSearchRow {
   id: string;
@@ -23,8 +24,19 @@ export interface SavedSearchInput {
   sources?: string[] | null;
 }
 
+export class SavedSearchInactiveError extends Error {
+  constructor(readonly id: string) {
+    super(`Saved search ${id} is missing or removed`);
+    this.name = "SavedSearchInactiveError";
+  }
+}
+
 export class SavedSearchesRepo {
   constructor(private readonly db: Database) {}
+
+  private assertChanged(changed: number, error: Error): void {
+    if (changed === 0) throw error;
+  }
 
   async create(input: SavedSearchInput): Promise<string> {
     const id = newId();
@@ -69,43 +81,50 @@ export class SavedSearchesRepo {
     nextRunAt: number,
   ): Promise<void> {
     const now = Date.now();
-    await this.db.run(
+    const changed = await this.db.run(
       `UPDATE saved_searches
        SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?,
            last_error = NULL, updated_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND deleted_at IS NULL`,
       [JSON.stringify(seenIds), newCount, now, nextRunAt, now, id],
     );
+    this.assertChanged(changed, new SavedSearchInactiveError(id));
   }
 
   async recordError(id: string, error: string, nextRunAt: number): Promise<void> {
     const now = Date.now();
-    await this.db.run(
+    const changed = await this.db.run(
       `UPDATE saved_searches
        SET last_run_at = ?, next_run_at = ?, last_error = ?, updated_at = ?
-       WHERE id = ?`,
-      [now, nextRunAt, summarizeError(error), now, id],
+       WHERE id = ? AND deleted_at IS NULL`,
+      [now, nextRunAt, summarizePersistedError(error), now, id],
     );
+    this.assertChanged(changed, new SavedSearchInactiveError(id));
   }
 
   /** Clear the unread badge (user has viewed the new results). */
   async clearNew(id: string): Promise<void> {
-    await this.db.run(`UPDATE saved_searches SET new_count = 0, updated_at = ? WHERE id = ?`, [
-      Date.now(),
-      id,
-    ]);
+    const changed = await this.db.run(
+      `UPDATE saved_searches SET new_count = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+      [Date.now(), id],
+    );
+    this.assertChanged(changed, new SavedSearchInactiveError(id));
   }
 
   async softDelete(id: string): Promise<void> {
     const now = Date.now();
-    await this.db.run(`UPDATE saved_searches SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
-      now,
-      now,
-      id,
-    ]);
+    const changed = await this.db.run(
+      `UPDATE saved_searches SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+      [now, now, id],
+    );
+    this.assertChanged(changed, new Error(`Saved search ${id} is missing or already removed`));
   }
-}
 
-function summarizeError(value: string): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, 500);
+  async restore(id: string): Promise<void> {
+    const changed = await this.db.run(
+      `UPDATE saved_searches SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL`,
+      [Date.now(), id],
+    );
+    this.assertChanged(changed, new Error(`Saved search ${id} is missing or already active`));
+  }
 }

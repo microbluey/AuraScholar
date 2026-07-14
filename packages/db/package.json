@@ -76,6 +76,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@aurascholar/platform": "workspace:*",
     "drizzle-orm": "^0.38.3",
     "uuidv7": "^1.0.2",
     "ts-fsrs": "^4.6.1"

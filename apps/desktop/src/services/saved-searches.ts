@@ -3,12 +3,14 @@
 // loop (services/sentinel.ts) — startup catch-up + hourly in-app timer.
 import { workFingerprint } from "@aurascholar/db/ids";
 import {
+  SavedSearchInactiveError,
   SavedSearchesRepo,
   type SavedSearchRow,
 } from "@aurascholar/db/repos/saved-searches";
 import type { NormalizedWork } from "@aurascholar/connectors";
 import { getDb } from "./aura-db";
 import { auraNotifier } from "./aura-platform";
+import { describeSafeError } from "./sensitive-text";
 import type { DiscoveryResultWithLibrary } from "./discovery";
 import type { DiscoverySource } from "@aurascholar/core";
 
@@ -37,20 +39,42 @@ function toView(row: SavedSearchRow): SavedSearchView {
   return {
     id: row.id,
     query: row.query,
-    sources: row.sources_json ? (JSON.parse(row.sources_json) as DiscoverySource[]) : null,
+    sources: parseSources(row.sources_json),
     newCount: row.new_count,
     lastRunAt: row.last_run_at,
-    lastError: row.last_error,
+    lastError: row.last_error ? describeSafeError(row.last_error) : null,
   };
 }
 
 function parseSources(value: string | null): DiscoverySource[] | null {
   if (!value) return null;
+  const parsed = parseJsonValue(value);
+  if (!Array.isArray(parsed)) return null;
+  const sources = parsed.filter(isDiscoverySource);
+  return sources.length ? [...new Set(sources)] : null;
+}
+
+function parseSeenIds(value: string): { ids: string[]; recovered: boolean } {
+  const parsed = parseJsonValue(value);
+  if (!Array.isArray(parsed)) return { ids: [], recovered: true };
+  return { ids: parsed.filter((item): item is string => typeof item === "string"), recovered: false };
+}
+
+function parseJsonValue(value: string): unknown {
   try {
-    return JSON.parse(value) as DiscoverySource[];
+    return JSON.parse(value);
   } catch {
     return null;
   }
+}
+
+function isDiscoverySource(value: unknown): value is DiscoverySource {
+  return (
+    value === "arxiv" ||
+    value === "crossref" ||
+    value === "openalex" ||
+    value === "s2"
+  );
 }
 
 function normalizeQuery(value: string): string {
@@ -114,6 +138,11 @@ export async function deleteSavedSearch(id: string): Promise<void> {
   await repo.softDelete(id);
 }
 
+export async function restoreSavedSearch(id: string): Promise<void> {
+  const repo = new SavedSearchesRepo(await getDb());
+  await repo.restore(id);
+}
+
 export async function clearSavedSearchBadge(id: string): Promise<void> {
   const repo = new SavedSearchesRepo(await getDb());
   await repo.clearNew(id);
@@ -139,9 +168,7 @@ async function runRow(
   row: SavedSearchRow,
   options: { silent: boolean; throwOnError: boolean },
 ): Promise<number> {
-  const sources = row.sources_json
-    ? (JSON.parse(row.sources_json) as DiscoverySource[])
-    : undefined;
+  const sources = parseSources(row.sources_json) ?? undefined;
   let results: DiscoveryResultWithLibrary[];
   try {
     const { searchDiscoveryDetailed } = await import("./discovery");
@@ -152,22 +179,33 @@ async function runRow(
     results = report.results;
   } catch (error) {
     // A transient failure shouldn't reset the baseline — reschedule and bail.
-    const message = error instanceof Error ? error.message : String(error);
-    await repo.recordError(row.id, message, Date.now() + POLL_INTERVAL_MS);
-    notifySavedSearchesUpdated();
+    const message = describeSafeError(error);
+    try {
+      await repo.recordError(row.id, message, Date.now() + POLL_INTERVAL_MS);
+      notifySavedSearchesUpdated();
+    } catch (recordError) {
+      if (recordError instanceof SavedSearchInactiveError) return 0;
+      throw recordError;
+    }
     if (options.throwOnError) throw new Error(message, { cause: error });
     return 0;
   }
 
-  const seen = new Set<string>(JSON.parse(row.seen_ids_json) as string[]);
+  const parsedSeen = parseSeenIds(row.seen_ids_json);
+  const seen = new Set<string>(parsedSeen.ids);
   const currentIds = results.map((r) => stableId(r.work));
-  const isFirstRun = seen.size === 0 && row.last_run_at == null;
+  const isFirstRun = parsedSeen.recovered || (seen.size === 0 && row.last_run_at == null);
   const fresh = isFirstRun ? [] : currentIds.filter((key) => !seen.has(key));
 
   // The new baseline is the union of what we've ever seen and what's here now,
   // so a paper dropping out of the top results doesn't re-alert when it returns.
   const nextSeen = [...new Set([...seen, ...currentIds])];
-  await repo.recordRun(row.id, nextSeen, fresh.length, Date.now() + POLL_INTERVAL_MS);
+  try {
+    await repo.recordRun(row.id, nextSeen, fresh.length, Date.now() + POLL_INTERVAL_MS);
+  } catch (error) {
+    if (error instanceof SavedSearchInactiveError) return 0;
+    throw error;
+  }
 
   notifySavedSearchesUpdated();
 

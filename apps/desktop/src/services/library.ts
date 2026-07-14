@@ -35,6 +35,19 @@ const ctx: ConnectorContext = { http: auraHttp, mailto: "contact@aurascholar.app
 
 configureWorker(workerSrc);
 
+interface LibraryIngestSmokeWindow extends Window {
+  __AURASCHOLAR_SMOKE_INGEST_FROM_INPUT__?: (
+    input: string,
+  ) => IngestResult | null | undefined | Promise<IngestResult | null | undefined>;
+}
+
+async function smokeIngestFromInput(input: string): Promise<IngestResult | null | undefined> {
+  if (typeof window === "undefined") return undefined;
+  const smokeIngest = (window as LibraryIngestSmokeWindow).__AURASCHOLAR_SMOKE_INGEST_FROM_INPUT__;
+  if (!smokeIngest) return undefined;
+  return smokeIngest(input);
+}
+
 async function repos() {
   const db = await getDb();
   return {
@@ -51,6 +64,8 @@ async function repos() {
  * (quick-add, PDF import, browser download) go through analyze/commit instead.
  */
 export async function ingestFromInput(input: string): Promise<IngestResult | null> {
+  const smokeResult = await smokeIngestFromInput(input);
+  if (smokeResult !== undefined) return smokeResult;
   const clue = clueFromInput(input);
   if (!clue) return null;
   const resolved = await resolveClue(ctx, clue);
@@ -433,7 +448,26 @@ export async function attachPdfToWork(
     fetchedVia: "manual",
     pageCount,
   });
-  return { attachmentId: id, deduped, pageCount };
+  const restoredAnnotationCount = await restoreAnnotationsFromInactiveAttachments(workId, id);
+  return { attachmentId: id, deduped, pageCount, restoredAnnotationCount };
+}
+
+async function restoreAnnotationsFromInactiveAttachments(
+  workId: string,
+  activeAttachmentId: string,
+): Promise<number> {
+  const db = await getDb();
+  return db.run(
+    `UPDATE annotations
+     SET attachment_id = ?, updated_at = ?
+     WHERE work_id = ?
+       AND deleted_at IS NULL
+       AND attachment_id IN (
+         SELECT id FROM attachments
+         WHERE work_id = ? AND kind = 'pdf' AND deleted_at IS NOT NULL
+       )`,
+    [activeAttachmentId, Date.now(), workId, workId],
+  );
 }
 
 /**

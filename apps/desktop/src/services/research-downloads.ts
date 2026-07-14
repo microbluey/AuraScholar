@@ -7,6 +7,7 @@
 // before anything reaches the library; citation files (.bib etc.) are
 // authoritative and imported directly. No per-site scraping required.
 import { auraFs } from "./aura-platform";
+import { describeSafeError } from "./sensitive-text";
 import type { IngestDraft } from "./library-types";
 import type { ScholarIdentity } from "../../electron/shared";
 
@@ -74,7 +75,7 @@ async function ingestDownloadedFile(
     return { kind: "ignored", fileName: display };
   } catch (e) {
     void auraFs.deleteFile(relPath).catch(() => {});
-    return { kind: "error", fileName: display, error: e instanceof Error ? e.message : String(e) };
+    return { kind: "error", fileName: display, error: describeSafeError(e) };
   }
 }
 

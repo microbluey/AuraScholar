@@ -23,14 +23,7 @@ export async function importReferences(
   const items = parseImportableReferences(text, format);
   const db = await getDb();
   const works = new WorksRepo(db);
-  let imported = 0;
-  let deduped = 0;
-  for (const item of items) {
-    const { deduped: dup } = await works.upsert(toWorkInput(item));
-    if (dup) deduped++;
-    else imported++;
-  }
-  return { total: items.length, imported, deduped };
+  return works.upsertMany(items.map(toWorkInput));
 }
 
 function parseImportableReferences(text: string, format?: ImportFormat): CslItem[] {

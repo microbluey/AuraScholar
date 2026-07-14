@@ -1,27 +1,37 @@
 // The reader view: virtualized page list + selection capture + highlight
 // toolbar. Storage-agnostic — annotation CRUD is delegated to callbacks.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PdfDocument } from "./document";
-import type { PendingSelection, ReaderAnnotation, AnnotationType } from "./annotations";
-import type { AnnotationAnchor } from "./anchor-types";
-import { makeQuoteSelector } from "./anchoring";
-import { rectsForTextRange, textRangeFromDomSelection } from "./quads";
-import { PdfPage } from "./PdfPage";
+import type { PdfDocument } from "./document.js";
+import type { PendingSelection, ReaderAnnotation, AnnotationType } from "./annotations.js";
+import type { AnnotationAnchor } from "./anchor-types.js";
+import { makeQuoteSelector } from "./anchoring.js";
+import { rectsForTextRange, textRangeFromDomSelection } from "./quads.js";
+import { PdfPage } from "./PdfPage.js";
+
+export interface ReaderTextSelection {
+  text: string;
+  pageIndex: number;
+  clientRect: { x: number; y: number; width: number; height: number };
+}
 
 export interface PdfReaderProps {
   doc: PdfDocument;
   annotations: ReaderAnnotation[];
-  onCreateAnnotation?: (a: Omit<ReaderAnnotation, "id">) => void;
+  onCreateAnnotation?: (
+    a: Omit<ReaderAnnotation, "id">,
+  ) => boolean | void | Promise<boolean | void>;
   onAnnotationClick?: (id: string) => void;
-  /** Invoked with the selected text when the user taps the translate tool. */
-  onTranslate?: (text: string) => void;
+  /** Invoked with the selected text and viewport anchor when translation is requested. */
+  onTranslate?: (selection: ReaderTextSelection) => void;
   /** Invoked with the selected text + page when the user saves a writing snippet. */
-  onSaveSnippet?: (text: string, pageIndex: number) => void | Promise<void>;
+  onSaveSnippet?: (text: string, pageIndex: number) => boolean | void | Promise<boolean | void>;
   /** Highlight palette: name → CSS color. */
   palette?: Record<string, string>;
   pageFilter?: "none" | "sepia" | "invert";
   /** When set (and changed), the reader scrolls to this page. */
   scrollToPage?: number | null;
+  /** Reports the page nearest the reading focus as the document scrolls. */
+  onVisiblePageChange?: (pageIndex: number) => void;
 }
 
 const DEFAULT_PALETTE: Record<string, string> = {
@@ -44,6 +54,7 @@ export function PdfReader({
   palette = DEFAULT_PALETTE,
   pageFilter = "none",
   scrollToPage = null,
+  onVisiblePageChange,
 }: PdfReaderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1.2);
@@ -51,6 +62,7 @@ export function PdfReader({
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const [pageHeight, setPageHeight] = useState(800); // estimated until first page loads
   const [snippetSaving, setSnippetSaving] = useState(false);
+  const visiblePageRef = useRef(0);
 
   // Measure first page to estimate scroll heights for virtualization.
   useEffect(() => {
@@ -71,7 +83,15 @@ export function PdfReader({
       Math.ceil((el.scrollTop + el.clientHeight) / scaledPageHeight) + OVERSCAN,
     );
     setVisibleRange([first, last]);
-  }, [doc.pageCount, scaledPageHeight]);
+    const focusedPage = Math.min(
+      doc.pageCount - 1,
+      Math.max(0, Math.floor((el.scrollTop + el.clientHeight * 0.32) / scaledPageHeight)),
+    );
+    if (focusedPage !== visiblePageRef.current) {
+      visiblePageRef.current = focusedPage;
+      onVisiblePageChange?.(focusedPage);
+    }
+  }, [doc.pageCount, onVisiblePageChange, scaledPageHeight]);
 
   useEffect(updateVisible, [updateVisible]);
 
@@ -117,20 +137,36 @@ export function PdfReader({
   const createFromPending = useCallback(
     async (type: AnnotationType, color: string) => {
       if (!pending || !onCreateAnnotation || snippetSaving) return;
-      const index = await doc.getPageText(pending.pageIndex);
-      const anchor: AnnotationAnchor = {
-        version: 1,
-        pageIndex: pending.pageIndex,
-        quote: makeQuoteSelector(index.text, pending.start, pending.end),
-        position: { start: pending.start, end: pending.end },
-        quads: {
+      setSnippetSaving(true);
+      let shouldClear: boolean;
+      try {
+        const index = await doc.getPageText(pending.pageIndex);
+        const anchor: AnnotationAnchor = {
+          version: 1,
           pageIndex: pending.pageIndex,
-          rects: rectsForTextRange(index, pending.start, pending.end),
-        },
-      };
-      onCreateAnnotation({ type, color, pageIndex: pending.pageIndex, anchor });
-      setPending(null);
-      window.getSelection()?.removeAllRanges();
+          quote: makeQuoteSelector(index.text, pending.start, pending.end),
+          position: { start: pending.start, end: pending.end },
+          quads: {
+            pageIndex: pending.pageIndex,
+            rects: rectsForTextRange(index, pending.start, pending.end),
+          },
+        };
+        const result = await onCreateAnnotation({
+          type,
+          color,
+          pageIndex: pending.pageIndex,
+          anchor,
+        });
+        shouldClear = result !== false;
+      } catch {
+        shouldClear = false;
+      } finally {
+        setSnippetSaving(false);
+      }
+      if (shouldClear) {
+        setPending(null);
+        window.getSelection()?.removeAllRanges();
+      }
     },
     [pending, onCreateAnnotation, doc, snippetSaving],
   );
@@ -139,9 +175,11 @@ export function PdfReader({
     if (!pending || !onSaveSnippet || snippetSaving) return;
     setSnippetSaving(true);
     try {
-      await onSaveSnippet(pending.exact, pending.pageIndex);
-      setPending(null);
-      window.getSelection()?.removeAllRanges();
+      const result = await onSaveSnippet(pending.exact, pending.pageIndex);
+      if (result !== false) {
+        setPending(null);
+        window.getSelection()?.removeAllRanges();
+      }
     } finally {
       setSnippetSaving(false);
     }
@@ -157,15 +195,30 @@ export function PdfReader({
     for (let i = start; i <= end; i++) out.push(i);
     return out;
   }, [doc.pageCount, visibleRange]);
+  const zoomPercent = Math.round(scale * 100);
 
   return (
     <div className="au-reader" onMouseUp={() => void handleMouseUp()}>
-      <div className="au-reader__toolbar">
-        <button className="au-reader__zoom" onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>
+      <div className="au-reader__toolbar" role="toolbar" aria-label="PDF 缩放">
+        <button
+          type="button"
+          className="au-reader__zoom"
+          aria-label={`缩小 PDF，当前 ${zoomPercent}%`}
+          title="缩小 PDF"
+          onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}
+        >
           −
         </button>
-        <span className="au-reader__zoom-label">{Math.round(scale * 100)}%</span>
-        <button className="au-reader__zoom" onClick={() => setScale((s) => Math.min(4, s + 0.2))}>
+        <span className="au-reader__zoom-label" role="status" aria-live="polite">
+          {zoomPercent}%
+        </span>
+        <button
+          type="button"
+          className="au-reader__zoom"
+          aria-label={`放大 PDF，当前 ${zoomPercent}%`}
+          title="放大 PDF"
+          onClick={() => setScale((s) => Math.min(4, s + 0.2))}
+        >
           +
         </button>
       </div>
@@ -193,6 +246,8 @@ export function PdfReader({
       {pending && (
         <div
           className="au-reader__selection-toolbar"
+          role="toolbar"
+          aria-label="选中文本操作"
           style={{
             position: "fixed",
             left: pending.clientRect.x + pending.clientRect.width / 2,
@@ -203,37 +258,52 @@ export function PdfReader({
           {Object.entries(palette).map(([name, color]) => (
             <button
               key={name}
+              type="button"
               className="au-reader__swatch"
               style={{ background: color }}
+              aria-busy={snippetSaving}
+              aria-label={snippetSaving ? "正在保存批注" : `添加${name}高亮`}
               disabled={snippetSaving}
-              title={`高亮 · ${name}`}
+              title={snippetSaving ? "正在保存批注" : `高亮 · ${name}`}
               onClick={() => void createFromPending("highlight", color)}
             />
           ))}
           <button
+            type="button"
             className="au-reader__tool"
+            aria-busy={snippetSaving}
+            aria-label={snippetSaving ? "正在保存批注" : "添加下划线"}
             disabled={snippetSaving}
-            title="下划线"
+            title={snippetSaving ? "正在保存批注" : "下划线"}
             onClick={() => void createFromPending("underline", "var(--color-accent)")}
           >
             U̲
           </button>
           <button
+            type="button"
             className="au-reader__tool"
+            aria-busy={snippetSaving}
+            aria-label={snippetSaving ? "正在保存批注" : "添加批注"}
             disabled={snippetSaving}
-            title="批注"
+            title={snippetSaving ? "正在保存批注" : "批注"}
             onClick={() => void createFromPending("note", palette.yellow ?? "#ffd866")}
           >
             ✎
           </button>
           {onTranslate && (
             <button
+              type="button"
               className="au-reader__tool"
+              aria-label="翻译选中文本"
               disabled={snippetSaving}
               title="翻译选中文本"
               onClick={() => {
                 if (snippetSaving) return;
-                onTranslate(pending.exact);
+                onTranslate({
+                  text: pending.exact,
+                  pageIndex: pending.pageIndex,
+                  clientRect: pending.clientRect,
+                });
                 setPending(null);
                 window.getSelection()?.removeAllRanges();
               }}
@@ -243,8 +313,10 @@ export function PdfReader({
           )}
           {onSaveSnippet && (
             <button
+              type="button"
               className="au-reader__tool au-reader__tool--snippet"
               aria-busy={snippetSaving}
+              aria-label={snippetSaving ? "正在保存为写作素材" : "存为写作素材"}
               disabled={snippetSaving}
               title={snippetSaving ? "正在保存为写作素材" : "存为写作素材"}
               onClick={() => void saveSnippetFromPending()}

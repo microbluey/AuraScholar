@@ -1,6 +1,6 @@
 // Static homepage renderer: Profile → self-contained HTML (inline CSS, no
 // build deps, no external requests). Two templates mirroring the app themes.
-import { formatGbt7714, type Profile, type ProfileLink, type ProfilePublication } from "./model";
+import { formatGbt7714, type Profile, type ProfileLink, type ProfilePublication } from "./model.js";
 
 export interface RenderedSite {
   /** Filename → content. Currently a single index.html; assets may join later. */
@@ -22,10 +22,24 @@ function safeLinkHref(rawUrl: string): string | null {
   if (!trimmed) return null;
   try {
     const url = new URL(trimmed);
+    if (url.username || url.password) return null;
     return SAFE_LINK_PROTOCOLS.has(url.protocol) ? url.toString() : null;
   } catch {
     return null;
   }
+}
+
+function doiHref(rawDoi: string): string | null {
+  const normalized = rawDoi
+    .trim()
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "")
+    .replace(/^doi:\s*/i, "")
+    .toLowerCase();
+  if (!/^10\.\d{4,9}\/\S+$/.test(normalized)) return null;
+  if (hasAsciiControl(normalized) || /[<>"']/.test(normalized)) return null;
+  const url = new URL("https://doi.org/");
+  url.pathname = normalized;
+  return url.toString();
 }
 
 function profileLinkAnchor(link: ProfileLink): string | null {
@@ -35,18 +49,32 @@ function profileLinkAnchor(link: ProfileLink): string | null {
   return `<a href="${esc(href)}"${target} rel="noopener noreferrer">${esc(link.label)}</a>`;
 }
 
+function emailAnchor(rawEmail: string | undefined): string | null {
+  const email = rawEmail?.trim();
+  if (!email) return null;
+  if (hasAsciiControl(email) || /[<>"'()\s?#]/.test(email)) return null;
+  if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) return null;
+  return `<a href="mailto:${esc(email)}">${esc(email)}</a>`;
+}
+
+function hasAsciiControl(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const code = char.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+}
+
 function publicationLi(pub: ProfilePublication): string {
   let line = esc(formatGbt7714(pub));
   if (pub.selfName) {
     const escaped = esc(pub.selfName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     line = line.replace(new RegExp(escaped, "g"), `<strong>${esc(pub.selfName)}</strong>`);
   }
-  const doi = pub.doi
-    ? ` <a href="https://doi.org/${esc(pub.doi)}" target="_blank" rel="noopener noreferrer">[DOI]</a>`
+  const href = pub.doi ? doiHref(pub.doi) : null;
+  const doi = href
+    ? ` <a href="${esc(href)}" target="_blank" rel="noopener noreferrer">[DOI]</a>`
     : "";
-  const tags = (pub.tags ?? [])
-    .map((t) => `<span class="tag">${esc(t)}</span>`)
-    .join(" ");
+  const tags = (pub.tags ?? []).map((t) => `<span class="tag">${esc(t)}</span>`).join(" ");
   return `<li>${line}${doi} ${tags}</li>`;
 }
 
@@ -54,11 +82,8 @@ function commonBody(p: Profile): string {
   const links = p.links
     .map(profileLinkAnchor)
     .filter((anchor): anchor is string => Boolean(anchor));
-  const email = p.email?.trim();
-  const navLinks = [
-    ...links,
-    ...(email ? [`<a href="mailto:${esc(email)}">${esc(email)}</a>`] : []),
-  ].join('<span class="sep">·</span>');
+  const email = emailAnchor(p.email);
+  const navLinks = [...links, ...(email ? [email] : [])].join('<span class="sep">·</span>');
   const pubs = p.publications.map(publicationLi).join("\n");
   const sections = p.sections
     .filter((s) => s.items.length > 0)

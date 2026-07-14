@@ -33,6 +33,7 @@ export const auraHttp: HttpClient = {
         timeoutMs: req.timeoutMs,
       })
       .finally(() => req.signal?.removeEventListener("abort", onAbort));
+    if ("aborted" in res) throw abortError();
     if (req.signal?.aborted) throw abortError();
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(res.headers)) headers[k.toLowerCase()] = v;
@@ -84,6 +85,9 @@ export function normalizeExternalUrl(rawUrl: string): string {
   }
   if (!EXTERNAL_PROTOCOLS.has(url.protocol)) {
     throw new Error(`不允许打开 ${url.protocol || "未知"} 链接`);
+  }
+  if (url.username || url.password) {
+    throw new Error("外部链接不能包含用户名或密码");
   }
   return url.toString();
 }

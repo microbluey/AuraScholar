@@ -1,7 +1,7 @@
 // Annotation list panel: page-ordered, click-to-jump, inline comment editing.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clsx } from "clsx";
-import type { ReaderAnnotation } from "./annotations";
+import type { ReaderAnnotation } from "./annotations.js";
 
 function isImeComposing(event: {
   isComposing?: boolean;
@@ -57,7 +57,7 @@ export function AnnotationSidebar({
   );
 
   const editingAnnotation = useMemo(
-    () => (editingId ? annotations.find((ann) => ann.id === editingId) ?? null : null),
+    () => (editingId ? (annotations.find((ann) => ann.id === editingId) ?? null) : null),
     [annotations, editingId],
   );
   const savedDraft = editingAnnotation?.contentMd ?? "";
@@ -130,6 +130,11 @@ export function AnnotationSidebar({
       {sorted.map((ann) => {
         const deleting = deletingId === ann.id;
         const controlsDisabled = saving || Boolean(deletingId);
+        const pageLabel = `第 ${ann.pageIndex + 1} 页`;
+        const quotePreview = ann.anchor.quote?.exact?.trim();
+        const shortQuote =
+          quotePreview && quotePreview.length > 42 ? `${quotePreview.slice(0, 42)}…` : quotePreview;
+        const annotationLabel = shortQuote ? `${pageLabel}批注，${shortQuote}` : `${pageLabel}批注`;
         return (
           <div
             key={ann.id}
@@ -146,15 +151,34 @@ export function AnnotationSidebar({
             }}
           >
             <div className="au-annsidebar__meta">
-              <span className="au-annsidebar__swatch" style={{ background: ann.color }} />
-              <span className="au-annsidebar__page">第 {ann.pageIndex + 1} 页</span>
+              <span
+                className="au-annsidebar__swatch"
+                style={{ background: ann.color }}
+                aria-hidden="true"
+              />
+              <span className="au-annsidebar__page">{pageLabel}</span>
               {ann.orphaned && <span className="au-annsidebar__orphan-flag">位置失效</span>}
               <button
+                type="button"
+                className="au-annsidebar__jump"
+                disabled={controlsDisabled}
+                aria-label={`定位到${annotationLabel}`}
+                title={`定位到${pageLabel}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (controlsDisabled) return;
+                  onJump?.(ann);
+                }}
+              >
+                定位
+              </button>
+              <button
+                type="button"
                 className="au-annsidebar__action"
                 aria-busy={deleting}
-                aria-label={deleting ? "正在删除批注" : "删除批注"}
+                aria-label={deleting ? `正在删除${annotationLabel}` : `删除${annotationLabel}`}
                 disabled={controlsDisabled}
-                title={deleting ? "正在删除批注" : "删除"}
+                title={deleting ? "正在删除批注" : `删除${pageLabel}批注`}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (controlsDisabled) return;
@@ -175,6 +199,7 @@ export function AnnotationSidebar({
                   autoFocus
                   disabled={saving || deleting}
                   rows={3}
+                  aria-label={`编辑${annotationLabel}评论`}
                   placeholder="写下你的想法…(支持 Markdown)"
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
@@ -188,16 +213,22 @@ export function AnnotationSidebar({
                     {saving ? "保存中" : draftDirty ? "未保存" : "已保存"}
                   </span>
                   <button
+                    type="button"
                     className="au-annsidebar__btn"
                     disabled={saving}
                     aria-busy={saving}
+                    aria-label={
+                      saving ? `正在保存${annotationLabel}评论` : `保存${annotationLabel}评论`
+                    }
                     onClick={() => void commitEdit()}
                   >
                     {saving ? "保存中…" : "保存"}
                   </button>
                   <button
+                    type="button"
                     className="au-annsidebar__btn"
                     disabled={saving}
+                    aria-label={`取消编辑${annotationLabel}评论`}
                     onClick={() => void closeEditor()}
                   >
                     取消
@@ -205,8 +236,12 @@ export function AnnotationSidebar({
                 </div>
               </div>
             ) : ann.contentMd ? (
-              <p
+              <button
+                type="button"
                 className="au-annsidebar__comment"
+                aria-label={`编辑${annotationLabel}评论`}
+                title={`编辑${pageLabel}批注评论`}
+                disabled={controlsDisabled}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (controlsDisabled) return;
@@ -214,11 +249,13 @@ export function AnnotationSidebar({
                 }}
               >
                 {ann.contentMd}
-              </p>
+              </button>
             ) : (
               <button
+                type="button"
                 className="au-annsidebar__add-comment"
                 disabled={controlsDisabled}
+                aria-label={`添加${annotationLabel}评论`}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (controlsDisabled) return;

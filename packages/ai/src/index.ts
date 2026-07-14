@@ -4,17 +4,17 @@ export type {
   AIMessage,
   GenerateOptions,
   GenerateResult,
-} from "./provider";
-export { estimateTokens } from "./provider";
-export { OpenAICompatibleProvider } from "./openai-compatible";
-export type { OpenAICompatibleOptions } from "./openai-compatible";
-export { AnthropicProvider } from "./anthropic";
-export type { AnthropicOptions } from "./anthropic";
+} from "./provider.js";
+export { estimateTokens } from "./provider.js";
+export { OpenAICompatibleProvider } from "./openai-compatible.js";
+export type { OpenAICompatibleOptions } from "./openai-compatible.js";
+export { AnthropicProvider } from "./anthropic.js";
+export type { AnthropicOptions } from "./anthropic.js";
 export {
   FlashcardOutputSchema,
   PROMPT_VERSION,
   generateFlashcards,
   flashcardsToCards,
   trimPaperText,
-} from "./flashcards";
-export type { FlashcardOutput, FlashcardRequest } from "./flashcards";
+} from "./flashcards.js";
+export type { FlashcardOutput, FlashcardRequest } from "./flashcards.js";

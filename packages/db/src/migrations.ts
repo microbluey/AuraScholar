@@ -16,7 +16,7 @@ export interface Migration {
   sql: string;
 }
 
-import { DDL_V1 } from "./ddl";
+import { DDL_V1 } from "./ddl.js";
 
 export const MIGRATIONS: Migration[] = [
   {
@@ -313,6 +313,16 @@ export const MIGRATIONS: Migration[] = [
     name: "saved_searches_last_error",
     sql: `
       ALTER TABLE saved_searches ADD COLUMN last_error TEXT;
+    `,
+  },
+  {
+    // v2 introduced the FTS table and triggers, but users upgrading from a v1
+    // database may already have works rows. Rebuild once so legacy rows become
+    // searchable without requiring users to edit or reimport them.
+    version: 15,
+    name: "works_fts_rebuild_existing_rows",
+    sql: `
+      INSERT INTO works_fts(works_fts) VALUES('rebuild');
     `,
   },
 ];

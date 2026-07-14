@@ -101,12 +101,12 @@ function fromRawCsl(raw: Record<string, unknown>, work: WorkLike): CslItem {
   const container = pickString(raw["container-title"]) ?? work.venueName ?? undefined;
   return {
     id: work.id,
-    type: mapType((raw.type as string) ?? work.type ?? "article"),
+    type: mapType(pickScalarString(raw.type) ?? work.type),
     title,
     author: normalizeNames(raw.author),
     editor: normalizeNames(raw.editor),
     "container-title": container,
-    issued: normalizeDate(raw.issued) ?? yearDate(work.year),
+    issued: normalizeDate(raw.issued) ?? yearDate(work.year) ?? rawDate(work.publicationDate),
     volume: pickString(raw.volume),
     issue: pickString(raw.issue),
     page: pickString(raw.page),
@@ -121,7 +121,7 @@ function fromRawCsl(raw: Record<string, unknown>, work: WorkLike): CslItem {
 function synthesize(work: WorkLike): CslItem {
   return {
     id: work.id,
-    type: mapType(work.type ?? "article"),
+    type: mapType(work.type),
     title: work.title,
     author: (work.authorNames ?? []).map(splitName),
     "container-title": work.venueName ?? undefined,
@@ -162,8 +162,9 @@ function overlayColumns(base: CslItem, work: WorkLike): CslItem {
   return out;
 }
 
-function mapType(t: string): string {
-  return TYPE_MAP[t] ?? t ?? "article-journal";
+function mapType(value?: string | null): string {
+  const type = value?.trim() || "article";
+  return TYPE_MAP[type] ?? type;
 }
 
 /** "Ashish Vaswani" → { family: "Vaswani", given: "Ashish" }. */
@@ -194,12 +195,31 @@ function normalizeNames(value: unknown): CslName[] | undefined {
 function normalizeDate(value: unknown): CslDate | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const o = value as Record<string, unknown>;
-  const dp = o["date-parts"];
-  if (Array.isArray(dp) && Array.isArray(dp[0])) {
-    return { "date-parts": dp as number[][] };
-  }
+  const dp = normalizeDateParts(o["date-parts"]);
+  if (dp) return { "date-parts": dp };
   const raw = pickString(o.raw);
   return raw ? { raw } : undefined;
+}
+
+function normalizeDateParts(value: unknown): number[][] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parts = value
+    .map(normalizeDatePart)
+    .filter((part): part is number[] => part !== null);
+  return parts.length ? parts : undefined;
+}
+
+function normalizeDatePart(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const parts = value.slice(0, 3);
+  if (parts.length === 0) return null;
+  if (parts.some((part) => part === undefined)) return null;
+  if (!parts.every(isValidDatePartNumber)) return null;
+  return parts;
+}
+
+function isValidDatePartNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && Number.isFinite(value);
 }
 
 function yearDate(year?: number | null): CslDate | undefined {
@@ -215,6 +235,10 @@ function pickString(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (Array.isArray(value) && typeof value[0] === "string") return value[0];
   return undefined;
+}
+
+function pickScalarString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 /** Year extracted from a CSL date, when present. */

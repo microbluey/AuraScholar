@@ -1,12 +1,13 @@
 // One polling cycle for one sentinel task: fetch fresh snapshots, derive
 // milestones, diff against the task's known state.
 import { crossrefRaw, openalexByDoi, type ConnectorContext } from "@aurascholar/connectors";
+import { describeSafeError } from "@aurascholar/platform";
 import {
   deriveMilestones,
   stateRank,
   type MilestoneEvidence,
   type SentinelState,
-} from "./states";
+} from "./states.js";
 
 export interface SentinelCheckResult {
   /** Newly crossed milestones (not previously recorded), in rank order. */
@@ -85,8 +86,7 @@ function assertEvidenceCheckComplete(
 }
 
 function formatSourceFailure(source: { name: string; error: unknown | null }): string {
-  const raw =
-    source.error instanceof Error ? source.error.message : String(source.error ?? "未知错误");
+  const raw = describeSafeError(source.error);
   const compact = raw.replace(/\s+/g, " ").trim();
   return `${source.name} ${compact.slice(0, 220)}`;
 }

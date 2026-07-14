@@ -11,7 +11,8 @@ import {
   type ConnectorContext,
   type NormalizedWork,
 } from "@aurascholar/connectors";
-import { titleSimilarity } from "../ingest/resolve";
+import { describeSafeError } from "@aurascholar/platform";
+import { titleSimilarity } from "../ingest/resolve.js";
 
 export interface TitleMatchHints {
   /** Expected journal/conference name (substring match, case-insensitive). */
@@ -141,8 +142,7 @@ function assertTitleSearchComplete(
 }
 
 function formatSourceFailure(source: { name: string; error: unknown | null }): string {
-  const raw =
-    source.error instanceof Error ? source.error.message : String(source.error ?? "未知错误");
+  const raw = describeSafeError(source.error);
   const compact = raw.replace(/\s+/g, " ").trim();
   return `${source.name} ${compact.slice(0, 220)}`;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useNavigate } from "react-router-dom";
 import { normalizeDoi } from "@aurascholar/db/ids";
 import {
@@ -19,6 +19,7 @@ import { InlineNotice } from "../components/InlineNotice";
 import { downloadBlob } from "../download";
 import { isImeComposing } from "../keyboard";
 import { isDesktopRuntime } from "../services/aura-platform";
+import { describeSafeError } from "../services/sensitive-text";
 
 type CreateMode = "doi" | "title";
 type SentinelView = "all" | "active" | "due" | "changed" | "title";
@@ -29,12 +30,306 @@ type TaskAction = { id: string; type: TaskActionType } | null;
 const PIPELINE_STATES = SENTINEL_STATES;
 const MIN_SENTINEL_ACTION_BUSY_MS = 250;
 
+interface SentinelUndoState {
+  id: string;
+  message: string;
+  task?: SentinelTaskRow;
+  events?: SentinelEventRow[];
+}
+
+interface SentinelSmokeWindow extends Window {
+  __AURASCHOLAR_SMOKE_SENTINEL_AFTER_READ_DELAY_MS__?: number;
+  __AURASCHOLAR_SMOKE_SENTINEL_AFTER_READ_COUNT__?: number;
+  __AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_READ__?: string;
+  __AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_DELETE__?: string;
+  __AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_RESTORE__?: string;
+}
 
 async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
   const remaining = minimumMs - (Date.now() - startedAt);
   if (remaining > 0) {
     await new Promise((resolve) => setTimeout(resolve, remaining));
   }
+}
+
+async function waitForSentinelSmokeAfterReadDelay(): Promise<void> {
+  const smokeWindow = window as SentinelSmokeWindow;
+  const delayMs = smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_AFTER_READ_DELAY_MS__;
+  if (typeof delayMs !== "number" || delayMs <= 0) return;
+  smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_AFTER_READ_COUNT__ =
+    (smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_AFTER_READ_COUNT__ ?? 0) + 1;
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function consumeSentinelSmokeReadFailure(): Error | null {
+  const smokeWindow = window as SentinelSmokeWindow;
+  const message = smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_READ__;
+  if (!message) return null;
+  delete smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_READ__;
+  return new Error(message);
+}
+
+function consumeSentinelSmokeDeleteFailure(): Error | null {
+  const smokeWindow = window as SentinelSmokeWindow;
+  const message = smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_DELETE__;
+  if (!message) return null;
+  delete smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_DELETE__;
+  return new Error(message);
+}
+
+function consumeSentinelSmokeRestoreFailure(): Error | null {
+  const smokeWindow = window as SentinelSmokeWindow;
+  const message = smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_RESTORE__;
+  if (!message) return null;
+  delete smokeWindow.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_RESTORE__;
+  return new Error(message);
+}
+
+function safeSentinelTask(task: SentinelTaskRow): SentinelTaskRow {
+  if (!task.last_error) return task;
+  return { ...task, last_error: describeSafeError(task.last_error) };
+}
+
+const PREVIEW_SENTINEL_NOW = Date.now();
+const PREVIEW_DAY = 24 * 60 * 60 * 1000;
+const PREVIEW_SENTINEL_SCOPE_MESSAGE =
+  "浏览器预览使用可重置的哨兵样例；新增、检查、暂停、删除和撤销会在本页模拟生效，真实检查和证据快照会在桌面应用中保存。";
+
+function previewTask(input: {
+  currentState: SentinelState;
+  doi?: string | null;
+  hintAuthor?: string | null;
+  hintVenue?: string | null;
+  id: string;
+  nextOffsetDays: number;
+  polledOffsetDays: number;
+  status?: string;
+  title: string;
+  workId?: string | null;
+}): SentinelTaskRow {
+  const createdAt = PREVIEW_SENTINEL_NOW - PREVIEW_DAY * 21;
+  return {
+    id: input.id,
+    work_id: input.workId ?? null,
+    doi: input.doi ?? null,
+    title: input.title,
+    hint_venue: input.hintVenue ?? null,
+    hint_author: input.hintAuthor ?? null,
+    current_state: input.currentState,
+    target_flags: "registered,online,in_issue,indexed_openalex,indexed_pubmed",
+    poll_interval_s: 86_400,
+    next_poll_at: PREVIEW_SENTINEL_NOW + PREVIEW_DAY * input.nextOffsetDays,
+    last_polled_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * input.polledOffsetDays,
+    error_count: 0,
+    last_error: null,
+    status: input.status ?? "active",
+    created_at: createdAt,
+    updated_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * input.polledOffsetDays,
+    deleted_at: null,
+  };
+}
+
+function previewEvent(
+  taskId: string,
+  fromState: SentinelState,
+  toState: SentinelState,
+  offsetDays: number,
+  source: string,
+): SentinelEventRow {
+  return {
+    id: `${taskId}-${toState}`,
+    task_id: taskId,
+    from_state: fromState,
+    to_state: toState,
+    evidence_json: JSON.stringify(
+      {
+        preview: true,
+        source,
+        detectedAt: new Date(PREVIEW_SENTINEL_NOW - PREVIEW_DAY * offsetDays).toISOString(),
+        note: "浏览器预览样例证据；真实证据会在桌面应用中保存原始 API 快照。",
+      },
+      null,
+      2,
+    ),
+    detected_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * offsetDays,
+    notified_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * offsetDays,
+  };
+}
+
+const PREVIEW_SENTINEL_TASKS: SentinelTaskRow[] = [
+  previewTask({
+    id: "preview-sentinel-attention",
+    workId: "preview-attention",
+    doi: "10.48550/arXiv.1706.03762",
+    title: "Attention Is All You Need",
+    currentState: "indexed_openalex",
+    nextOffsetDays: 2,
+    polledOffsetDays: 1,
+  }),
+  previewTask({
+    id: "preview-sentinel-alphafold",
+    workId: "preview-alphafold",
+    doi: "10.1038/s41586-021-03819-2",
+    title: "Highly accurate protein structure prediction with AlphaFold",
+    currentState: "indexed_pubmed",
+    nextOffsetDays: 14,
+    polledOffsetDays: 3,
+    status: "done",
+  }),
+  previewTask({
+    id: "preview-sentinel-sam",
+    workId: "preview-sam",
+    title: "Segment Anything",
+    hintVenue: "ICCV",
+    hintAuthor: "Kirillov",
+    currentState: "accepted",
+    nextOffsetDays: -1,
+    polledOffsetDays: 5,
+  }),
+];
+
+const PREVIEW_SENTINEL_EVENTS = new Map<string, SentinelEventRow[]>([
+  [
+    "preview-sentinel-attention",
+    [
+      previewEvent("preview-sentinel-attention", "accepted", "registered", 18, "Crossref"),
+      previewEvent("preview-sentinel-attention", "registered", "online", 16, "Crossref"),
+      previewEvent("preview-sentinel-attention", "online", "in_issue", 9, "Crossref"),
+      previewEvent("preview-sentinel-attention", "in_issue", "indexed_openalex", 1, "OpenAlex"),
+    ],
+  ],
+  [
+    "preview-sentinel-alphafold",
+    [
+      previewEvent("preview-sentinel-alphafold", "accepted", "registered", 20, "Crossref"),
+      previewEvent("preview-sentinel-alphafold", "registered", "online", 17, "Crossref"),
+      previewEvent("preview-sentinel-alphafold", "online", "in_issue", 12, "Crossref"),
+      previewEvent("preview-sentinel-alphafold", "in_issue", "indexed_pubmed", 3, "PubMed"),
+    ],
+  ],
+  ["preview-sentinel-sam", []],
+]);
+
+function previewSentinelTasks(): SentinelTaskRow[] {
+  return PREVIEW_SENTINEL_TASKS.map((task) => ({ ...task }));
+}
+
+function previewSentinelEvents(): Map<string, SentinelEventRow[]> {
+  return new Map(
+    Array.from(PREVIEW_SENTINEL_EVENTS, ([taskId, events]) => [
+      taskId,
+      events.map((event) => ({ ...event })),
+    ]),
+  );
+}
+
+function createPreviewSentinelTask(input: {
+  mode: CreateMode;
+  doi: string;
+  title: string;
+  hintVenue: string;
+  hintAuthor: string;
+}): SentinelTaskRow {
+  const now = Date.now();
+  const normalizedDoi = input.mode === "doi" ? normalizeDoi(input.doi) : null;
+  return {
+    id: `preview-sentinel-custom-${now}`,
+    work_id: null,
+    doi: normalizedDoi,
+    title: input.title.trim() || normalizedDoi || "新的预览监控",
+    hint_venue: input.mode === "title" ? input.hintVenue.trim() || null : null,
+    hint_author: input.mode === "title" ? input.hintAuthor.trim() || null : null,
+    current_state: "accepted",
+    target_flags: "registered,online,in_issue,indexed_openalex,indexed_pubmed",
+    poll_interval_s: 86_400,
+    next_poll_at: now,
+    last_polled_at: null,
+    error_count: 0,
+    last_error: null,
+    status: "active",
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+  };
+}
+
+function nextPreviewState(state: SentinelState): SentinelState | null {
+  if (state === "accepted") return "registered";
+  if (state === "registered") return "online";
+  if (state === "online") return "in_issue";
+  if (state === "in_issue") return "indexed_openalex";
+  return null;
+}
+
+function previewCheckEvent(
+  taskId: string,
+  fromState: SentinelState,
+  toState: SentinelState,
+  detectedAt: number,
+): SentinelEventRow {
+  return {
+    id: `${taskId}-preview-check-${detectedAt}`,
+    task_id: taskId,
+    from_state: fromState,
+    to_state: toState,
+    evidence_json: JSON.stringify(
+      {
+        preview: true,
+        source: "Preview check",
+        detectedAt: new Date(detectedAt).toISOString(),
+        note: "浏览器预览模拟检查结果；真实证据会在桌面应用中保存原始 API 快照。",
+      },
+      null,
+      2,
+    ),
+    detected_at: detectedAt,
+    notified_at: detectedAt,
+  };
+}
+
+function simulatePreviewPoll(
+  tasks: SentinelTaskRow[],
+  eventsByTask: Map<string, SentinelEventRow[]>,
+  taskIds: string[],
+): {
+  changes: number;
+  checked: number;
+  eventsByTask: Map<string, SentinelEventRow[]>;
+  tasks: SentinelTaskRow[];
+} {
+  const ids = new Set(taskIds);
+  const now = Date.now();
+  let checked = 0;
+  let changes = 0;
+  const nextEvents = new Map(
+    Array.from(eventsByTask, ([taskId, events]) => [taskId, events.map((event) => ({ ...event }))]),
+  );
+  const nextTasks = tasks.map((task) => {
+    if (!ids.has(task.id) || task.status !== "active") return task;
+    checked += 1;
+    const currentState = task.current_state as SentinelState;
+    const nextState = nextPreviewState(currentState);
+    const nextTask = {
+      ...task,
+      last_polled_at: now,
+      next_poll_at: now + task.poll_interval_s * 1000,
+      error_count: 0,
+      last_error: null,
+      updated_at: now,
+    };
+    if (!nextState) return nextTask;
+    changes += 1;
+    nextEvents.set(task.id, [
+      ...(nextEvents.get(task.id) ?? []),
+      previewCheckEvent(task.id, currentState, nextState, now),
+    ]);
+    return {
+      ...nextTask,
+      current_state: nextState,
+      status: nextState.startsWith("indexed_") ? "done" : nextTask.status,
+    };
+  });
+  return { changes, checked, eventsByTask: nextEvents, tasks: nextTasks };
 }
 
 export function SentinelPage() {
@@ -49,65 +344,104 @@ export function SentinelPage() {
   const [eventsByTask, setEventsByTask] = useState<Map<string, SentinelEventRow[]>>(new Map());
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [globalAction, setGlobalAction] = useState<GlobalAction>(null);
   const [taskAction, setTaskAction] = useState<TaskAction>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [sentinelUndo, setSentinelUndo] = useState<SentinelUndoState | null>(null);
+  const [sentinelUndoBusy, setSentinelUndoBusy] = useState(false);
+  const [viewNow, setViewNow] = useState(() => Date.now());
   const { confirm, confirmDialog } = useConfirmDialog();
-  const globalBusy = globalAction !== null;
+  const refreshSeqRef = useRef(0);
+  const allViewButtonRef = useRef<HTMLButtonElement>(null);
+  const globalBusy = globalAction !== null || sentinelUndoBusy;
   const taskBusy = taskAction !== null;
 
   const refresh = useCallback(async () => {
+    const seq = refreshSeqRef.current + 1;
+    refreshSeqRef.current = seq;
     if (!isDesktopRuntime()) {
-      setTasks([]);
-      setEventsByTask(new Map());
+      if (refreshSeqRef.current !== seq) return;
+      setViewNow(Date.now());
+      setTasks(previewSentinelTasks());
+      setEventsByTask(previewSentinelEvents());
       setLoading(false);
+      setLoadError(null);
+      setMessage((current) => current ?? PREVIEW_SENTINEL_SCOPE_MESSAGE);
       return;
     }
     setLoading(true);
+    setLoadError(null);
     try {
+      const smokeFailure = consumeSentinelSmokeReadFailure();
+      if (smokeFailure) throw smokeFailure;
       const db = await getDb();
       const repo = new SentinelRepo(db);
       const list = await repo.list();
       const eventPairs = await Promise.all(
         list.map(async (task) => [task.id, await repo.events(task.id)] as const),
       );
-      setTasks(list);
+      await waitForSentinelSmokeAfterReadDelay();
+      if (refreshSeqRef.current !== seq) return;
+      setViewNow(Date.now());
+      setTasks(list.map(safeSentinelTask));
       setEventsByTask(new Map(eventPairs));
+      setLoadError(null);
+      setMessage((current) => (current?.startsWith("读取哨兵任务失败") ? null : current));
     } catch (e) {
-      setMessage(`读取哨兵任务失败:${e instanceof Error ? e.message : String(e)}`);
+      if (refreshSeqRef.current !== seq) return;
+      setViewNow(Date.now());
+      const detail = describeSafeError(e);
+      setLoadError(detail);
+      setMessage(`读取哨兵任务失败:${detail}`);
     } finally {
-      setLoading(false);
+      if (refreshSeqRef.current === seq) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
+    const initialRefreshId = window.setTimeout(() => {
+      void refresh();
+    }, 0);
+    const onUpdated = () => void refresh();
+    window.addEventListener("aurascholar:sentinel-updated", onUpdated);
+    return () => {
+      window.clearTimeout(initialRefreshId);
+      refreshSeqRef.current += 1;
+      window.removeEventListener("aurascholar:sentinel-updated", onUpdated);
+    };
   }, [refresh]);
 
+  useEffect(() => {
+    const clockId = window.setInterval(() => {
+      setViewNow(Date.now());
+    }, 60_000);
+    return () => window.clearInterval(clockId);
+  }, []);
+
   const stats = useMemo(() => {
-    const now = Date.now();
     const active = tasks.filter((task) => task.status === "active").length;
-    const due = tasks.filter((task) => isTaskDue(task, now)).length;
+    const due = tasks.filter((task) => isTaskDue(task, viewNow)).length;
     const changed = Array.from(eventsByTask.values()).filter((events) => events.length > 0).length;
     const titleMode = tasks.filter((task) => !task.doi).length;
     return { active, due, changed, titleMode, total: tasks.length };
-  }, [eventsByTask, tasks]);
+  }, [eventsByTask, tasks, viewNow]);
 
   const filteredTasks = useMemo(() => {
-    const now = Date.now();
     if (view === "active") return tasks.filter((task) => task.status === "active");
-    if (view === "due") return tasks.filter((task) => isTaskDue(task, now));
+    if (view === "due") return tasks.filter((task) => isTaskDue(task, viewNow));
     if (view === "changed")
       return tasks.filter((task) => (eventsByTask.get(task.id)?.length ?? 0) > 0);
     if (view === "title") return tasks.filter((task) => !task.doi);
     return tasks;
-  }, [eventsByTask, tasks, view]);
+  }, [eventsByTask, tasks, view, viewNow]);
+
+  const showAllTasks = useCallback(() => {
+    setView("all");
+    window.setTimeout(() => allViewButtonRef.current?.focus(), 0);
+  }, []);
 
   const handleAdd = useCallback(async () => {
-    if (!isDesktopRuntime()) {
-      setMessage("浏览器预览无法写入本地数据库，请在桌面应用中创建监控。");
-      return;
-    }
     if (globalAction || taskAction) return;
     if (mode === "doi" && !normalizeDoi(doi)) {
       setMessage("DOI 格式不正确");
@@ -120,7 +454,27 @@ export function SentinelPage() {
     const startedAt = Date.now();
     let finalMessage: string | null = null;
     setGlobalAction("add");
+    setSentinelUndo(null);
     setMessage("正在创建监控...");
+    if (!isDesktopRuntime()) {
+      await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      const task = createPreviewSentinelTask({ doi, hintAuthor, hintVenue, mode, title });
+      setTasks((current) => [task, ...current]);
+      setEventsByTask((current) => new Map(current).set(task.id, []));
+      setDoi("");
+      setTitle("");
+      setHintVenue("");
+      setHintAuthor("");
+      setExpanded(task.id);
+      setView("all");
+      setMessage(
+        mode === "doi"
+          ? `已添加预览 DOI 监控:《${task.title}》`
+          : `已添加预览标题监控:《${task.title}》`,
+      );
+      setGlobalAction(null);
+      return;
+    }
     try {
       const db = await getDb();
       const repo = new SentinelRepo(db);
@@ -154,12 +508,10 @@ export function SentinelPage() {
               setMessage(sentinelPollMessage(summary, "首次检查", "已添加监控，暂无新进展"));
             }
           })
-          .catch((e) =>
-            setMessage(`监控已创建，首次检查失败:${e instanceof Error ? e.message : String(e)}`),
-          );
+          .catch((e) => setMessage(`监控已创建，首次检查失败:${describeSafeError(e)}`));
       }
     } catch (e) {
-      finalMessage = `创建监控失败:${e instanceof Error ? e.message : String(e)}`;
+      finalMessage = `创建监控失败:${describeSafeError(e)}`;
     } finally {
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
       if (finalMessage) setMessage(finalMessage);
@@ -168,66 +520,117 @@ export function SentinelPage() {
   }, [doi, globalAction, hintAuthor, hintVenue, mode, refresh, taskAction, title]);
 
   const handleCheckNow = useCallback(async () => {
-    if (!isDesktopRuntime()) {
-      setMessage("浏览器预览无法执行后台检查，请在桌面应用中使用。");
-      return;
-    }
     if (globalAction || taskAction) return;
     const startedAt = Date.now();
     let finalMessage: string | null = null;
     setGlobalAction("check-all");
     setMessage("检查中…");
+    if (!isDesktopRuntime()) {
+      const dueIds = tasks.filter((task) => isTaskDue(task)).map((task) => task.id);
+      await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      if (dueIds.length === 0) {
+        setMessage("当前没有待检查的预览监控任务。");
+        setGlobalAction(null);
+        return;
+      }
+      const simulated = simulatePreviewPoll(tasks, eventsByTask, dueIds);
+      setTasks(simulated.tasks);
+      setEventsByTask(simulated.eventsByTask);
+      setMessage(
+        simulated.changes > 0
+          ? `预览检查完成:${simulated.checked} 个任务，发现 ${simulated.changes} 个状态变化。`
+          : `预览检查完成:${simulated.checked} 个任务，暂无新进展。`,
+      );
+      setGlobalAction(null);
+      return;
+    }
     try {
       const summary = await runDuePollsDetailed();
       finalMessage = sentinelPollMessage(summary, "检查", "已检查，暂无新进展");
       await refresh();
     } catch (e) {
-      finalMessage = `检查失败:${e instanceof Error ? e.message : String(e)}`;
+      finalMessage = `检查失败:${describeSafeError(e)}`;
     } finally {
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
       if (finalMessage) setMessage(finalMessage);
       setGlobalAction(null);
     }
-  }, [globalAction, refresh, taskAction]);
+  }, [eventsByTask, globalAction, refresh, taskAction, tasks]);
 
   const handleForceCheck = useCallback(
     async (taskId: string) => {
-      if (!isDesktopRuntime()) return;
       if (globalAction || taskAction) return;
       const startedAt = Date.now();
       let finalMessage: string | null = null;
       setTaskAction({ id: taskId, type: "check" });
       setMessage("正在检查该监控...");
+      if (!isDesktopRuntime()) {
+        await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        const simulated = simulatePreviewPoll(tasks, eventsByTask, [taskId]);
+        setTasks(simulated.tasks);
+        setEventsByTask(simulated.eventsByTask);
+        setMessage(
+          simulated.checked === 0
+            ? "该预览任务当前不可检查。"
+            : simulated.changes > 0
+              ? "单篇预览检查完成，发现 1 个状态变化。"
+              : "单篇预览检查完成，暂无新进展。",
+        );
+        setTaskAction(null);
+        return;
+      }
       try {
         const summary = await runSentinelTaskNow(taskId);
         finalMessage = sentinelPollMessage(summary, "单篇检查", "单篇检查完成，暂无新进展");
         await refresh();
       } catch (e) {
-        finalMessage = `单篇检查失败:${e instanceof Error ? e.message : String(e)}`;
+        finalMessage = `单篇检查失败:${describeSafeError(e)}`;
       } finally {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
         if (finalMessage) setMessage(finalMessage);
         setTaskAction(null);
       }
     },
-    [globalAction, refresh, taskAction],
+    [eventsByTask, globalAction, refresh, taskAction, tasks],
   );
 
   const handleToggleStatus = useCallback(
     async (task: SentinelTaskRow) => {
-      if (!isDesktopRuntime()) return;
       if (globalAction || taskAction) return;
       const nextStatus = task.status === "paused" ? "active" : "paused";
       const startedAt = Date.now();
       let finalMessage: string | null = null;
       setTaskAction({ id: task.id, type: "status" });
+      setSentinelUndo(null);
+      if (!isDesktopRuntime()) {
+        await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        setTasks((current) =>
+          current.map((item) =>
+            item.id === task.id
+              ? {
+                  ...item,
+                  status: nextStatus,
+                  next_poll_at:
+                    nextStatus === "active" && item.next_poll_at < Date.now()
+                      ? Date.now()
+                      : item.next_poll_at,
+                  updated_at: Date.now(),
+                }
+              : item,
+          ),
+        );
+        finalMessage = nextStatus === "active" ? "已恢复预览监控。" : "已暂停预览监控。";
+        setMessage(finalMessage);
+        setTaskAction(null);
+        return;
+      }
       try {
         const db = await getDb();
         await new SentinelRepo(db).setStatus(task.id, nextStatus);
         finalMessage = nextStatus === "active" ? "已恢复监控" : "已暂停监控";
         await refresh();
       } catch (e) {
-        finalMessage = `更新监控状态失败:${e instanceof Error ? e.message : String(e)}`;
+        finalMessage = `更新监控状态失败:${describeSafeError(e)}`;
       } finally {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
         if (finalMessage) setMessage(finalMessage);
@@ -239,7 +642,6 @@ export function SentinelPage() {
 
   const handleDelete = useCallback(
     async (task: SentinelTaskRow) => {
-      if (!isDesktopRuntime()) return;
       if (globalAction || taskAction) return;
       const confirmed = await confirm({
         title: "删除哨兵监控？",
@@ -251,24 +653,104 @@ export function SentinelPage() {
       if (!confirmed) return;
       const startedAt = Date.now();
       let finalMessage: string | null = null;
+      let deleteUndo: SentinelUndoState | null = null;
       setTaskAction({ id: task.id, type: "delete" });
+      setSentinelUndo(null);
       setMessage("正在删除监控任务...");
+      if (!isDesktopRuntime()) {
+        await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        const taskEvents = (eventsByTask.get(task.id) ?? []).map((event) => ({ ...event }));
+        finalMessage = `已从预览哨兵移除:《${task.title}》`;
+        deleteUndo = { id: task.id, message: finalMessage, task: { ...task }, events: taskEvents };
+        setTasks((current) => current.filter((item) => item.id !== task.id));
+        setEventsByTask((current) => {
+          const next = new Map(current);
+          next.delete(task.id);
+          return next;
+        });
+        if (expanded === task.id) setExpanded(null);
+        setSentinelUndo(deleteUndo);
+        setMessage(finalMessage);
+        setTaskAction(null);
+        return;
+      }
       try {
         const db = await getDb();
+        const smokeFailure = consumeSentinelSmokeDeleteFailure();
+        if (smokeFailure) {
+          await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+          throw smokeFailure;
+        }
         await new SentinelRepo(db).softDelete(task.id);
-        finalMessage = "已删除监控任务";
+        finalMessage = `已删除监控任务:《${task.title}》`;
+        deleteUndo = { id: task.id, message: finalMessage };
         if (expanded === task.id) setExpanded(null);
+        await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        setSentinelUndo(deleteUndo);
         await refresh();
       } catch (e) {
-        finalMessage = `删除监控失败:${e instanceof Error ? e.message : String(e)}`;
-      } finally {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        if (deleteUndo) {
+          setSentinelUndo(deleteUndo);
+          finalMessage = `删除监控后刷新失败，撤销入口已保留:${describeSafeError(e)}`;
+        } else {
+          finalMessage = `删除监控失败，监控任务仍保留，可重新删除:${describeSafeError(e)}`;
+        }
+      } finally {
         if (finalMessage) setMessage(finalMessage);
         setTaskAction(null);
       }
     },
-    [confirm, expanded, globalAction, refresh, taskAction],
+    [confirm, eventsByTask, expanded, globalAction, refresh, taskAction],
   );
+
+  const undoDelete = useCallback(async () => {
+    if (!sentinelUndo || sentinelUndoBusy) return;
+    const startedAt = Date.now();
+    setSentinelUndoBusy(true);
+    setMessage("正在撤销删除监控任务...");
+    if (!isDesktopRuntime()) {
+      await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      if (!sentinelUndo.task) {
+        setMessage("预览撤销信息不完整，刷新页面可重置演示任务。");
+        setSentinelUndoBusy(false);
+        return;
+      }
+      setTasks((current) => [{ ...sentinelUndo.task! }, ...current]);
+      setEventsByTask((current) =>
+        new Map(current).set(
+          sentinelUndo.id,
+          (sentinelUndo.events ?? []).map((event) => ({ ...event })),
+        ),
+      );
+      setExpanded(sentinelUndo.id);
+      setView("all");
+      setSentinelUndo(null);
+      setMessage("已撤销删除预览监控任务。");
+      setSentinelUndoBusy(false);
+      return;
+    }
+    try {
+      const db = await getDb();
+      const smokeFailure = consumeSentinelSmokeRestoreFailure();
+      if (smokeFailure) {
+        await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        throw smokeFailure;
+      }
+      await new SentinelRepo(db).restore(sentinelUndo.id);
+      await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      await refresh();
+      setExpanded(sentinelUndo.id);
+      setView("all");
+      setSentinelUndo(null);
+      setMessage("已撤销删除监控任务");
+    } catch (e) {
+      await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      setMessage(`撤销删除监控失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
+    } finally {
+      setSentinelUndoBusy(false);
+    }
+  }, [refresh, sentinelUndo, sentinelUndoBusy]);
 
   return (
     <div className="sentinel-page">
@@ -395,7 +877,27 @@ export function SentinelPage() {
             </Button>
           </div>
         )}
-        <InlineNotice className="sentinel-message" message={message} />
+        {sentinelUndo &&
+        (message === sentinelUndo.message ||
+          sentinelUndoBusy ||
+          message?.startsWith("删除监控后刷新失败，撤销入口已保留") ||
+          message?.startsWith("撤销删除监控失败，撤销入口仍保留")) ? (
+          <InlineNotice className="sentinel-message" message={message}>
+            <span className="library-command__message-text">{message}</span>
+            <button
+              type="button"
+              className="library-command__message-action"
+              onClick={() => void undoDelete()}
+              disabled={sentinelUndoBusy}
+              aria-busy={sentinelUndoBusy ? "true" : undefined}
+              aria-label="撤销删除监控任务"
+            >
+              {sentinelUndoBusy ? "撤销中..." : "撤销"}
+            </button>
+          </InlineNotice>
+        ) : (
+          <InlineNotice className="sentinel-message" message={message} />
+        )}
       </Card>
 
       <div className="sentinel-toolbar">
@@ -405,6 +907,7 @@ export function SentinelPage() {
             count={stats.total}
             active={view === "all"}
             onClick={() => setView("all")}
+            buttonRef={allViewButtonRef}
           />
           <ViewButton
             label="监控中"
@@ -446,8 +949,14 @@ export function SentinelPage() {
           <Card className="sentinel-empty">
             <p>读取哨兵任务…</p>
           </Card>
+        ) : loadError ? (
+          <SentinelLoadErrorState
+            error={loadError}
+            onRetry={() => void refresh()}
+            onOpenLibrary={() => navigate("/library")}
+          />
         ) : filteredTasks.length === 0 ? (
-          <SentinelEmptyState view={view} hasAnyTasks={tasks.length > 0} />
+          <SentinelEmptyState view={view} hasAnyTasks={tasks.length > 0} onShowAll={showAllTasks} />
         ) : (
           filteredTasks.map((task) => {
             const events = eventsByTask.get(task.id) ?? [];
@@ -456,6 +965,7 @@ export function SentinelPage() {
                 key={task.id}
                 task={task}
                 events={events}
+                now={viewNow}
                 expanded={expanded === task.id}
                 action={taskAction?.id === task.id ? taskAction.type : null}
                 controlsDisabled={globalBusy || taskBusy}
@@ -463,7 +973,14 @@ export function SentinelPage() {
                 onForceCheck={() => void handleForceCheck(task.id)}
                 onToggleStatus={() => void handleToggleStatus(task)}
                 onDelete={() => void handleDelete(task)}
-                onOpenWork={() => task.work_id && navigate(`/reader?work=${task.work_id}`)}
+                onOpenWork={() => {
+                  if (!task.work_id) return;
+                  navigate(
+                    isDesktopRuntime()
+                      ? `/reader?work=${task.work_id}`
+                      : `/library?work=${encodeURIComponent(task.work_id)}`,
+                  );
+                }}
               />
             );
           })
@@ -479,9 +996,36 @@ export function SentinelPage() {
   );
 }
 
+function SentinelLoadErrorState({
+  error,
+  onRetry,
+  onOpenLibrary,
+}: {
+  error: string;
+  onRetry: () => void;
+  onOpenLibrary: () => void;
+}) {
+  return (
+    <Card className="sentinel-empty sentinel-empty--error">
+      <Badge variant="danger">读取失败</Badge>
+      <p>检索哨兵暂时不可用</p>
+      <small>{error}</small>
+      <div className="sentinel-empty__actions">
+        <Button type="button" variant="secondary" aria-label="重试读取检索哨兵" onClick={onRetry}>
+          重试读取
+        </Button>
+        <Button type="button" variant="ghost" onClick={onOpenLibrary}>
+          去文献库
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 function SentinelTaskCard({
   task,
   events,
+  now,
   expanded,
   action,
   controlsDisabled,
@@ -493,6 +1037,7 @@ function SentinelTaskCard({
 }: {
   task: SentinelTaskRow;
   events: SentinelEventRow[];
+  now: number;
   expanded: boolean;
   action: TaskActionType | null;
   controlsDisabled: boolean;
@@ -504,7 +1049,7 @@ function SentinelTaskCard({
 }) {
   const currentState = task.current_state as SentinelState;
   const currentRank = stateRank(currentState);
-  const due = isTaskDue(task);
+  const due = isTaskDue(task, now);
   const forceCheckBusy = action === "check";
   const statusBusy = action === "status";
   const deleteBusy = action === "delete";
@@ -582,7 +1127,13 @@ function SentinelTaskCard({
           disabled={controlsDisabled || task.status === "done"}
           aria-busy={statusBusy}
         >
-          {statusBusy ? (task.status === "paused" ? "恢复中…" : "暂停中…") : task.status === "paused" ? "恢复" : "暂停"}
+          {statusBusy
+            ? task.status === "paused"
+              ? "恢复中…"
+              : "暂停中…"
+            : task.status === "paused"
+              ? "恢复"
+              : "暂停"}
         </button>
         {task.work_id && (
           <button type="button" onClick={onOpenWork} disabled={controlsDisabled}>
@@ -639,7 +1190,15 @@ function EvidenceRow({ event }: { event: SentinelEventRow }) {
   );
 }
 
-function SentinelEmptyState({ view, hasAnyTasks }: { view: SentinelView; hasAnyTasks: boolean }) {
+function SentinelEmptyState({
+  view,
+  hasAnyTasks,
+  onShowAll,
+}: {
+  view: SentinelView;
+  hasAnyTasks: boolean;
+  onShowAll: () => void;
+}) {
   const title = hasAnyTasks ? "当前视图没有任务" : "还没有哨兵任务";
   const copy = hasAnyTasks
     ? "切换视图可以查看其他监控状态。"
@@ -651,6 +1210,18 @@ function SentinelEmptyState({ view, hasAnyTasks }: { view: SentinelView; hasAnyT
       </Badge>
       <p>{title}</p>
       <small>{copy}</small>
+      {hasAnyTasks && view !== "all" && (
+        <div className="sentinel-empty__actions">
+          <Button
+            type="button"
+            variant="secondary"
+            aria-label="查看全部哨兵任务"
+            onClick={onShowAll}
+          >
+            查看全部监控
+          </Button>
+        </div>
+      )}
     </Card>
   );
 }
@@ -696,14 +1267,17 @@ function ViewButton({
   count,
   active,
   onClick,
+  buttonRef,
 }: {
   label: string;
   count: number;
   active: boolean;
   onClick: () => void;
+  buttonRef?: Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={active ? "sentinel-view-tab sentinel-view-tab--active" : "sentinel-view-tab"}
       onClick={onClick}

@@ -4,14 +4,14 @@ export type {
   TranslateResult,
   TranslateOptions,
   LangCode,
-} from "./types";
-export { TARGET_LANGS, langLabel } from "./types";
-export { LlmTranslator, buildSystemPrompt } from "./llm";
-export { DeepLTranslator } from "./deepl";
-export type { DeepLOptions } from "./deepl";
-export { BaiduTranslator } from "./baidu";
-export type { BaiduOptions } from "./baidu";
-export { md5 } from "./md5";
-export { splitForTranslation } from "./chunk";
-export { makeTranslator } from "./factory";
-export type { TranslateEngine, TranslateConfig, TranslatorDeps } from "./factory";
+} from "./types.js";
+export { TARGET_LANGS, langLabel } from "./types.js";
+export { LlmTranslator, buildSystemPrompt } from "./llm.js";
+export { DeepLTranslator } from "./deepl.js";
+export type { DeepLOptions } from "./deepl.js";
+export { BaiduTranslator } from "./baidu.js";
+export type { BaiduOptions } from "./baidu.js";
+export { md5 } from "./md5.js";
+export { splitForTranslation } from "./chunk.js";
+export { makeTranslator } from "./factory.js";
+export type { TranslateEngine, TranslateConfig, TranslatorDeps } from "./factory.js";

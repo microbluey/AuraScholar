@@ -60,6 +60,34 @@ describe("renderSite", () => {
     expect(html).not.toMatch(/src=["']http/); // no external requests
   });
 
+  it("normalizes publication DOI links and omits invalid DOI links", () => {
+    const site = renderSite({
+      ...PROFILE,
+      publications: [
+        {
+          title: "Normalized DOI Paper",
+          authors: ["Wang Xiao"],
+          year: 2026,
+          doi: " https://DX.doi.org/10.5555/Foo.Bar ",
+        },
+        {
+          title: "Invalid DOI Paper",
+          authors: ["Wang Xiao"],
+          year: 2026,
+          doi: "https://example.com/not-a-doi",
+        },
+      ],
+      sections: [],
+    });
+    const html = site.files.get("index.html")!;
+
+    expect(html).toContain(
+      'href="https://doi.org/10.5555/foo.bar" target="_blank" rel="noopener noreferrer">[DOI]</a>',
+    );
+    expect(html).not.toContain("https://doi.org/https://");
+    expect(html).not.toContain("https://example.com/not-a-doi");
+  });
+
   it("renders the nocturne template when selected", () => {
     const site = renderSite({ ...PROFILE, theme: "nocturne-geek" });
     const html = site.files.get("index.html")!;
@@ -88,6 +116,7 @@ describe("renderSite", () => {
         { label: "Email", url: "mailto:wang@example.edu" },
         { label: "Script", url: "javascript:alert(1)" },
         { label: "Data", url: "data:text/html,<h1>x</h1>" },
+        { label: "Credential", url: "https://user:pass@example.edu/profile" },
         { label: "Broken", url: "https://javascript:alert(1)" },
       ],
       publications: [],
@@ -100,6 +129,8 @@ describe("renderSite", () => {
     expect(html).toContain('href="mailto:wang@example.edu" rel="noopener noreferrer">Email</a>');
     expect(html).not.toContain("Script");
     expect(html).not.toContain("Data");
+    expect(html).not.toContain("Credential");
+    expect(html).not.toContain("user:pass");
     expect(html).not.toContain("Broken");
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("data:text/html");
@@ -115,6 +146,22 @@ describe("renderSite", () => {
     });
     const html = site.files.get("index.html")!;
     expect(html).toContain('<nav class="links"><a href="mailto:wang@example.edu">wang@example.edu</a></nav>');
+  });
+
+  it("omits invalid profile email links from exported HTML", () => {
+    const site = renderSite({
+      ...PROFILE,
+      email: 'wang@example.edu?subject="x"',
+      links: [{ label: "Script", url: "javascript:alert(1)" }],
+      publications: [],
+      sections: [],
+    });
+    const html = site.files.get("index.html")!;
+
+    expect(html).toContain('<nav class="links"></nav>');
+    expect(html).not.toContain("mailto:");
+    expect(html).not.toContain("subject=");
+    expect(html).not.toContain('<span class="sep">');
   });
 
   it("omits empty sections", () => {

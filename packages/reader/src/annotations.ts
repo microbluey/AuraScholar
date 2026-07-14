@@ -1,6 +1,6 @@
 // View-model types for the reader UI. The app layer persists these via the
 // db package; the reader package itself is storage-agnostic.
-import type { AnnotationAnchor } from "./anchor-types";
+import type { AnnotationAnchor } from "./anchor-types.js";
 
 export type AnnotationType = "highlight" | "underline" | "strikeout" | "note";
 
