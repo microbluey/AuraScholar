@@ -6,6 +6,7 @@ interface InlineNoticeProps {
   children?: ReactNode;
   className?: string;
   message?: string | null;
+  onDismiss?: () => void;
   tone?: InlineNoticeTone;
 }
 
@@ -24,7 +25,7 @@ export function inferNoticeTone(message: string): InlineNoticeTone {
   return "neutral";
 }
 
-export function InlineNotice({ children, className, message, tone }: InlineNoticeProps) {
+export function InlineNotice({ children, className, message, onDismiss, tone }: InlineNoticeProps) {
   const content = children ?? message;
   if (!content) return null;
 
@@ -43,7 +44,18 @@ export function InlineNotice({ children, className, message, tone }: InlineNotic
       aria-atomic="true"
       aria-busy={resolvedTone === "busy" ? "true" : undefined}
     >
-      {content}
+      <span className="inline-notice__content">{content}</span>
+      {onDismiss && (
+        <button
+          type="button"
+          className="inline-notice__dismiss"
+          aria-label="关闭通知"
+          title="关闭通知"
+          onClick={onDismiss}
+        >
+          ×
+        </button>
+      )}
     </p>
   );
 }

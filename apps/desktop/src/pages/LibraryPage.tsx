@@ -37,7 +37,7 @@ import type { ExportFormat } from "../services/cite";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
 import type { Draft as MetadataDraft } from "../components/MetadataEditor";
 import { useConfirmDialog } from "../components/ConfirmDialog";
-import { InlineNotice } from "../components/InlineNotice";
+import { inferNoticeTone, InlineNotice } from "../components/InlineNotice";
 import { useModalFocusTrap } from "../components/useModalFocusTrap";
 import { writeClipboardText } from "../clipboard";
 import { downloadBlob } from "../download";
@@ -63,6 +63,7 @@ type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred" | "trash
 type SortMode = "added" | "year";
 type DetailPanelTab = "overview" | "notes" | "related";
 type ExtraFilter = "with-pdf" | "without-pdf" | "ai-done" | "ai-needed";
+type ImportMethod = "identifier" | "pdf" | "references";
 
 interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_IMPORT_PDF__?: (file: File) => Promise<void>;
@@ -914,6 +915,8 @@ export function LibraryPage() {
   const [attachingPdf, setAttachingPdf] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageLeaving, setMessageLeaving] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [trashUndo, setTrashUndo] = useState<TrashUndoState | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [page, setPage] = useState(0);
@@ -974,13 +977,35 @@ export function LibraryPage() {
   const { confirm, confirmDialog } = useConfirmDialog();
   const findShortcut = useMemo(() => shortcutLabel("F"), []);
 
+  useEffect(() => {
+    if (!message) return;
+    setMessageLeaving(false);
+    const tone = inferNoticeTone(message);
+    if (tone === "busy") return;
+    const hasUndoAction = Boolean(
+      trashUndo &&
+        (message === trashUndo.message ||
+          message.startsWith("撤销移入回收站失败，撤销入口仍保留")),
+    );
+    let duration = 4_500;
+    if (tone === "warning") duration = 6_500;
+    if (tone === "danger") duration = 9_000;
+    if (hasUndoAction) duration = 10_000;
+    const exitTimeout = window.setTimeout(() => {
+      setMessageLeaving(true);
+    }, duration - 220);
+    const removeTimeout = window.setTimeout(() => {
+      setMessage((current) => (current === message ? null : current));
+    }, duration);
+    return () => {
+      window.clearTimeout(exitTimeout);
+      window.clearTimeout(removeTimeout);
+    };
+  }, [message, trashUndo]);
+
   const fillExamplePaper = useCallback(() => {
     setInput("1706.03762");
-    setMessage(
-      isDesktopRuntime()
-        ? "已填入示例 arXiv ID。按 Enter 或点击“添加文献”即可预览入库卡片。"
-        : "已填入示例 arXiv ID。浏览器预览会定位匹配的示例文献；真实解析和入库请在桌面应用中完成。",
-    );
+    setImportDialogOpen(true);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -1235,14 +1260,15 @@ export function LibraryPage() {
     [refresh],
   );
 
-  const handleAdd = useCallback(async () => {
-    if (!input.trim() || busy) return;
+  const handleAdd = useCallback(async (rawInput = input) => {
+    const normalizedInput = rawInput.trim();
+    if (!normalizedInput || busy) return;
     if (!isDesktopRuntime()) {
       const startedAt = Date.now();
       setBusy(true);
       setMessage("正在演示快速入库...");
       try {
-        const matched = findPreviewImportWork(input);
+        const matched = findPreviewImportWork(normalizedInput);
         await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_BUSY_MS);
         if (!matched) {
           setMessage("浏览器预览支持样例 DOI、arXiv、标题或作者定位；真实解析请在桌面应用中完成。");
@@ -1272,7 +1298,7 @@ export function LibraryPage() {
     setMessage("正在识别…");
     try {
       const { analyzeInput } = await import("../services/library");
-      const draft = await analyzeInput(input);
+      const draft = await analyzeInput(normalizedInput);
       if (!draft) {
         setMessage("无法识别输入 — 请提供 DOI、arXiv ID、论文链接或标题");
       } else if (await surfaceDedup(draft)) {
@@ -2988,7 +3014,7 @@ export function LibraryPage() {
 
   const handleRefsFile = useCallback(async (file: File) => {
     if (!isDesktopRuntime()) {
-      setMessage("浏览器预览不会导入文献库文件；当前示例文献仍可试用整理、阅读入口和导出。");
+      setMessage("浏览器预览不会批量导入题录文件；当前示例文献仍可试用整理、阅读入口和导出。");
       return;
     }
     try {
@@ -3023,7 +3049,7 @@ export function LibraryPage() {
         return;
       }
       if (supported.length > 1) {
-        setMessage("请一次拖入一个 PDF 或一个文献库文件，避免误入库");
+        setMessage("请一次拖入一个 PDF 或一个题录文件，避免误入库");
         return;
       }
       const file = supported[0]!;
@@ -3121,7 +3147,7 @@ export function LibraryPage() {
 
   const requestReferenceImport = useCallback(() => {
     if (!isDesktopRuntime()) {
-      setMessage("浏览器预览不会导入文献库文件；当前示例文献仍可试用整理、阅读入口和导出。");
+      setMessage("浏览器预览不会批量导入题录文件；当前示例文献仍可试用整理、阅读入口和导出。");
       return;
     }
     refsInputRef.current?.click();
@@ -3136,44 +3162,68 @@ export function LibraryPage() {
   }, []);
 
   return (
-    <div className="library-page">
+    <div
+      className="library-page"
+      onDragEnter={handleQuickDragEnter}
+      onDragOver={handleQuickDragOver}
+      onDragLeave={handleQuickDragLeave}
+      onDragEnd={resetQuickDropState}
+      onDrop={handleQuickDrop}
+    >
       <h1 className="sr-only">文献库</h1>
-      <div
-        className={`library-topbar ${quickDropActive ? "library-topbar--drop-active" : ""}`}
-        onDragEnter={handleQuickDragEnter}
-        onDragOver={handleQuickDragOver}
-        onDragLeave={handleQuickDragLeave}
-        onDragEnd={resetQuickDropState}
-        onDrop={handleQuickDrop}
-      >
-        <div className={`library-command ${quickDropActive ? "library-command--drop-active" : ""}`}>
-          <Input
-            placeholder="快速入库：DOI / arXiv / PDF 链接或拖拽文件到此处..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !isImeComposing(e)) void handleAdd();
-            }}
-            disabled={busy}
-          />
-          <span className="au-kbd">Enter</span>
-          {quickDropActive && (
-            <span className="library-command__drop-hint" role="status">
-              释放导入 PDF / 文献库
-            </span>
-          )}
+      <div className={`library-topbar ${quickDropActive ? "library-topbar--drop-active" : ""}`}>
+        <div className="library-topbar__main">
+          <div className="library-list-header__copy">
+            <span className="library-view-eyebrow">{activeViewLabel}</span>
+            <div className="library-view-title-row">
+              <h2>{viewTitle}</h2>
+              <span>{viewSubtitle}</span>
+            </div>
+          </div>
+          <div className="library-inline-search library-inline-search--header">
+            <input
+              ref={searchInputRef}
+              className="au-input"
+              aria-label={isTrashView ? "搜索回收站文献" : "搜索当前文献结果"}
+              placeholder={isTrashView ? "搜索回收站" : "在结果中搜索"}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (isImeComposing(e)) return;
+                if (e.key === "Escape" && search) {
+                  e.preventDefault();
+                  clearInlineSearch();
+                }
+              }}
+            />
+            {search ? (
+              <button
+                type="button"
+                className="library-inline-search__clear"
+                aria-label="清除文献搜索"
+                title="清除搜索"
+                onClick={clearInlineSearch}
+              >
+                ×
+              </button>
+            ) : (
+              <span className="au-kbd">{findShortcut}</span>
+            )}
+          </div>
         </div>
         <div className="library-topbar__actions">
-          <Button variant="secondary" onClick={requestPdfImport} disabled={busy}>
-            导入 PDF
+          <Button
+            onClick={() => setImportDialogOpen(true)}
+            disabled={busy}
+            title="通过链接、PDF 或题录文件导入文献"
+          >
+            导入文献
           </Button>
-          <Button variant="secondary" onClick={requestReferenceImport} disabled={busy}>
-            导入文献库
-          </Button>
-          <Button onClick={() => void handleAdd()} disabled={busy}>
-            {busy ? "处理中..." : "添加文献"}
-          </Button>
-          <ActionIconButton label="刷新" icon="refresh" onClick={() => void refresh()} />
+          <ActionIconButton
+            label="重新载入本地数据"
+            icon="refresh"
+            onClick={() => void refresh()}
+          />
         </div>
       </div>
       <input
@@ -3213,7 +3263,16 @@ export function LibraryPage() {
       (message === trashUndo.message ||
         workActionBusy === "restore" ||
         message?.startsWith("撤销移入回收站失败，撤销入口仍保留")) ? (
-        <InlineNotice className="library-command__message" message={message}>
+        <InlineNotice
+          className={`library-command__message ${
+            messageLeaving ? "library-command__message--leaving" : ""
+          }`}
+          message={message}
+          onDismiss={() => {
+            setMessageLeaving(false);
+            setMessage(null);
+          }}
+        >
           <span className="library-command__message-text">{message}</span>
           <button
             type="button"
@@ -3227,7 +3286,16 @@ export function LibraryPage() {
           </button>
         </InlineNotice>
       ) : (
-        <InlineNotice className="library-command__message" message={message} />
+        <InlineNotice
+          className={`library-command__message ${
+            messageLeaving ? "library-command__message--leaving" : ""
+          }`}
+          message={message}
+          onDismiss={() => {
+            setMessageLeaving(false);
+            setMessage(null);
+          }}
+        />
       )}
 
       {selectedIds.size > 0 && (
@@ -3377,46 +3445,6 @@ export function LibraryPage() {
 
       <div className="app-workspace">
         <div className="library-main">
-          <div className="library-list-header">
-            <div className="library-list-header__copy">
-              <span className="library-view-eyebrow">{activeViewLabel}</span>
-              <div className="library-view-title-row">
-                <h2>{viewTitle}</h2>
-                <span>{viewSubtitle}</span>
-              </div>
-            </div>
-            <div className="library-inline-search library-inline-search--header">
-              <input
-                ref={searchInputRef}
-                className="au-input"
-                aria-label={isTrashView ? "搜索回收站文献" : "搜索当前文献结果"}
-                placeholder={isTrashView ? "搜索回收站" : "在结果中搜索"}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (isImeComposing(e)) return;
-                  if (e.key === "Escape" && search) {
-                    e.preventDefault();
-                    clearInlineSearch();
-                  }
-                }}
-              />
-              {search ? (
-                <button
-                  type="button"
-                  className="library-inline-search__clear"
-                  aria-label="清除文献搜索"
-                  title="清除搜索"
-                  onClick={clearInlineSearch}
-                >
-                  ×
-                </button>
-              ) : (
-                <span className="au-kbd">{findShortcut}</span>
-              )}
-            </div>
-          </div>
-
           {isTrashView ? (
             <div className="library-refinebar library-refinebar--trash">
               <span>已删除文献</span>
@@ -3477,11 +3505,13 @@ export function LibraryPage() {
                     </select>
                   </label>
                   <button
-                    className="library-filter-button library-filter-button--quiet"
+                    className="library-filter-button library-filter-button--compact"
                     type="button"
                     onClick={() => setTagManagerIntent("manage")}
+                    aria-label="管理标签"
+                    title="管理标签"
                   >
-                    管理标签
+                    管理
                   </button>
                   <button
                     className={`library-filter-button ${
@@ -3489,23 +3519,28 @@ export function LibraryPage() {
                     }`}
                     type="button"
                     onClick={() => setAdvancedFilterOpen(true)}
+                    aria-label={`更多筛选${advancedFacetCount > 0 ? `，已启用 ${advancedFacetCount} 项` : ""}`}
                   >
-                    更多筛选{advancedFacetCount > 0 ? ` ${advancedFacetCount}` : ""}
+                    筛选{advancedFacetCount > 0 ? ` ${advancedFacetCount}` : ""}
                   </button>
+                  <span className="library-refinebar__divider" aria-hidden="true" />
                   <button
-                    className="library-filter-button"
+                    className="library-filter-button library-filter-button--sort"
                     type="button"
                     onClick={() => setSortMode(sortMode === "year" ? "added" : "year")}
+                    aria-label={`当前按${sortMode === "year" ? "发表时间" : "添加时间"}排序，点击切换`}
                   >
+                    <span>排序</span>
                     {sortMode === "year" ? "发表时间" : "添加时间"}
                   </button>
                   {hasActiveLibraryFilter && (
                     <button
-                      className="library-filter-button library-filter-button--quiet"
+                      className="library-filter-button library-filter-button--compact"
                       type="button"
                       onClick={clearLibraryView}
+                      aria-label="清除所有筛选条件"
                     >
-                      重置
+                      清除
                     </button>
                   )}
                   <button
@@ -3519,6 +3554,7 @@ export function LibraryPage() {
                       setExtraFilter(null);
                       setSelectedIds(new Set());
                     }}
+                    title="查看回收站"
                   >
                     回收站
                   </button>
@@ -3584,8 +3620,7 @@ export function LibraryPage() {
               <LibraryOnboardingEmpty
                 busy={busy}
                 previewMode={!isDesktopRuntime()}
-                onImportPdf={requestPdfImport}
-                onImportRefs={requestReferenceImport}
+                onOpenImport={() => setImportDialogOpen(true)}
                 onTryExample={fillExamplePaper}
                 onOpenSettings={() => navigate("/settings?section=ai")}
                 onOpenFlashcards={() => navigate("/flashcards")}
@@ -3838,6 +3873,27 @@ export function LibraryPage() {
         </Suspense>
       )}
 
+      {importDialogOpen && (
+        <LibraryImportDialog
+          value={input}
+          busy={busy}
+          onValueChange={setInput}
+          onClose={() => setImportDialogOpen(false)}
+          onImportIdentifier={(value) => {
+            setImportDialogOpen(false);
+            void handleAdd(value);
+          }}
+          onImportPdf={() => {
+            setImportDialogOpen(false);
+            requestPdfImport();
+          }}
+          onImportReferences={() => {
+            setImportDialogOpen(false);
+            requestReferenceImport();
+          }}
+        />
+      )}
+
       {collectionManagerOpen && (
         <CollectionManager
           collections={collections}
@@ -4007,14 +4063,14 @@ function ImportPreviewDialog({
         <div className="library-modal__head">
           <div>
             <Badge variant="accent">待确认</Badge>
-            <h2 id={titleId}>导入文献库</h2>
+            <h2 id={titleId}>批量导入题录</h2>
           </div>
           <button
             type="button"
             className="library-modal__close"
             onClick={requestClose}
-            aria-label="关闭导入文献库"
-            title="关闭导入文献库"
+            aria-label="关闭批量导入题录"
+            title="关闭批量导入题录"
             disabled={importing}
           >
             ×
@@ -4032,7 +4088,7 @@ function ImportPreviewDialog({
         )}
         {importing && (
           <p className="reference-import-preview__status" role="status" aria-live="polite">
-            正在导入文献库...
+            正在导入题录...
           </p>
         )}
         <div className="library-modal-actions reference-import-preview__actions">
@@ -4083,16 +4139,14 @@ function LibraryLoadErrorState({
 function LibraryOnboardingEmpty({
   busy,
   previewMode,
-  onImportPdf,
-  onImportRefs,
+  onOpenImport,
   onTryExample,
   onOpenSettings,
   onOpenFlashcards,
 }: {
   busy: boolean;
   previewMode: boolean;
-  onImportPdf: () => void;
-  onImportRefs: () => void;
+  onOpenImport: () => void;
   onTryExample: () => void;
   onOpenSettings: () => void;
   onOpenFlashcards: () => void;
@@ -4106,14 +4160,11 @@ function LibraryOnboardingEmpty({
         <h3>把第一篇论文放进工作台</h3>
         <p>
           从 PDF、DOI、arXiv 或 BibTeX/RIS/NBIB/ENW
-          文献库开始；入库后可以直接进入阅读、生成重点和闪卡。
+          题录文件开始；入库后可以直接进入阅读、生成重点和闪卡。
         </p>
         <div className="library-onboarding-actions">
-          <Button onClick={onImportPdf} disabled={busy}>
-            导入 PDF
-          </Button>
-          <Button variant="secondary" onClick={onImportRefs} disabled={busy}>
-            导入文献库
+          <Button onClick={onOpenImport} disabled={busy}>
+            导入文献
           </Button>
           <Button variant="secondary" onClick={onTryExample} disabled={busy}>
             填入 arXiv 示例
@@ -4147,6 +4198,157 @@ function LibraryOnboardingEmpty({
         </div>
       </div>
     </section>
+  );
+}
+
+function LibraryImportDialog({
+  value,
+  busy,
+  onValueChange,
+  onClose,
+  onImportIdentifier,
+  onImportPdf,
+  onImportReferences,
+}: {
+  value: string;
+  busy: boolean;
+  onValueChange: (value: string) => void;
+  onClose: () => void;
+  onImportIdentifier: (value: string) => void;
+  onImportPdf: () => void;
+  onImportReferences: () => void;
+}) {
+  const [method, setMethod] = useState<ImportMethod>("identifier");
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const identifierInputRef = useRef<HTMLInputElement | null>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+  const canSubmitIdentifier = Boolean(value.trim()) && !busy;
+
+  useModalFocusTrap(dialogRef, {
+    initialFocusSelector: "[data-autofocus]",
+    onEscape: onClose,
+  });
+
+  const selectMethod = (nextMethod: ImportMethod) => {
+    setMethod(nextMethod);
+    if (nextMethod === "identifier") {
+      window.requestAnimationFrame(() => identifierInputRef.current?.focus());
+    }
+  };
+
+  return (
+    <div className="library-modal-overlay" role="presentation" onMouseDown={onClose}>
+      <section
+        ref={dialogRef}
+        aria-describedby={descriptionId}
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="library-modal library-import-modal"
+        data-modal-root="true"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="library-modal__head">
+          <div>
+            <Badge variant="accent">Add to library</Badge>
+            <h2 id={titleId}>导入文献</h2>
+            <p className="library-modal__subhead" id={descriptionId}>
+              选择一种来源；识别完成后仍会进入确认流程，不会直接写入文献库。
+            </p>
+          </div>
+          <button
+            type="button"
+            className="library-modal__close"
+            onClick={onClose}
+            aria-label="关闭导入文献"
+            title="关闭导入文献"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="library-import-methods" role="group" aria-label="选择导入方式">
+          {(
+            [
+              ["identifier", "标识符或链接", "DOI、arXiv、标题或网页"],
+              ["pdf", "本地 PDF", "识别元数据并保存全文"],
+              ["references", "题录文件", "从 Zotero、EndNote 批量导入"],
+            ] as const
+          ).map(([methodId, label, description]) => (
+            <button
+              key={methodId}
+              type="button"
+              className={method === methodId ? "library-import-method--active" : ""}
+              aria-pressed={method === methodId}
+              onClick={() => selectMethod(methodId)}
+            >
+              <strong>{label}</strong>
+              <span>{description}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="library-import-panel">
+          {method === "identifier" && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (canSubmitIdentifier) onImportIdentifier(value.trim());
+              }}
+            >
+              <label htmlFor="library-import-identifier">DOI、arXiv、标题或出版商链接</label>
+              <div className="library-import-panel__input-row">
+                <input
+                  ref={identifierInputRef}
+                  id="library-import-identifier"
+                  className="au-input"
+                  data-autofocus="true"
+                  placeholder="例如 10.1038/s41586-021-03819-2"
+                  value={value}
+                  onChange={(event) => onValueChange(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && isImeComposing(event)) event.preventDefault();
+                  }}
+                  disabled={busy}
+                />
+                <Button type="submit" disabled={!canSubmitIdentifier} aria-busy={busy}>
+                  {busy ? "识别中…" : "识别并继续"}
+                </Button>
+              </div>
+              <p>适合单篇文献；系统会自动识别来源并补全元数据。</p>
+            </form>
+          )}
+
+          {method === "pdf" && (
+            <div className="library-import-panel__file">
+              <div>
+                <strong>选择一篇 PDF</strong>
+                <span>解析标题、作者和 DOI，并将原文件作为全文附件保存。</span>
+              </div>
+              <Button type="button" onClick={onImportPdf} data-autofocus="true">
+                选择 PDF 文件
+              </Button>
+            </div>
+          )}
+
+          {method === "references" && (
+            <div className="library-import-panel__file">
+              <div>
+                <strong>选择题录文件</strong>
+                <span>支持 {REFERENCE_IMPORT_FORMAT_LABEL}，导入前会预览数量并自动去重。</span>
+              </div>
+              <Button type="button" onClick={onImportReferences} data-autofocus="true">
+                选择题录文件
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <p className="library-import-modal__drop-note">也可以关闭弹窗，直接把文件拖到文献库窗口中。</p>
+      </section>
+    </div>
   );
 }
 
