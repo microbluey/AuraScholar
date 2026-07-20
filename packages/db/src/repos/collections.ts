@@ -84,9 +84,15 @@ export class CollectionsRepo {
     if (parentId) await this.assertActiveCollection(parentId);
     const id = newId();
     const now = Date.now();
+    const nextOrderRows = await this.db.query<{ next_order: number }>(
+      `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+       FROM collections
+       WHERE deleted_at IS NULL AND parent_id IS ?`,
+      [parentId ?? null],
+    );
     await this.db.run(
-      `INSERT INTO collections (id, name, parent_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)`,
-      [id, trimmed, parentId ?? null, now, now],
+      `INSERT INTO collections (id, name, parent_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, trimmed, parentId ?? null, nextOrderRows[0]?.next_order ?? 0, now, now],
     );
     return id;
   }
@@ -99,8 +105,75 @@ export class CollectionsRepo {
        LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
        WHERE c.deleted_at IS NULL
        GROUP BY c.id, c.name, c.parent_id, c.sort_order
-       ORDER BY c.name`,
+       ORDER BY c.sort_order, c.name, c.id`,
     );
+  }
+
+  /** Moves a folder within the tree. position is zero-based among the target siblings. */
+  async move(id: string, parentId: string | null, position: number): Promise<void> {
+    return this.withWriteLock(() => this.moveUnlocked(id, parentId, position));
+  }
+
+  private async moveUnlocked(id: string, parentId: string | null, position: number): Promise<void> {
+    await this.withSavepoint(`collections_move_${newId().replace(/-/g, "_")}`, async () => {
+      const rows = await this.db.query<{
+        id: string;
+        name: string;
+        parent_id: string | null;
+        sort_order: number;
+      }>(
+        `SELECT id, name, parent_id, sort_order
+         FROM collections
+         WHERE deleted_at IS NULL
+         ORDER BY sort_order, name, id`,
+      );
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      const moving = byId.get(id);
+      if (!moving) throw new Error(`Collection ${id} is missing or removed`);
+      if (parentId === id) throw new Error("文件夹不能移动到自身");
+      if (parentId && !byId.has(parentId)) {
+        throw new Error(`Collection ${parentId} is missing or removed`);
+      }
+
+      let cursor = parentId;
+      const seen = new Set<string>();
+      while (cursor) {
+        if (cursor === id) throw new Error("文件夹不能移动到自己的子文件夹中");
+        if (seen.has(cursor)) throw new Error("文件夹层级存在循环");
+        seen.add(cursor);
+        cursor = byId.get(cursor)?.parent_id ?? null;
+      }
+
+      const targetSiblings = rows.filter((row) => row.id !== id && row.parent_id === parentId);
+      const targetPosition = Math.max(
+        0,
+        Math.min(
+          Number.isFinite(position) ? Math.trunc(position) : targetSiblings.length,
+          targetSiblings.length,
+        ),
+      );
+      targetSiblings.splice(targetPosition, 0, { ...moving, parent_id: parentId });
+
+      const previousSiblings =
+        moving.parent_id === parentId
+          ? []
+          : rows.filter((row) => row.id !== id && row.parent_id === moving.parent_id);
+      const now = Date.now();
+      for (const [index, row] of previousSiblings.entries()) {
+        await this.db.run(
+          `UPDATE collections SET sort_order = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+          [index, now, row.id],
+        );
+      }
+      for (const [index, row] of targetSiblings.entries()) {
+        await this.db.run(
+          `UPDATE collections
+           SET parent_id = ?, sort_order = ?, updated_at = ?
+           WHERE id = ? AND deleted_at IS NULL`,
+          [parentId, index, now, row.id],
+        );
+      }
+    });
   }
 
   async rename(id: string, name: string): Promise<void> {
@@ -180,7 +253,9 @@ export class CollectionsRepo {
     collectionId: string | null,
     options: SetWorksCollectionOptions = {},
   ): Promise<number> {
-    return this.withWriteLock(() => this.setWorksCollectionUnlocked(workIds, collectionId, options));
+    return this.withWriteLock(() =>
+      this.setWorksCollectionUnlocked(workIds, collectionId, options),
+    );
   }
 
   private async setWorksCollectionUnlocked(

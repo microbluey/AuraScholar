@@ -52,6 +52,35 @@ pnpm --filter @aurascholar/desktop dev
 - 新功能请附测试;修 bug 请附能复现该 bug 的测试。
 - PR 描述写清楚"为什么",不只是"做了什么"。
 
+### 分支命名
+
+- 新功能分支使用 `feat/<short-description>`。
+- 缺陷修复分支使用 `fix/<short-description>`。
+- `<short-description>` 必须使用简短的英文 kebab-case,例如
+  `feat/library-workspace-redesign` 或 `fix/pdf-render-overflow`。
+
+### Commit Message
+
+提交信息遵循英文 Angular/Conventional Commits 格式:
+
+```text
+<type>(<scope>): <subject>
+```
+
+- `type` 使用 `feat`、`fix`、`docs`、`refactor`、`test`、`chore`、`build`、`ci`、
+  `perf`、`style` 或 `revert`。
+- `scope` 使用受影响的应用或包名,例如 `desktop`、`reader`、`db`;没有明确范围时可以省略。
+- `subject` 使用英文、现在时祈使语气,首字母小写,末尾不加句号。
+- 每个提交只表达一个明确目的;不把无关修改混入同一提交。
+
+示例:
+
+```text
+feat(desktop): refine library import workflow
+fix(reader): prevent annotation panel overflow
+docs: clarify contribution workflow
+```
+
 ## 报告问题
 
 请使用 issue 模板。涉及具体 PDF 的批注/渲染问题,请尽量附上该 PDF 的 DOI 或开放获取链接(不要上传有版权的 PDF 文件)。
