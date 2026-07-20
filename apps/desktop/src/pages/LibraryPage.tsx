@@ -43,12 +43,7 @@ import { writeClipboardText } from "../clipboard";
 import { downloadBlob } from "../download";
 import { isImeComposing } from "../keyboard";
 import { isPlatformShortcut, shortcutLabel } from "../shortcut-labels";
-import {
-  blobPath,
-  sha256Hex,
-  auraFs,
-  isDesktopRuntime,
-} from "../services/aura-platform";
+import { blobPath, sha256Hex, auraFs, isDesktopRuntime } from "../services/aura-platform";
 import { fulltextHandoffPath } from "../services/fulltext";
 import { describeSafeError } from "../services/sensitive-text";
 
@@ -141,6 +136,17 @@ interface LibraryViewDetail {
   filter?: LibraryFilter;
   collectionId?: string | null;
   tag?: string | null;
+}
+
+interface MoveCollectionEventDetail {
+  id: string;
+  parentId: string | null;
+  position: number;
+}
+
+interface CollectionContextActionEventDetail {
+  id: string;
+  name: string;
 }
 
 interface CreateCollectionEventDetail {
@@ -373,7 +379,7 @@ const PREVIEW_LIBRARY_COLLECTIONS: CollectionRow[] = [
     id: "preview-life-science",
     name: "生命科学",
     parent_id: null,
-    sort_order: 0,
+    sort_order: 1,
     count: 1,
   },
 ];
@@ -984,8 +990,7 @@ export function LibraryPage() {
     if (tone === "busy") return;
     const hasUndoAction = Boolean(
       trashUndo &&
-        (message === trashUndo.message ||
-          message.startsWith("撤销移入回收站失败，撤销入口仍保留")),
+      (message === trashUndo.message || message.startsWith("撤销移入回收站失败，撤销入口仍保留")),
     );
     let duration = 4_500;
     if (tone === "warning") duration = 6_500;
@@ -1043,7 +1048,7 @@ export function LibraryPage() {
            LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
            WHERE c.deleted_at IS NULL
            GROUP BY c.id, c.name, c.parent_id, c.sort_order
-           ORDER BY c.name`,
+           ORDER BY c.sort_order, c.name, c.id`,
         ),
         db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
       ]);
@@ -1260,59 +1265,64 @@ export function LibraryPage() {
     [refresh],
   );
 
-  const handleAdd = useCallback(async (rawInput = input) => {
-    const normalizedInput = rawInput.trim();
-    if (!normalizedInput || busy) return;
-    if (!isDesktopRuntime()) {
-      const startedAt = Date.now();
-      setBusy(true);
-      setMessage("正在演示快速入库...");
-      try {
-        const matched = findPreviewImportWork(normalizedInput);
-        await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_BUSY_MS);
-        if (!matched) {
-          setMessage("浏览器预览支持样例 DOI、arXiv、标题或作者定位；真实解析请在桌面应用中完成。");
-          return;
+  const handleAdd = useCallback(
+    async (rawInput = input) => {
+      const normalizedInput = rawInput.trim();
+      if (!normalizedInput || busy) return;
+      if (!isDesktopRuntime()) {
+        const startedAt = Date.now();
+        setBusy(true);
+        setMessage("正在演示快速入库...");
+        try {
+          const matched = findPreviewImportWork(normalizedInput);
+          await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_BUSY_MS);
+          if (!matched) {
+            setMessage(
+              "浏览器预览支持样例 DOI、arXiv、标题或作者定位；真实解析请在桌面应用中完成。",
+            );
+            return;
+          }
+          setInput("");
+          setSearch("");
+          setActiveFilter("all");
+          setActiveCollection(null);
+          setActiveTag(null);
+          setActiveSource(null);
+          setExtraFilter(null);
+          setItems(PREVIEW_LIBRARY_WORKS);
+          setWorkMeta(PREVIEW_LIBRARY_META);
+          setTrashCount(0);
+          setSelectedIds(new Set());
+          setSelectedWorkId(matched.id);
+          const matchedIndex = PREVIEW_LIBRARY_WORKS.findIndex((work) => work.id === matched.id);
+          setPage(Math.max(0, Math.floor(matchedIndex / PAGE_SIZE)));
+          setMessage(`已在预览文献库中定位《${matched.title}》，可继续打开阅读器或补全文。`);
+        } finally {
+          setBusy(false);
         }
-        setInput("");
-        setSearch("");
-        setActiveFilter("all");
-        setActiveCollection(null);
-        setActiveTag(null);
-        setActiveSource(null);
-        setExtraFilter(null);
-        setItems(PREVIEW_LIBRARY_WORKS);
-        setWorkMeta(PREVIEW_LIBRARY_META);
-        setTrashCount(0);
-        setSelectedIds(new Set());
-        setSelectedWorkId(matched.id);
-        const matchedIndex = PREVIEW_LIBRARY_WORKS.findIndex((work) => work.id === matched.id);
-        setPage(Math.max(0, Math.floor(matchedIndex / PAGE_SIZE)));
-        setMessage(`已在预览文献库中定位《${matched.title}》，可继续打开阅读器或补全文。`);
+        return;
+      }
+      setBusy(true);
+      setMessage("正在识别…");
+      try {
+        const { analyzeInput } = await import("../services/library");
+        const draft = await analyzeInput(normalizedInput);
+        if (!draft) {
+          setMessage("无法识别输入 — 请提供 DOI、arXiv ID、论文链接或标题");
+        } else if (await surfaceDedup(draft)) {
+          setInput("");
+        } else {
+          setConfirmDraft(draft);
+          setInput("");
+        }
+      } catch (e) {
+        setMessage(`解析失败:${describeSafeError(e)}`);
       } finally {
         setBusy(false);
       }
-      return;
-    }
-    setBusy(true);
-    setMessage("正在识别…");
-    try {
-      const { analyzeInput } = await import("../services/library");
-      const draft = await analyzeInput(normalizedInput);
-      if (!draft) {
-        setMessage("无法识别输入 — 请提供 DOI、arXiv ID、论文链接或标题");
-      } else if (await surfaceDedup(draft)) {
-        setInput("");
-      } else {
-        setConfirmDraft(draft);
-        setInput("");
-      }
-    } catch (e) {
-      setMessage(`解析失败:${describeSafeError(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [input, busy, surfaceDedup]);
+    },
+    [input, busy, surfaceDedup],
+  );
 
   const handleUpload = useCallback(
     async (file: File) => {
@@ -1625,6 +1635,30 @@ export function LibraryPage() {
     }
   }, [collectionAction, collectionDeleteUndo, refresh]);
 
+  const handleMoveFolder = useCallback(
+    async ({ id, parentId, position }: MoveCollectionEventDetail) => {
+      const folder = collections.find((collection) => collection.id === id);
+      if (!folder) return;
+      if (!isDesktopRuntime()) {
+        setCollections((current) => moveCollectionRows(current, { id, parentId, position }));
+        setMessage(`已移动文件夹「${folder.name}」`);
+        return;
+      }
+      try {
+        const db = await getDb();
+        const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
+        await new CollectionsRepo(db).move(id, parentId, position);
+        setMessage(`已移动文件夹「${folder.name}」`);
+        await refresh();
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      } catch (error) {
+        setMessage(`移动文件夹失败，原有层级未改变:${describeSafeError(error)}`);
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      }
+    },
+    [collections, refresh],
+  );
+
   useEffect(() => {
     const onLibraryView = (event: Event) => {
       const detail = (event as CustomEvent<LibraryViewDetail>).detail ?? {};
@@ -1647,21 +1681,42 @@ export function LibraryPage() {
       setCollectionDeleteUndo(null);
       setCollectionManagerOpen(true);
     };
+    const onMoveCollection = (event: Event) => {
+      const detail = (event as CustomEvent<MoveCollectionEventDetail>).detail;
+      if (!detail?.id) return;
+      void handleMoveFolder(detail);
+    };
+    const onRenameCollection = (event: Event) => {
+      const detail = (event as CustomEvent<CollectionContextActionEventDetail>).detail;
+      if (!detail?.id) return;
+      void handleRenameFolder(detail.id, detail.name);
+    };
+    const onDeleteCollection = (event: Event) => {
+      const detail = (event as CustomEvent<CollectionContextActionEventDetail>).detail;
+      if (!detail?.id) return;
+      void handleDeleteFolder(detail.id, detail.name);
+    };
     const onCreateTag = () => setTagManagerIntent("create");
     const onManageTags = () => setTagManagerIntent("manage");
     window.addEventListener("aurascholar:library-view", onLibraryView);
     window.addEventListener("aurascholar:create-collection", onCreateCollection);
     window.addEventListener("aurascholar:manage-collections", onManageCollections);
+    window.addEventListener("aurascholar:move-collection", onMoveCollection);
+    window.addEventListener("aurascholar:rename-collection", onRenameCollection);
+    window.addEventListener("aurascholar:delete-collection", onDeleteCollection);
     window.addEventListener("aurascholar:create-tag", onCreateTag);
     window.addEventListener("aurascholar:manage-tags", onManageTags);
     return () => {
       window.removeEventListener("aurascholar:library-view", onLibraryView);
       window.removeEventListener("aurascholar:create-collection", onCreateCollection);
       window.removeEventListener("aurascholar:manage-collections", onManageCollections);
+      window.removeEventListener("aurascholar:move-collection", onMoveCollection);
+      window.removeEventListener("aurascholar:rename-collection", onRenameCollection);
+      window.removeEventListener("aurascholar:delete-collection", onDeleteCollection);
       window.removeEventListener("aurascholar:create-tag", onCreateTag);
       window.removeEventListener("aurascholar:manage-tags", onManageTags);
     };
-  }, [handleNewFolder]);
+  }, [handleDeleteFolder, handleMoveFolder, handleNewFolder, handleRenameFolder]);
 
   useEffect(() => {
     if (!requestedWorkId) return;
@@ -1810,13 +1865,6 @@ export function LibraryPage() {
     sortMode === "year" ? "按发表时间" : "按添加时间",
   ].filter(Boolean);
   const viewSubtitle = viewMetaParts.join(" · ");
-  const activeViewLabel = activeCollectionRow
-    ? `文件夹 / ${activeCollectionPath.map((collection) => collection.name).join(" / ")}`
-    : isTrashView
-      ? "文献库 / 回收站"
-      : activeFilter === "all"
-        ? "文献库 / 全部文献"
-        : "文献库 / 阅读状态";
   const plainEmptyTitle = hasSearchQuery
     ? "当前筛选无结果"
     : isTrashView
@@ -1843,7 +1891,7 @@ export function LibraryPage() {
   }, [pageSomeSelected]);
 
   const selectedWork = useMemo(
-    () => tableRows.find((w) => w.id === selectedWorkId) ?? tableRows[0] ?? null,
+    () => tableRows.find((w) => w.id === selectedWorkId) ?? null,
     [tableRows, selectedWorkId],
   );
   const editingPreviewWork = useMemo(() => {
@@ -2222,8 +2270,8 @@ export function LibraryPage() {
       }
       setPage(0);
     }
-    if (!selectedWorkId || !tableRows.some((w) => w.id === selectedWorkId)) {
-      setSelectedWorkId(tableRows[0]?.id ?? null);
+    if (selectedWorkId && !tableRows.some((w) => w.id === selectedWorkId)) {
+      setSelectedWorkId(null);
     }
   }, [tableRows, selectedWorkId]);
 
@@ -2400,6 +2448,18 @@ export function LibraryPage() {
       });
     }
   }, []);
+
+  const closeSelectedWork = useCallback(() => {
+    const closingWorkId = selectedWorkId;
+    setSelectedWorkId(null);
+    if (!closingWorkId) return;
+    requestAnimationFrame(() => {
+      const row = Array.from(document.querySelectorAll<HTMLElement>("[data-library-row-id]")).find(
+        (candidate) => candidate.dataset.libraryRowId === closingWorkId,
+      );
+      row?.focus({ preventScroll: true });
+    });
+  }, [selectedWorkId]);
 
   const openReader = useCallback(
     (work: WorkWithAuthors) => {
@@ -3132,6 +3192,15 @@ export function LibraryPage() {
     setSelectedIds(new Set());
   }, []);
 
+  const openBreadcrumbCollection = useCallback((collectionId: string) => {
+    setActiveFilter("all");
+    setActiveCollection(collectionId);
+    setActiveTag(null);
+    setActiveSource(null);
+    setExtraFilter(null);
+    setSelectedIds(new Set());
+  }, []);
+
   const clearInlineSearch = useCallback(() => {
     setSearch("");
     searchInputRef.current?.focus();
@@ -3171,10 +3240,64 @@ export function LibraryPage() {
       onDrop={handleQuickDrop}
     >
       <h1 className="sr-only">文献库</h1>
-      <div className={`library-topbar ${quickDropActive ? "library-topbar--drop-active" : ""}`}>
+      <div
+        className={`library-topbar ${
+          selectedWork ? "library-topbar--detail-open" : "library-topbar--detail-closed"
+        } ${quickDropActive ? "library-topbar--drop-active" : ""}`}
+      >
         <div className="library-topbar__main">
           <div className="library-list-header__copy">
-            <span className="library-view-eyebrow">{activeViewLabel}</span>
+            <nav className="library-breadcrumb" aria-label="当前位置">
+              {isTrashView ? (
+                <span className="library-breadcrumb__current" aria-current="page">
+                  回收站
+                </span>
+              ) : activeCollectionRow ? (
+                <>
+                  <button type="button" onClick={clearLibraryView}>
+                    全部文献
+                  </button>
+                  {activeCollectionPath.map((collection, index) => {
+                    const isCurrent = index === activeCollectionPath.length - 1;
+                    return (
+                      <span className="library-breadcrumb__item" key={collection.id}>
+                        <span className="library-breadcrumb__separator" aria-hidden="true">
+                          /
+                        </span>
+                        {isCurrent ? (
+                          <span className="library-breadcrumb__current" aria-current="page">
+                            {collection.name}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openBreadcrumbCollection(collection.id)}
+                          >
+                            {collection.name}
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </>
+              ) : activeFilter !== "all" ? (
+                <>
+                  <button type="button" onClick={clearLibraryView}>
+                    全部文献
+                  </button>
+                  <span className="library-breadcrumb__separator" aria-hidden="true">
+                    /
+                  </span>
+                  <span className="library-breadcrumb__current" aria-current="page">
+                    阅读状态
+                  </span>
+                </>
+              ) : (
+                <span className="library-breadcrumb__current" aria-current="page">
+                  全部文献
+                </span>
+              )}
+            </nav>
             <div className="library-view-title-row">
               <h2>{viewTitle}</h2>
               <span>{viewSubtitle}</span>
@@ -3443,7 +3566,11 @@ export function LibraryPage() {
         </div>
       )}
 
-      <div className="app-workspace">
+      <div
+        className={`app-workspace ${
+          selectedWork ? "app-workspace--detail-open" : "app-workspace--detail-closed"
+        }`}
+      >
         <div className="library-main">
           {isTrashView ? (
             <div className="library-refinebar library-refinebar--trash">
@@ -3781,74 +3908,68 @@ export function LibraryPage() {
           )}
         </div>
 
-        <aside ref={contextPanelRef} className="app-context-panel">
-          <SelectedWorkPanel
-            key={selectedWork?.id ?? "empty"}
-            work={selectedWork}
-            meta={selectedMeta}
-            tableMeta={selectedWork ? workMeta[selectedWork.id] : undefined}
-            isTrashView={isTrashView}
-            generating={generating}
-            attachingPdf={attachingPdf}
-            workActionBusy={workActionBusy}
-            starActionBusyTarget={selectedWork ? starActionBusyById[selectedWork.id] : undefined}
-            readingStatusBusyTarget={
-              selectedWork && readingStatusBusy?.workId === selectedWork.id
-                ? readingStatusBusy.status
-                : undefined
-            }
-            onOpenReader={() => {
-              if (selectedWork) openReader(selectedWork);
+        {selectedWork && (
+          <aside
+            ref={contextPanelRef}
+            className="app-context-panel"
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              closeSelectedWork();
             }}
-            onRestoreWork={() => {
-              if (selectedWork) void restoreWorks([selectedWork.id]);
-            }}
-            onPurgeWork={() => {
-              if (selectedWork) void purgeWorks([selectedWork.id]);
-            }}
-            onDeleteWork={() => void deleteSelectedWork()}
-            onToggleStar={() => {
-              if (selectedWork) void updateWorkStarred(selectedWork, selectedWork.starred !== 1);
-            }}
-            onSetReadingStatus={(status) => void updateSelectedReadingStatus(status)}
-            onUploadPdf={requestSelectedPdfUpload}
-            onFindFulltext={() => void handleFindFulltext()}
-            findingFulltext={findingFulltext}
-            onGenerateFlashcards={() => void generateForSelected()}
-            onOpenFlashcards={() => {
-              if (!selectedWork) {
-                navigate("/flashcards");
-                return;
+          >
+            <SelectedWorkPanel
+              key={selectedWork.id}
+              work={selectedWork}
+              meta={selectedMeta}
+              tableMeta={workMeta[selectedWork.id]}
+              isTrashView={isTrashView}
+              generating={generating}
+              attachingPdf={attachingPdf}
+              workActionBusy={workActionBusy}
+              starActionBusyTarget={starActionBusyById[selectedWork.id]}
+              readingStatusBusyTarget={
+                readingStatusBusy?.workId === selectedWork.id ? readingStatusBusy.status : undefined
               }
-              const params = new URLSearchParams({
-                work: selectedWork.id,
-                title: selectedWork.title,
-              });
-              navigate(`/flashcards?${params.toString()}`);
-            }}
-            onOpenAiSettings={() => navigate("/settings?section=ai")}
-            onOpenGraph={() => {
-              if (!isDesktopRuntime()) {
-                const graphKey = selectedWork?.doi ?? selectedWork?.arxiv_id;
-                if (graphKey) {
-                  navigate(`/graph?doi=${encodeURIComponent(graphKey)}`);
-                } else {
-                  setMessage("这篇文献没有 DOI 或 arXiv ID，暂时无法打开引文图谱");
+              onClose={closeSelectedWork}
+              onOpenReader={() => openReader(selectedWork)}
+              onRestoreWork={() => void restoreWorks([selectedWork.id])}
+              onPurgeWork={() => void purgeWorks([selectedWork.id])}
+              onDeleteWork={() => void deleteSelectedWork()}
+              onToggleStar={() => void updateWorkStarred(selectedWork, selectedWork.starred !== 1)}
+              onSetReadingStatus={(status) => void updateSelectedReadingStatus(status)}
+              onUploadPdf={requestSelectedPdfUpload}
+              onFindFulltext={() => void handleFindFulltext()}
+              findingFulltext={findingFulltext}
+              onGenerateFlashcards={() => void generateForSelected()}
+              onOpenFlashcards={() => {
+                const params = new URLSearchParams({
+                  work: selectedWork.id,
+                  title: selectedWork.title,
+                });
+                navigate(`/flashcards?${params.toString()}`);
+              }}
+              onOpenAiSettings={() => navigate("/settings?section=ai")}
+              onOpenGraph={() => {
+                if (!isDesktopRuntime()) {
+                  const graphKey = selectedWork.doi ?? selectedWork.arxiv_id;
+                  if (graphKey) {
+                    navigate(`/graph?doi=${encodeURIComponent(graphKey)}`);
+                  } else {
+                    setMessage("这篇文献没有 DOI 或 arXiv ID，暂时无法打开引文图谱");
+                  }
+                  return;
                 }
-                return;
-              }
-              if (selectedWork?.doi) {
-                navigate(`/graph?doi=${encodeURIComponent(selectedWork.doi)}`);
-              } else {
-                setMessage("这篇文献没有 DOI，暂时无法打开引文图谱");
-              }
-            }}
-            onEditMetadata={() => {
-              if (!selectedWork) return;
-              setEditingMetaId(selectedWork.id);
-            }}
-          />
-        </aside>
+                if (selectedWork.doi) {
+                  navigate(`/graph?doi=${encodeURIComponent(selectedWork.doi)}`);
+                } else {
+                  setMessage("这篇文献没有 DOI，暂时无法打开引文图谱");
+                }
+              }}
+              onEditMetadata={() => setEditingMetaId(selectedWork.id)}
+            />
+          </aside>
+        )}
       </div>
 
       {editingMetaId && (
@@ -4346,7 +4467,9 @@ function LibraryImportDialog({
           )}
         </div>
 
-        <p className="library-import-modal__drop-note">也可以关闭弹窗，直接把文件拖到文献库窗口中。</p>
+        <p className="library-import-modal__drop-note">
+          也可以关闭弹窗，直接把文件拖到文献库窗口中。
+        </p>
       </section>
     </div>
   );
@@ -4371,9 +4494,7 @@ function TextPromptDialog({ config, onClose }: { config: TextPromptConfig; onClo
   const trimmed = value.trim();
   const canSubmit = config.allowEmpty || Boolean(trimmed);
   const isColorPicker = config.inputKind === "color";
-  const nativeColorValue = /^#[0-9a-f]{6}$/i.test(trimmed)
-    ? trimmed
-    : TAG_COLOR_OPTIONS[0].value;
+  const nativeColorValue = /^#[0-9a-f]{6}$/i.test(trimmed) ? trimmed : TAG_COLOR_OPTIONS[0].value;
 
   const requestClose = useCallback(() => {
     if (!submitting) onClose();
@@ -4440,12 +4561,20 @@ function TextPromptDialog({ config, onClose }: { config: TextPromptConfig; onClo
         {isColorPicker ? (
           <fieldset className="library-color-picker" disabled={submitting}>
             <legend>{config.label}</legend>
-            <div className="library-color-picker__swatches" role="radiogroup" aria-label={config.label}>
+            <div
+              className="library-color-picker__swatches"
+              role="radiogroup"
+              aria-label={config.label}
+            >
               {TAG_COLOR_OPTIONS.map((option, index) => (
                 <button
                   key={option.value}
                   type="button"
-                  className={trimmed.toLowerCase() === option.value ? "library-color-picker__swatch--active" : ""}
+                  className={
+                    trimmed.toLowerCase() === option.value
+                      ? "library-color-picker__swatch--active"
+                      : ""
+                  }
                   data-autofocus={index === 0 ? "true" : undefined}
                   aria-label={option.label}
                   aria-pressed={trimmed.toLowerCase() === option.value}
@@ -5527,6 +5656,41 @@ function collectionPath(
   return path;
 }
 
+function moveCollectionRows(
+  collections: CollectionRow[],
+  detail: MoveCollectionEventDetail,
+): CollectionRow[] {
+  const moving = collections.find((collection) => collection.id === detail.id);
+  if (!moving) return collections;
+  const targetSiblings = collections
+    .filter((collection) => collection.id !== detail.id && collection.parent_id === detail.parentId)
+    .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, "zh-CN"));
+  const position = Math.max(0, Math.min(Math.trunc(detail.position), targetSiblings.length));
+  targetSiblings.splice(position, 0, { ...moving, parent_id: detail.parentId });
+  const targetOrder = new Map(targetSiblings.map((collection, index) => [collection.id, index]));
+  const previousSiblings = collections
+    .filter(
+      (collection) => collection.id !== detail.id && collection.parent_id === moving.parent_id,
+    )
+    .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, "zh-CN"));
+  const previousOrder = new Map(
+    previousSiblings.map((collection, index) => [collection.id, index]),
+  );
+  return collections.map((collection) => {
+    if (targetOrder.has(collection.id)) {
+      return {
+        ...collection,
+        parent_id: detail.parentId,
+        sort_order: targetOrder.get(collection.id)!,
+      };
+    }
+    if (moving.parent_id !== detail.parentId && previousOrder.has(collection.id)) {
+      return { ...collection, sort_order: previousOrder.get(collection.id)! };
+    }
+    return collection;
+  });
+}
+
 function formatAddedDate(createdAt: number | null | undefined) {
   if (!createdAt) return "—";
   const date = new Date(createdAt);
@@ -5561,6 +5725,7 @@ function SelectedWorkPanel({
   onOpenAiSettings,
   onOpenGraph,
   onEditMetadata,
+  onClose,
 }: {
   work: WorkWithAuthors | null;
   meta: WorkRuntimeMeta | null;
@@ -5585,6 +5750,7 @@ function SelectedWorkPanel({
   onOpenAiSettings: () => void;
   onOpenGraph: () => void;
   onEditMetadata: () => void;
+  onClose: () => void;
 }) {
   const [activePanelTab, setActivePanelTab] = useState<DetailPanelTab>("overview");
 
@@ -5618,14 +5784,25 @@ function SelectedWorkPanel({
         <div className="library-detail au-panel library-detail--selected library-detail--trash">
           <div className="library-panel-heading">
             <span className="library-panel-kicker">回收站文献</span>
-            <button
-              type="button"
-              onClick={onRestoreWork}
-              disabled={Boolean(workActionBusy)}
-              aria-busy={workActionBusy === "restore" ? "true" : undefined}
-            >
-              {workActionBusy === "restore" ? "恢复中..." : "恢复 ›"}
-            </button>
+            <div className="library-panel-actions">
+              <button
+                type="button"
+                onClick={onRestoreWork}
+                disabled={Boolean(workActionBusy)}
+                aria-busy={workActionBusy === "restore" ? "true" : undefined}
+              >
+                {workActionBusy === "restore" ? "恢复中..." : "恢复 ›"}
+              </button>
+              <button
+                type="button"
+                className="library-inspector-close"
+                onClick={onClose}
+                aria-label="关闭文献详情"
+                title="关闭详情"
+              >
+                ×
+              </button>
+            </div>
           </div>
           <h2>{work.title}</h2>
           <p>{authorText}</p>
@@ -5714,6 +5891,15 @@ function SelectedWorkPanel({
                 : work.starred
                   ? "取消重点"
                   : "标为重点"}
+            </button>
+            <button
+              type="button"
+              className="library-inspector-close"
+              onClick={onClose}
+              aria-label="关闭文献详情"
+              title="关闭详情"
+            >
+              ×
             </button>
           </div>
         </div>

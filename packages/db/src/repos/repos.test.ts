@@ -394,9 +394,7 @@ describe("WorksRepo", () => {
     await expect(works.list({ search: `"" !!! ***` })).resolves.toEqual([]);
     await expect(works.listDeleted({ search: `"" !!! ***` })).resolves.toEqual([]);
 
-    expect((await works.list({ search: `"atten"!!!` })).map((row) => row.id)).toEqual([
-      active.id,
-    ]);
+    expect((await works.list({ search: `"atten"!!!` })).map((row) => row.id)).toEqual([active.id]);
     expect((await works.listDeleted({ search: `"deleted"!!!` })).map((row) => row.id)).toEqual([
       deleted.id,
     ]);
@@ -536,12 +534,8 @@ describe("WorksRepo", () => {
     await expect(works.setReadingStatus(id, "read")).rejects.toThrow(
       `Work ${id} is missing or removed`,
     );
-    await expect(works.setStarred(id, true)).rejects.toThrow(
-      `Work ${id} is missing or removed`,
-    );
-    await expect(works.softDelete(id)).rejects.toThrow(
-      `Work ${id} is missing or already removed`,
-    );
+    await expect(works.setStarred(id, true)).rejects.toThrow(`Work ${id} is missing or removed`);
+    await expect(works.softDelete(id)).rejects.toThrow(`Work ${id} is missing or already removed`);
     await expect(works.update("missing-work", { issue: "missing edit" })).rejects.toThrow(
       "Work missing-work is missing or removed",
     );
@@ -809,6 +803,32 @@ describe("CollectionsRepo", () => {
       "Collection missing-parent is missing or removed",
     );
     await expect(collections.create("   ")).rejects.toThrow("分组名称不能为空");
+  });
+
+  it("persists sibling order and supports moving folders across levels", async () => {
+    const first = await collections.create("First");
+    const second = await collections.create("Second");
+    const third = await collections.create("Third");
+
+    await collections.move(third, null, 0);
+    expect(
+      (await collections.list()).filter((row) => row.parent_id === null).map((row) => row.id),
+    ).toEqual([third, first, second]);
+
+    await collections.move(second, first, 0);
+    const nested = await collections.list();
+    expect(nested.find((row) => row.id === second)?.parent_id).toBe(first);
+    expect(nested.find((row) => row.id === second)?.sort_order).toBe(0);
+  });
+
+  it("rejects collection moves that would create a hierarchy cycle", async () => {
+    const parent = await collections.create("Parent");
+    const child = await collections.create("Child", parent);
+
+    await expect(collections.move(parent, child, 0)).rejects.toThrow(
+      "文件夹不能移动到自己的子文件夹中",
+    );
+    await expect(collections.move(parent, parent, 0)).rejects.toThrow("文件夹不能移动到自身");
   });
 
   it("restores a deleted collection with its previous works", async () => {

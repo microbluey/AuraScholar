@@ -4,7 +4,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { ThemeToggle } from "@aurascholar/ui";
@@ -37,7 +39,13 @@ interface LibraryShellStats {
   annotations: number;
   flashcards: number;
   snippets: number;
-  collections: Array<{ id: string; name: string; count: number; parentId: string | null }>;
+  collections: Array<{
+    id: string;
+    name: string;
+    count: number;
+    parentId: string | null;
+    sortOrder: number;
+  }>;
   tags: Array<{ name: string; color: string | null; count: number }>;
 }
 
@@ -51,14 +59,15 @@ const PREVIEW_LIBRARY_STATS: LibraryShellStats = {
   flashcards: 30,
   snippets: 5,
   collections: [
-    { id: "preview-projects", name: "研究项目", count: 1, parentId: null },
+    { id: "preview-projects", name: "研究项目", count: 1, parentId: null, sortOrder: 0 },
     {
       id: "preview-transformer",
       name: "Transformer 综述",
       count: 2,
       parentId: "preview-projects",
+      sortOrder: 0,
     },
-    { id: "preview-life-science", name: "生命科学", count: 1, parentId: null },
+    { id: "preview-life-science", name: "生命科学", count: 1, parentId: null, sortOrder: 1 },
   ],
   tags: [
     { name: "Transformer", color: "#7566f0", count: 1 },
@@ -72,6 +81,12 @@ interface LibraryViewDetail {
   filter?: "all" | "reading" | "unread" | "noted" | "starred" | "trash";
   collectionId?: string | null;
   tag?: string | null;
+}
+
+interface LibraryCollectionMoveDetail {
+  id: string;
+  parentId: string | null;
+  position: number;
 }
 
 type LibraryViewState = Required<LibraryViewDetail>;
@@ -472,14 +487,20 @@ export function App() {
            JOIN works w ON w.id = s.work_id AND w.deleted_at IS NULL
            WHERE s.deleted_at IS NULL`,
         ),
-        db.query<{ id: string; name: string; parent_id: string | null; count: number }>(
-          `SELECT c.id, c.name, c.parent_id, COUNT(w.id) AS count
+        db.query<{
+          id: string;
+          name: string;
+          parent_id: string | null;
+          sort_order: number;
+          count: number;
+        }>(
+          `SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
            FROM collections c
            LEFT JOIN collection_items ci ON ci.collection_id = c.id
            LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
            WHERE c.deleted_at IS NULL
            GROUP BY c.id, c.name, c.parent_id, c.sort_order
-           ORDER BY c.name`,
+           ORDER BY c.sort_order, c.name, c.id`,
         ),
         db.query<{ name: string; color: string | null; count: number }>(
           `SELECT t.name, t.color, COUNT(DISTINCT w.id) AS count
@@ -507,6 +528,7 @@ export function App() {
           name: collection.name,
           count: collection.count,
           parentId: collection.parent_id,
+          sortOrder: collection.sort_order,
         })),
         tags,
       });
@@ -813,9 +835,31 @@ export function App() {
                   }),
                 )
               }
-              onManageCollections={() =>
-                window.dispatchEvent(new Event("aurascholar:manage-collections"))
+              onRenameCollection={(collection) =>
+                window.dispatchEvent(
+                  new CustomEvent("aurascholar:rename-collection", {
+                    detail: { id: collection.id, name: collection.name },
+                  }),
+                )
               }
+              onDeleteCollection={(collection) =>
+                window.dispatchEvent(
+                  new CustomEvent("aurascholar:delete-collection", {
+                    detail: { id: collection.id, name: collection.name },
+                  }),
+                )
+              }
+              onMoveCollection={(detail) => {
+                setLibraryStats((current) =>
+                  current
+                    ? {
+                        ...current,
+                        collections: moveLibraryShellCollection(current.collections, detail),
+                      }
+                    : current,
+                );
+                window.dispatchEvent(new CustomEvent("aurascholar:move-collection", { detail }));
+              }}
             />
           )}
           <div className="app-sidebar__footer">
@@ -1259,16 +1303,79 @@ function buildLibraryCollectionTree(
     if (hasValidParent(collection)) {
       nodes.get(collection.parentId!)!.children.push(node);
     } else {
+      node.parentId = null;
       roots.push(node);
     }
   }
 
   const sortTree = (items: LibraryCollectionTreeNode[]) => {
-    items.sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+    items.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "zh-CN"));
     items.forEach((item) => sortTree(item.children));
   };
   sortTree(roots);
   return roots;
+}
+
+function moveLibraryShellCollection(
+  collections: LibraryShellCollection[],
+  detail: LibraryCollectionMoveDetail,
+): LibraryShellCollection[] {
+  const moving = collections.find((collection) => collection.id === detail.id);
+  if (!moving) return collections;
+  const targetSiblings = collections
+    .filter((collection) => collection.id !== detail.id && collection.parentId === detail.parentId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "zh-CN"));
+  const position = Math.max(0, Math.min(Math.trunc(detail.position), targetSiblings.length));
+  targetSiblings.splice(position, 0, { ...moving, parentId: detail.parentId });
+  const targetOrder = new Map(targetSiblings.map((collection, index) => [collection.id, index]));
+  const previousSiblings = collections
+    .filter((collection) => collection.id !== detail.id && collection.parentId === moving.parentId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "zh-CN"));
+  const previousOrder = new Map(
+    previousSiblings.map((collection, index) => [collection.id, index]),
+  );
+  return collections.map((collection) => {
+    if (targetOrder.has(collection.id)) {
+      return {
+        ...collection,
+        parentId: detail.parentId,
+        sortOrder: targetOrder.get(collection.id)!,
+      };
+    }
+    if (moving.parentId !== detail.parentId && previousOrder.has(collection.id)) {
+      return { ...collection, sortOrder: previousOrder.get(collection.id)! };
+    }
+    return collection;
+  });
+}
+
+type CollectionDropPosition = "before" | "inside" | "after";
+
+interface CollectionDropTarget {
+  id: string;
+  position: CollectionDropPosition;
+}
+
+interface CollectionContextMenuState {
+  collectionId: string | null;
+  x: number;
+  y: number;
+}
+
+function collectionContains(
+  collections: LibraryShellCollection[],
+  ancestorId: string,
+  collectionId: string,
+): boolean {
+  const byId = new Map(collections.map((collection) => [collection.id, collection]));
+  const seen = new Set<string>();
+  let cursor = byId.get(collectionId)?.parentId ?? null;
+  while (cursor && !seen.has(cursor)) {
+    if (cursor === ancestorId) return true;
+    seen.add(cursor);
+    cursor = byId.get(cursor)?.parentId ?? null;
+  }
+  return false;
 }
 
 function CollectionTreeBranch({
@@ -1276,6 +1383,13 @@ function CollectionTreeBranch({
   depth,
   activeView,
   collapsedIds,
+  draggingId,
+  dropTarget,
+  onDragEnd,
+  onDragOver,
+  onDragStart,
+  onDrop,
+  onRequestContextMenu,
   onCreateCollection,
   onSelect,
   onToggle,
@@ -1284,6 +1398,13 @@ function CollectionTreeBranch({
   depth: number;
   activeView: LibraryViewState;
   collapsedIds: Set<string>;
+  draggingId: string | null;
+  dropTarget: CollectionDropTarget | null;
+  onDragEnd: () => void;
+  onDragOver: (event: ReactDragEvent<HTMLDivElement>, node: LibraryCollectionTreeNode) => void;
+  onDragStart: (event: ReactDragEvent<HTMLDivElement>, id: string) => void;
+  onDrop: (event: ReactDragEvent<HTMLDivElement>, node: LibraryCollectionTreeNode) => void;
+  onRequestContextMenu: (node: LibraryCollectionTreeNode, x: number, y: number) => void;
   onCreateCollection: (parentId?: string) => void;
   onSelect: (detail: LibraryViewDetail) => void;
   onToggle: (id: string) => void;
@@ -1303,8 +1424,21 @@ function CollectionTreeBranch({
         <div
           className={`app-sidebar-collection ${
             isActive ? "app-sidebar-collection--active" : ""
+          } ${draggingId === node.id ? "app-sidebar-collection--dragging" : ""} ${
+            dropTarget?.id === node.id ? `app-sidebar-collection--drop-${dropTarget.position}` : ""
           }`}
           style={{ paddingLeft: 6 + depth * 14 }}
+          draggable
+          aria-grabbed={draggingId === node.id}
+          title="拖动可调整顺序；拖到文件夹中可改变层级"
+          onDragStart={(event) => onDragStart(event, node.id)}
+          onDragOver={(event) => onDragOver(event, node)}
+          onDragEnd={onDragEnd}
+          onDrop={(event) => onDrop(event, node)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            onRequestContextMenu(node, event.clientX, event.clientY);
+          }}
         >
           {hasChildren ? (
             <button
@@ -1327,7 +1461,15 @@ function CollectionTreeBranch({
             aria-label={sidebarViewLabel(node.name, node.count, isActive)}
             aria-pressed={isActive}
             onClick={() => onSelect(detail)}
-            title={node.name}
+            onKeyDown={(event) => {
+              if (!(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+                return;
+              }
+              event.preventDefault();
+              const rect = event.currentTarget.getBoundingClientRect();
+              onRequestContextMenu(node, rect.left + 20, rect.bottom + 4);
+            }}
+            title={`${node.name}；右键或双指点按可管理文件夹`}
           >
             <span className="app-sidebar-collection__folder" aria-hidden="true">
               <svg viewBox="0 0 20 20">
@@ -1354,6 +1496,13 @@ function CollectionTreeBranch({
               depth={depth + 1}
               activeView={activeView}
               collapsedIds={collapsedIds}
+              draggingId={draggingId}
+              dropTarget={dropTarget}
+              onDragEnd={onDragEnd}
+              onDragOver={onDragOver}
+              onDragStart={onDragStart}
+              onDrop={onDrop}
+              onRequestContextMenu={onRequestContextMenu}
               onCreateCollection={onCreateCollection}
               onSelect={onSelect}
               onToggle={onToggle}
@@ -1370,15 +1519,23 @@ function LibrarySidebarMeta({
   activeView,
   onSelect,
   onCreateCollection,
-  onManageCollections,
+  onDeleteCollection,
+  onMoveCollection,
+  onRenameCollection,
 }: {
   stats: LibraryShellStats;
   activeView: LibraryViewState;
   onSelect: (detail: LibraryViewDetail) => void;
   onCreateCollection: (parentId?: string) => void;
-  onManageCollections: () => void;
+  onDeleteCollection: (collection: LibraryShellCollection) => void;
+  onMoveCollection: (detail: LibraryCollectionMoveDetail) => void;
+  onRenameCollection: (collection: LibraryShellCollection) => void;
 }) {
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<CollectionDropTarget | null>(null);
+  const [contextMenu, setContextMenu] = useState<CollectionContextMenuState | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const collectionTree = useMemo(
     () => buildLibraryCollectionTree(stats.collections),
     [stats.collections],
@@ -1391,28 +1548,181 @@ function LibrarySidebarMeta({
       return next;
     });
   };
+  const clearDragState = () => {
+    setDraggingId(null);
+    setDropTarget(null);
+  };
+  const canDropOn = (nodeId: string) =>
+    Boolean(
+      draggingId &&
+      draggingId !== nodeId &&
+      !collectionContains(stats.collections, draggingId, nodeId),
+    );
+  const handleDragStart = (event: ReactDragEvent<HTMLDivElement>, id: string) => {
+    setDraggingId(id);
+    setDropTarget(null);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+  };
+  const handleDragOver = (
+    event: ReactDragEvent<HTMLDivElement>,
+    node: LibraryCollectionTreeNode,
+  ) => {
+    if (!canDropOn(node.id)) {
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offset = (event.clientY - rect.top) / Math.max(rect.height, 1);
+    const position: CollectionDropPosition =
+      offset < 0.25 ? "before" : offset > 0.75 ? "after" : "inside";
+    setDropTarget({ id: node.id, position });
+  };
+  const commitMove = (node: LibraryCollectionTreeNode, position: CollectionDropPosition) => {
+    if (!draggingId || !canDropOn(node.id)) return;
+    if (position === "inside") {
+      const childCount = stats.collections.filter(
+        (collection) => collection.id !== draggingId && collection.parentId === node.id,
+      ).length;
+      setCollapsedIds((current) => {
+        const next = new Set(current);
+        next.delete(node.id);
+        return next;
+      });
+      onMoveCollection({ id: draggingId, parentId: node.id, position: childCount });
+      return;
+    }
+    const siblings = stats.collections
+      .filter((collection) => collection.id !== draggingId && collection.parentId === node.parentId)
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "zh-CN"));
+    const targetIndex = siblings.findIndex((collection) => collection.id === node.id);
+    onMoveCollection({
+      id: draggingId,
+      parentId: node.parentId,
+      position: Math.max(0, targetIndex + (position === "after" ? 1 : 0)),
+    });
+  };
+  const handleDrop = (event: ReactDragEvent<HTMLDivElement>, node: LibraryCollectionTreeNode) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (dropTarget?.id === node.id) commitMove(node, dropTarget.position);
+    clearDragState();
+  };
+  const handleRootDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!draggingId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTarget({ id: "__root__", position: "inside" });
+  };
+  const handleRootDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (draggingId) {
+      const rootCount = stats.collections.filter(
+        (collection) => collection.id !== draggingId && collection.parentId === null,
+      ).length;
+      onMoveCollection({ id: draggingId, parentId: null, position: rootCount });
+    }
+    clearDragState();
+  };
+
+  const allWorksActive = sameLibraryView(activeView, {
+    filter: "all",
+    collectionId: null,
+    tag: null,
+  });
+  const openContextMenu = useCallback((collectionId: string | null, x: number, y: number) => {
+    const menuWidth = 184;
+    const menuHeight = collectionId ? 238 : 52;
+    setContextMenu({
+      collectionId,
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8)),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = (event: Event) => {
+      if (event.target instanceof Node && contextMenuRef.current?.contains(event.target)) return;
+      setContextMenu(null);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+    const focusId = window.requestAnimationFrame(() => {
+      contextMenuRef.current?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+    });
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusId);
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [contextMenu]);
+
+  const contextCollection = contextMenu?.collectionId
+    ? (stats.collections.find((collection) => collection.id === contextMenu.collectionId) ?? null)
+    : null;
+  const runContextAction = (action: () => void) => {
+    setContextMenu(null);
+    action();
+  };
 
   return (
     <div className="app-sidebar-meta">
       <section className="app-sidebar-section app-sidebar-section--collections">
-        <div className="app-sidebar-section__head">
-          <span>文件夹</span>
+        <div
+          className={`app-sidebar-library-root-row ${
+            allWorksActive ? "app-sidebar-library-root-row--active" : ""
+          } ${dropTarget?.id === "__root__" ? "app-sidebar-library-root-row--drop-inside" : ""}`}
+          onDragOver={handleRootDragOver}
+          onDrop={handleRootDrop}
+          onContextMenu={(event: ReactMouseEvent<HTMLDivElement>) => {
+            event.preventDefault();
+            openContextMenu(null, event.clientX, event.clientY);
+          }}
+        >
+          <button
+            type="button"
+            className="app-sidebar-library-root app-sidebar-library-root--all"
+            aria-current={allWorksActive ? "page" : undefined}
+            onClick={() => onSelect({ filter: "all", collectionId: null, tag: null })}
+            onKeyDown={(event) => {
+              if (!(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+                return;
+              }
+              event.preventDefault();
+              const rect = event.currentTarget.getBoundingClientRect();
+              openContextMenu(null, rect.left + 20, rect.bottom + 4);
+            }}
+            title="全部文献；右键或双指点按可新建文件夹"
+          >
+            <span className="app-sidebar-library-root__icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20">
+                <path d="M3 5.4h5l1.5 1.7H17v8.1H3z" />
+              </svg>
+            </span>
+            <span>全部文献</span>
+            <small>{stats.total.toLocaleString("zh-CN")}</small>
+          </button>
           <div className="app-sidebar-section__actions">
             <button
               type="button"
               aria-label="新建目录"
               title="新建目录"
               onClick={() => onCreateCollection()}
-          >
-              ＋
-            </button>
-            <button
-              type="button"
-              aria-label="管理文件夹"
-              onClick={onManageCollections}
-              title="管理文件夹"
             >
-              •••
+              ＋
             </button>
           </div>
         </div>
@@ -1423,6 +1733,13 @@ function LibrarySidebarMeta({
               depth={0}
               activeView={activeView}
               collapsedIds={collapsedIds}
+              draggingId={draggingId}
+              dropTarget={dropTarget}
+              onDragEnd={clearDragState}
+              onDragOver={handleDragOver}
+              onDragStart={handleDragStart}
+              onDrop={handleDrop}
+              onRequestContextMenu={(node, x, y) => openContextMenu(node.id, x, y)}
               onCreateCollection={onCreateCollection}
               onSelect={onSelect}
               onToggle={toggleCollection}
@@ -1438,6 +1755,121 @@ function LibrarySidebarMeta({
           </button>
         )}
       </section>
+      <button
+        type="button"
+        className={`app-sidebar-library-root app-sidebar-library-root--trash ${
+          sameLibraryView(activeView, { filter: "trash", collectionId: null, tag: null })
+            ? "app-sidebar-library-root--active"
+            : ""
+        }`}
+        aria-current={
+          sameLibraryView(activeView, { filter: "trash", collectionId: null, tag: null })
+            ? "page"
+            : undefined
+        }
+        onClick={() => onSelect({ filter: "trash", collectionId: null, tag: null })}
+      >
+        <span className="app-sidebar-library-root__icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20">
+            <path d="M4.8 6.2h10.4l-.7 9.1H5.5z" />
+            <path d="M3.6 4.2h12.8M7.4 4.2V2.8h5.2v1.4M8 8.2v4.9M12 8.2v4.9" />
+          </svg>
+        </span>
+        <span>回收站</span>
+        <small>{stats.trash.toLocaleString("zh-CN")}</small>
+      </button>
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="app-sidebar-context-menu"
+          role="menu"
+          aria-label={contextCollection ? `${contextCollection.name} 文件夹操作` : "全部文献操作"}
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onContextMenu={(event) => event.preventDefault()}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            event.preventDefault();
+            const items = Array.from(
+              event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"),
+            );
+            const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+            const direction = event.key === "ArrowDown" ? 1 : -1;
+            items[(currentIndex + direction + items.length) % items.length]?.focus();
+          }}
+        >
+          {contextCollection ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() =>
+                  runContextAction(() =>
+                    onSelect({
+                      filter: "all",
+                      collectionId: contextCollection.id,
+                      tag: null,
+                    }),
+                  )
+                }
+              >
+                打开
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextAction(() => onCreateCollection(contextCollection.id))}
+              >
+                新建子文件夹
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runContextAction(() => onRenameCollection(contextCollection))}
+              >
+                重命名
+              </button>
+              {contextCollection.parentId && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const parent = stats.collections.find(
+                      (collection) => collection.id === contextCollection.parentId,
+                    );
+                    const parentId = parent?.parentId ?? null;
+                    const position = stats.collections.filter(
+                      (collection) =>
+                        collection.id !== contextCollection.id && collection.parentId === parentId,
+                    ).length;
+                    runContextAction(() =>
+                      onMoveCollection({ id: contextCollection.id, parentId, position }),
+                    );
+                  }}
+                >
+                  移到上一级
+                </button>
+              )}
+              <span className="app-sidebar-context-menu__separator" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                className="app-sidebar-context-menu__danger"
+                onClick={() => runContextAction(() => onDeleteCollection(contextCollection))}
+              >
+                删除文件夹…
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runContextAction(() => onCreateCollection())}
+            >
+              新建文件夹
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
