@@ -13,6 +13,9 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 
 > The interface is currently Chinese-first.
 
+> [!NOTE]
+> **Project status: early development (alpha).** The core workflow works but is under active iteration — expect rough edges and breaking changes. Not recommended for managing your primary research library yet.
+
 ## Features
 
 ### 📚 Library workbench
