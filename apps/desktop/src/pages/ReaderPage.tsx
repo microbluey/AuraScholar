@@ -1,5 +1,4 @@
-// Reader page: PDF + right panel with three tabs — 批注 / 重点 (AI digest,
-// generated at import time or on demand) / 脉络 (citation graph of this paper).
+// Reader page: PDF + research panel for annotations, translation, and citation context.
 import {
   Suspense,
   lazy,
@@ -26,7 +25,6 @@ import {
 } from "@aurascholar/reader";
 import { newId } from "@aurascholar/db/ids";
 import { AnnotationsRepo, type AnnotationRow } from "@aurascholar/db/repos/annotations";
-import { FlashcardsRepo, type FlashcardRow } from "@aurascholar/db/repos/flashcards";
 import { WorksRepo } from "@aurascholar/db/repos/works";
 import { Badge, Button } from "@aurascholar/ui";
 import "@aurascholar/reader/reader.css";
@@ -50,9 +48,9 @@ const CitationGraphView = lazy(() =>
 configureWorker(workerSrc);
 
 type PageFilter = "none" | "sepia" | "invert";
-type PanelTab = "annotations" | "translate" | "digest" | "graph";
+type PanelTab = "annotations" | "translate" | "graph";
 type TranslationMode = "selection" | "split" | "inline";
-const PANEL_TABS = new Set<PanelTab>(["annotations", "translate", "digest", "graph"]);
+const PANEL_TABS = new Set<PanelTab>(["annotations", "translate", "graph"]);
 
 interface ReaderSmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_OPEN__?: string;
@@ -61,7 +59,6 @@ interface ReaderSmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_DELETE__?: string;
   __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_RESTORE__?: string;
   __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_SNIPPET_SAVE__?: string;
-  __AURASCHOLAR_SMOKE_READER_DIGEST_GENERATE__?: (workId: string, title: string) => Promise<void>;
 }
 
 function normalizePanelTab(value: string | null): PanelTab | null {
@@ -175,7 +172,9 @@ function ReaderPageNavigator({
           <strong>页面</strong>
           <span>{doc.pageCount} 页</span>
         </div>
-        <small>{currentPage + 1} / {doc.pageCount}</small>
+        <small>
+          {currentPage + 1} / {doc.pageCount}
+        </small>
       </div>
       <div className="reader-page-nav__list">
         {Array.from({ length: doc.pageCount }, (_, pageIndex) => {
@@ -185,7 +184,11 @@ function ReaderPageNavigator({
             <button
               key={pageIndex}
               type="button"
-              className={isCurrent ? "reader-page-nav__item reader-page-nav__item--active" : "reader-page-nav__item"}
+              className={
+                isCurrent
+                  ? "reader-page-nav__item reader-page-nav__item--active"
+                  : "reader-page-nav__item"
+              }
               aria-current={isCurrent ? "page" : undefined}
               aria-label={`第 ${pageIndex + 1} 页${annotationCount ? `，${annotationCount} 条批注` : ""}`}
               onClick={() => onSelect(pageIndex)}
@@ -390,7 +393,10 @@ function fullTextLanding(work: MissingWorkContext): string {
   return fulltextLandingUrl(work);
 }
 
-async function loadLibraryPdfContext(workId: string): Promise<LibraryPdfContext> {
+async function loadLibraryPdfContext(
+  workId: string,
+  preferredAttachmentId?: string,
+): Promise<LibraryPdfContext> {
   const db = await getDb();
   const work = await new WorksRepo(db).get(workId);
   if (work?.deleted_at != null) {
@@ -406,7 +412,7 @@ async function loadLibraryPdfContext(workId: string): Promise<LibraryPdfContext>
   }
   let pdf: Awaited<ReturnType<typeof loadPdfForWork>>;
   try {
-    pdf = await loadPdfForWork(workId);
+    pdf = await loadPdfForWork(workId, preferredAttachmentId);
   } catch (error) {
     return {
       annotations: [],
@@ -475,6 +481,9 @@ export function ReaderPage() {
   const [params] = useSearchParams();
   const workIdParam = params.get("work");
   const rawTabParam = params.get("tab");
+  const annotationIdParam = params.get("annotation");
+  const attachmentIdParam = params.get("attachment")?.trim() || undefined;
+  const pageParam = params.get("page");
   const tabParam = normalizePanelTab(rawTabParam);
   const [ctx, setCtx] = useState<OpenContext | null>(null);
   const [missingWork, setMissingWork] = useState<MissingWorkContext | null>(null);
@@ -511,16 +520,16 @@ export function ReaderPage() {
   const savingSnippetRef = useRef(false);
   const deletingAnnotationIdRef = useRef<string | null>(null);
   const tabWorkIdRef = useRef<string | null>(workIdParam);
+  const appliedDeepLinkRef = useRef<string | null>(null);
   const canShowGraphTab = Boolean(ctx?.workDoi);
-  const canShowDigestTab = Boolean(ctx?.workId);
 
   useEffect(() => {
     if (!snippetToast) return;
     if (annotationDeleteUndoBusy || /正在/.test(snippetToast)) return;
     const isUndoNotice = Boolean(
       annotationDeleteUndo &&
-        (snippetToast === annotationDeleteUndo.message ||
-          snippetToast.startsWith("撤销删除批注失败")),
+      (snippetToast === annotationDeleteUndo.message ||
+        snippetToast.startsWith("撤销删除批注失败")),
     );
     const t = window.setTimeout(
       () => {
@@ -562,12 +571,37 @@ export function ReaderPage() {
 
   useEffect(() => {
     if (!ctx) return;
-    if ((tab !== "graph" || canShowGraphTab) && (tab !== "digest" || canShowDigestTab)) return;
+    if (tab !== "graph" || canShowGraphTab) return;
     const fallbackId = window.setTimeout(() => {
       setTab("annotations");
     }, 0);
     return () => window.clearTimeout(fallbackId);
-  }, [canShowDigestTab, canShowGraphTab, ctx, tab]);
+  }, [canShowGraphTab, ctx, tab]);
+
+  useEffect(() => {
+    if (!ctx) return;
+    const key = `${ctx.workId ?? "local"}:${annotationIdParam ?? ""}:${pageParam ?? ""}`;
+    if (appliedDeepLinkRef.current === key) return;
+    const targetAnnotation = annotationIdParam
+      ? annotations.find((annotation) => annotation.id === annotationIdParam)
+      : undefined;
+    const requestedPage = pageParam ? Number(pageParam) - 1 : Number.NaN;
+    const pageIndex =
+      targetAnnotation?.pageIndex ??
+      (Number.isInteger(requestedPage) && requestedPage >= 0 ? requestedPage : null);
+    if (pageIndex === null) return;
+    appliedDeepLinkRef.current = key;
+    const applyId = window.setTimeout(() => {
+      setJumpPage(pageIndex);
+      setCurrentReaderPage(pageIndex);
+      if (targetAnnotation) {
+        setActiveId(targetAnnotation.id);
+        setTab("annotations");
+        setPanelOpen(true);
+      }
+    }, 0);
+    return () => window.clearTimeout(applyId);
+  }, [annotationIdParam, annotations, ctx, pageParam]);
 
   useEffect(() => {
     if (!commentDraftDirty) return;
@@ -611,7 +645,7 @@ export function ReaderPage() {
       }
       const smokeFailure = consumeReaderSmokeOpenFailure();
       if (smokeFailure) throw smokeFailure;
-      const next = await loadLibraryPdfContext(workIdParam);
+      const next = await loadLibraryPdfContext(workIdParam, attachmentIdParam);
       if (cancelled) {
         next.ctx?.doc.destroy();
         return;
@@ -663,7 +697,7 @@ export function ReaderPage() {
     return () => {
       cancelled = true;
     };
-  }, [readerReloadSeq, workIdParam]);
+  }, [attachmentIdParam, readerReloadSeq, workIdParam]);
 
   const retryOpenWork = useCallback(() => {
     if (!workIdParam || readerLoading) return;
@@ -1000,12 +1034,6 @@ export function ReaderPage() {
     { key: "annotations", label: `批注 ${annotations.length}` },
     { key: "translate", label: "翻译" },
     {
-      key: "digest",
-      label: "重点",
-      disabled: !ctx.workId,
-      title: ctx.workId ? undefined : "需先入库",
-    },
-    {
       key: "graph",
       label: "脉络",
       disabled: !ctx.workDoi,
@@ -1110,6 +1138,15 @@ export function ReaderPage() {
           >
             导出笔记
           </Button>
+          {ctx.workId && (
+            <Button
+              variant="ghost"
+              style={{ fontSize: 13 }}
+              onClick={() => navigate(`/canvas?workId=${encodeURIComponent(ctx.workId!)}`)}
+            >
+              加入空间白板
+            </Button>
+          )}
           <Button variant="ghost" style={{ fontSize: 13 }} onClick={() => setPanelOpen((v) => !v)}>
             {panelOpen ? "收起面板" : "展开面板"}
           </Button>
@@ -1118,9 +1155,7 @@ export function ReaderPage() {
           </Button>
         </div>
       </div>
-      <div
-        className={`reader-shell ${tab === "graph" ? "reader-shell--graph" : ""}`}
-      >
+      <div className={`reader-shell ${tab === "graph" ? "reader-shell--graph" : ""}`}>
         <ReaderPageNavigator
           annotations={annotations}
           currentPage={currentReaderPage}
@@ -1183,7 +1218,6 @@ export function ReaderPage() {
                 const panelMounted =
                   t.key === "annotations" ||
                   t.key === "translate" ||
-                  (t.key === "digest" && Boolean(ctx.workId)) ||
                   (t.key === "graph" && Boolean(ctx.workDoi && graphMounted));
                 return (
                   <button
@@ -1202,8 +1236,7 @@ export function ReaderPage() {
                 );
               })}
             </div>
-            {/* All panels stay mounted — switching tabs must not lose
-                in-flight digest generation or the loaded graph. */}
+            {/* Panels stay mounted so switching tabs does not lose translation state or the graph. */}
             <div className="reader-research-panel__body">
               <div
                 id="reader-panel-annotations"
@@ -1223,6 +1256,17 @@ export function ReaderPage() {
                     setTimeout(() => setJumpPage(null), 100);
                   }}
                   onSaveComment={handleSaveComment}
+                  onAddToCanvas={
+                    ctx.workId
+                      ? (annotation) => {
+                          const nextParams = new URLSearchParams({
+                            workId: ctx.workId!,
+                            annotationId: annotation.id,
+                          });
+                          navigate(`/canvas?${nextParams.toString()}`);
+                        }
+                      : undefined
+                  }
                   onDelete={handleDelete}
                   deletingId={deletingAnnotationId}
                 />
@@ -1243,17 +1287,6 @@ export function ReaderPage() {
                   onPagesChange={setTranslatedPages}
                 />
               </div>
-              {ctx.workId && (
-                <div
-                  id="reader-panel-digest"
-                  role="tabpanel"
-                  aria-labelledby="reader-tab-digest"
-                  hidden={tab !== "digest"}
-                  style={{ height: "100%", display: tab === "digest" ? "block" : "none" }}
-                >
-                  <DigestPanel workId={ctx.workId} title={ctx.workTitle ?? ctx.fileName} />
-                </div>
-              )}
               {ctx.workDoi && graphMounted && (
                 <div
                   id="reader-panel-graph"
@@ -1498,9 +1531,8 @@ async function pageParagraphsForTranslation(
     }
     const headingLike =
       line.length <= 96 &&
-      (/^(?:\d+(?:\.\d+)*\.?\s+|abstract\b|introduction\b|conclusion\b|references\b)/i.test(
-        line,
-      ) || /^[A-Z][A-Za-z\s-]{2,48}$/.test(line));
+      (/^(?:\d+(?:\.\d+)*\.?\s+|abstract\b|introduction\b|conclusion\b|references\b)/i.test(line) ||
+        /^[A-Z][A-Za-z\s-]{2,48}$/.test(line));
     if (headingLike && buffer) flush();
     buffer = buffer ? `${buffer} ${line}` : line;
     if (headingLike || (buffer.length >= 90 && /[.!?。！？][”"')\]]?$/.test(line))) flush();
@@ -1743,7 +1775,9 @@ function TranslationDocumentPane({
               >
                 <span className="reader-translation-page__number">{pageIndex + 1}</span>
                 {segments.length === 0 ? (
-                  <div className="reader-translation-page__empty">第 {pageIndex + 1} 页尚无译文</div>
+                  <div className="reader-translation-page__empty">
+                    第 {pageIndex + 1} 页尚无译文
+                  </div>
                 ) : mode === "translated" ? (
                   <div className="reader-translation-page__translated">
                     {segments.map((segment, index) => (
@@ -1751,7 +1785,7 @@ function TranslationDocumentPane({
                         {segment.error ? (
                           <span className="reader-translation-page__error">{segment.error}</span>
                         ) : (
-                          segment.result ?? <span className="au-text-muted">待翻译</span>
+                          (segment.result ?? <span className="au-text-muted">待翻译</span>)
                         )}
                       </p>
                     ))}
@@ -1765,7 +1799,7 @@ function TranslationDocumentPane({
                           {segment.error ? (
                             <span className="reader-translation-page__error">{segment.error}</span>
                           ) : (
-                            segment.result ?? <span className="au-text-muted">待翻译</span>
+                            (segment.result ?? <span className="au-text-muted">待翻译</span>)
                           )}
                         </p>
                       </section>
@@ -1825,10 +1859,7 @@ function TranslatePanel({
       setTranslateAction(null);
       setCopyStatus(null);
       setEngine(detail.engine ?? "smoke");
-      const pageIndex = Math.min(
-        doc.pageCount - 1,
-        Math.max(0, detail.pageIndex ?? currentPage),
-      );
+      const pageIndex = Math.min(doc.pageCount - 1, Math.max(0, detail.pageIndex ?? currentPage));
       onPagesChange((current) => ({
         ...current,
         [pageIndex]: detail.segments!.map((segment) => ({
@@ -1943,9 +1974,7 @@ function TranslatePanel({
               onPagesChange((current) => ({
                 ...current,
                 [page.pageIndex]: (current[page.pageIndex] ?? []).map((segment, segmentIndex) =>
-                  segmentIndex === index
-                    ? { ...segment, error: describeSafeError(e) }
-                    : segment,
+                  segmentIndex === index ? { ...segment, error: describeSafeError(e) } : segment,
                 ),
               }));
             }
@@ -2053,33 +2082,33 @@ function TranslatePanel({
       <div className="reader-translate-controls">
         {mode !== "selection" ? (
           <div className="reader-translate-controls__row">
-              <span className="reader-translate-controls__label">页码</span>
-              <input
-                type="number"
-                className="au-input reader-translate-pageinput"
-                min={1}
-                max={doc.pageCount}
-                value={pageInput}
-                onChange={(e) => setPageInput(e.target.value)}
-                disabled={busy}
-              />
-              <span className="reader-translate-pagecount">/ {doc.pageCount}</span>
-              <Button
-                variant="secondary"
-                onClick={() => void translatePage()}
-                disabled={busy}
-                aria-busy={pageTranslating || undefined}
-              >
-                {pageTranslating ? "翻译中..." : "翻译该页"}
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => void translateFullText()}
-                disabled={busy}
-                aria-busy={fullTextTranslating || undefined}
-              >
-                {fullTextTranslating ? "翻译中..." : "翻译全文"}
-              </Button>
+            <span className="reader-translate-controls__label">页码</span>
+            <input
+              type="number"
+              className="au-input reader-translate-pageinput"
+              min={1}
+              max={doc.pageCount}
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value)}
+              disabled={busy}
+            />
+            <span className="reader-translate-pagecount">/ {doc.pageCount}</span>
+            <Button
+              variant="secondary"
+              onClick={() => void translatePage()}
+              disabled={busy}
+              aria-busy={pageTranslating || undefined}
+            >
+              {pageTranslating ? "翻译中..." : "翻译该页"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => void translateFullText()}
+              disabled={busy}
+              aria-busy={fullTextTranslating || undefined}
+            >
+              {fullTextTranslating ? "翻译中..." : "翻译全文"}
+            </Button>
           </div>
         ) : null}
         <div className="reader-translate-controls__row reader-translate-controls__row--meta">
@@ -2140,186 +2169,6 @@ function TranslatePanel({
             已准备 {preparedPageCount} 页 · 已完成 {translatedSegmentCount} 段
           </span>
         </div>
-      )}
-    </div>
-  );
-}
-
-/** 重点 tab: the paper's AI digest (cards generated at import or on demand). */
-function DigestPanel({ workId, title }: { workId: string; title: string }) {
-  const navigate = useNavigate();
-  const [cards, setCards] = useState<FlashcardRow[]>([]);
-  const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const generatingRef = useRef(false);
-  const showAiSettingsCta = isAiConfigurationError(error);
-
-  const refresh = useCallback(async () => {
-    const db = await getDb();
-    setCards(await new FlashcardsRepo(db).forWork(workId));
-  }, [workId]);
-
-  useEffect(() => {
-    const refreshId = window.setTimeout(() => {
-      void refresh();
-    }, 0);
-    return () => window.clearTimeout(refreshId);
-  }, [refresh]);
-
-  // A generation job may still be running in the background — poll briefly
-  // until cards appear (or a persisted ai_jobs error surfaces), then stop.
-  useEffect(() => {
-    if (cards.length > 0 || error) return;
-    let attempts = 0;
-    let cancelled = false;
-    const timer = setInterval(async () => {
-      attempts += 1;
-      const db = await getDb();
-      const nextCards = await new FlashcardsRepo(db).forWork(workId);
-      if (cancelled) return;
-      setCards(nextCards);
-      if (nextCards.length > 0) {
-        clearInterval(timer);
-        return;
-      }
-      const jobs = await db.query<{ status: string; error: string | null }>(
-        `SELECT status, error FROM ai_jobs WHERE work_id = ? ORDER BY created_at DESC LIMIT 1`,
-        [workId],
-      );
-      if (cancelled) return;
-      if (jobs[0]?.status === "error" && jobs[0].error) {
-        setError(describeSafeError(jobs[0].error));
-        clearInterval(timer);
-      } else if (attempts >= 20) {
-        clearInterval(timer);
-      }
-    }, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [cards.length, error, workId]);
-
-  const generate = useCallback(async () => {
-    if (generatingRef.current) return;
-    const startedAt = Date.now();
-    generatingRef.current = true;
-    setGenerating(true);
-    setError(null);
-    try {
-      const smokeGenerate = (window as ReaderSmokeWindow)
-        .__AURASCHOLAR_SMOKE_READER_DIGEST_GENERATE__;
-      if (smokeGenerate) {
-        await smokeGenerate(workId, title);
-      } else {
-        const { generateFlashcardsForWork } = await import("../services/ai");
-        await generateFlashcardsForWork(workId, title);
-      }
-      await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-      await refresh();
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-      setError(describeSafeError(e));
-    } finally {
-      generatingRef.current = false;
-      setGenerating(false);
-    }
-  }, [workId, title, refresh]);
-
-  const TYPE_LABEL: Record<string, string> = {
-    tldr: "一句话",
-    method: "问题与方法",
-    contribution: "贡献",
-    limitation: "结果与局限",
-    qa: "自测",
-  };
-
-  return (
-    <div className="reader-digest-panel" aria-busy={generating || undefined}>
-      {cards.length === 0 ? (
-        <div className="reader-digest-empty">
-          <p className="au-text-muted" style={{ fontSize: 13 }}>
-            还没有提取重点。
-            <br />
-            AI 会从全文提炼核心贡献、方法与局限。
-          </p>
-          {generating && (
-            <p className="reader-digest-status" role="status">
-              正在提取重点，完成后会同步到「闪卡」。
-            </p>
-          )}
-          <Button
-            onClick={() => void generate()}
-            disabled={generating}
-            aria-busy={generating || undefined}
-          >
-            {generating ? "提取中..." : "提取重点"}
-          </Button>
-          {error && (
-            <div className="reader-digest-error" role="alert">
-              <span>{error}</span>
-              <Button variant="secondary" onClick={() => void generate()} disabled={generating}>
-                重试提取
-              </Button>
-              {showAiSettingsCta && (
-                <Button variant="secondary" onClick={() => navigate("/settings?section=ai")}>
-                  去配置 AI
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        <>
-          {cards.map((c) => (
-            <div key={c.id} className="reader-digest-card">
-              <div style={{ marginBottom: 6 }}>
-                <Badge variant="neutral">{TYPE_LABEL[c.card_type] ?? c.card_type}</Badge>
-              </div>
-              <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px" }}>{c.front_md}</p>
-              <p
-                style={{
-                  fontSize: 13,
-                  margin: 0,
-                  whiteSpace: "pre-wrap",
-                  color: "var(--color-text-secondary)",
-                }}
-              >
-                {c.back_md}
-              </p>
-            </div>
-          ))}
-          <Button
-            variant="secondary"
-            style={{ fontSize: 12 }}
-            onClick={() => void generate()}
-            disabled={generating}
-            aria-busy={generating || undefined}
-          >
-            {generating ? "提取中..." : "重新提取"}
-          </Button>
-          {generating && (
-            <p className="reader-digest-status" role="status">
-              正在重新提取重点，完成后会同步到「闪卡」。
-            </p>
-          )}
-          {error && (
-            <div className="reader-digest-error" role="alert">
-              <span>{error}</span>
-              <Button variant="secondary" onClick={() => void generate()} disabled={generating}>
-                重试提取
-              </Button>
-              {showAiSettingsCta && (
-                <Button variant="secondary" onClick={() => navigate("/settings?section=ai")}>
-                  去配置 AI
-                </Button>
-              )}
-            </div>
-          )}
-          <p className="au-text-muted" style={{ fontSize: 11, margin: 0 }}>
-            这些卡片同时进入「闪卡」页的间隔复习队列
-          </p>
-        </>
       )}
     </div>
   );

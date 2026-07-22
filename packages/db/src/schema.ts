@@ -1,4 +1,5 @@
 import {
+  check,
   sqliteTable,
   text,
   integer,
@@ -7,6 +8,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 // Convention: UUIDv7 string PKs (time-ordered, sync-friendly). Timestamps are
 // epoch milliseconds. deleted_at is a soft-delete tombstone required by the
@@ -359,6 +361,93 @@ export const graphCache = sqliteTable("graph_cache", {
   payloadJson: text("payload_json", { mode: "json" }).notNull(),
   fetchedAt: integer("fetched_at").notNull(),
 });
+
+// ---------------------------------------------------------------------------
+// Spatial Canvas — workspace-owned snapshot records. Canvas node ids describe
+// placements/cards and are intentionally distinct from works.id. Removing a
+// node can cascade to its canvas edges, but never to the referenced work.
+// ---------------------------------------------------------------------------
+
+export const canvasWorkspaces = sqliteTable(
+  "canvas_workspaces",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    description: text("description"),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    viewportJson: text("viewport_json", { mode: "json" }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [check("canvas_workspaces_schema_version_check", sql`${t.schemaVersion} >= 1`)],
+);
+
+export const canvasNodes = sqliteTable(
+  "canvas_nodes",
+  {
+    id: id(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => canvasWorkspaces.id, { onDelete: "cascade" }),
+    workId: text("work_id").references(() => works.id, { onDelete: "set null" }),
+    type: text("type", {
+      enum: ["paper", "excerpt", "ai-synth", "idea-note", "group"],
+    }).notNull(),
+    posX: real("pos_x").notNull(),
+    posY: real("pos_y").notNull(),
+    width: real("width").notNull(),
+    height: real("height").notNull(),
+    groupId: text("group_id"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    tagsJson: text("tags_json", { mode: "json" }).notNull().default([]),
+    dataJson: text("data_json", { mode: "json" }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("canvas_nodes_workspace_idx").on(t.workspaceId),
+    index("canvas_nodes_work_idx").on(t.workId),
+    index("canvas_nodes_group_idx").on(t.workspaceId, t.groupId),
+    check(
+      "canvas_nodes_type_check",
+      sql`${t.type} IN ('paper', 'excerpt', 'ai-synth', 'idea-note', 'group')`,
+    ),
+    check("canvas_nodes_dimensions_check", sql`${t.width} > 0 AND ${t.height} > 0`),
+  ],
+);
+
+export const canvasEdges = sqliteTable(
+  "canvas_edges",
+  {
+    id: id(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => canvasWorkspaces.id, { onDelete: "cascade" }),
+    sourceId: text("source_id")
+      .notNull()
+      .references(() => canvasNodes.id, { onDelete: "cascade" }),
+    targetId: text("target_id")
+      .notNull()
+      .references(() => canvasNodes.id, { onDelete: "cascade" }),
+    relationType: text("relation_type", {
+      enum: ["cites", "supports", "contradicts", "extends", "derived-from", "custom"],
+    }).notNull(),
+    label: text("label"),
+    styleJson: text("style_json", { mode: "json" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("canvas_edges_workspace_idx").on(t.workspaceId),
+    index("canvas_edges_source_idx").on(t.sourceId),
+    index("canvas_edges_target_idx").on(t.targetId),
+    check(
+      "canvas_edges_relation_check",
+      sql`${t.relationType} IN ('cites', 'supports', 'contradicts', 'extends', 'derived-from', 'custom')`,
+    ),
+  ],
+);
 
 // ---------------------------------------------------------------------------
 // Indexing sentinel — tracks accept → online → in_issue → indexed.

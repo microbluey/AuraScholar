@@ -9,6 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Graph } from "@phosphor-icons/react";
 import { ThemeToggle } from "@aurascholar/ui";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { useModalFocusTrap } from "./components/useModalFocusTrap";
@@ -23,7 +24,7 @@ import { describeSafeError } from "./services/sensitive-text";
 const NAV = [
   { to: "/library", icon: "library", label: "文献库" },
   { to: "/discovery", icon: "search", label: "学术检索" },
-  { to: "/flashcards", icon: "cards", label: "闪卡" },
+  { to: "/canvas", icon: "canvas", label: "空间白板" },
   { to: "/snippets", icon: "snippet", label: "写作素材" },
   { to: "/sentinel", icon: "radar", label: "检索哨兵" },
   { to: "/homepage", icon: "profile", label: "学术主页" },
@@ -37,7 +38,7 @@ interface LibraryShellStats {
   unread: number;
   starred: number;
   annotations: number;
-  flashcards: number;
+  canvasNodes: number;
   snippets: number;
   collections: Array<{
     id: string;
@@ -56,7 +57,7 @@ const PREVIEW_LIBRARY_STATS: LibraryShellStats = {
   unread: 1,
   starred: 1,
   annotations: 13,
-  flashcards: 30,
+  canvasNodes: 18,
   snippets: 5,
   collections: [
     { id: "preview-projects", name: "研究项目", count: 1, parentId: null, sortOrder: 0 },
@@ -143,7 +144,7 @@ interface AppCommand {
 const NAV_DESCRIPTIONS: Record<(typeof NAV)[number]["to"], string> = {
   "/library": "导入、整理、阅读和引用你的论文库。",
   "/discovery": "检索开放学术来源并把结果沉淀到文献库。",
-  "/flashcards": "进入间隔复习队列，把论文变成长期记忆。",
+  "/canvas": "在无限画布中关联文献、摘录、想法与 AI 合成。",
   "/snippets": "整理摘录、批注和可复制的写作素材。",
   "/sentinel": "订阅检索任务，持续追踪新论文。",
   "/homepage": "编辑个人学术主页并导出发布内容。",
@@ -297,6 +298,14 @@ function runtimeIssueFromErrorEvent(event: ErrorEvent): RuntimeIssue {
   };
 }
 
+function isBenignResizeObserverDiagnostic(event: ErrorEvent): boolean {
+  if (event.error != null) return false;
+  return (
+    event.message === "ResizeObserver loop completed with undelivered notifications." ||
+    event.message === "ResizeObserver loop limit exceeded"
+  );
+}
+
 function runtimeIssueFromRejection(event: PromiseRejectionEvent): RuntimeIssue {
   return {
     id: Date.now(),
@@ -309,8 +318,8 @@ export function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const previousPathRef = useRef(location.pathname);
-  // The reader needs edge-to-edge layout; other pages keep comfortable padding.
-  const flush = location.pathname.startsWith("/reader");
+  // The reader and spatial canvas need edge-to-edge layout; other pages keep comfortable padding.
+  const flush = location.pathname.startsWith("/reader") || location.pathname.startsWith("/canvas");
   const showLibraryMeta = location.pathname.startsWith("/library");
   const currentLabel = activeRouteLabel(location.pathname);
   const currentRuntime = runtimeLabel();
@@ -422,6 +431,12 @@ export function App() {
 
   useEffect(() => {
     const onRuntimeError = (event: ErrorEvent) => {
+      // Chromium reports these layout diagnostics as global errors even when the
+      // observer successfully delivers the next frame. They are not app crashes.
+      if (isBenignResizeObserverDiagnostic(event)) {
+        event.preventDefault();
+        return;
+      }
       setRuntimeIssue(runtimeIssueFromErrorEvent(event));
     };
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
@@ -453,7 +468,7 @@ export function App() {
         unreadRows,
         starredRows,
         annotationRows,
-        flashcardRows,
+        canvasNodeRows,
         snippetRows,
         collections,
         tags,
@@ -475,12 +490,7 @@ export function App() {
            JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
            WHERE a.deleted_at IS NULL`,
         ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM flashcards f
-           JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
-           WHERE f.deleted_at IS NULL`,
-        ),
+        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM canvas_nodes`),
         db.query<{ n: number }>(
           `SELECT COUNT(*) AS n
            FROM snippets s
@@ -521,7 +531,7 @@ export function App() {
         unread: unreadRows[0]?.n ?? 0,
         starred: starredRows[0]?.n ?? 0,
         annotations: annotationRows[0]?.n ?? 0,
-        flashcards: flashcardRows[0]?.n ?? 0,
+        canvasNodes: canvasNodeRows[0]?.n ?? 0,
         snippets: snippetRows[0]?.n ?? 0,
         collections: collections.map((collection) => ({
           id: collection.id,
@@ -704,7 +714,7 @@ export function App() {
         title: "管理标签",
       },
       {
-        description: "配置模型服务，让摘要、重点、翻译和闪卡开始工作。",
+        description: "配置模型服务，让摘要、观点合成、翻译和研究辅助开始工作。",
         group: "配置",
         icon: "settings",
         id: "settings:ai",
@@ -753,7 +763,7 @@ export function App() {
     const onStorage = () => void refreshAiStatus();
     const onAiSettingsUpdated = () => void refreshAiStatus();
     window.addEventListener("aurascholar:library-updated", onLibraryUpdated);
-    window.addEventListener("aurascholar:flashcards-updated", onLibraryUpdated);
+    window.addEventListener("aurascholar:canvas-updated", onLibraryUpdated);
     window.addEventListener("aurascholar:library-view-state", onLibraryViewState);
     window.addEventListener("aurascholar:snippets-updated", onLibraryUpdated);
     window.addEventListener("aurascholar:ai-settings-updated", onAiSettingsUpdated);
@@ -762,7 +772,7 @@ export function App() {
       libraryStatsRefreshSeqRef.current += 1;
       aiStatusRefreshSeqRef.current += 1;
       window.removeEventListener("aurascholar:library-updated", onLibraryUpdated);
-      window.removeEventListener("aurascholar:flashcards-updated", onLibraryUpdated);
+      window.removeEventListener("aurascholar:canvas-updated", onLibraryUpdated);
       window.removeEventListener("aurascholar:library-view-state", onLibraryViewState);
       window.removeEventListener("aurascholar:snippets-updated", onLibraryUpdated);
       window.removeEventListener("aurascholar:ai-settings-updated", onAiSettingsUpdated);
@@ -1043,7 +1053,7 @@ function StatusBar({
             笔记 <strong>{stats.annotations.toLocaleString("zh-CN")}</strong>
           </span>
           <span>
-            闪卡 <strong>{stats.flashcards.toLocaleString("zh-CN")}</strong>
+            白板节点 <strong>{stats.canvasNodes.toLocaleString("zh-CN")}</strong>
           </span>
           <span>
             素材 <strong>{stats.snippets.toLocaleString("zh-CN")}</strong>
@@ -1904,15 +1914,8 @@ function NavIcon({ name }: { name: (typeof NAV)[number]["icon"] }) {
           <path d="M8.5 11h5" />
         </svg>
       );
-    case "cards":
-      return (
-        <svg {...common}>
-          <path d="M7 7.5h10" />
-          <path d="M7 12h7" />
-          <path d="M5.5 4h13A1.5 1.5 0 0 1 20 5.5v11A1.5 1.5 0 0 1 18.5 18h-13A1.5 1.5 0 0 1 4 16.5v-11A1.5 1.5 0 0 1 5.5 4z" />
-          <path d="M7 21h10" />
-        </svg>
-      );
+    case "canvas":
+      return <Graph size={18} weight="regular" aria-hidden className="app-nav-item__icon" />;
     case "snippet":
       return (
         <svg {...common}>

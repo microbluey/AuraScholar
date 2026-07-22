@@ -111,6 +111,24 @@ describe("migrations", () => {
     expect(await columnExists("sync_state", "library_id")).toBe(true);
   });
 
+  it("adds spatial canvas tables without removing legacy flashcard data tables", async () => {
+    expect(await tableExists("canvas_workspaces")).toBe(true);
+    expect(await tableExists("canvas_nodes")).toBe(true);
+    expect(await tableExists("canvas_edges")).toBe(true);
+    expect(await columnExists("canvas_workspaces", "schema_version")).toBe(true);
+    expect(await columnExists("canvas_nodes", "work_id")).toBe(true);
+    expect(await columnExists("canvas_nodes", "sort_order")).toBe(true);
+    expect(await columnExists("canvas_edges", "sort_order")).toBe(true);
+    expect(await indexExists("canvas_nodes_workspace_idx")).toBe(true);
+    expect(await indexExists("canvas_edges_workspace_idx")).toBe(true);
+
+    // Flashcards are retired at the UI/product layer only. Migration v16 must
+    // preserve existing tables and therefore all historical user data.
+    expect(await tableExists("flashcards")).toBe(true);
+    expect(await tableExists("flashcard_srs")).toBe(true);
+    expect(await tableExists("flashcard_reviews")).toBe(true);
+  });
+
   it("indexes stable academic identifiers used by import dedup", async () => {
     expect(await indexExists("works_arxiv_idx")).toBe(true);
     expect(await indexExists("works_openalex_idx")).toBe(true);
@@ -125,10 +143,11 @@ describe("migrations", () => {
     await legacyDb.exec(
       `CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)`,
     );
-    await legacyDb.run(
-      `INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)`,
-      [1, MIGRATIONS[0]!.name, now],
-    );
+    await legacyDb.run(`INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)`, [
+      1,
+      MIGRATIONS[0]!.name,
+      now,
+    ]);
     await legacyDb.run(
       `INSERT INTO works (id, title, abstract, type, created_at, updated_at)
        VALUES (?, ?, ?, 'article', ?, ?)`,

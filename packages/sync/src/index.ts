@@ -14,10 +14,16 @@ export {
 } from "./table-guard.js";
 export type { SyncedTableColumns } from "./table-guard.js";
 export { safeSnapshotWatermark } from "./watermark.js";
-export {
-  segmentPath,
-  parseSegmentPath,
-  encodeSegment,
-  decodeSegment,
-} from "./types.js";
+export { segmentPath, parseSegmentPath, encodeSegment, decodeSegment } from "./types.js";
 export type { ChangeEntry, JournalSegment } from "./types.js";
+export {
+  DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID,
+  SPATIAL_CANVAS_BACKUP_TABLES,
+  assertSpatialCanvasBackupOrder,
+  remapSpatialCanvasBackupRow,
+} from "./canvas-backup.js";
+export type {
+  SpatialCanvasBackupIdMaps,
+  SpatialCanvasBackupRemapResult,
+  SpatialCanvasBackupTable,
+} from "./canvas-backup.js";

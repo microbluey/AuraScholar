@@ -18,12 +18,26 @@
   "build": {
     "appId": "app.aurascholar.desktop",
     "productName": "AuraScholar",
-    "directories": { "output": "release", "buildResources": "build" },
-    "files": ["out/**/*", "package.json"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
     "npmRebuild": true,
-    "mac": { "target": "dmg", "category": "public.app-category.education" },
-    "win": { "target": "nsis" },
-    "linux": { "target": "AppImage", "category": "Education" }
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.education"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Education"
+    }
   },
   "dependencies": {
     "@aurascholar/ai": "workspace:*",
@@ -38,11 +52,18 @@
     "@aurascholar/tokens": "workspace:*",
     "@aurascholar/translate": "workspace:*",
     "@aurascholar/ui": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10",
+    "@xyflow/react": "^12.11.2",
     "better-sqlite3": "^11.10.0",
+    "katex": "^0.18.1",
     "pdfjs-dist": "^4.10.38",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.1.1",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {

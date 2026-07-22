@@ -57,15 +57,11 @@ const ImportConfirmDialog = lazy(() =>
 type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred" | "trash";
 type SortMode = "added" | "year";
 type DetailPanelTab = "overview" | "notes" | "related";
-type ExtraFilter = "with-pdf" | "without-pdf" | "ai-done" | "ai-needed";
+type ExtraFilter = "with-pdf" | "without-pdf";
 type ImportMethod = "identifier" | "pdf" | "references";
 
 interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_IMPORT_PDF__?: (file: File) => Promise<void>;
-  __AURASCHOLAR_SMOKE_LIBRARY_GENERATE_FLASHCARDS__?: (
-    workId: string,
-    title: string,
-  ) => Promise<{ created: number }>;
   __AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__?: number;
   __AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__?: number;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_CREATE__?: string;
@@ -104,7 +100,6 @@ function normalizeLibraryFilter(value: string | null): LibraryFilter | null {
 const PAGE_SIZE = 30;
 const LIST_HARD_LIMIT = 1000;
 const MIN_CITATION_BUSY_MS = 350;
-const MIN_FLASHCARD_GENERATION_BUSY_MS = 350;
 const MIN_COLLECTION_ACTION_BUSY_MS = 250;
 const MIN_BULK_TAG_BUSY_MS = 250;
 const MIN_MOVE_ACTION_BUSY_MS = 250;
@@ -124,13 +119,8 @@ const CITATION_STYLES = [
   { id: "chicago", label: "Chicago (note)" },
 ] as const;
 
-const AI_CONFIGURATION_ERROR_RE = /配置 AI 服务|配置.*AI|API Key|模型/;
 const PREVIEW_LIBRARY_SCOPE_MESSAGE =
-  "浏览器预览使用可重置的示例文献；星标、标签、阅读状态等整理操作只在本页生效，真实数据库、PDF 附件和 AI 生成需要在桌面应用中完成。";
-
-function isAiConfigurationError(message: string | null | undefined): boolean {
-  return Boolean(message && AI_CONFIGURATION_ERROR_RE.test(message));
-}
+  "浏览器预览使用可重置的示例文献；星标、标签、阅读状态等整理操作只在本页生效，真实数据库、PDF 附件和 AI 合成需要在桌面应用中完成。";
 
 interface LibraryViewDetail {
   filter?: LibraryFilter;
@@ -177,12 +167,9 @@ const TAG_COLOR_OPTIONS = [
 
 interface WorkRuntimeMeta {
   pdfCount: number;
-  flashcardCount: number;
   annotationCount: number;
   pdfPreview: AttachmentRow | null;
   notePreviews: WorkNotePreview[];
-  latestAiJobStatus: string | null;
-  latestAiJobError: string | null;
   sentinelTaskCount: number;
   sentinelStatus: string | null;
   sentinelState: string | null;
@@ -223,8 +210,6 @@ interface WorkTableMeta {
   citedBy: number;
   annotations: number;
   pdfs: number;
-  flashcards: number;
-  latestAiJobStatus: string | null;
   sentinelTaskCount: number;
   sentinelStatus: string | null;
   sentinelState: string | null;
@@ -237,8 +222,6 @@ function emptyWorkMeta(): WorkTableMeta {
     citedBy: 0,
     annotations: 0,
     pdfs: 0,
-    flashcards: 0,
-    latestAiJobStatus: null,
     sentinelTaskCount: 0,
     sentinelStatus: null,
     sentinelState: null,
@@ -399,8 +382,6 @@ const PREVIEW_LIBRARY_META: Record<string, WorkTableMeta> = {
     citedBy: 128000,
     annotations: 6,
     pdfs: 1,
-    flashcards: 14,
-    latestAiJobStatus: "done",
     sentinelTaskCount: 1,
     sentinelStatus: "active",
     sentinelState: "indexed_openalex",
@@ -412,8 +393,6 @@ const PREVIEW_LIBRARY_META: Record<string, WorkTableMeta> = {
     citedBy: 31000,
     annotations: 4,
     pdfs: 1,
-    flashcards: 9,
-    latestAiJobStatus: "done",
     sentinelTaskCount: 1,
     sentinelStatus: "done",
     sentinelState: "indexed_pubmed",
@@ -425,8 +404,6 @@ const PREVIEW_LIBRARY_META: Record<string, WorkTableMeta> = {
     citedBy: 21000,
     annotations: 0,
     pdfs: 0,
-    flashcards: 0,
-    latestAiJobStatus: null,
     sentinelTaskCount: 0,
     sentinelStatus: null,
     sentinelState: null,
@@ -438,8 +415,6 @@ const PREVIEW_LIBRARY_META: Record<string, WorkTableMeta> = {
     citedBy: 18000,
     annotations: 3,
     pdfs: 1,
-    flashcards: 7,
-    latestAiJobStatus: "done",
     sentinelTaskCount: 0,
     sentinelStatus: null,
     sentinelState: null,
@@ -463,7 +438,6 @@ function previewAttachment(workId: string, fileName: string, pages: number): Att
 const PREVIEW_RUNTIME_META: Record<string, WorkRuntimeMeta> = {
   "preview-attention": {
     pdfCount: 1,
-    flashcardCount: 14,
     annotationCount: 6,
     pdfPreview: previewAttachment("preview-attention", "attention-is-all-you-need.pdf", 15),
     notePreviews: [
@@ -482,15 +456,12 @@ const PREVIEW_RUNTIME_META: Record<string, WorkRuntimeMeta> = {
         updated_at: PREVIEW_TIMESTAMP - 1000 * 60 * 46,
       },
     ],
-    latestAiJobStatus: "done",
-    latestAiJobError: null,
     sentinelTaskCount: 1,
     sentinelStatus: "active",
     sentinelState: "indexed_openalex",
   },
   "preview-alphafold": {
     pdfCount: 1,
-    flashcardCount: 9,
     annotationCount: 4,
     pdfPreview: previewAttachment("preview-alphafold", "alphafold-nature-2021.pdf", 27),
     notePreviews: [
@@ -502,27 +473,21 @@ const PREVIEW_RUNTIME_META: Record<string, WorkRuntimeMeta> = {
         updated_at: PREVIEW_TIMESTAMP - 1000 * 60 * 90,
       },
     ],
-    latestAiJobStatus: "done",
-    latestAiJobError: null,
     sentinelTaskCount: 1,
     sentinelStatus: "done",
     sentinelState: "indexed_pubmed",
   },
   "preview-sam": {
     pdfCount: 0,
-    flashcardCount: 0,
     annotationCount: 0,
     pdfPreview: null,
     notePreviews: [],
-    latestAiJobStatus: null,
-    latestAiJobError: null,
     sentinelTaskCount: 0,
     sentinelStatus: null,
     sentinelState: null,
   },
   "preview-scaling-laws": {
     pdfCount: 1,
-    flashcardCount: 7,
     annotationCount: 3,
     pdfPreview: previewAttachment("preview-scaling-laws", "scaling-laws-language-models.pdf", 30),
     notePreviews: [
@@ -534,8 +499,6 @@ const PREVIEW_RUNTIME_META: Record<string, WorkRuntimeMeta> = {
         updated_at: PREVIEW_TIMESTAMP - 1000 * 60 * 130,
       },
     ],
-    latestAiJobStatus: "done",
-    latestAiJobError: null,
     sentinelTaskCount: 0,
     sentinelStatus: null,
     sentinelState: null,
@@ -919,7 +882,6 @@ export function LibraryPage() {
   const [selectedMeta, setSelectedMeta] = useState<WorkRuntimeMeta | null>(null);
   const [busy, setBusy] = useState(false);
   const [attachingPdf, setAttachingPdf] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageLeaving, setMessageLeaving] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -1074,63 +1036,38 @@ export function LibraryPage() {
 
       const ids = works.map((work) => work.id);
       const placeholders = ids.map(() => "?").join(",");
-      const [
-        tagRows,
-        citationCounts,
-        annotationRows,
-        attachmentRows,
-        flashcardRows,
-        aiJobRows,
-        sentinelRows,
-      ] = await Promise.all([
-        db.query<{ work_id: string; name: string }>(
-          `SELECT wt.work_id, t.name
+      const [tagRows, citationCounts, annotationRows, attachmentRows, sentinelRows] =
+        await Promise.all([
+          db.query<{ work_id: string; name: string }>(
+            `SELECT wt.work_id, t.name
            FROM work_tags wt
            JOIN tags t ON t.id = wt.tag_id
            WHERE wt.work_id IN (${placeholders}) AND t.deleted_at IS NULL
           ORDER BY t.name`,
-          ids,
-        ),
-        citationCountsForWorks(db, ids),
-        db.query<{ work_id: string; count: number }>(
-          `SELECT work_id, COUNT(*) AS count
+            ids,
+          ),
+          citationCountsForWorks(db, ids),
+          db.query<{ work_id: string; count: number }>(
+            `SELECT work_id, COUNT(*) AS count
            FROM annotations
            WHERE work_id IN (${placeholders}) AND deleted_at IS NULL
            GROUP BY work_id`,
-          ids,
-        ),
-        db.query<{ work_id: string; count: number }>(
-          `SELECT work_id, COUNT(*) AS count
+            ids,
+          ),
+          db.query<{ work_id: string; count: number }>(
+            `SELECT work_id, COUNT(*) AS count
            FROM attachments
            WHERE work_id IN (${placeholders}) AND deleted_at IS NULL AND kind = 'pdf'
            GROUP BY work_id`,
-          ids,
-        ),
-        db.query<{ work_id: string; count: number }>(
-          `SELECT work_id, COUNT(*) AS count
-           FROM flashcards
-           WHERE work_id IN (${placeholders}) AND deleted_at IS NULL
-           GROUP BY work_id`,
-          ids,
-        ),
-        db.query<{ work_id: string; status: string }>(
-          `SELECT j.work_id, j.status
-           FROM ai_jobs j
-           JOIN (
-             SELECT work_id, MAX(created_at) AS created_at
-             FROM ai_jobs
-             WHERE work_id IN (${placeholders})
-             GROUP BY work_id
-           ) latest ON latest.work_id = j.work_id AND latest.created_at = j.created_at`,
-          ids,
-        ),
-        db.query<{
-          work_id: string;
-          status: string;
-          current_state: string | null;
-          task_count: number;
-        }>(
-          `SELECT st.work_id, st.status, st.current_state, latest.task_count
+            ids,
+          ),
+          db.query<{
+            work_id: string;
+            status: string;
+            current_state: string | null;
+            task_count: number;
+          }>(
+            `SELECT st.work_id, st.status, st.current_state, latest.task_count
            FROM sentinel_tasks st
            JOIN (
              SELECT work_id, MAX(created_at) AS created_at, COUNT(*) AS task_count
@@ -1139,9 +1076,9 @@ export function LibraryPage() {
              GROUP BY work_id
            ) latest ON latest.work_id = st.work_id AND latest.created_at = st.created_at
            WHERE st.deleted_at IS NULL`,
-          ids,
-        ),
-      ]);
+            ids,
+          ),
+        ]);
       await waitForLibrarySmokeAfterReadDelay();
       if (refreshSeqRef.current !== seq) return;
 
@@ -1165,14 +1102,6 @@ export function LibraryPage() {
       for (const row of attachmentRows) {
         const meta = nextMeta[row.work_id];
         if (meta) meta.pdfs = Number(row.count);
-      }
-      for (const row of flashcardRows) {
-        const meta = nextMeta[row.work_id];
-        if (meta) meta.flashcards = Number(row.count);
-      }
-      for (const row of aiJobRows) {
-        const meta = nextMeta[row.work_id];
-        if (meta) meta.latestAiJobStatus = row.status;
       }
       for (const row of sentinelRows) {
         const meta = nextMeta[row.work_id];
@@ -1210,11 +1139,9 @@ export function LibraryPage() {
 
   useEffect(() => {
     const onDerivedDataUpdated = () => void refresh();
-    window.addEventListener("aurascholar:flashcards-updated", onDerivedDataUpdated);
     window.addEventListener("aurascholar:sentinel-updated", onDerivedDataUpdated);
     return () => {
       refreshSeqRef.current += 1;
-      window.removeEventListener("aurascholar:flashcards-updated", onDerivedDataUpdated);
       window.removeEventListener("aurascholar:sentinel-updated", onDerivedDataUpdated);
     };
   }, [refresh]);
@@ -1230,15 +1157,6 @@ export function LibraryPage() {
     };
     window.addEventListener("keydown", onFindShortcut);
     return () => window.removeEventListener("keydown", onFindShortcut);
-  }, []);
-
-  const autoDigest = useCallback((workId: string, title: string) => {
-    void import("../services/ai")
-      .then(({ generateFlashcardsForWork }) =>
-        generateFlashcardsForWork(workId, title, { persistError: false }),
-      )
-      .then(() => setMessage(`已入库并提取重点:${title}`))
-      .catch(() => {}); // no AI config / scanned PDF — manual extraction remains
   }, []);
 
   // Surface a dedup hit (already in library) without a confirm card.
@@ -1409,13 +1327,12 @@ export function LibraryPage() {
           source: draft?.source ?? "pdf",
         });
         setMessage(`已入库:${result.title}`);
-        if (!result.deduped && result.pdfFetched) autoDigest(result.workId, result.title);
       }
       setConfirmDraft(null);
       window.dispatchEvent(new Event("aurascholar:library-updated"));
       await refresh();
     },
-    [confirmDraft, refresh, autoDigest],
+    [confirmDraft, refresh],
   );
 
   const handleCancelImport = useCallback(() => {
@@ -1803,13 +1720,6 @@ export function LibraryPage() {
       const meta = workMeta[work.id];
       if (extraFilter === "with-pdf" && (meta?.pdfs ?? 0) === 0) return false;
       if (extraFilter === "without-pdf" && (meta?.pdfs ?? 0) > 0) return false;
-      if (extraFilter === "ai-done" && meta?.latestAiJobStatus !== "done") return false;
-      if (
-        extraFilter === "ai-needed" &&
-        ((meta?.pdfs ?? 0) === 0 || meta?.latestAiJobStatus === "done")
-      ) {
-        return false;
-      }
       if (activeFilter === "reading") return work.reading_status === "reading";
       if (activeFilter === "unread") return work.reading_status === "unread";
       if (activeFilter === "noted") return (workMeta[work.id]?.annotations ?? 0) > 0;
@@ -1954,7 +1864,6 @@ export function LibraryPage() {
             ? `这份 PDF 已经附加在《${selectedWork.title}》上${annotationMessage}`
             : `已为《${selectedWork.title}》上传 PDF(${result.pageCount} 页)${annotationMessage}`,
         );
-        if (!result.deduped) autoDigest(selectedWork.id, selectedWork.title);
         await refresh();
         setSelectedWorkId(selectedWork.id);
         window.dispatchEvent(new Event("aurascholar:library-updated"));
@@ -1964,7 +1873,7 @@ export function LibraryPage() {
         setAttachingPdf(false);
       }
     },
-    [autoDigest, refresh, selectedWork],
+    [refresh, selectedWork],
   );
 
   // "Find full text" for a work missing a PDF: try OA first (still confirmed via
@@ -2129,7 +2038,7 @@ export function LibraryPage() {
     const confirmed = await confirm({
       title: "移入回收站？",
       description: `《${title}》会从当前列表移到回收站。`,
-      details: ["你可以在回收站恢复它。", "永久删除前，PDF、批注、标签和闪卡都会保留。"],
+      details: ["你可以在回收站恢复它。", "永久删除前，PDF、批注、标签和关联数据都会保留。"],
       confirmLabel: "移入回收站",
       tone: "warning",
     });
@@ -2308,19 +2217,11 @@ export function LibraryPage() {
     let cancelled = false;
     void (async () => {
       const db = await getDb();
-      const [attachments, flashcards, jobs, notes, sentinelTasks] = await Promise.all([
+      const [attachments, notes, sentinelTasks] = await Promise.all([
         db.query<AttachmentRow>(
           `SELECT * FROM attachments
            WHERE work_id = ? AND deleted_at IS NULL
            ORDER BY created_at DESC`,
-          [selectedWork.id],
-        ),
-        db.query<{ id: string }>(
-          `SELECT id FROM flashcards WHERE work_id = ? AND deleted_at IS NULL`,
-          [selectedWork.id],
-        ),
-        db.query<{ status: string; error: string | null }>(
-          `SELECT status, error FROM ai_jobs WHERE work_id = ? ORDER BY created_at DESC LIMIT 1`,
           [selectedWork.id],
         ),
         db.query<WorkNotePreview>(
@@ -2343,12 +2244,9 @@ export function LibraryPage() {
       const pdfPreview = attachments.find((a) => a.kind === "pdf") ?? null;
       setSelectedMeta({
         pdfCount: attachments.filter((a) => a.kind === "pdf").length,
-        flashcardCount: flashcards.length,
         annotationCount: workMeta[selectedWork.id]?.annotations ?? 0,
         pdfPreview,
         notePreviews: notes,
-        latestAiJobStatus: jobs[0]?.status ?? null,
-        latestAiJobError: jobs[0]?.error ? describeSafeError(jobs[0].error) : null,
         sentinelTaskCount: sentinelTasks.length,
         sentinelStatus: sentinelTasks[0]?.status ?? null,
         sentinelState: sentinelTasks[0]?.current_state ?? null,
@@ -2515,69 +2413,6 @@ export function LibraryPage() {
     },
     [focusPagedRow, pagedRows],
   );
-
-  const generateForSelected = useCallback(async () => {
-    if (!selectedWork || generating) return;
-    if (!isDesktopRuntime()) {
-      const params = new URLSearchParams({
-        work: selectedWork.id,
-        title: selectedWork.title,
-      });
-      navigate(`/flashcards?${params.toString()}`);
-      return;
-    }
-    const startedAt = Date.now();
-    setGenerating(true);
-    setMessage(`正在为《${selectedWork.title}》生成闪卡...`);
-    try {
-      const smokeGenerate = (window as LibrarySmokeWindow)
-        .__AURASCHOLAR_SMOKE_LIBRARY_GENERATE_FLASHCARDS__;
-      const result = smokeGenerate
-        ? await smokeGenerate(selectedWork.id, selectedWork.title)
-        : await import("../services/ai").then(({ generateFlashcardsForWork }) =>
-            generateFlashcardsForWork(selectedWork.id, selectedWork.title),
-          );
-      await waitForMinimumElapsed(startedAt, MIN_FLASHCARD_GENERATION_BUSY_MS);
-      setMessage(`已为《${selectedWork.title}》生成 ${result.created} 张闪卡`);
-      window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-      const db = await getDb();
-      const cards = await db.query<{ n: number }>(
-        `SELECT COUNT(*) AS n FROM flashcards WHERE work_id = ? AND deleted_at IS NULL`,
-        [selectedWork.id],
-      );
-      setSelectedMeta((prev) => ({
-        pdfCount: prev?.pdfCount ?? 0,
-        flashcardCount: Number(cards[0]?.n ?? 0),
-        annotationCount: prev?.annotationCount ?? 0,
-        pdfPreview: prev?.pdfPreview ?? null,
-        notePreviews: prev?.notePreviews ?? [],
-        latestAiJobStatus: "done",
-        latestAiJobError: null,
-        sentinelTaskCount: prev?.sentinelTaskCount ?? 0,
-        sentinelStatus: prev?.sentinelStatus ?? null,
-        sentinelState: prev?.sentinelState ?? null,
-      }));
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_FLASHCARD_GENERATION_BUSY_MS);
-      const detail = describeSafeError(e);
-      setMessage(`生成闪卡失败，文献和现有闪卡仍保留，可重新生成:${detail}`);
-      setSelectedMeta((prev) => ({
-        pdfCount: prev?.pdfCount ?? 0,
-        flashcardCount: prev?.flashcardCount ?? 0,
-        annotationCount: prev?.annotationCount ?? 0,
-        pdfPreview: prev?.pdfPreview ?? null,
-        notePreviews: prev?.notePreviews ?? [],
-        latestAiJobStatus: "error",
-        latestAiJobError: describeSafeError(e),
-        sentinelTaskCount: prev?.sentinelTaskCount ?? 0,
-        sentinelStatus: prev?.sentinelStatus ?? null,
-        sentinelState: prev?.sentinelState ?? null,
-      }));
-    } finally {
-      setGenerating(false);
-    }
-  }, [generating, navigate, selectedWork]);
 
   // --- Multi-select & bulk operations -------------------------------------
   const toggleRowSelected = useCallback((workId: string) => {
@@ -2762,7 +2597,7 @@ export function LibraryPage() {
       description: `将选中的 ${workIds.length} 篇文献移入回收站。`,
       details: [
         "这些文献之后可以从回收站恢复。",
-        "永久删除前，关联 PDF、批注、标签和闪卡都会保留。",
+        "永久删除前，关联 PDF、批注、标签和其他研究数据都会保留。",
       ],
       confirmLabel: `移入 ${workIds.length} 篇`,
       tone: "warning",
@@ -2899,7 +2734,7 @@ export function LibraryPage() {
       const confirmed = await confirm({
         title: "永久删除文献？",
         description: `将永久删除 ${workIds.length} 篇回收站文献。`,
-        details: ["这会移除元数据、PDF、标签、笔记、闪卡和引用关联。", "该操作不能撤销。"],
+        details: ["这会移除元数据、PDF、标签、笔记和引用关联。", "该操作不能撤销。"],
         confirmationHelp: "输入“永久删除”后才会启用确认按钮。",
         confirmationPhrase: "永久删除",
         confirmLabel: "永久删除",
@@ -2945,7 +2780,7 @@ export function LibraryPage() {
       title: "合并重复文献？",
       description: `将 ${duplicates.length} 篇重复文献合并到主记录《${selectedWork.title}》。`,
       details: [
-        "PDF、批注、闪卡、标签、摘录、文件夹、引文和哨兵任务会迁移到主记录。",
+        "PDF、批注、标签、摘录、文件夹、引文、衍生数据和哨兵任务会迁移到主记录。",
         "主记录的题名与作者优先保留，重复项会移入回收站。",
         titles ? `重复项：${titles}${duplicates.length > 4 ? "…" : ""}` : null,
       ],
@@ -3750,7 +3585,7 @@ export function LibraryPage() {
                 onOpenImport={() => setImportDialogOpen(true)}
                 onTryExample={fillExamplePaper}
                 onOpenSettings={() => navigate("/settings?section=ai")}
-                onOpenFlashcards={() => navigate("/flashcards")}
+                onOpenCanvas={() => navigate("/canvas")}
               />
             ) : (
               <div className="library-empty library-empty--plain au-surface">
@@ -3924,7 +3759,6 @@ export function LibraryPage() {
               meta={selectedMeta}
               tableMeta={workMeta[selectedWork.id]}
               isTrashView={isTrashView}
-              generating={generating}
               attachingPdf={attachingPdf}
               workActionBusy={workActionBusy}
               starActionBusyTarget={starActionBusyById[selectedWork.id]}
@@ -3941,15 +3775,10 @@ export function LibraryPage() {
               onUploadPdf={requestSelectedPdfUpload}
               onFindFulltext={() => void handleFindFulltext()}
               findingFulltext={findingFulltext}
-              onGenerateFlashcards={() => void generateForSelected()}
-              onOpenFlashcards={() => {
-                const params = new URLSearchParams({
-                  work: selectedWork.id,
-                  title: selectedWork.title,
-                });
-                navigate(`/flashcards?${params.toString()}`);
-              }}
-              onOpenAiSettings={() => navigate("/settings?section=ai")}
+              onAddToCanvas={() =>
+                navigate(`/canvas?workId=${encodeURIComponent(selectedWork.id)}`)
+              }
+              onOpenCanvas={() => navigate(`/canvas?workId=${encodeURIComponent(selectedWork.id)}`)}
               onOpenGraph={() => {
                 if (!isDesktopRuntime()) {
                   const graphKey = selectedWork.doi ?? selectedWork.arxiv_id;
@@ -4263,14 +4092,14 @@ function LibraryOnboardingEmpty({
   onOpenImport,
   onTryExample,
   onOpenSettings,
-  onOpenFlashcards,
+  onOpenCanvas,
 }: {
   busy: boolean;
   previewMode: boolean;
   onOpenImport: () => void;
   onTryExample: () => void;
   onOpenSettings: () => void;
-  onOpenFlashcards: () => void;
+  onOpenCanvas: () => void;
 }) {
   return (
     <section className="library-empty library-empty--onboarding au-surface">
@@ -4281,7 +4110,7 @@ function LibraryOnboardingEmpty({
         <h3>把第一篇论文放进工作台</h3>
         <p>
           从 PDF、DOI、arXiv 或 BibTeX/RIS/NBIB/ENW
-          题录文件开始；入库后可以直接进入阅读、生成重点和闪卡。
+          题录文件开始；入库后可以直接阅读、提取摘录并放到空间白板中重组。
         </p>
         <div className="library-onboarding-actions">
           <Button onClick={onOpenImport} disabled={busy}>
@@ -4302,19 +4131,19 @@ function LibraryOnboardingEmpty({
       <div className="library-onboarding-steps" aria-label="首条研究流">
         <OnboardingStep index="01" title="入库" text="识别题名、作者、DOI 与 PDF 附件。" />
         <OnboardingStep index="02" title="阅读" text="打开 PDF，沉淀批注、摘录和状态。" />
-        <OnboardingStep index="03" title="AI 重点" text="提炼贡献、方法、局限并生成闪卡。" />
-        <OnboardingStep index="04" title="复习" text="用 FSRS 队列把论文记成长期知识。" />
+        <OnboardingStep index="03" title="关联" text="把文献、摘录和研究想法放进空间白板。" />
+        <OnboardingStep index="04" title="综合" text="重组证据链，并用 AI 提炼分歧与研究空白。" />
       </div>
 
       <div className="library-onboarding-side">
-        <strong>首轮配置</strong>
-        <p>先配置 AI 服务，导入 PDF 后就能自动生成重点和闪卡。</p>
+        <strong>开始研究</strong>
+        <p>先把文献加入白板；需要合成观点时再启用 AI 服务。</p>
         <div>
           <Button variant="secondary" onClick={onOpenSettings}>
             配置 AI
           </Button>
-          <Button variant="secondary" onClick={onOpenFlashcards}>
-            复习队列
+          <Button variant="secondary" onClick={onOpenCanvas}>
+            打开空间白板
           </Button>
         </div>
       </div>
@@ -4802,8 +4631,6 @@ function AdvancedFilterDialog({
     { value: "", title: "不限" },
     { value: "with-pdf", title: "已有 PDF" },
     { value: "without-pdf", title: "缺 PDF" },
-    { value: "ai-done", title: "AI 已生成" },
-    { value: "ai-needed", title: "需要生成 AI" },
   ];
   return (
     <div className="library-modal-overlay" role="presentation" onMouseDown={onClose}>
@@ -4820,7 +4647,7 @@ function AdvancedFilterDialog({
         <div className="library-modal__head">
           <div>
             <h2 id={titleId}>筛选当前范围</h2>
-            <p className="library-modal__subhead">标签、来源和处理状态可以组合使用。</p>
+            <p className="library-modal__subhead">标签、来源和全文状态可以组合使用。</p>
           </div>
           <button
             type="button"
@@ -4865,7 +4692,7 @@ function AdvancedFilterDialog({
             </select>
           </label>
           <label>
-            <span>处理状态</span>
+            <span>全文状态</span>
             <select
               className="au-input"
               value={draftExtra}
@@ -5632,10 +5459,6 @@ function extraFilterLabel(filter: ExtraFilter) {
       return "已有 PDF";
     case "without-pdf":
       return "缺 PDF";
-    case "ai-done":
-      return "AI 已生成";
-    case "ai-needed":
-      return "需要生成 AI";
   }
 }
 
@@ -5706,7 +5529,6 @@ function SelectedWorkPanel({
   meta,
   tableMeta,
   isTrashView,
-  generating,
   attachingPdf,
   workActionBusy,
   starActionBusyTarget,
@@ -5720,9 +5542,8 @@ function SelectedWorkPanel({
   onUploadPdf,
   onFindFulltext,
   findingFulltext,
-  onGenerateFlashcards,
-  onOpenFlashcards,
-  onOpenAiSettings,
+  onAddToCanvas,
+  onOpenCanvas,
   onOpenGraph,
   onEditMetadata,
   onClose,
@@ -5731,7 +5552,6 @@ function SelectedWorkPanel({
   meta: WorkRuntimeMeta | null;
   tableMeta?: WorkTableMeta;
   isTrashView: boolean;
-  generating: boolean;
   attachingPdf: boolean;
   workActionBusy: "merge" | "purge" | "restore" | "trash" | null;
   starActionBusyTarget?: boolean;
@@ -5745,9 +5565,8 @@ function SelectedWorkPanel({
   onUploadPdf: () => void;
   onFindFulltext: () => void;
   findingFulltext: boolean;
-  onGenerateFlashcards: () => void;
-  onOpenFlashcards: () => void;
-  onOpenAiSettings: () => void;
+  onAddToCanvas: () => void;
+  onOpenCanvas: () => void;
   onOpenGraph: () => void;
   onEditMetadata: () => void;
   onClose: () => void;
@@ -5763,7 +5582,7 @@ function SelectedWorkPanel({
       <div className="library-detail au-panel">
         <h2>文献详情</h2>
         <p className="au-text-muted">
-          选择一篇文献后，这里会显示元信息、笔记、预览、处理状态和引用脉络。
+          选择一篇文献后，这里会显示元信息、笔记、预览、研究素材和引用脉络。
         </p>
       </div>
     );
@@ -5775,8 +5594,6 @@ function SelectedWorkPanel({
   const tags = (tableMeta?.tags ?? []).slice(0, 4);
   const starActionBusy = typeof starActionBusyTarget === "boolean";
   const readingStatusBusy = Boolean(readingStatusBusyTarget);
-  const aiGenerationError = meta?.latestAiJobStatus === "error" ? meta.latestAiJobError : null;
-  const showAiSettingsCta = isAiConfigurationError(aiGenerationError);
 
   if (isTrashView) {
     return (
@@ -5955,6 +5772,9 @@ function SelectedWorkPanel({
         <Button className="library-detail__read" onClick={onOpenReader}>
           {meta?.pdfCount ? "继续阅读" : "打开阅读器"}
         </Button>
+        <Button variant="secondary" className="library-panel-action" onClick={onAddToCanvas}>
+          加入白板
+        </Button>
       </div>
 
       <div className="library-side-tabs" role="tablist" aria-label="文献详情">
@@ -6052,51 +5872,14 @@ function SelectedWorkPanel({
             </section>
             <section className="library-inspector__section">
               <div className="library-panel-heading">
-                <h3>处理状态</h3>
+                <h3>研究素材</h3>
               </div>
-              <StatusLine
-                label="AI 重点"
-                value={
-                  !meta
-                    ? "读取中"
-                    : meta.latestAiJobStatus === "done"
-                      ? "已生成"
-                      : meta.latestAiJobStatus === "error"
-                        ? "生成失败"
-                        : "待生成"
-                }
-                variant={
-                  !meta
-                    ? "neutral"
-                    : meta.latestAiJobStatus === "done"
-                      ? "success"
-                      : meta.latestAiJobStatus === "error"
-                        ? "warning"
-                        : "neutral"
-                }
-              />
               <StatusLine
                 label="批注"
                 value={meta ? `${meta.annotationCount} 条` : "读取中"}
                 variant={meta?.annotationCount ? "success" : "neutral"}
               />
-              <StatusLine
-                label="闪卡"
-                value={meta ? `${meta.flashcardCount} 张` : "读取中"}
-                variant={meta?.flashcardCount ? "success" : "neutral"}
-              />
-              {aiGenerationError && (
-                <div className="library-panel-recovery" role="alert">
-                  <p>{aiGenerationError}</p>
-                  {showAiSettingsCta && (
-                    <div className="library-panel-recovery__actions">
-                      <Button variant="secondary" onClick={onOpenAiSettings}>
-                        配置 AI
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
+              <StatusLine label="空间白板" value="可作为文献卡加入" variant="neutral" />
             </section>
             <section className="library-inspector__section library-inspector__section--danger">
               <button
@@ -6117,42 +5900,16 @@ function SelectedWorkPanel({
             <NotesPanel meta={meta} onOpenReader={onOpenReader} />
             <section className="library-inspector__section">
               <div className="library-panel-heading">
-                <h3>闪卡</h3>
-                <button type="button" onClick={onOpenFlashcards}>
-                  查看全部
+                <h3>空间白板</h3>
+                <button type="button" onClick={onOpenCanvas}>
+                  打开空间白板
                 </button>
               </div>
-              <StatusLine
-                label="当前文献"
-                value={meta ? `${meta.flashcardCount} 张` : "读取中"}
-                variant={meta?.flashcardCount ? "success" : "neutral"}
-              />
-              {aiGenerationError && (
-                <div className="library-panel-recovery" role="alert">
-                  <p>{aiGenerationError}</p>
-                  {showAiSettingsCta && (
-                    <div className="library-panel-recovery__actions">
-                      <Button variant="secondary" onClick={onOpenAiSettings}>
-                        去配置 AI
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-              <Button
-                className="library-panel-action"
-                variant={meta?.flashcardCount ? "secondary" : "primary"}
-                onClick={onGenerateFlashcards}
-                disabled={generating}
-                aria-busy={generating ? "true" : undefined}
-              >
-                {generating
-                  ? "生成中..."
-                  : aiGenerationError
-                    ? "重试生成闪卡"
-                    : meta?.flashcardCount
-                      ? "重新生成闪卡"
-                      : "生成闪卡"}
+              <p className="library-preview-copy">
+                将完整文献作为卡片加入画布，再与摘录、研究笔记和 AI 合成建立连接。
+              </p>
+              <Button className="library-panel-action" variant="primary" onClick={onAddToCanvas}>
+                加入白板
               </Button>
             </section>
           </>

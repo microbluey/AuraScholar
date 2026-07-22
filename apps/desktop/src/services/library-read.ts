@@ -5,14 +5,20 @@ import { describeSafeError } from "./sensitive-text";
 
 export async function loadPdfForWork(
   workId: string,
+  preferredAttachmentId?: string,
 ): Promise<{ attachmentId: string; data: Uint8Array } | null> {
   const db = await getDb();
   const attachments = new AttachmentsRepo(db);
   const list = await attachments.forWork(workId);
-  const pdfs = list
+  let pdfs = list
     .filter((a) => a.kind === "pdf")
     .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
   if (pdfs.length === 0) return null;
+  if (preferredAttachmentId) {
+    const preferred = pdfs.find((pdf) => pdf.id === preferredAttachmentId);
+    if (!preferred) throw new Error("指定的 PDF 附件不存在或已被移除");
+    pdfs = [preferred];
+  }
 
   let lastError: unknown = null;
   for (const pdf of pdfs) {

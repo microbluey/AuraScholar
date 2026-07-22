@@ -18,3 +18,16 @@ export {
   trimPaperText,
 } from "./flashcards.js";
 export type { FlashcardOutput, FlashcardRequest } from "./flashcards.js";
+export {
+  CANVAS_SYNTHESIS_PROMPT_VERSION,
+  CanvasSynthesisModeSchema,
+  CanvasSynthesisOutputSchema,
+  MAX_CANVAS_SYNTHESIS_SOURCES,
+  generateCanvasSynthesis,
+} from "./canvas-synthesis.js";
+export type {
+  CanvasSynthesisMode,
+  CanvasSynthesisOutput,
+  CanvasSynthesisRequest,
+  CanvasSynthesisSource,
+} from "./canvas-synthesis.js";

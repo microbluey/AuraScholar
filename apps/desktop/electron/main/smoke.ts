@@ -140,33 +140,24 @@ interface SmokeRendererResult {
   discoveryReferenceImportRejectsEmptyPersisted: boolean;
   discoveryReferenceImportRejectsEmptyVisible: boolean;
   discoveryReferenceImportRichFormatsPersisted: boolean;
-  appShellFlashcardStatsRacePreserved: boolean;
+  appShellCanvasStatsRacePreserved: boolean;
+  canvasLegacyFlashcardsRedirected: boolean;
+  canvasLegacyRedirectHash: string;
+  canvasLibraryWorkIngressHash: string;
+  canvasLibraryWorkIngressNavigated: boolean;
+  canvasLibraryWorkIngressPersisted: boolean;
+  canvasLibraryWorkIngressVisible: boolean;
+  canvasPersistedNodeCount: number | null;
+  canvasPersistedNodeReloaded: boolean;
+  canvasReaderAnnotationDeepLinkHash: string;
+  canvasReaderAnnotationDeepLinkNavigated: boolean;
+  canvasReaderAnnotationPersisted: boolean;
+  canvasReaderAnnotationVisible: boolean;
   dbError: string | null;
   emptyStateVisible: boolean;
   externalCredentialsRejected: boolean;
   externalNavigationBlocked: boolean;
   externalUnsafeRejected: boolean;
-  flashcardCardSpaceReveals: boolean;
-  flashcardLoadRetryAttempts: number;
-  flashcardLoadRetryRecoveryDetail: string;
-  flashcardLoadRetryRecoveryVisible: boolean;
-  flashcardEmptyLatestReaderHash: string;
-  flashcardEmptyLatestReaderOpened: boolean;
-  flashcardEmptyLatestReaderVisible: boolean;
-  flashcardFocusedButtonSpacePreservesReveal: boolean;
-  flashcardNextDueVisible: boolean;
-  flashcardRemoveConfirmVisible: boolean;
-  flashcardRemoveFailurePreserved: boolean;
-  flashcardRemoveBusyVisible: boolean;
-  flashcardRemovePersisted: boolean;
-  flashcardRestoreFailurePreserved: boolean;
-  flashcardRestoreBusyVisible: boolean;
-  flashcardRestorePersisted: boolean;
-  flashcardRatingFailurePreserved: boolean;
-  flashcardRatingBusyVisible: boolean;
-  flashcardRatingCompleted: boolean;
-  flashcardRatingPersisted: boolean;
-  flashcardRefreshRacePreserved: boolean;
   graphCachedVisible: boolean;
   graphEmptyLatestCtaHash: string;
   graphEmptyLatestCtaOpened: boolean;
@@ -225,15 +216,9 @@ interface SmokeRendererResult {
   libraryBulkTagFailurePreserved: boolean;
   libraryBulkTagFailureVisible: boolean;
   libraryBulkSelectMixedVisible: boolean;
-  libraryFlashcardEventRefreshVisible: boolean;
   libraryFilterEmptyActionRestoresResults: boolean;
   libraryFilterTabsExposeState: boolean;
   libraryMissingDeepLinkFeedbackVisible: boolean;
-  libraryFlashcardGenerateBusyVisible: boolean;
-  libraryFlashcardGenerateFailurePreserved: boolean;
-  libraryFlashcardGenerateFailureRetryVisible: boolean;
-  libraryFlashcardGenerateFailureSettingsCtaVisible: boolean;
-  libraryFlashcardGenerateRetryRecovered: boolean;
   libraryBulkTrashFailureBusyVisible: boolean;
   libraryBulkTrashFailureDidNotPersist: boolean;
   libraryBulkTrashFailurePreserved: boolean;
@@ -435,14 +420,6 @@ interface SmokeRendererResult {
   readerCorruptPdfRecoveryVisible: boolean;
   readerCorruptPdfVisible: boolean;
   readerCorruptHash: string;
-  readerDigestGenerateBusyVisible: boolean;
-  readerDigestGenerateErrorVisible: boolean;
-  readerDigestRetryAttempts: number;
-  readerDigestRetryRecoveryDetail: string;
-  readerDigestRetryRecoveryVisible: boolean;
-  readerDigestSettingsCtaNavigates: boolean;
-  readerDigestSettingsCtaTargetsSection: boolean;
-  readerDigestSettingsCtaVisible: boolean;
   readerErrorVisible: boolean;
   readerFindFulltextHandoffNavigated: boolean;
   readerFindFulltextHandoffHash: string;
@@ -1075,16 +1052,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           retryDoi: "10.4242/aurascholar.graph-retry",
           retryTitle: "Smoke Graph Retry Recovered Center",
         };
-        const FLASHCARD_SMOKE = {
-          id: "smoke-flashcard-keyboard",
-          front: "Smoke flashcard keyboard front",
-          back: "Smoke flashcard keyboard back"
-        };
-        const FLASHCARD_REMOVE_SMOKE = {
-          id: "smoke-flashcard-remove-undo",
-          front: "Smoke flashcard remove undo front",
-          back: "Smoke flashcard remove undo back"
-        };
         const SNIPPET_SMOKE = {
           id: "smoke-snippet-keyboard",
           quote: "Smoke snippet quote for keyboard editing",
@@ -1272,8 +1239,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 ))
             );
           };
-          const selectedFlashcardPanelText = () =>
-            (selectedLibrarySection("闪卡")?.textContent ?? "").replace(/\s+/g, " ");
         const findButton = (label) =>
           Array.from(document.querySelectorAll("button")).find((button) => {
             const values = [
@@ -1472,31 +1437,22 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let commandCompositionIgnored = false;
         let detailVisible = false;
         let discoverySearchCompositionIgnored = false;
-        let appShellFlashcardStatsRacePreserved = false;
+        let appShellCanvasStatsRacePreserved = false;
+        let canvasLegacyFlashcardsRedirected = false;
+        let canvasLegacyRedirectHash = "";
+        let canvasLibraryWorkIngressHash = "";
+        let canvasLibraryWorkIngressNavigated = false;
+        let canvasLibraryWorkIngressPersisted = false;
+        let canvasLibraryWorkIngressVisible = false;
+        let canvasPersistedNodeCount = null;
+        let canvasPersistedNodeReloaded = false;
+        let canvasReaderAnnotationDeepLinkHash = "";
+        let canvasReaderAnnotationDeepLinkNavigated = false;
+        let canvasReaderAnnotationPersisted = false;
+        let canvasReaderAnnotationVisible = false;
         let externalCredentialsRejected = false;
         let externalNavigationBlocked = false;
         let externalUnsafeRejected = false;
-        let flashcardCardSpaceReveals = false;
-        let flashcardLoadRetryAttempts = 0;
-        let flashcardLoadRetryRecoveryDetail = "";
-        let flashcardLoadRetryRecoveryVisible = false;
-        let flashcardEmptyLatestReaderHash = "";
-        let flashcardEmptyLatestReaderOpened = false;
-        let flashcardEmptyLatestReaderVisible = false;
-        let flashcardFocusedButtonSpacePreservesReveal = false;
-        let flashcardNextDueVisible = false;
-        let flashcardRemoveConfirmVisible = false;
-        let flashcardRemoveFailurePreserved = false;
-        let flashcardRemoveBusyVisible = false;
-        let flashcardRemovePersisted = false;
-        let flashcardRestoreFailurePreserved = false;
-        let flashcardRestoreBusyVisible = false;
-        let flashcardRestorePersisted = false;
-        let flashcardRatingFailurePreserved = false;
-        let flashcardRatingBusyVisible = false;
-        let flashcardRatingCompleted = false;
-        let flashcardRatingPersisted = false;
-        let flashcardRefreshRacePreserved = false;
         let graphCachedVisible = false;
         let graphDeepLinkParamSyncVisible = false;
         let graphEmptyLatestCtaHash = "";
@@ -1683,12 +1639,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let discoveryReferenceImportRichFormatsPersisted = false;
         let libraryPdfAttachmentVisible = false;
         let libraryBulkSelectMixedVisible = false;
-        let libraryFlashcardEventRefreshVisible = false;
-        let libraryFlashcardGenerateBusyVisible = false;
-        let libraryFlashcardGenerateFailurePreserved = false;
-        let libraryFlashcardGenerateFailureRetryVisible = false;
-        let libraryFlashcardGenerateFailureSettingsCtaVisible = false;
-        let libraryFlashcardGenerateRetryRecovered = false;
         let libraryFilterEmptyActionRestoresResults = false;
         let libraryFilterTabsExposeState = false;
         let libraryMissingDeepLinkFeedbackVisible = false;
@@ -1897,14 +1847,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let readerCorruptPdfRecoveryVisible = false;
         let readerCorruptPdfVisible = false;
         let readerCorruptHash = "";
-        let readerDigestGenerateBusyVisible = false;
-        let readerDigestGenerateErrorVisible = false;
-        let readerDigestRetryAttempts = 0;
-        let readerDigestRetryRecoveryDetail = "";
-        let readerDigestRetryRecoveryVisible = false;
-        let readerDigestSettingsCtaNavigates = false;
-        let readerDigestSettingsCtaTargetsSection = false;
-        let readerDigestSettingsCtaVisible = false;
         let readerErrorVisible = false;
         let readerFindFulltextHandoffHash = "";
         let readerFindFulltextHandoffNavigated = false;
@@ -2945,25 +2887,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO flashcards (id, work_id, front_md, back_md, card_type, source, ai_model, generation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-              [
-                FLASHCARD_SMOKE.id,
-                SAMPLE.workId,
-                FLASHCARD_SMOKE.front,
-                FLASHCARD_SMOKE.back,
-                "qa",
-                "smoke",
-                null,
-                null,
-                now,
-                now
-              ]
-            );
-            await window.aura.db.run(
-              "INSERT OR REPLACE INTO flashcard_srs (flashcard_id, due_at, stability, difficulty, reps, lapses, state, last_review_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-              [FLASHCARD_SMOKE.id, now - 1_000, 0, 0, 0, 0, 0, null]
-            );
-            await window.aura.db.run(
               "INSERT OR REPLACE INTO snippets (id, work_id, page_index, quote, note_md, tag, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
               [
                 SNIPPET_SMOKE.id,
@@ -3382,133 +3305,27 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               !relatedPanelText.includes("按需读取 S2");
 
             await selectLibraryDetailTab("笔记");
-            await waitFor(() => selectedFlashcardPanelText().includes("1 张"), 3_000);
-            const selectedFlashcardPanel = () => selectedLibrarySection("闪卡");
-          const selectedFlashcardGenerateButton = () =>
-            Array.from(selectedFlashcardPanel()?.querySelectorAll("button") ?? []).find((button) =>
-              button.classList.contains("library-panel-action") ||
-              button.textContent?.replace(/\s+/g, " ").trim().includes("生成")
-            );
-          const flashcardRowsBeforeGenerateFailure = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM flashcards WHERE work_id = ? AND deleted_at IS NULL",
-            [SAMPLE.workId]
-          );
-          const flashcardCountBeforeGenerateFailure = Number(
-            flashcardRowsBeforeGenerateFailure[0]?.n ?? 0
-          );
-          let libraryFlashcardGenerateAttempts = 0;
-          window.__AURASCHOLAR_SMOKE_LIBRARY_GENERATE_FLASHCARDS__ = async (workId, title) => {
-            libraryFlashcardGenerateAttempts += 1;
-            await wait(80);
-            if (workId !== SAMPLE.workId || title !== SAMPLE.title) {
-              throw new Error("Unexpected smoke flashcard generation target");
-            }
-            if (libraryFlashcardGenerateAttempts === 1) {
-              throw new Error("请先在设置页配置 AI 服务(地址、模型与 API Key)");
-            }
-            const createdAt = Date.now();
+            const canvasWorkspaceFixtureNow = Date.now();
             await window.aura.db.run(
-              "INSERT OR REPLACE INTO flashcards (id, work_id, front_md, back_md, card_type, source, ai_model, generation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO canvas_workspaces (id, name, description, schema_version, viewport_json, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?, ?)",
               [
-                "smoke-library-flashcard-generate-retry",
-                SAMPLE.workId,
-                "Smoke library flashcard retry front",
-                "Smoke library flashcard retry back",
-                "qa",
-                "smoke",
-                "smoke-model",
-                "smoke-library-flashcard-generate-retry-job",
-                createdAt,
-                createdAt
+                "canvas:default",
+                "研究画布",
+                1,
+                JSON.stringify({ x: 0, y: 0, zoom: 1 }),
+                canvasWorkspaceFixtureNow,
+                canvasWorkspaceFixtureNow
               ]
             );
-            return { created: 1 };
-          };
-          selectedFlashcardGenerateButton()?.click();
-          libraryFlashcardGenerateBusyVisible = Boolean(
-            await waitFor(() => {
-              const button = selectedFlashcardGenerateButton();
-              return button?.disabled &&
-                button.getAttribute("aria-busy") === "true" &&
-                button.textContent?.includes("生成中") &&
-                bodyIncludes("正在为《" + SAMPLE.title + "》生成闪卡")
-                ? button
-                : null;
-            }, 1_000)
-          );
-          await waitFor(
-            () =>
-              bodyIncludes("生成闪卡失败，文献和现有闪卡仍保留，可重新生成") &&
-              bodyIncludes("请先在设置页配置 AI 服务") &&
-              selectedFlashcardPanel()?.textContent?.includes("去配置 AI") &&
-              selectedFlashcardGenerateButton()?.textContent?.includes("重试生成闪卡"),
-            3_000
-          );
-          const flashcardRowsAfterGenerateFailure = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM flashcards WHERE work_id = ? AND deleted_at IS NULL",
-            [SAMPLE.workId]
-          );
-          const flashcardCountAfterGenerateFailure = Number(
-            flashcardRowsAfterGenerateFailure[0]?.n ?? 0
-          );
-          libraryFlashcardGenerateFailurePreserved =
-            flashcardCountAfterGenerateFailure === flashcardCountBeforeGenerateFailure &&
-            selectedFlashcardPanelText().includes("1 张");
-          libraryFlashcardGenerateFailureRetryVisible =
-            Boolean(selectedFlashcardGenerateButton()?.textContent?.includes("重试生成闪卡")) &&
-            bodyIncludes("生成闪卡失败，文献和现有闪卡仍保留，可重新生成");
-          libraryFlashcardGenerateFailureSettingsCtaVisible =
-            Boolean(selectedFlashcardPanel()?.textContent?.includes("去配置 AI")) &&
-            bodyIncludes("请先在设置页配置 AI 服务");
-
-          selectedFlashcardGenerateButton()?.click();
-          await waitFor(
-            () =>
-              selectedFlashcardGenerateButton()?.disabled &&
-              selectedFlashcardGenerateButton()?.getAttribute("aria-busy") === "true" &&
-              selectedFlashcardGenerateButton()?.textContent?.includes("生成中"),
-            1_000
-          );
-          await waitFor(
-            () =>
-              bodyIncludes("已为《" + SAMPLE.title + "》生成 1 张闪卡") &&
-              selectedFlashcardPanelText().includes("2 张"),
-            3_000
-          );
-          const flashcardRowsAfterGenerateRetry = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM flashcards WHERE work_id = ? AND deleted_at IS NULL",
-            [SAMPLE.workId]
-          );
-          const flashcardCountAfterGenerateRetry = Number(
-            flashcardRowsAfterGenerateRetry[0]?.n ?? 0
-          );
-          libraryFlashcardGenerateRetryRecovered =
-            libraryFlashcardGenerateAttempts === 2 &&
-            flashcardCountAfterGenerateRetry === flashcardCountBeforeGenerateFailure + 1 &&
-            selectedFlashcardPanelText().includes("2 张") &&
-            !selectedFlashcardPanelText().includes("请先在设置页配置 AI 服务");
-          delete window.__AURASCHOLAR_SMOKE_LIBRARY_GENERATE_FLASHCARDS__;
-
-          const libraryFlashcardEventNow = Date.now();
-          await window.aura.db.run(
-            "INSERT OR REPLACE INTO flashcards (id, work_id, front_md, back_md, card_type, source, ai_model, generation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-              "smoke-library-flashcards-updated-event",
-              SAMPLE.workId,
-              "Smoke library flashcards event front",
-              "Smoke library flashcards event back",
-              "qa",
-              "smoke",
-              null,
-              null,
-              libraryFlashcardEventNow,
-              libraryFlashcardEventNow
-            ]
-          );
-          window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-          await waitFor(() => selectedFlashcardPanelText().includes("3 张"), 3_000);
-          libraryFlashcardEventRefreshVisible = selectedFlashcardPanelText().includes("3 张");
-
+            await window.aura.db.run(
+              "DELETE FROM canvas_edges WHERE workspace_id = ?",
+              ["canvas:default"]
+            );
+            await window.aura.db.run(
+              "DELETE FROM canvas_nodes WHERE workspace_id = ?",
+              ["canvas:default"]
+            );
+            window.dispatchEvent(new Event("aurascholar:canvas-updated"));
           const libraryRaceTitle = "Smoke Library Race Newer Refresh Wins";
           await window.aura.db.run("DELETE FROM works WHERE id = ?", [
             "smoke-library-refresh-race"
@@ -4607,54 +4424,62 @@ export function setupSmokeHarness(win: BrowserWindow): void {
 
         }
 
-        await window.aura.db.run("DELETE FROM flashcards WHERE id = ?", [
-          "smoke-app-shell-stats-race"
+        await window.aura.db.run("DELETE FROM canvas_nodes WHERE id = ?", [
+          "smoke-app-shell-canvas-stats-race"
         ]);
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
-        const appShellFlashcardCountBefore = Number(
-          await window.aura.db.queryScalar(
-            "SELECT COUNT(*) FROM flashcards WHERE deleted_at IS NULL"
-          )
+        window.dispatchEvent(new Event("aurascholar:canvas-updated"));
+        const appShellCanvasCountBefore = Number(
+          await window.aura.db.queryScalar("SELECT COUNT(*) FROM canvas_nodes")
         );
-        await waitFor(() => statusbarMetric("闪卡") === appShellFlashcardCountBefore, 3_000);
+        await waitFor(
+          () => statusbarMetric("白板节点") === appShellCanvasCountBefore,
+          3_000
+        );
         window.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_DELAY_MS__ = 450;
         window.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_COUNT__ = 0;
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
+        window.dispatchEvent(new Event("aurascholar:canvas-updated"));
         await waitFor(
           () => Number(window.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_COUNT__ ?? 0) >= 1,
           1_000
         );
         const appShellRaceNow = Date.now();
         await window.aura.db.run(
-          "INSERT OR REPLACE INTO flashcards (id, work_id, front_md, back_md, card_type, source, ai_model, generation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT OR REPLACE INTO canvas_nodes (id, workspace_id, work_id, type, pos_x, pos_y, width, height, group_id, sort_order, tags_json, data_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           [
-            "smoke-app-shell-stats-race",
-            SAMPLE.workId,
-            "Smoke app shell flashcard stats race",
-            "Smoke app shell stats back",
-            "qa",
-            "smoke",
+            "smoke-app-shell-canvas-stats-race",
+            "canvas:default",
             null,
+            "idea-note",
+            536,
+            140,
+            300,
+            220,
             null,
+            999,
+            "[]",
+            JSON.stringify({
+              title: "Smoke canvas status race",
+              contentMarkdown: "Persisted canvas node for app-shell count refresh.",
+              hasEquations: false
+            }),
             appShellRaceNow,
             appShellRaceNow
           ]
         );
-        const appShellFlashcardCountAfter = appShellFlashcardCountBefore + 1;
+        const appShellCanvasCountAfter = appShellCanvasCountBefore + 1;
         window.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_DELAY_MS__ = 0;
-        window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-        await waitFor(() => statusbarMetric("闪卡") === appShellFlashcardCountAfter, 2_000);
+        window.dispatchEvent(new Event("aurascholar:canvas-updated"));
+        await waitFor(
+          () => statusbarMetric("白板节点") === appShellCanvasCountAfter,
+          2_000
+        );
         await wait(650);
-        appShellFlashcardStatsRacePreserved =
-          statusbarMetric("闪卡") === appShellFlashcardCountAfter &&
-          Number(
-            await window.aura.db.queryScalar(
-              "SELECT COUNT(*) FROM flashcards WHERE deleted_at IS NULL"
-            )
-          ) === appShellFlashcardCountAfter;
+        appShellCanvasStatsRacePreserved =
+          statusbarMetric("白板节点") === appShellCanvasCountAfter &&
+          Number(await window.aura.db.queryScalar("SELECT COUNT(*) FROM canvas_nodes")) ===
+            appShellCanvasCountAfter;
         delete window.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_DELAY_MS__;
         delete window.__AURASCHOLAR_SMOKE_APP_STATS_AFTER_READ_COUNT__;
-
         detailVisible =
           (document.querySelector(".library-detail--selected h2")?.textContent ?? "").includes(SAMPLE.title) &&
           bodyIncludes(SAMPLE.venue);
@@ -6809,390 +6634,109 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             "rows=" + keyboardRows.length + "; start=; next=; title=";
         }
 
-        const flashcardEmptyLatestNow = Date.now();
-        await window.aura.db.run("UPDATE works SET created_at = ?, updated_at = ? WHERE id = ?", [
-          flashcardEmptyLatestNow,
-          flashcardEmptyLatestNow,
-          SAMPLE.workId
-        ]);
-        window.__AURASCHOLAR_SMOKE_FLASHCARDS_FAIL_NEXT_REFRESH__ =
-          "Smoke flashcards initial load failure";
+        location.hash = "#/library";
+        await waitFor(
+          () =>
+            location.hash.includes("/library") &&
+            Boolean(document.querySelector(".library-page")) &&
+            rowText().includes(SAMPLE.title),
+          5_000
+        );
+        const libraryCanvasIngressSourceVisible = rowText().includes(SAMPLE.title);
+        location.hash = "#/canvas?workId=" + encodeURIComponent(SAMPLE.workId);
+        await waitFor(
+          () =>
+            location.hash.includes("/canvas?workId=" + encodeURIComponent(SAMPLE.workId)) &&
+            Boolean(document.querySelector(".canvas-workspace")) &&
+            Boolean(
+              Array.from(document.querySelectorAll(".canvas-card--paper")).find((card) =>
+                card.querySelector(".canvas-card__title")?.textContent?.includes(SAMPLE.title)
+              )
+            ),
+          8_000
+        );
+        canvasLibraryWorkIngressHash = location.hash;
+        canvasLibraryWorkIngressNavigated =
+          libraryCanvasIngressSourceVisible &&
+          canvasLibraryWorkIngressHash.includes(
+            "/canvas?workId=" + encodeURIComponent(SAMPLE.workId)
+          );
+        canvasLibraryWorkIngressVisible = Boolean(
+          Array.from(document.querySelectorAll(".canvas-card--paper")).find((card) =>
+            card.querySelector(".canvas-card__title")?.textContent?.includes(SAMPLE.title)
+          )
+        );
+        const persistedCanvasPaper = await waitFor(async () => {
+          const rows = await window.aura.db.query(
+            "SELECT id, data_json FROM canvas_nodes WHERE workspace_id = ? AND type = 'paper'",
+            ["canvas:default"]
+          );
+          return rows.find((row) => {
+            try {
+              const data = JSON.parse(row.data_json);
+              return data.workId === SAMPLE.workId && data.title === SAMPLE.title;
+            } catch {
+              return false;
+            }
+          }) ?? null;
+        }, 5_000);
+        canvasLibraryWorkIngressPersisted = Boolean(persistedCanvasPaper);
+
         location.hash = "#/flashcards";
         await waitFor(
           () =>
-            bodyIncludes("闪卡队列暂时不可用") &&
-            bodyIncludes("Smoke flashcards initial load failure") &&
-            Boolean(document.querySelector('button[aria-label="重试读取闪卡队列"]')),
-          3_000
-        );
-        flashcardLoadRetryAttempts = 1;
-        document.querySelector('button[aria-label="重试读取闪卡队列"]')?.click();
-        await waitFor(
-          () =>
-            location.hash.includes("/flashcards") &&
-            bodyIncludes("闪卡复习") &&
-            bodyIncludes(FLASHCARD_SMOKE.front),
-          5_000
-        );
-        flashcardLoadRetryAttempts += 1;
-        flashcardLoadRetryRecoveryVisible =
-          bodyIncludes(FLASHCARD_SMOKE.front) &&
-          !bodyIncludes("闪卡队列暂时不可用") &&
-          !bodyIncludes("Smoke flashcards initial load failure");
-        flashcardLoadRetryRecoveryDetail =
-          "attempts=" +
-          flashcardLoadRetryAttempts +
-          "; front=" +
-          bodyIncludes(FLASHCARD_SMOKE.front) +
-          "; error=" +
-          bodyIncludes("闪卡队列暂时不可用");
-        const flashcard = document.querySelector(".study-card");
-        if (flashcard) {
-          flashcard.focus?.();
-          flashcard.dispatchEvent(
-            new KeyboardEvent("keydown", {
-              bubbles: true,
-              cancelable: true,
-              code: "Space",
-              key: " "
-            })
-          );
-          await waitFor(
-            () =>
-              bodyIncludes(FLASHCARD_SMOKE.back) &&
-              Boolean(document.querySelector(".study-rating button")),
-            1_500
-          );
-          flashcardCardSpaceReveals =
-            bodyIncludes(FLASHCARD_SMOKE.back) &&
-            Boolean(document.querySelector(".study-rating button"));
-          const firstRatingButton = document.querySelector(".study-rating button");
-          firstRatingButton?.focus?.();
-          firstRatingButton?.dispatchEvent(
-            new KeyboardEvent("keydown", {
-              bubbles: true,
-              cancelable: true,
-              code: "Space",
-              key: " "
-            })
-          );
-          await wait(150);
-          flashcardFocusedButtonSpacePreservesReveal =
-            flashcardCardSpaceReveals &&
-            bodyIncludes(FLASHCARD_SMOKE.back) &&
-            Boolean(document.querySelector(".study-rating button"));
-          const goodRatingButton = Array.from(document.querySelectorAll(".study-rating button")).find(
-            (button) => button.textContent?.includes("记得")
-          );
-          window.__AURASCHOLAR_SMOKE_FLASHCARDS_FAIL_NEXT_REVIEW__ =
-            "Smoke flashcards review save failure";
-          goodRatingButton?.click();
-          await waitFor(
-            () =>
-              bodyIncludes(
-                "保存复习结果失败，卡片已保留，可重新评分:Smoke flashcards review save failure"
-              ) &&
-              bodyIncludes(FLASHCARD_SMOKE.front) &&
-              bodyIncludes(FLASHCARD_SMOKE.back) &&
-              Boolean(document.querySelector(".study-rating button")),
-            3_000
-          );
-          const flashcardReviewRowsAfterFailure = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM flashcard_reviews WHERE flashcard_id = ?",
-            [FLASHCARD_SMOKE.id]
-          );
-          flashcardRatingFailurePreserved =
-            bodyIncludes(
-              "保存复习结果失败，卡片已保留，可重新评分:Smoke flashcards review save failure"
+            location.hash.startsWith("#/canvas") &&
+            !location.hash.includes("/flashcards") &&
+            Boolean(document.querySelector(".canvas-workspace")) &&
+            Boolean(
+              Array.from(document.querySelectorAll(".canvas-card--paper")).find((card) =>
+                card.querySelector(".canvas-card__title")?.textContent?.includes(SAMPLE.title)
+              )
             ) &&
-            bodyIncludes(FLASHCARD_SMOKE.front) &&
-            bodyIncludes(FLASHCARD_SMOKE.back) &&
-            Boolean(document.querySelector(".study-rating button")) &&
-            Number(flashcardReviewRowsAfterFailure[0]?.n ?? 0) === 0;
-
-          const retryGoodRatingButton = Array.from(
-            document.querySelectorAll(".study-rating button")
-          ).find((button) => button.textContent?.includes("记得"));
-          retryGoodRatingButton?.click();
-          await waitFor(
-            () =>
-              retryGoodRatingButton?.disabled &&
-              retryGoodRatingButton.getAttribute("aria-busy") === "true" &&
-              retryGoodRatingButton.textContent?.includes("记录中") &&
-              retryGoodRatingButton.textContent?.includes("正在推进队列"),
-            1_000
-          );
-          flashcardRatingBusyVisible =
-            Boolean(retryGoodRatingButton?.disabled) &&
-            retryGoodRatingButton?.getAttribute("aria-busy") === "true" &&
-            Boolean(retryGoodRatingButton?.textContent?.includes("记录中")) &&
-            Boolean(retryGoodRatingButton?.textContent?.includes("正在推进队列"));
-          await waitFor(
-            () =>
-              bodyIncludes("已记录：正常推进") &&
-              bodyIncludes("本轮复习完成") &&
-              !bodyIncludes(FLASHCARD_SMOKE.front),
-            3_000
-          );
-          const flashcardReviewRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM flashcard_reviews WHERE flashcard_id = ?",
-            [FLASHCARD_SMOKE.id]
-          );
-          flashcardRatingPersisted = Number(flashcardReviewRows[0]?.n ?? 0) >= 1;
-          flashcardRatingCompleted =
-            bodyIncludes("已记录：正常推进") &&
-            bodyIncludes("本轮复习完成") &&
-            !bodyIncludes(FLASHCARD_SMOKE.front);
-          flashcardNextDueVisible =
-            flashcardRatingCompleted &&
-            bodyIncludes("下一张预计") &&
-            bodyIncludes("回到队列");
-
-          const flashcardRemoveNow = Date.now();
-          await window.aura.db.run(
-            "INSERT OR REPLACE INTO flashcards (id, work_id, front_md, back_md, card_type, source, ai_model, generation_id, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-            [
-              FLASHCARD_REMOVE_SMOKE.id,
-              SAMPLE.workId,
-              FLASHCARD_REMOVE_SMOKE.front,
-              FLASHCARD_REMOVE_SMOKE.back,
-              "qa",
-              "ai",
-              "smoke",
-              "smoke-flashcard-remove",
-              flashcardRemoveNow,
-              flashcardRemoveNow
-            ]
-          );
-          await window.aura.db.run(
-            "INSERT OR REPLACE INTO flashcard_srs (flashcard_id, due_at, stability, difficulty, reps, lapses, state, last_review_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [FLASHCARD_REMOVE_SMOKE.id, flashcardRemoveNow - 1_000, 0, 0, 0, 0, 0, null]
-          );
-          window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-          await waitFor(
-            () =>
-              bodyIncludes(FLASHCARD_REMOVE_SMOKE.front) &&
-              Boolean(findExactButton("移除这张闪卡")),
-            3_000
-          );
-
-          const removeCardButton = () => findExactButton("移除这张闪卡");
-          const confirmRemoveButton = () => findExactButton("移除闪卡");
-          removeCardButton()?.click();
-          await waitFor(
-            () =>
-              bodyIncludes("移除这张闪卡？") &&
-              Boolean(confirmRemoveButton()) &&
-              Boolean(findExactButton("继续复习")),
-            1_500
-          );
-          flashcardRemoveConfirmVisible =
-            bodyIncludes("移除这张闪卡？") &&
-            Boolean(confirmRemoveButton()) &&
-            Boolean(findExactButton("继续复习"));
-          findExactButton("继续复习")?.click();
-          await waitFor(
-            () =>
-              !bodyIncludes("移除这张闪卡？") &&
-              bodyIncludes(FLASHCARD_REMOVE_SMOKE.front) &&
-              Boolean(removeCardButton()),
-            1_500
-          );
-
-          window.__AURASCHOLAR_SMOKE_FLASHCARDS_FAIL_NEXT_REMOVE__ =
-            "Smoke flashcards remove failure";
-          removeCardButton()?.click();
-          await waitFor(() => bodyIncludes("移除这张闪卡？") && Boolean(confirmRemoveButton()), 1_500);
-          confirmRemoveButton()?.click();
-          await waitFor(
-            () =>
-              bodyIncludes("移除闪卡失败，卡片仍保留，可重新移除:Smoke flashcards remove failure") &&
-              bodyIncludes(FLASHCARD_REMOVE_SMOKE.front) &&
-              Boolean(removeCardButton()),
-            3_000
-          );
-          const flashcardRemoveFailureRows = await window.aura.db.query(
-            "SELECT deleted_at FROM flashcards WHERE id = ?",
-            [FLASHCARD_REMOVE_SMOKE.id]
-          );
-          flashcardRemoveFailurePreserved =
-            bodyIncludes("移除闪卡失败，卡片仍保留，可重新移除:Smoke flashcards remove failure") &&
-            bodyIncludes(FLASHCARD_REMOVE_SMOKE.front) &&
-            Boolean(removeCardButton()) &&
-            flashcardRemoveFailureRows[0]?.deleted_at == null;
-
-          removeCardButton()?.click();
-          await waitFor(() => bodyIncludes("移除这张闪卡？") && Boolean(confirmRemoveButton()), 1_500);
-          confirmRemoveButton()?.click();
-          await waitFor(
-            () =>
-              bodyIncludes("正在移除闪卡") &&
-              Boolean(
-                Array.from(document.querySelectorAll("button")).find(
-                  (button) =>
-                    button.textContent?.includes("移除中") &&
-                    button.getAttribute("aria-busy") === "true"
+            Boolean(
+              Array.from(document.querySelectorAll(".canvas-card--idea")).find((card) =>
+                card.querySelector(".canvas-card__title")?.textContent?.includes(
+                  "Smoke canvas status race"
                 )
-              ),
-            1_000
-          );
-          const removeBusyButton = Array.from(document.querySelectorAll("button")).find(
-            (button) =>
-              button.textContent?.includes("移除中") && button.getAttribute("aria-busy") === "true"
-          );
-          flashcardRemoveBusyVisible =
-            bodyIncludes("正在移除闪卡") &&
-            Boolean(removeBusyButton);
-          await waitFor(
-            () =>
-              bodyIncludes("已移除这张闪卡") &&
-              Boolean(document.querySelector('button[aria-label="撤销移除闪卡"]')) &&
-              !bodyIncludes(FLASHCARD_REMOVE_SMOKE.front),
-            3_000
-          );
-          const flashcardRemoveRows = await window.aura.db.query(
-            "SELECT deleted_at FROM flashcards WHERE id = ?",
-            [FLASHCARD_REMOVE_SMOKE.id]
-          );
-          flashcardRemovePersisted =
-            bodyIncludes("已移除这张闪卡") &&
-            Boolean(document.querySelector('button[aria-label="撤销移除闪卡"]')) &&
-            flashcardRemoveRows[0]?.deleted_at != null;
-
-          window.__AURASCHOLAR_SMOKE_FLASHCARDS_FAIL_NEXT_RESTORE__ =
-            "Smoke flashcards restore failure";
-          document.querySelector('button[aria-label="撤销移除闪卡"]')?.click();
-          await waitFor(
-            () =>
-              bodyIncludes(
-                "恢复闪卡失败，撤销入口仍保留，可重新恢复:Smoke flashcards restore failure"
-              ) &&
-              Boolean(document.querySelector('button[aria-label="撤销移除闪卡"]')),
-            3_000
-          );
-          const flashcardRestoreFailureRows = await window.aura.db.query(
-            "SELECT deleted_at FROM flashcards WHERE id = ?",
-            [FLASHCARD_REMOVE_SMOKE.id]
-          );
-          flashcardRestoreFailurePreserved =
-            bodyIncludes(
-              "恢复闪卡失败，撤销入口仍保留，可重新恢复:Smoke flashcards restore failure"
-            ) &&
-            Boolean(document.querySelector('button[aria-label="撤销移除闪卡"]')) &&
-            flashcardRestoreFailureRows[0]?.deleted_at != null;
-
-          document.querySelector('button[aria-label="撤销移除闪卡"]')?.click();
-          await waitFor(
-            () => {
-              const undoButton = document.querySelector('button[aria-label="撤销移除闪卡"]');
-              return (
-                undoButton?.getAttribute("aria-busy") === "true" &&
-                Boolean(undoButton?.textContent?.includes("恢复中"))
-              );
-            },
-            1_000
-          );
-          const restoreBusyButton = document.querySelector('button[aria-label="撤销移除闪卡"]');
-          flashcardRestoreBusyVisible =
-            restoreBusyButton?.getAttribute("aria-busy") === "true" &&
-            Boolean(restoreBusyButton?.textContent?.includes("恢复中"));
-          await waitFor(
-            () =>
-              bodyIncludes("已恢复这张闪卡") &&
-              bodyIncludes(FLASHCARD_REMOVE_SMOKE.front) &&
-              !document.querySelector('button[aria-label="撤销移除闪卡"]'),
-            3_000
-          );
-          const flashcardRestoreRows = await window.aura.db.query(
-            "SELECT deleted_at FROM flashcards WHERE id = ?",
-            [FLASHCARD_REMOVE_SMOKE.id]
-          );
-          flashcardRestorePersisted =
-            bodyIncludes("已恢复这张闪卡") &&
-            bodyIncludes(FLASHCARD_REMOVE_SMOKE.front) &&
-            flashcardRestoreRows[0]?.deleted_at == null;
-          const flashcardRemoveCleanupNow = Date.now();
-          await window.aura.db.run(
-            "UPDATE flashcards SET deleted_at = ?, updated_at = ? WHERE id = ?",
-            [flashcardRemoveCleanupNow, flashcardRemoveCleanupNow, FLASHCARD_REMOVE_SMOKE.id]
-          );
-          window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-          await waitFor(
-            () =>
-              (bodyIncludes("本轮复习完成") || bodyIncludes("现在没有待复习卡片")) &&
-              !bodyIncludes(FLASHCARD_REMOVE_SMOKE.front),
-            3_000
-          );
-
-          const flashcardEmptyLatestReaderButton = Array.from(document.querySelectorAll("button")).find(
-            (button) => button.textContent?.replace(/\s+/g, " ").trim() === "继续阅读最近文献"
-          );
-          flashcardEmptyLatestReaderVisible =
-            Boolean(flashcardEmptyLatestReaderButton) &&
-            bodyIncludes("最近文献") &&
-            bodyIncludes(SAMPLE.title);
-          flashcardEmptyLatestReaderButton?.click();
-          await waitFor(
-            () =>
-              location.hash.includes("/reader?work=" + encodeURIComponent(SAMPLE.workId)) &&
-              bodyIncludes("PDF Reader") &&
-              bodyIncludes(SAMPLE.title),
-            10_000
-          );
-          flashcardEmptyLatestReaderHash = location.hash;
-          flashcardEmptyLatestReaderOpened =
-            flashcardEmptyLatestReaderHash.includes(
-              "/reader?work=" + encodeURIComponent(SAMPLE.workId)
-            ) && bodyIncludes(SAMPLE.title);
-          location.hash = "#/flashcards";
-          await waitFor(
-            () =>
-              location.hash.includes("/flashcards") &&
-              bodyIncludes("闪卡复习") &&
-              (bodyIncludes("本轮复习完成") || bodyIncludes("现在没有待复习卡片")),
-            5_000
-          );
-
-          const flashcardRaceFront = "Smoke flashcard race newer refresh wins";
-          window.__AURASCHOLAR_SMOKE_FLASHCARDS_AFTER_READ_DELAY_MS__ = 450;
-          window.__AURASCHOLAR_SMOKE_FLASHCARDS_AFTER_READ_COUNT__ = 0;
-          window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-          await waitFor(
-            () => Number(window.__AURASCHOLAR_SMOKE_FLASHCARDS_AFTER_READ_COUNT__ ?? 0) >= 1,
-            1_000
-          );
-          const flashcardRaceNow = Date.now();
-          await window.aura.db.run(
-            "INSERT OR REPLACE INTO flashcards (id, work_id, front_md, back_md, card_type, source, ai_model, generation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-              "smoke-flashcard-refresh-race",
-              SAMPLE.workId,
-              flashcardRaceFront,
-              "Smoke flashcard race back",
-              "qa",
-              "manual",
-              null,
-              null,
-              flashcardRaceNow,
-              flashcardRaceNow
-            ]
-          );
-          await window.aura.db.run(
-            "INSERT OR REPLACE INTO flashcard_srs (flashcard_id, due_at, stability, difficulty, reps, lapses, state, last_review_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ["smoke-flashcard-refresh-race", flashcardRaceNow - 1_000, 0, 0, 0, 0, 0, null]
-          );
-          window.__AURASCHOLAR_SMOKE_FLASHCARDS_AFTER_READ_DELAY_MS__ = 0;
-          window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-          await waitFor(() => bodyIncludes(flashcardRaceFront), 2_000);
-          await wait(650);
-          flashcardRefreshRacePreserved =
-            bodyIncludes(flashcardRaceFront) &&
-            bodyIncludes("今日待复习") &&
-            !bodyIncludes("正在读取复习队列");
-          delete window.__AURASCHOLAR_SMOKE_FLASHCARDS_AFTER_READ_DELAY_MS__;
-          delete window.__AURASCHOLAR_SMOKE_FLASHCARDS_AFTER_READ_COUNT__;
-        }
-
+              )
+            ),
+          10_000
+        );
+        canvasLegacyRedirectHash = location.hash;
+        canvasLegacyFlashcardsRedirected =
+          canvasLegacyRedirectHash.startsWith("#/canvas") &&
+          !canvasLegacyRedirectHash.includes("/flashcards") &&
+          Boolean(document.querySelector(".canvas-workspace"));
+        const persistedCanvasRows = await window.aura.db.query(
+          "SELECT id, type, data_json FROM canvas_nodes WHERE workspace_id = ? ORDER BY sort_order, id",
+          ["canvas:default"]
+        );
+        canvasPersistedNodeCount = persistedCanvasRows.length;
+        const persistedCanvasPaperVisible = Boolean(
+          Array.from(document.querySelectorAll(".canvas-card--paper")).find((card) =>
+            card.querySelector(".canvas-card__title")?.textContent?.includes(SAMPLE.title)
+          )
+        );
+        const persistedCanvasIdeaVisible = Boolean(
+          Array.from(document.querySelectorAll(".canvas-card--idea")).find((card) =>
+            card.querySelector(".canvas-card__title")?.textContent?.includes(
+              "Smoke canvas status race"
+            )
+          )
+        );
+        const persistedCanvasPaperRow = persistedCanvasRows.find((row) => {
+          if (row.type !== "paper") return false;
+          try {
+            return JSON.parse(row.data_json).workId === SAMPLE.workId;
+          } catch {
+            return false;
+          }
+        });
+        canvasPersistedNodeReloaded =
+          persistedCanvasPaperVisible &&
+          persistedCanvasIdeaVisible &&
+          Boolean(persistedCanvasPaperRow) &&
+          persistedCanvasRows.some((row) => row.id === "smoke-app-shell-canvas-stats-race");
         window.__AURASCHOLAR_SMOKE_SNIPPETS_FAIL_NEXT_READ__ =
           "Smoke snippets initial load failure";
         location.hash = "#/snippets";
@@ -8477,124 +8021,73 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           readerTranslationClipboardMatches = readerTranslationCopyFeedbackVisible;
         }
 
-        const digestTab = Array.from(document.querySelectorAll(".reader-tabs button")).find((button) =>
-          button.textContent?.includes("重点")
-        );
-        digestTab?.click();
-        await waitFor(
-          () =>
-            Boolean(document.querySelector(".reader-digest-panel")) &&
-            bodyIncludes(FLASHCARD_SMOKE.front) &&
-            Boolean(
-              Array.from(document.querySelectorAll(".reader-digest-panel button")).find((button) =>
-                button.textContent?.includes("重新提取")
-              )
-            ),
-          2_000
-        );
-        const regenerateDigestButton = Array.from(
-          document.querySelectorAll(".reader-digest-panel button")
-        ).find((button) => button.textContent?.includes("重新提取"));
-        let readerDigestSmokeGenerateCalls = 0;
-        window.__AURASCHOLAR_SMOKE_READER_DIGEST_GENERATE__ = async (workId) => {
-          readerDigestSmokeGenerateCalls += 1;
-          if (readerDigestSmokeGenerateCalls === 1) {
-            throw new Error("Smoke reader digest transient failure");
-          }
-          const now = Date.now();
-          await window.aura.db.run(
-            "INSERT OR REPLACE INTO flashcards (id, work_id, front_md, back_md, card_type, source, ai_model, generation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-              "smoke-reader-digest-retry-card",
-              workId,
-              "Smoke reader digest retry recovered front",
-              "Smoke reader digest retry recovered back",
-              "qa",
-              "ai",
-              "smoke-reader-digest",
-              "smoke-reader-digest-retry-generation",
-              now,
-              now
-            ]
+        const readerAnnotationsTab = Array.from(
+          document.querySelectorAll(".reader-tabs button")
+        ).find((button) => button.textContent?.includes("批注"));
+        readerAnnotationsTab?.click();
+        const readerAnnotationCanvasButton = await waitFor(() => {
+          const activeReaderTab = document.querySelector(".reader-tabs .au-tab--active");
+          if (!activeReaderTab?.textContent?.includes("批注")) return null;
+          return (
+            Array.from(document.querySelectorAll(".au-annsidebar__canvas")).find((button) =>
+              button.getAttribute("aria-label")?.includes("AuraScholar Smoke PDF")
+            ) ?? null
           );
-          window.dispatchEvent(new Event("aurascholar:flashcards-updated"));
-        };
-        regenerateDigestButton?.click();
+        }, 3_000);
+        readerAnnotationCanvasButton?.click();
         await waitFor(
           () =>
-            bodyIncludes("Smoke reader digest transient failure") &&
+            location.hash.includes(
+              "/canvas?workId=" + encodeURIComponent(SAMPLE.workId)
+            ) &&
+            location.hash.includes(
+              "annotationId=" + encodeURIComponent(SAMPLE.annotationId)
+            ) &&
+            Boolean(document.querySelector(".canvas-workspace")) &&
             Boolean(
-              Array.from(document.querySelectorAll(".reader-digest-panel button")).find(
-                (button) => button.textContent?.replace(/\s+/g, " ").trim() === "重试提取"
+              Array.from(document.querySelectorAll(".canvas-card--excerpt")).find((card) =>
+                card.querySelector(".canvas-card__quote")?.textContent?.includes(
+                  "AuraScholar Smoke PDF"
+                )
               )
             ),
-          3_000
+          8_000
         );
-        readerDigestRetryAttempts = 1;
-        Array.from(document.querySelectorAll(".reader-digest-panel button"))
-          .find((button) => button.textContent?.replace(/\s+/g, " ").trim() === "重试提取")
-          ?.click();
-        await waitFor(
-          () =>
-            bodyIncludes("Smoke reader digest retry recovered front") &&
-            !bodyIncludes("Smoke reader digest transient failure"),
-          3_000
+        canvasReaderAnnotationDeepLinkHash = location.hash;
+        canvasReaderAnnotationDeepLinkNavigated =
+          Boolean(readerAnnotationCanvasButton) &&
+          canvasReaderAnnotationDeepLinkHash.includes(
+            "/canvas?workId=" + encodeURIComponent(SAMPLE.workId)
+          ) &&
+          canvasReaderAnnotationDeepLinkHash.includes(
+            "annotationId=" + encodeURIComponent(SAMPLE.annotationId)
+          );
+        canvasReaderAnnotationVisible = Boolean(
+          Array.from(document.querySelectorAll(".canvas-card--excerpt")).find((card) =>
+            card.querySelector(".canvas-card__quote")?.textContent?.includes(
+              "AuraScholar Smoke PDF"
+            )
+          )
         );
-        readerDigestRetryAttempts += 1;
-        readerDigestRetryRecoveryVisible =
-          readerDigestRetryAttempts === 2 &&
-          bodyIncludes("Smoke reader digest retry recovered front") &&
-          !bodyIncludes("Smoke reader digest transient failure");
-        readerDigestRetryRecoveryDetail =
-          "attempts=" +
-          readerDigestRetryAttempts +
-          "; recovered=" +
-          bodyIncludes("Smoke reader digest retry recovered front") +
-          "; error=" +
-          bodyIncludes("Smoke reader digest transient failure");
-        delete window.__AURASCHOLAR_SMOKE_READER_DIGEST_GENERATE__;
-
-        Array.from(document.querySelectorAll(".reader-digest-panel button"))
-          .find((button) => button.textContent?.includes("重新提取"))
-          ?.click();
-        readerDigestGenerateBusyVisible = Boolean(
-          await waitFor(() => {
-            const panel = document.querySelector(".reader-digest-panel");
-            const busyButton = Array.from(panel?.querySelectorAll("button") ?? []).find(
-              (button) => button.getAttribute("aria-busy") === "true" && button.disabled
-            );
-            return panel?.getAttribute("aria-busy") === "true" &&
-              busyButton?.textContent?.includes("提取中") &&
-              panel.textContent?.includes("正在重新提取重点")
-              ? busyButton
-              : null;
-          }, 1_000)
-        );
-        await waitFor(() => bodyIncludes("请先在设置页配置 AI 服务"), 3_000);
-        readerDigestGenerateErrorVisible =
-          readerDigestGenerateBusyVisible && bodyIncludes("请先在设置页配置 AI 服务");
-        const digestSettingsButton = Array.from(
-          document.querySelectorAll(".reader-digest-panel button")
-        ).find((button) => button.textContent?.replace(/\s+/g, " ").trim() === "去配置 AI");
-        readerDigestSettingsCtaVisible =
-          readerDigestGenerateErrorVisible && Boolean(digestSettingsButton);
-        digestSettingsButton?.click();
-        await waitFor(
-          () =>
-            location.hash.includes("/settings?section=ai") &&
-            Boolean(document.querySelector('[data-settings-section="ai"].settings-card--targeted')) &&
-            bodyIncludes("AI 服务") &&
-            bodyIncludes("摘要、重点和闪卡"),
-          3_000
-        );
-        readerDigestSettingsCtaTargetsSection =
-          location.hash.includes("/settings?section=ai") &&
-          Boolean(document.querySelector('[data-settings-section="ai"].settings-card--targeted'));
-        readerDigestSettingsCtaNavigates =
-          location.hash.includes("/settings?section=ai") &&
-          bodyIncludes("AI 服务") &&
-          bodyIncludes("摘要、重点和闪卡");
-
+        const persistedCanvasAnnotation = await waitFor(async () => {
+          const rows = await window.aura.db.query(
+            "SELECT id, data_json FROM canvas_nodes WHERE workspace_id = ? AND type = 'excerpt'",
+            ["canvas:default"]
+          );
+          return rows.find((row) => {
+            try {
+              const data = JSON.parse(row.data_json);
+              return (
+                data.workId === SAMPLE.workId &&
+                data.annotationId === SAMPLE.annotationId &&
+                data.highlightText === "AuraScholar Smoke PDF"
+              );
+            } catch {
+              return false;
+            }
+          }) ?? null;
+        }, 5_000);
+        canvasReaderAnnotationPersisted = Boolean(persistedCanvasAnnotation);
         location.hash =
           "#/reader?work=" + encodeURIComponent(SAMPLE.workId) + "&tab=graph";
         await waitFor(
@@ -13966,7 +13459,22 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           discoveryReferenceImportRejectsEmptyPersisted,
           discoveryReferenceImportRejectsEmptyVisible,
           discoveryReferenceImportRichFormatsPersisted,
-          appShellFlashcardStatsRacePreserved,
+          appShellCanvasStatsRacePreserved,
+          canvasLegacyFlashcardsRedirected,
+          canvasLegacyRedirectHash,
+          canvasLibraryWorkIngressHash,
+          canvasLibraryWorkIngressNavigated,
+          canvasLibraryWorkIngressPersisted,
+          canvasLibraryWorkIngressVisible,
+          canvasPersistedNodeCount:
+            typeof canvasPersistedNodeCount === "number"
+              ? canvasPersistedNodeCount
+              : Number(canvasPersistedNodeCount),
+          canvasPersistedNodeReloaded,
+          canvasReaderAnnotationDeepLinkHash,
+          canvasReaderAnnotationDeepLinkNavigated,
+          canvasReaderAnnotationPersisted,
+          canvasReaderAnnotationVisible,
           discoverySiteActionConfirmCancelled,
           discoverySiteActionConfirmVisible,
           dbError,
@@ -13974,27 +13482,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           externalCredentialsRejected,
           externalNavigationBlocked,
           externalUnsafeRejected,
-          flashcardCardSpaceReveals,
-          flashcardLoadRetryAttempts,
-          flashcardLoadRetryRecoveryDetail,
-          flashcardLoadRetryRecoveryVisible,
-          flashcardEmptyLatestReaderHash,
-          flashcardEmptyLatestReaderOpened,
-          flashcardEmptyLatestReaderVisible,
-          flashcardFocusedButtonSpacePreservesReveal,
-          flashcardNextDueVisible,
-          flashcardRemoveConfirmVisible,
-          flashcardRemoveFailurePreserved,
-          flashcardRemoveBusyVisible,
-          flashcardRemovePersisted,
-          flashcardRestoreFailurePreserved,
-          flashcardRestoreBusyVisible,
-          flashcardRestorePersisted,
-          flashcardRatingFailurePreserved,
-          flashcardRatingBusyVisible,
-          flashcardRatingCompleted,
-          flashcardRatingPersisted,
-          flashcardRefreshRacePreserved,
           graphCachedVisible,
           graphDeepLinkParamSyncVisible,
           graphEmptyLatestCtaHash,
@@ -14048,12 +13535,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           researchUnsafeUrlRejected,
           platformSecretsConcurrentWritesPreserved,
           libraryBulkSelectMixedVisible,
-          libraryFlashcardEventRefreshVisible,
-          libraryFlashcardGenerateBusyVisible,
-          libraryFlashcardGenerateFailurePreserved,
-          libraryFlashcardGenerateFailureRetryVisible,
-          libraryFlashcardGenerateFailureSettingsCtaVisible,
-          libraryFlashcardGenerateRetryRecovered,
           libraryFilterEmptyActionRestoresResults,
           libraryFilterTabsExposeState,
           libraryMissingDeepLinkFeedbackVisible,
@@ -14263,14 +13744,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           readerCorruptPdfRecoveryVisible,
           readerCorruptPdfVisible,
           readerCorruptHash,
-          readerDigestGenerateBusyVisible,
-          readerDigestGenerateErrorVisible,
-          readerDigestRetryAttempts,
-          readerDigestRetryRecoveryDetail,
-          readerDigestRetryRecoveryVisible,
-          readerDigestSettingsCtaNavigates,
-          readerDigestSettingsCtaTargetsSection,
-          readerDigestSettingsCtaVisible,
           readerErrorVisible,
           readerFindFulltextHandoffHash,
           readerFindFulltextHandoffNavigated,
@@ -14574,8 +14047,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               pass: renderer.externalNavigationBlocked,
             },
             {
-              name: "app-shell-flashcard-stats-race-preserved",
-              pass: renderer.appShellFlashcardStatsRacePreserved,
+              name: "app-shell-canvas-stats-race-preserved",
+              pass: renderer.appShellCanvasStatsRacePreserved,
             },
             {
               name: "citation-graph-cached-keyboard-and-import-feedback",
@@ -14634,18 +14107,12 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               pass: renderer.libraryBulkSelectMixedVisible,
             },
             {
-              name: "library-flashcard-generate-failure-recovers",
+              name: "library-canvas-work-ingress",
               pass:
-                renderer.libraryFlashcardGenerateBusyVisible &&
-                renderer.libraryFlashcardGenerateFailurePreserved &&
-                renderer.libraryFlashcardGenerateFailureRetryVisible &&
-                renderer.libraryFlashcardGenerateFailureSettingsCtaVisible &&
-                renderer.libraryFlashcardGenerateRetryRecovered,
-              detail: `busy=${renderer.libraryFlashcardGenerateBusyVisible}; preserved=${renderer.libraryFlashcardGenerateFailurePreserved}; retry=${renderer.libraryFlashcardGenerateFailureRetryVisible}; settings=${renderer.libraryFlashcardGenerateFailureSettingsCtaVisible}; recovered=${renderer.libraryFlashcardGenerateRetryRecovered}`,
-            },
-            {
-              name: "library-derived-flashcard-event-refresh",
-              pass: renderer.libraryFlashcardEventRefreshVisible,
+                renderer.canvasLibraryWorkIngressNavigated &&
+                renderer.canvasLibraryWorkIngressVisible &&
+                renderer.canvasLibraryWorkIngressPersisted,
+              detail: `navigated=${renderer.canvasLibraryWorkIngressNavigated}; visible=${renderer.canvasLibraryWorkIngressVisible}; persisted=${renderer.canvasLibraryWorkIngressPersisted}; hash=${renderer.canvasLibraryWorkIngressHash}`,
             },
             {
               name: "library-refresh-race-preserved",
@@ -15115,54 +14582,17 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               pass: renderer.sentinelFilterEmptyActionRestoresResults,
             },
             {
-              name: "flashcard-load-retry-recovery",
+              name: "canvas-legacy-flashcards-redirect",
+              pass: renderer.canvasLegacyFlashcardsRedirected,
+              detail: renderer.canvasLegacyRedirectHash,
+            },
+            {
+              name: "canvas-persisted-node-reload",
               pass:
-                renderer.flashcardLoadRetryRecoveryVisible &&
-                renderer.flashcardLoadRetryAttempts === 2,
-              detail: renderer.flashcardLoadRetryRecoveryDetail,
-            },
-            {
-              name: "flashcard-space-shortcut-target-guard",
-              pass:
-                renderer.flashcardCardSpaceReveals &&
-                renderer.flashcardFocusedButtonSpacePreservesReveal,
-              detail: `card=${renderer.flashcardCardSpaceReveals}; button=${renderer.flashcardFocusedButtonSpacePreservesReveal}`,
-            },
-            {
-              name: "flashcard-rating-feedback",
-              pass:
-                renderer.flashcardRatingFailurePreserved &&
-                renderer.flashcardRatingBusyVisible &&
-                renderer.flashcardRatingCompleted &&
-                renderer.flashcardRatingPersisted,
-              detail: `failurePreserved=${renderer.flashcardRatingFailurePreserved}; busy=${renderer.flashcardRatingBusyVisible}; completed=${renderer.flashcardRatingCompleted}; persisted=${renderer.flashcardRatingPersisted}`,
-            },
-            {
-              name: "flashcard-next-due-empty-state",
-              pass: renderer.flashcardNextDueVisible,
-            },
-            {
-              name: "flashcard-remove-undo-feedback",
-              pass:
-                renderer.flashcardRemoveConfirmVisible &&
-                renderer.flashcardRemoveFailurePreserved &&
-                renderer.flashcardRemoveBusyVisible &&
-                renderer.flashcardRemovePersisted &&
-                renderer.flashcardRestoreFailurePreserved &&
-                renderer.flashcardRestoreBusyVisible &&
-                renderer.flashcardRestorePersisted,
-              detail: `confirm=${renderer.flashcardRemoveConfirmVisible}; failure=${renderer.flashcardRemoveFailurePreserved}; removeBusy=${renderer.flashcardRemoveBusyVisible}; removed=${renderer.flashcardRemovePersisted}; restoreFailure=${renderer.flashcardRestoreFailurePreserved}; restoreBusy=${renderer.flashcardRestoreBusyVisible}; restored=${renderer.flashcardRestorePersisted}`,
-            },
-            {
-              name: "flashcard-empty-latest-reader-cta",
-              pass:
-                renderer.flashcardEmptyLatestReaderVisible &&
-                renderer.flashcardEmptyLatestReaderOpened,
-              detail: `visible=${renderer.flashcardEmptyLatestReaderVisible}; opened=${renderer.flashcardEmptyLatestReaderOpened}; hash=${renderer.flashcardEmptyLatestReaderHash}`,
-            },
-            {
-              name: "flashcard-refresh-race-preserved",
-              pass: renderer.flashcardRefreshRacePreserved,
+                renderer.canvasPersistedNodeReloaded &&
+                typeof renderer.canvasPersistedNodeCount === "number" &&
+                renderer.canvasPersistedNodeCount >= 2,
+              detail: `reloaded=${renderer.canvasPersistedNodeReloaded}; count=${renderer.canvasPersistedNodeCount}`,
             },
             {
               name: "snippets-note-shortcut-ime-guard",
@@ -15427,26 +14857,12 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               detail: `busy=${renderer.readerTranslationCopyBusyVisible}; ${renderer.readerTranslationCopyStatusText}; clipboard=${renderer.readerTranslationClipboardMatches}`,
             },
             {
-              name: "reader-digest-generate-feedback",
+              name: "reader-annotation-canvas-deep-link",
               pass:
-                renderer.readerDigestGenerateBusyVisible &&
-                renderer.readerDigestGenerateErrorVisible,
-              detail: `busy=${renderer.readerDigestGenerateBusyVisible}; error=${renderer.readerDigestGenerateErrorVisible}`,
-            },
-            {
-              name: "reader-digest-retry-recovery",
-              pass:
-                renderer.readerDigestRetryRecoveryVisible &&
-                renderer.readerDigestRetryAttempts === 2,
-              detail: renderer.readerDigestRetryRecoveryDetail,
-            },
-            {
-              name: "reader-digest-ai-settings-cta",
-              pass:
-                renderer.readerDigestSettingsCtaVisible &&
-                renderer.readerDigestSettingsCtaNavigates &&
-                renderer.readerDigestSettingsCtaTargetsSection,
-              detail: `visible=${renderer.readerDigestSettingsCtaVisible}; navigated=${renderer.readerDigestSettingsCtaNavigates}; targeted=${renderer.readerDigestSettingsCtaTargetsSection}`,
+                renderer.canvasReaderAnnotationDeepLinkNavigated &&
+                renderer.canvasReaderAnnotationVisible &&
+                renderer.canvasReaderAnnotationPersisted,
+              detail: `navigated=${renderer.canvasReaderAnnotationDeepLinkNavigated}; visible=${renderer.canvasReaderAnnotationVisible}; persisted=${renderer.canvasReaderAnnotationPersisted}; hash=${renderer.canvasReaderAnnotationDeepLinkHash}`,
             },
             {
               name: "reader-no-work-clears-document",

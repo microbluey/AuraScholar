@@ -19,11 +19,9 @@ const DiscoveryPage = lazy(() =>
 const ReaderPage = lazy(() =>
   import("./pages/ReaderPage").then((m) => ({ default: m.ReaderPage })),
 );
-const GraphPage = lazy(() =>
-  import("./pages/GraphPage").then((m) => ({ default: m.GraphPage })),
-);
-const FlashcardsPage = lazy(() =>
-  import("./pages/FlashcardsPage").then((m) => ({ default: m.FlashcardsPage })),
+const GraphPage = lazy(() => import("./pages/GraphPage").then((m) => ({ default: m.GraphPage })));
+const SpatialCanvasPage = lazy(() =>
+  import("./pages/SpatialCanvasPage").then((m) => ({ default: m.SpatialCanvasPage })),
 );
 const SentinelPage = lazy(() =>
   import("./pages/SentinelPage").then((m) => ({ default: m.SentinelPage })),
@@ -78,7 +76,8 @@ const router = createHashRouter([
       { path: "discovery", element: routeElement(<DiscoveryPage />, "学术检索") },
       { path: "reader", element: routeElement(<ReaderPage />, "PDF 阅读器") },
       { path: "graph", element: routeElement(<GraphPage />, "引文脉络") },
-      { path: "flashcards", element: routeElement(<FlashcardsPage />, "闪卡") },
+      { path: "canvas", element: routeElement(<SpatialCanvasPage />, "空间白板") },
+      { path: "flashcards", element: <Navigate to="/canvas" replace /> },
       { path: "snippets", element: routeElement(<SnippetsPage />, "写作素材") },
       { path: "sentinel", element: routeElement(<SentinelPage />, "检索哨兵") },
       { path: "homepage", element: routeElement(<HomepagePage />, "学术主页") },

@@ -33,3 +33,22 @@ export { SnippetsRepo } from "./repos/snippets.js";
 export type { SnippetRow, SnippetInput, SnippetWithWork } from "./repos/snippets.js";
 export { SavedSearchesRepo } from "./repos/saved-searches.js";
 export type { SavedSearchRow, SavedSearchInput } from "./repos/saved-searches.js";
+export {
+  CanvasRepo,
+  DEFAULT_CANVAS_WORKSPACE_ID,
+  DEFAULT_CANVAS_WORKSPACE_NAME,
+  STORED_CANVAS_EDGE_RELATIONS,
+  STORED_CANVAS_NODE_TYPES,
+} from "./repos/canvas.js";
+export type {
+  CanvasWorkspaceSummary,
+  StoredCanvasDimensions,
+  StoredCanvasEdge,
+  StoredCanvasEdgeRelation,
+  StoredCanvasEdgeStyle,
+  StoredCanvasNode,
+  StoredCanvasNodeType,
+  StoredCanvasPoint,
+  StoredCanvasViewport,
+  StoredCanvasWorkspaceDocument,
+} from "./repos/canvas.js";

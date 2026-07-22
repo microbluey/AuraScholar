@@ -325,6 +325,61 @@ export const MIGRATIONS: Migration[] = [
       INSERT INTO works_fts(works_fts) VALUES('rebuild');
     `,
   },
+  {
+    // Spatial Canvas persistence is additive. Legacy flashcard/FSRS tables are
+    // intentionally retained so disabling that UI never destroys user data.
+    // A canvas node is a workspace-owned placement with its own id; work_id is
+    // only a nullable parent reference and uses ON DELETE SET NULL.
+    version: 16,
+    name: "spatial_canvas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS canvas_workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        schema_version INTEGER NOT NULL DEFAULT 1 CHECK (schema_version >= 1),
+        viewport_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS canvas_nodes (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES canvas_workspaces(id) ON DELETE CASCADE,
+        work_id TEXT REFERENCES works(id) ON DELETE SET NULL,
+        type TEXT NOT NULL CHECK (type IN ('paper', 'excerpt', 'ai-synth', 'idea-note', 'group')),
+        pos_x REAL NOT NULL,
+        pos_y REAL NOT NULL,
+        width REAL NOT NULL CHECK (width > 0),
+        height REAL NOT NULL CHECK (height > 0),
+        group_id TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        data_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS canvas_nodes_workspace_idx ON canvas_nodes(workspace_id);
+      CREATE INDEX IF NOT EXISTS canvas_nodes_work_idx ON canvas_nodes(work_id);
+      CREATE INDEX IF NOT EXISTS canvas_nodes_group_idx ON canvas_nodes(workspace_id, group_id);
+
+      CREATE TABLE IF NOT EXISTS canvas_edges (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES canvas_workspaces(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL REFERENCES canvas_nodes(id) ON DELETE CASCADE,
+        target_id TEXT NOT NULL REFERENCES canvas_nodes(id) ON DELETE CASCADE,
+        relation_type TEXT NOT NULL CHECK (relation_type IN ('cites', 'supports', 'contradicts', 'extends', 'derived-from', 'custom')),
+        label TEXT,
+        style_json TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS canvas_edges_workspace_idx ON canvas_edges(workspace_id);
+      CREATE INDEX IF NOT EXISTS canvas_edges_source_idx ON canvas_edges(source_id);
+      CREATE INDEX IF NOT EXISTS canvas_edges_target_idx ON canvas_edges(target_id);
+    `,
+  },
 ];
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {

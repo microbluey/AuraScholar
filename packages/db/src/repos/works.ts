@@ -484,6 +484,7 @@ export class WorksRepo {
     await this.moveTags(primaryId, duplicateId);
     await this.moveCitations(primaryId, duplicateId);
     await this.moveGraphCache(primaryId, duplicateId);
+    await this.moveCanvasReferences(primaryId, duplicateId, now);
 
     for (const table of ["annotations", "flashcards", "snippets", "sentinel_tasks", "ai_jobs"]) {
       await this.db.run(`UPDATE ${table} SET work_id = ?, updated_at = ? WHERE work_id = ?`, [
@@ -634,6 +635,31 @@ export class WorksRepo {
         duplicateId,
       ]);
     }
+  }
+
+  private async moveCanvasReferences(
+    primaryId: string,
+    duplicateId: string,
+    now: number,
+  ): Promise<void> {
+    // Keep both representations in lockstep. `work_id` provides referential
+    // integrity, while paper/excerpt payloads use data.workId to open Reader.
+    // These statements run inside mergeInto's transaction, so a later merge
+    // failure rolls the canvas changes back with every other moved reference.
+    await this.db.run(
+      `UPDATE canvas_nodes
+       SET work_id = ?, updated_at = ?
+       WHERE work_id = ?`,
+      [primaryId, now, duplicateId],
+    );
+    await this.db.run(
+      `UPDATE canvas_nodes
+       SET data_json = json_set(data_json, '$.workId', ?), updated_at = ?
+       WHERE type IN ('paper', 'excerpt')
+         AND json_valid(data_json)
+         AND json_extract(data_json, '$.workId') = ?`,
+      [primaryId, now, duplicateId],
+    );
   }
 
   /**
