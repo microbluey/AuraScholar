@@ -44,6 +44,10 @@
       "types": "./dist/repos/collections.d.ts",
       "default": "./dist/repos/collections.js"
     },
+    "./repos/canvas": {
+      "types": "./dist/repos/canvas.d.ts",
+      "default": "./dist/repos/canvas.js"
+    },
     "./repos/flashcards": {
       "types": "./dist/repos/flashcards.d.ts",
       "default": "./dist/repos/flashcards.js"
@@ -69,7 +73,9 @@
       "default": "./dist/repos/works.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

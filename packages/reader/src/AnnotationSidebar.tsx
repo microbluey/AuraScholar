@@ -18,6 +18,7 @@ export interface AnnotationSidebarProps {
   onDiscardCommentDraft?: (annotation: ReaderAnnotation) => boolean | Promise<boolean>;
   onDraftDirtyChange?: (dirty: boolean) => void;
   onSaveComment?: (id: string, contentMd: string) => boolean | void | Promise<boolean | void>;
+  onAddToCanvas?: (annotation: ReaderAnnotation) => void;
   onDelete?: (id: string) => void | Promise<void>;
   deletingId?: string | null;
 }
@@ -38,6 +39,7 @@ export function AnnotationSidebar({
   onDiscardCommentDraft,
   onDraftDirtyChange,
   onSaveComment,
+  onAddToCanvas,
   onDelete,
   deletingId = null,
 }: AnnotationSidebarProps) {
@@ -172,6 +174,22 @@ export function AnnotationSidebar({
               >
                 定位
               </button>
+              {onAddToCanvas && (
+                <button
+                  type="button"
+                  className="au-annsidebar__canvas"
+                  disabled={controlsDisabled}
+                  aria-label={`把${annotationLabel}加入空间白板`}
+                  title="加入空间白板"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (controlsDisabled) return;
+                    onAddToCanvas(ann);
+                  }}
+                >
+                  白板
+                </button>
+              )}
               <button
                 type="button"
                 className="au-annsidebar__action"

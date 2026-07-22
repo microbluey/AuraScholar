@@ -898,7 +898,7 @@ export function SettingsPage() {
     setApiKey(next.apiKey);
     setSavedAiSettings(next);
     window.dispatchEvent(new Event(AI_SETTINGS_UPDATED_EVENT));
-    setStatus("已保存，新的 AI 配置会用于摘要、闪卡与翻译。");
+    setStatus("已保存，新的 AI 配置会用于摘要、观点合成与翻译。");
     return true;
   };
 
@@ -910,7 +910,7 @@ export function SettingsPage() {
     setStatus("测试中...");
     if (!desktopRuntime) {
       await withMinimumBusyTime(delay(0));
-      setStatus(`预览连接成功，模型 ${model.trim()} 已可用于摘要、闪卡与翻译演示。`);
+      setStatus(`预览连接成功，模型 ${model.trim()} 已可用于摘要、观点合成与翻译演示。`);
       setTesting(false);
       return;
     }
@@ -1349,7 +1349,7 @@ export function SettingsPage() {
                 title="AI 服务"
                 badge={activeProvider.label}
                 dirty={aiDirty}
-                description="AuraScholar 不内置云端账号，摘要、重点和闪卡都走你自己的模型服务。"
+                description="AuraScholar 不内置云端账号，摘要、研究合成和翻译都走你自己的模型服务。"
               />
 
               <div className="settings-provider-grid" role="group" aria-label="AI 服务类型">
@@ -1613,7 +1613,7 @@ export function SettingsPage() {
                 title="同步与备份"
                 badge="WebDAV"
                 dirty={syncDirty}
-                description="多设备同步使用你自己的云盘；JSON 备份可导出题录、批注、闪卡、素材和主页资料。"
+                description="WebDAV 同步题录、批注和检索状态；空间白板暂通过整库 JSON 备份跨设备迁移。"
               />
 
               <form

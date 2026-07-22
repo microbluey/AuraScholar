@@ -9,12 +9,17 @@ import {
   SyncEngine,
   WebDavProvider,
   HlcClock,
+  DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID,
+  SPATIAL_CANVAS_BACKUP_TABLES,
+  assertSpatialCanvasBackupOrder,
   columnsForSyncedTable,
+  remapSpatialCanvasBackupRow,
   safeSnapshotWatermark,
   type MarkPushedOptions,
   type SyncStorage,
   type ChangeEntry,
   type ConflictRecord,
+  type SpatialCanvasBackupTable,
   type SyncResult,
 } from "@aurascholar/sync";
 import { newId, type Database } from "@aurascholar/db";
@@ -81,6 +86,7 @@ const USER_BACKUP_TABLES = [
   "annotations",
   "annotation_comments",
   "snippets",
+  ...SPATIAL_CANVAS_BACKUP_TABLES,
   "flashcards",
   "flashcard_srs",
   "flashcard_reviews",
@@ -100,6 +106,7 @@ const GENERATED_BACKUP_ID_TABLES = [
   "annotations",
   "annotation_comments",
   "snippets",
+  ...SPATIAL_CANVAS_BACKUP_TABLES,
   "flashcards",
   "flashcard_reviews",
   "sentinel_tasks",
@@ -111,9 +118,14 @@ const GENERATED_BACKUP_ID_TABLES = [
   "derived_artifacts",
 ] as const satisfies readonly UserBackupTable[];
 const GENERATED_BACKUP_ID_TABLE_SET = new Set<UserBackupTable>(GENERATED_BACKUP_ID_TABLES);
+const SPATIAL_CANVAS_BACKUP_TABLE_SET = new Set<string>(SPATIAL_CANVAS_BACKUP_TABLES);
+const EMPTY_BACKUP_ID_MAP = new Map<string, string>();
 
 type UserBackupTable = (typeof USER_BACKUP_TABLES)[number];
 type GeneratedBackupIdTable = (typeof GENERATED_BACKUP_ID_TABLES)[number];
+
+// Keep the executable import loop honest when new backup tables are added.
+assertSpatialCanvasBackupOrder(USER_BACKUP_TABLES);
 
 interface LibraryBackupFile {
   exportedAt: string | null;
@@ -787,10 +799,20 @@ export async function importLibraryBackupJson(text: string): Promise<LibraryBack
           continue;
         }
         const placeholders = insertColumns.map(() => "?").join(", ");
+        const updateColumns = insertColumns.filter((column) => column !== "id");
+        const mergeVisibleDefaultWorkspace =
+          table === "canvas_workspaces" &&
+          importRow.id === DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID &&
+          updateColumns.length > 0;
+        const conflictClause = mergeVisibleDefaultWorkspace
+          ? ` ON CONFLICT(id) DO UPDATE SET ${updateColumns
+              .map((column) => `${quoteIdentifier(column)} = excluded.${quoteIdentifier(column)}`)
+              .join(", ")}`
+          : "";
         const changes = await db.run(
-          `INSERT OR IGNORE INTO ${quoteIdentifier(table)} (${insertColumns
+          `${mergeVisibleDefaultWorkspace ? "INSERT" : "INSERT OR IGNORE"} INTO ${quoteIdentifier(table)} (${insertColumns
             .map(quoteIdentifier)
-            .join(", ")}) VALUES (${placeholders})`,
+            .join(", ")}) VALUES (${placeholders})${conflictClause}`,
           insertColumns.map((column) => importRow[column] ?? null),
         );
         if (changes > 0) {
@@ -876,11 +898,26 @@ function prepareBackupRowForImport(
     }
   };
 
+  if (SPATIAL_CANVAS_BACKUP_TABLE_SET.has(table)) {
+    const canvasRemap = remapSpatialCanvasBackupRow(table as SpatialCanvasBackupTable, next, {
+      annotations: idMaps.generated.annotations ?? EMPTY_BACKUP_ID_MAP,
+      attachments: idMaps.generated.attachments ?? EMPTY_BACKUP_ID_MAP,
+      edges: idMaps.generated.canvas_edges ?? EMPTY_BACKUP_ID_MAP,
+      nodes: idMaps.generated.canvas_nodes ?? EMPTY_BACKUP_ID_MAP,
+      works: idMaps.works,
+      workspaces: idMaps.generated.canvas_workspaces ?? EMPTY_BACKUP_ID_MAP,
+    });
+    if (canvasRemap.redirected) {
+      next = canvasRemap.row;
+      redirectedRow = true;
+    }
+  }
+
   if (table === "libraries") remapLibraryId("id");
   if (table === "works") remap("id", idMaps.works);
   if (table === "authors") remap("id", idMaps.authors);
   if (table === "tags") remap("id", idMaps.tags);
-  if (GENERATED_BACKUP_ID_TABLE_SET.has(table)) {
+  if (GENERATED_BACKUP_ID_TABLE_SET.has(table) && !SPATIAL_CANVAS_BACKUP_TABLE_SET.has(table)) {
     remapGenerated("id", table as GeneratedBackupIdTable);
   }
 
@@ -1036,6 +1073,7 @@ async function buildGeneratedBackupIdMaps(
   const maps: BackupImportIdMaps["generated"] = {};
   for (const table of GENERATED_BACKUP_ID_TABLES) {
     const map = await buildConflictingPrimaryIdMap(db, backup.tables[table] ?? [], table);
+    if (table === "canvas_workspaces") map.delete(DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID);
     if (map.size > 0) maps[table] = map;
   }
   return maps;
