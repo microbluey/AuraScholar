@@ -45,6 +45,10 @@ import { isImeComposing } from "../keyboard";
 import { isPlatformShortcut, shortcutLabel } from "../shortcut-labels";
 import { blobPath, sha256Hex, auraFs, isDesktopRuntime } from "../services/aura-platform";
 import { fulltextHandoffPath } from "../services/fulltext";
+import {
+  PREVIEW_LIBRARY_WORK_SEEDS,
+  type PreviewLibraryWorkSeed,
+} from "../services/preview-library";
 import { describeSafeError } from "../services/sensitive-text";
 
 const MetadataEditor = lazy(() =>
@@ -230,20 +234,7 @@ function emptyWorkMeta(): WorkTableMeta {
 
 const PREVIEW_TIMESTAMP = Date.UTC(2026, 6, 1);
 
-function previewWork(input: {
-  abstract: string;
-  arxivId?: string | null;
-  authors: string[];
-  createdOffset: number;
-  doi?: string | null;
-  id: string;
-  readingStatus: ReadingStatus;
-  starred?: boolean;
-  title: string;
-  type?: string;
-  venue: string;
-  year: number;
-}): WorkWithAuthors {
+function previewWork(input: PreviewLibraryWorkSeed): WorkWithAuthors {
   return {
     id: input.id,
     doi: input.doi ?? null,
@@ -290,58 +281,7 @@ function previewWork(input: {
   };
 }
 
-const PREVIEW_LIBRARY_WORKS: WorkWithAuthors[] = [
-  previewWork({
-    id: "preview-attention",
-    title: "Attention Is All You Need",
-    authors: ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit"],
-    year: 2017,
-    venue: "NeurIPS",
-    doi: "10.48550/arXiv.1706.03762",
-    arxivId: "1706.03762",
-    readingStatus: "reading",
-    starred: true,
-    createdOffset: 1000 * 60 * 60 * 6,
-    abstract:
-      "The Transformer replaces recurrent sequence models with attention-only blocks, creating a faster and more parallelizable architecture for machine translation and later foundation models.",
-  }),
-  previewWork({
-    id: "preview-alphafold",
-    title: "Highly accurate protein structure prediction with AlphaFold",
-    authors: ["John Jumper", "Richard Evans", "Alexander Pritzel", "Tim Green"],
-    year: 2021,
-    venue: "Nature",
-    doi: "10.1038/s41586-021-03819-2",
-    readingStatus: "read",
-    createdOffset: 1000 * 60 * 60 * 28,
-    abstract:
-      "AlphaFold demonstrates near-experimental accuracy for protein structure prediction and shows how deep learning can change structural biology workflows.",
-  }),
-  previewWork({
-    id: "preview-sam",
-    title: "Segment Anything",
-    authors: ["Alexander Kirillov", "Eric Mintun", "Nikhila Ravi", "Hanzi Mao"],
-    year: 2023,
-    venue: "ICCV",
-    arxivId: "2304.02643",
-    readingStatus: "unread",
-    createdOffset: 1000 * 60 * 60 * 52,
-    abstract:
-      "Segment Anything introduces a promptable segmentation model and a large-scale dataset for broad zero-shot image segmentation use cases.",
-  }),
-  previewWork({
-    id: "preview-scaling-laws",
-    title: "Scaling Laws for Neural Language Models",
-    authors: ["Jared Kaplan", "Sam McCandlish", "Tom Henighan", "Tom B. Brown"],
-    year: 2020,
-    venue: "arXiv",
-    arxivId: "2001.08361",
-    readingStatus: "reading",
-    createdOffset: 1000 * 60 * 60 * 80,
-    abstract:
-      "This work studies predictable power-law relationships between model size, dataset size, compute, and language-model performance.",
-  }),
-];
+const PREVIEW_LIBRARY_WORKS: WorkWithAuthors[] = PREVIEW_LIBRARY_WORK_SEEDS.map(previewWork);
 
 const PREVIEW_LIBRARY_COLLECTIONS: CollectionRow[] = [
   {

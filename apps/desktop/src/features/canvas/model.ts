@@ -12,6 +12,7 @@ import {
   type IdeaNoteNode,
   type PaperNode,
 } from "@aurascholar/core";
+import { PREVIEW_LIBRARY_WORK_SEEDS } from "../../services/preview-library";
 
 export const DEFAULT_CANVAS_WORKSPACE_ID = "canvas:default";
 export const CANVAS_STORAGE_KEY = "aurascholar:spatial-canvas:v1";
@@ -219,6 +220,16 @@ export const PREVIEW_LIBRARY_WORKS: CanvasLibraryWork[] = [
       "A graph-based method for tracing causal claims and conflicting evidence across publications.",
     readingStatus: "unread",
   },
+  ...PREVIEW_LIBRARY_WORK_SEEDS.map((work) => ({
+    id: work.id,
+    title: work.title,
+    authorNames: work.authors,
+    year: work.year,
+    venue: work.venue,
+    doi: work.doi ?? null,
+    abstract: work.abstract,
+    readingStatus: work.readingStatus,
+  })),
 ];
 
 export function createPreviewWorkspace(): CanvasWorkspaceDocument {
