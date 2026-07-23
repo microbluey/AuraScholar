@@ -264,6 +264,8 @@ export function CanvasInspector({
     <aside
       className={`canvas-inspector${open ? " canvas-inspector--open" : ""}`}
       aria-label="画布检查器"
+      aria-hidden={!open}
+      inert={!open}
     >
       <header className="canvas-inspector__header">
         <div>

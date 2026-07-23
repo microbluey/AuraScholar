@@ -1,7 +1,7 @@
 // The reader view: virtualized page list + selection capture + highlight
 // toolbar. Storage-agnostic — annotation CRUD is delegated to callbacks.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PdfDocument } from "./document.js";
+import type { PageTextIndex, PdfDocument } from "./document.js";
 import type { PendingSelection, ReaderAnnotation, AnnotationType } from "./annotations.js";
 import type { AnnotationAnchor } from "./anchor-types.js";
 import { makeQuoteSelector } from "./anchoring.js";
@@ -32,6 +32,8 @@ export interface PdfReaderProps {
   scrollToPage?: number | null;
   /** Reports the page nearest the reading focus as the document scrolls. */
   onVisiblePageChange?: (pageIndex: number) => void;
+  /** Initial zoom for constrained hosts such as the Canvas side-by-side reader. */
+  initialScale?: number;
 }
 
 const DEFAULT_PALETTE: Record<string, string> = {
@@ -55,9 +57,12 @@ export function PdfReader({
   pageFilter = "none",
   scrollToPage = null,
   onVisiblePageChange,
+  initialScale = 1.2,
 }: PdfReaderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1.2);
+  const [scale, setScale] = useState(() =>
+    Number.isFinite(initialScale) ? Math.min(4, Math.max(0.5, initialScale)) : 1.2,
+  );
   const [visibleRange, setVisibleRange] = useState<[number, number]>([0, 2]);
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const [pageHeight, setPageHeight] = useState(800); // estimated until first page loads
@@ -66,10 +71,20 @@ export function PdfReader({
 
   // Measure first page to estimate scroll heights for virtualization.
   useEffect(() => {
-    void doc.getPage(0).then((p) => {
-      const vp = p.getViewport({ scale: 1 });
-      setPageHeight(vp.height);
-    });
+    let cancelled = false;
+    void doc
+      .getPage(0)
+      .then((page) => {
+        if (cancelled) return;
+        const viewport = page.getViewport({ scale: 1 });
+        setPageHeight(viewport.height);
+      })
+      .catch(() => {
+        // The Canvas drawer can destroy the worker while this measurement is pending.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [doc]);
 
   const scaledPageHeight = pageHeight * scale + 16; // + gap
@@ -115,7 +130,13 @@ export function PdfReader({
     if (Number.isNaN(pageIndex) || Number(focusSpan.parentElement?.dataset.pageIndex) !== pageIndex)
       return; // cross-page selection: out of scope for v0.1
 
-    const index = await doc.getPageText(pageIndex);
+    let index: PageTextIndex;
+    try {
+      index = await doc.getPageText(pageIndex);
+    } catch {
+      // Closing or switching the Canvas reader may destroy the PDF mid-selection.
+      return;
+    }
     const range = textRangeFromDomSelection(
       index,
       Number(anchorSpan.dataset.itemIndex),

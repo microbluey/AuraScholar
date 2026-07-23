@@ -24,10 +24,24 @@ import { canvasNodeTypes, type CanvasFlowNode } from "./CanvasCards";
 import { CanvasDock, type CanvasTool } from "./CanvasDock";
 import { CanvasInspector } from "./CanvasInspector";
 import { CANVAS_WORK_DRAG_TYPE, CanvasLibraryPanel } from "./CanvasLibraryPanel";
+import {
+  CanvasReaderDrawer,
+  canvasReaderExcerptDragPayload,
+  type CanvasReaderAnnotationPayload,
+} from "./CanvasReaderDrawer";
 import { CanvasWorkspaceSwitcher } from "./CanvasWorkspaceSwitcher";
 import { canvasEdgeTypes, type RelationFlowEdge } from "./RelationEdge";
 import {
+  CANVAS_EXCERPT_DRAG_MIME,
+  CanvasExcerptDropError,
+  applyCanvasExcerptDrop,
+  readCanvasExcerptDragPayload,
+  serializeCanvasExcerptDragPayload,
+  type CanvasExcerptDragPayload,
+} from "./canvas-excerpt-dnd";
+import {
   createAISynthNode,
+  createCanvasId,
   createEdge,
   createGroupNode,
   createIdeaNoteNode,
@@ -67,6 +81,16 @@ interface CanvasWorkspaceProps {
 }
 
 const COLLAPSED_GROUP_DIMENSIONS = { width: 260, height: 48 } as const;
+
+interface CanvasReaderTarget {
+  annotationId?: string;
+  attachmentId?: string;
+  fromExcerpt: boolean;
+  pageIndex?: number;
+  paperTitle: string;
+  sourceNodeId?: string;
+  workId: string;
+}
 
 function absoluteNodePosition(node: CanvasNode, allNodes: CanvasNode[]): CanvasPoint {
   if (!node.groupId) return node.position;
@@ -117,9 +141,66 @@ function CanvasWorkspaceInner({
   );
   const [synthesisBusy, setSynthesisBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [readerTarget, setReaderTarget] = useState<CanvasReaderTarget | null>(null);
+  const trustedReaderPayloadRef = useRef<string | null>(null);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
 
   const showNotice = useCallback((message: string) => setNotice(message), []);
+
+  const closeReader = useCallback(() => {
+    trustedReaderPayloadRef.current = null;
+    setReaderTarget(null);
+  }, []);
+
+  const openInspector = useCallback(() => {
+    if (readerTarget) return;
+    setDrawerOpen(true);
+  }, [readerTarget]);
+
+  const openNodeInReader = useCallback(
+    (node: CanvasNode) => {
+      trustedReaderPayloadRef.current = null;
+      if (node.type === "paper") {
+        setReaderTarget({
+          workId: node.data.workId,
+          sourceNodeId: node.id,
+          fromExcerpt: false,
+          paperTitle: node.data.title,
+        });
+        setDrawerOpen(false);
+        return;
+      }
+      if (node.type !== "excerpt") return;
+      const source = document.nodes.find(
+        (candidate) => candidate.type === "paper" && candidate.data.workId === node.data.workId,
+      );
+      setReaderTarget({
+        workId: node.data.workId,
+        sourceNodeId: source?.id,
+        fromExcerpt: true,
+        paperTitle: node.data.paperTitle,
+        annotationId: node.data.annotationId,
+        attachmentId: node.data.attachmentId,
+        pageIndex: node.data.pageIndex,
+      });
+      setDrawerOpen(false);
+    },
+    [document.nodes],
+  );
+
+  const openWorkInReader = useCallback(
+    (workId: string) => {
+      const paper = document.nodes.find(
+        (node) => node.type === "paper" && node.data.workId === workId,
+      );
+      if (paper) {
+        openNodeInReader(paper);
+        return;
+      }
+      onOpenPaper(workId);
+    },
+    [document.nodes, onOpenPaper, openNodeInReader],
+  );
 
   useEffect(() => {
     selectedNodeIdsRef.current = selectedNodeIds;
@@ -173,14 +254,14 @@ function CanvasWorkspaceInner({
       }));
       setSelectedNodeIds(new Set([groupId]));
       setSelectedEdgeId(null);
-      setDrawerOpen(true);
+      openInspector();
       showNotice(
         collapsed
           ? `已折叠「${groupTitle}」，隐藏 ${childCount} 张卡片。`
           : `已展开「${groupTitle}」。`,
       );
     },
-    [document.nodes, onDocumentChange, showNotice],
+    [document.nodes, onDocumentChange, openInspector, showNotice],
   );
 
   const flowNodes = useMemo<CanvasFlowNode[]>(() => {
@@ -230,21 +311,13 @@ function CanvasWorkspaceInner({
         data: {
           canvasNode: node,
           groupChildCount: groupChildCounts.get(node.id) ?? 0,
-          onOpenPaper,
-          onOpenExcerpt,
+          onOpenPaper: () => openNodeInReader(node),
+          onOpenExcerpt: () => openNodeInReader(node),
           onToggleGroup: setGroupCollapsed,
         },
       };
     });
-  }, [
-    document.nodes,
-    hiddenNodeIds,
-    onOpenExcerpt,
-    onOpenPaper,
-    selectedNodeIds,
-    setGroupCollapsed,
-    tool,
-  ]);
+  }, [document.nodes, hiddenNodeIds, openNodeInReader, selectedNodeIds, setGroupCollapsed, tool]);
 
   const flowEdges = useMemo<RelationFlowEdge[]>(
     () =>
@@ -311,7 +384,7 @@ function CanvasWorkspaceInner({
         });
         if (selectionChanges.some((change) => change.selected)) {
           setSelectedEdgeId(null);
-          setDrawerOpen(true);
+          openInspector();
         }
       }
       const positions = new Map<string, CanvasPoint>();
@@ -329,26 +402,29 @@ function CanvasWorkspaceInner({
         updatedAt: Date.now(),
       }));
     },
-    [onDocumentChange],
+    [onDocumentChange, openInspector],
   );
 
-  const onEdgesChange = useCallback((changes: EdgeChange<RelationFlowEdge>[]) => {
-    const selectionChanges = changes.filter(
-      (change): change is Extract<EdgeChange<RelationFlowEdge>, { type: "select" }> =>
-        change.type === "select",
-    );
-    if (!selectionChanges.length) return;
-    const selected = selectionChanges.find((change) => change.selected);
-    if (selected) {
-      setSelectedNodeIds(new Set());
-      setSelectedEdgeId(selected.id);
-      setDrawerOpen(true);
-      return;
-    }
-    setSelectedEdgeId((current) =>
-      selectionChanges.some((change) => change.id === current) ? null : current,
-    );
-  }, []);
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<RelationFlowEdge>[]) => {
+      const selectionChanges = changes.filter(
+        (change): change is Extract<EdgeChange<RelationFlowEdge>, { type: "select" }> =>
+          change.type === "select",
+      );
+      if (!selectionChanges.length) return;
+      const selected = selectionChanges.find((change) => change.selected);
+      if (selected) {
+        setSelectedNodeIds(new Set());
+        setSelectedEdgeId(selected.id);
+        openInspector();
+        return;
+      }
+      setSelectedEdgeId((current) =>
+        selectionChanges.some((change) => change.id === current) ? null : current,
+      );
+    },
+    [openInspector],
+  );
 
   const addPaper = useCallback(
     (work: CanvasLibraryWork, position?: CanvasPoint) => {
@@ -375,10 +451,10 @@ function CanvasWorkspaceInner({
       }));
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
-      setDrawerOpen(true);
+      openInspector();
       showNotice(`已将《${work.title}》加入画布。`);
     },
-    [document.nodes, flow, onDocumentChange, showNotice],
+    [document.nodes, flow, onDocumentChange, openInspector, showNotice],
   );
 
   const addNote = useCallback(() => {
@@ -395,8 +471,8 @@ function CanvasWorkspaceInner({
     }));
     setSelectedNodeIds(new Set([node.id]));
     setSelectedEdgeId(null);
-    setDrawerOpen(true);
-  }, [flow, onDocumentChange]);
+    openInspector();
+  }, [flow, onDocumentChange, openInspector]);
 
   const groupSelected = useCallback(() => {
     const selected = document.nodes.filter(
@@ -521,9 +597,9 @@ function CanvasWorkspaceInner({
       }));
       setSelectedNodeIds(new Set());
       setSelectedEdgeId(edge.id);
-      setDrawerOpen(true);
+      openInspector();
     },
-    [document.edges, onDocumentChange, showNotice],
+    [document.edges, onDocumentChange, openInspector, showNotice],
   );
 
   const synthesize = useCallback(
@@ -582,7 +658,7 @@ function CanvasWorkspaceInner({
         );
         setSelectedNodeIds(new Set([completedNode.id]));
         setSelectedEdgeId(null);
-        setDrawerOpen(true);
+        openInspector();
         showNotice(result.preview ? "已生成未连接 AI 的交互预览。" : "AI 合成已完成。");
       } catch (error) {
         const message = error instanceof Error ? error.message : "AI 合成暂时不可用";
@@ -595,14 +671,146 @@ function CanvasWorkspaceInner({
       document.nodes,
       document.workspaceId,
       onDocumentChange,
+      openInspector,
       selectedNodeIds,
       showNotice,
       synthesisBusy,
     ],
   );
 
+  const addExcerptPayload = useCallback(
+    (payload: CanvasExcerptDragPayload, position?: CanvasPoint): boolean => {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const dropPosition =
+        position ??
+        flow.screenToFlowPosition({
+          x: (rect?.left || 0) + (rect?.width || 900) * 0.52,
+          y: (rect?.top || 0) + (rect?.height || 640) * 0.48,
+        });
+      const generatedIds = [createCanvasId(), createCanvasId()];
+      const timestamp = Date.now();
+      const applyDrop = (current: CanvasWorkspaceDocument) => {
+        let idIndex = 0;
+        return applyCanvasExcerptDrop(current, payload, dropPosition, {
+          createId: () => generatedIds[idIndex++]!,
+          now: () => timestamp,
+        });
+      };
+
+      let planned: ReturnType<typeof applyCanvasExcerptDrop>;
+      try {
+        planned = applyDrop(document);
+      } catch (error) {
+        showNotice(
+          error instanceof CanvasExcerptDropError ? error.message : "无法把这条高亮加入当前白板。",
+        );
+        return false;
+      }
+
+      onDocumentChange((current) => {
+        try {
+          const next = applyDrop(current).document;
+          if (planned.createdNode || !planned.node.groupId) return next;
+          return {
+            ...next,
+            nodes: next.nodes.map((node) =>
+              node.id === planned.node.groupId && node.type === "group" && node.data.collapsed
+                ? {
+                    ...node,
+                    data: { ...node.data, collapsed: false },
+                    updatedAt: timestamp,
+                  }
+                : node,
+            ),
+            updatedAt: timestamp,
+          };
+        } catch {
+          return current;
+        }
+      });
+      setSelectedNodeIds(new Set([planned.node.id]));
+      setSelectedEdgeId(null);
+      if (!planned.createdNode) {
+        const absolute = absoluteNodePosition(planned.node, planned.document.nodes);
+        window.requestAnimationFrame(() => {
+          void flow.setCenter(
+            absolute.x + planned.node.dimensions.width / 2,
+            absolute.y + planned.node.dimensions.height / 2,
+            { duration: 240, zoom: Math.max(document.viewport.zoom, 0.8) },
+          );
+        });
+      }
+      showNotice(
+        planned.createdNode
+          ? "已创建摘录卡，并自动连接到来源文献。"
+          : planned.createdEdge
+            ? "摘录卡已存在，已补回来源连线。"
+            : "这条高亮已在白板中，已为你定位。",
+      );
+      return true;
+    },
+    [document, flow, onDocumentChange, showNotice],
+  );
+
+  const rememberReaderAnnotation = useCallback(
+    (payload: CanvasReaderAnnotationPayload): boolean => {
+      const dragPayload = canvasReaderExcerptDragPayload(payload);
+      if (
+        !readerTarget ||
+        dragPayload.workspaceId !== document.workspaceId ||
+        dragPayload.sourceNodeId !== readerTarget.sourceNodeId ||
+        dragPayload.workId !== readerTarget.workId
+      ) {
+        return false;
+      }
+      try {
+        trustedReaderPayloadRef.current = serializeCanvasExcerptDragPayload(dragPayload);
+      } catch {
+        trustedReaderPayloadRef.current = null;
+        return false;
+      }
+      return true;
+    },
+    [document.workspaceId, readerTarget],
+  );
+
+  const addReaderAnnotation = useCallback(
+    (payload: CanvasReaderAnnotationPayload) => {
+      const dragPayload = canvasReaderExcerptDragPayload(payload);
+      if (!rememberReaderAnnotation(payload)) {
+        showNotice("阅读会话已切换，本次加入已取消。");
+        return false;
+      }
+      return addExcerptPayload(dragPayload);
+    },
+    [addExcerptPayload, rememberReaderAnnotation, showNotice],
+  );
+
   const onDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
+      if (event.dataTransfer.types.includes(CANVAS_EXCERPT_DRAG_MIME)) {
+        event.preventDefault();
+        const excerptPayload = readCanvasExcerptDragPayload(
+          event.dataTransfer,
+          document.workspaceId,
+        );
+        if (!excerptPayload) {
+          showNotice("摘录数据无效或白板已切换，本次拖入已取消。");
+          return;
+        }
+        const trusted = trustedReaderPayloadRef.current;
+        if (!trusted || serializeCanvasExcerptDragPayload(excerptPayload) !== trusted) {
+          showNotice("无法验证这条摘录的阅读会话，本次拖入已取消。");
+          return;
+        }
+        addExcerptPayload(
+          excerptPayload,
+          flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+        );
+        return;
+      }
+
+      if (!event.dataTransfer.types.includes(CANVAS_WORK_DRAG_TYPE)) return;
       event.preventDefault();
       const raw = event.dataTransfer.getData(CANVAS_WORK_DRAG_TYPE);
       if (!raw) return;
@@ -615,7 +823,7 @@ function CanvasWorkspaceInner({
         showNotice("无法读取拖入的文献。");
       }
     },
-    [addPaper, flow, showNotice, works],
+    [addExcerptPayload, addPaper, document.workspaceId, flow, showNotice, works],
   );
 
   const onMoveEnd = useCallback(
@@ -652,175 +860,198 @@ function CanvasWorkspaceInner({
 
   return (
     <div
-      className={`canvas-workspace canvas-workspace--tool-${tool}`}
-      ref={wrapperRef}
-      onDrop={onDrop}
-      onDragOver={(event) => {
-        if (event.dataTransfer.types.includes(CANVAS_WORK_DRAG_TYPE)) {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-        }
-      }}
+      className={`canvas-workspace-split${readerTarget ? " canvas-workspace-split--reader-open" : ""}`}
     >
-      <ReactFlow<CanvasFlowNode, RelationFlowEdge>
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={canvasNodeTypes}
-        edgeTypes={canvasEdgeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onNodeClick={(event, node) => {
-          const additive = event.shiftKey || event.metaKey || event.ctrlKey;
-          const next = additive ? new Set(selectedNodeIdsRef.current) : new Set<string>();
-          if (additive && next.has(node.id)) next.delete(node.id);
-          else next.add(node.id);
-          setSelectedNodeIds(next);
-          setSelectedEdgeId(null);
-          setDrawerOpen(true);
-        }}
-        onConnect={connect}
-        onMoveEnd={onMoveEnd}
-        onNodeDoubleClick={(_event, node) => {
-          const canvasNode = node.data.canvasNode;
-          if (canvasNode.type === "paper") onOpenPaper(canvasNode.data.workId);
-          if (canvasNode.type === "excerpt") {
-            onOpenExcerpt(
-              canvasNode.data.workId,
-              canvasNode.data.annotationId,
-              canvasNode.data.pageIndex,
-              canvasNode.data.attachmentId,
-            );
+      <div
+        className={`canvas-workspace canvas-workspace--tool-${tool}`}
+        ref={wrapperRef}
+        onDrop={onDrop}
+        onDragOver={(event) => {
+          if (
+            event.dataTransfer.types.includes(CANVAS_WORK_DRAG_TYPE) ||
+            event.dataTransfer.types.includes(CANVAS_EXCERPT_DRAG_MIME)
+          ) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
           }
         }}
-        onPaneClick={() => {
-          setSelectedNodeIds(new Set());
-          setSelectedEdgeId(null);
-        }}
-        defaultViewport={document.viewport}
-        minZoom={0.2}
-        maxZoom={2.4}
-        panOnDrag={tool === "pan" ? true : [1, 2]}
-        selectionOnDrag={tool === "select"}
-        multiSelectionKeyCode="Shift"
-        panActivationKeyCode="Space"
-        nodesDraggable={tool !== "pan"}
-        nodesConnectable={tool === "connect"}
-        elementsSelectable={tool !== "pan"}
-        deleteKeyCode={null}
-        elevateNodesOnSelect
-        colorMode="system"
       >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={16}
-          size={1.25}
-          color="var(--canvas-grid-dot)"
-        />
-
-        <div className="canvas-workspace__meta" aria-label="当前画布状态">
-          <button type="button" onClick={onExit} aria-label="返回文献库" title="返回文献库">
-            <ArrowLeft size={14} weight="bold" />
-          </button>
-          <CanvasWorkspaceSwitcher
-            activeWorkspaceId={document.workspaceId}
-            workspaces={workspaces}
-            onSelectWorkspace={onSelectWorkspace}
-            onCreateWorkspace={onCreateWorkspace}
-            onDeleteWorkspace={onDeleteWorkspace}
-            onRenameWorkspace={onRenameWorkspace}
+        <ReactFlow<CanvasFlowNode, RelationFlowEdge>
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={canvasNodeTypes}
+          edgeTypes={canvasEdgeTypes}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onNodeClick={(event, node) => {
+            const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+            const next = additive ? new Set(selectedNodeIdsRef.current) : new Set<string>();
+            if (additive && next.has(node.id)) next.delete(node.id);
+            else next.add(node.id);
+            setSelectedNodeIds(next);
+            setSelectedEdgeId(null);
+            openInspector();
+          }}
+          onConnect={connect}
+          onMoveEnd={onMoveEnd}
+          onNodeDoubleClick={(_event, node) => openNodeInReader(node.data.canvasNode)}
+          onPaneClick={() => {
+            setSelectedNodeIds(new Set());
+            setSelectedEdgeId(null);
+          }}
+          defaultViewport={document.viewport}
+          minZoom={0.2}
+          maxZoom={2.4}
+          panOnDrag={tool === "pan" ? true : [1, 2]}
+          selectionOnDrag={tool === "select"}
+          multiSelectionKeyCode="Shift"
+          panActivationKeyCode="Space"
+          nodesDraggable={tool !== "pan"}
+          nodesConnectable={tool === "connect"}
+          elementsSelectable={tool !== "pan"}
+          deleteKeyCode={null}
+          elevateNodesOnSelect
+          colorMode="system"
+        >
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={16}
+            size={1.25}
+            color="var(--canvas-grid-dot)"
           />
-          <span>
-            {document.nodes.length} 张卡片 · {document.edges.length} 条关系
-          </span>
-          <small>{persistenceLabel}</small>
-        </div>
 
-        <CanvasLibraryPanel
-          works={works}
-          loading={libraryLoading}
-          addedWorkIds={addedWorkIds}
-          onAddWork={addPaper}
-        />
-
-        <CanvasDock
-          tool={tool}
-          onToolChange={setTool}
-          onZoomOut={() => void flow.zoomOut({ duration: 160 })}
-          onZoomIn={() => void flow.zoomIn({ duration: 160 })}
-          onFitView={() => void flow.fitView({ duration: 260, padding: 0.18 })}
-          onAddNote={addNote}
-          onGroup={groupSelected}
-          onSynthesize={(type) => void synthesize(type)}
-          canGroup={canGroup}
-          canSynthesize={
-            synthesisSourceCount >= 2 &&
-            synthesisSourceCount <= MAX_CANVAS_SYNTHESIS_SOURCES &&
-            !synthesisBusy
-          }
-          synthesisHint={
-            synthesisSourceCount > MAX_CANVAS_SYNTHESIS_SOURCES
-              ? `一次最多选择 ${MAX_CANVAS_SYNTHESIS_SOURCES} 张文献或摘录卡片`
-              : synthesisSourceCount >= 2
-                ? "合成所选文献与摘录"
-                : "至少选择两张文献或摘录卡片"
-          }
-          selectedCount={selectedNodeIds.size}
-        />
-
-        <CanvasInspector
-          open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          node={selectedNode}
-          edge={selectedEdge}
-          groupChildCount={
-            selectedNode?.type === "group"
-              ? document.nodes.filter((node) => node.groupId === selectedNode.id).length
-              : 0
-          }
-          selectedCount={selectedNodeIds.size}
-          onUpdateNode={updateNode}
-          onUpdateEdge={updateEdge}
-          onDeleteNode={deleteNode}
-          onDeleteEdge={deleteEdge}
-          onUngroup={ungroup}
-          onSetGroupCollapsed={setGroupCollapsed}
-          onOpenPaper={onOpenPaper}
-          miniMap={
-            <MiniMap<CanvasFlowNode>
-              nodeColor={nodeMiniMapColor}
-              nodeStrokeWidth={2}
-              pannable
-              zoomable
-              maskColor="color-mix(in srgb, var(--color-bg) 78%, transparent)"
-            />
-          }
-        />
-
-        {!drawerOpen && (
-          <button
-            className="canvas-inspector-toggle"
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            title="展开检查器"
-            aria-label="展开画布检查器"
-          >
-            <SidebarSimple size={19} weight="duotone" />
-          </button>
-        )}
-
-        {document.nodes.length === 0 && (
-          <div className="canvas-empty">
-            <strong>把第一篇文献放到研究空间</strong>
-            <p>从左侧文献库点击或拖入文献，也可以先新建一张研究笔记。</p>
-            <button type="button" onClick={addNote}>
-              新建研究笔记
+          <div className="canvas-workspace__meta" aria-label="当前画布状态">
+            <button type="button" onClick={onExit} aria-label="返回文献库" title="返回文献库">
+              <ArrowLeft size={14} weight="bold" />
             </button>
+            <CanvasWorkspaceSwitcher
+              activeWorkspaceId={document.workspaceId}
+              workspaces={workspaces}
+              onSelectWorkspace={onSelectWorkspace}
+              onCreateWorkspace={onCreateWorkspace}
+              onDeleteWorkspace={onDeleteWorkspace}
+              onRenameWorkspace={onRenameWorkspace}
+            />
+            <span>
+              {document.nodes.length} 张卡片 · {document.edges.length} 条关系
+            </span>
+            <small>{persistenceLabel}</small>
           </div>
-        )}
-      </ReactFlow>
-      <div className="canvas-live-notice" aria-live="polite" role="status">
-        {notice}
+
+          <CanvasLibraryPanel
+            works={works}
+            loading={libraryLoading}
+            addedWorkIds={addedWorkIds}
+            onAddWork={addPaper}
+          />
+
+          <CanvasDock
+            tool={tool}
+            onToolChange={setTool}
+            onZoomOut={() => void flow.zoomOut({ duration: 160 })}
+            onZoomIn={() => void flow.zoomIn({ duration: 160 })}
+            onFitView={() => void flow.fitView({ duration: 260, padding: 0.18 })}
+            onAddNote={addNote}
+            onGroup={groupSelected}
+            onSynthesize={(type) => void synthesize(type)}
+            canGroup={canGroup}
+            canSynthesize={
+              synthesisSourceCount >= 2 &&
+              synthesisSourceCount <= MAX_CANVAS_SYNTHESIS_SOURCES &&
+              !synthesisBusy
+            }
+            synthesisHint={
+              synthesisSourceCount > MAX_CANVAS_SYNTHESIS_SOURCES
+                ? `一次最多选择 ${MAX_CANVAS_SYNTHESIS_SOURCES} 张文献或摘录卡片`
+                : synthesisSourceCount >= 2
+                  ? "合成所选文献与摘录"
+                  : "至少选择两张文献或摘录卡片"
+            }
+            selectedCount={selectedNodeIds.size}
+          />
+
+          <CanvasInspector
+            open={drawerOpen && !readerTarget}
+            onClose={() => setDrawerOpen(false)}
+            node={selectedNode}
+            edge={selectedEdge}
+            groupChildCount={
+              selectedNode?.type === "group"
+                ? document.nodes.filter((node) => node.groupId === selectedNode.id).length
+                : 0
+            }
+            selectedCount={selectedNodeIds.size}
+            onUpdateNode={updateNode}
+            onUpdateEdge={updateEdge}
+            onDeleteNode={deleteNode}
+            onDeleteEdge={deleteEdge}
+            onUngroup={ungroup}
+            onSetGroupCollapsed={setGroupCollapsed}
+            onOpenPaper={openWorkInReader}
+            miniMap={
+              <MiniMap<CanvasFlowNode>
+                nodeColor={nodeMiniMapColor}
+                nodeStrokeWidth={2}
+                pannable
+                zoomable
+                maskColor="color-mix(in srgb, var(--color-bg) 78%, transparent)"
+              />
+            }
+          />
+
+          {!drawerOpen && !readerTarget && (
+            <button
+              className="canvas-inspector-toggle"
+              type="button"
+              onClick={openInspector}
+              title="展开检查器"
+              aria-label="展开画布检查器"
+            >
+              <SidebarSimple size={19} weight="duotone" />
+            </button>
+          )}
+
+          {document.nodes.length === 0 && (
+            <div className="canvas-empty">
+              <strong>把第一篇文献放到研究空间</strong>
+              <p>从左侧文献库点击或拖入文献，也可以先新建一张研究笔记。</p>
+              <button type="button" onClick={addNote}>
+                新建研究笔记
+              </button>
+            </div>
+          )}
+        </ReactFlow>
+        <div className="canvas-live-notice" aria-live="polite" role="status">
+          {notice}
+        </div>
       </div>
+      {readerTarget && (
+        <CanvasReaderDrawer
+          key={`${document.workspaceId}:${readerTarget.workId}:${readerTarget.attachmentId ?? ""}:${readerTarget.annotationId ?? ""}`}
+          workspaceId={document.workspaceId}
+          workId={readerTarget.workId}
+          fallbackTitle={readerTarget.paperTitle}
+          sourceNodeId={readerTarget.sourceNodeId}
+          preferredAttachmentId={readerTarget.attachmentId}
+          initialAnnotationId={readerTarget.annotationId}
+          initialPageIndex={readerTarget.pageIndex}
+          onClose={closeReader}
+          onAnnotationReady={rememberReaderAnnotation}
+          onAddAnnotation={addReaderAnnotation}
+          onOpenFullReader={(target) => {
+            if (readerTarget.fromExcerpt || target.annotationId) {
+              onOpenExcerpt(
+                target.workId,
+                target.annotationId,
+                target.pageIndex,
+                target.attachmentId,
+              );
+              return;
+            }
+            onOpenPaper(target.workId);
+          }}
+        />
+      )}
     </div>
   );
 }

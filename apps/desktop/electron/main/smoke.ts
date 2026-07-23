@@ -149,6 +149,11 @@ interface SmokeRendererResult {
   canvasLibraryWorkIngressVisible: boolean;
   canvasPersistedNodeCount: number | null;
   canvasPersistedNodeReloaded: boolean;
+  canvasSplitReaderClosed: boolean;
+  canvasSplitReaderCleanupSucceeded: boolean;
+  canvasSplitReaderExcerptLinked: boolean;
+  canvasSplitReaderKeptContext: boolean;
+  canvasSplitReaderOpened: boolean;
   canvasReaderAnnotationDeepLinkHash: string;
   canvasReaderAnnotationDeepLinkNavigated: boolean;
   canvasReaderAnnotationPersisted: boolean;
@@ -1446,6 +1451,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let canvasLibraryWorkIngressVisible = false;
         let canvasPersistedNodeCount = null;
         let canvasPersistedNodeReloaded = false;
+        let canvasSplitReaderClosed = false;
+        let canvasSplitReaderCleanupSucceeded = false;
+        let canvasSplitReaderExcerptLinked = false;
+        let canvasSplitReaderKeptContext = false;
+        let canvasSplitReaderOpened = false;
         let canvasReaderAnnotationDeepLinkHash = "";
         let canvasReaderAnnotationDeepLinkNavigated = false;
         let canvasReaderAnnotationPersisted = false;
@@ -6681,6 +6691,129 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           }) ?? null;
         }, 5_000);
         canvasLibraryWorkIngressPersisted = Boolean(persistedCanvasPaper);
+
+        const canvasHashBeforeSplitReader = location.hash;
+        const splitReaderPaperCard = Array.from(
+          document.querySelectorAll(".canvas-card--paper")
+        ).find((card) =>
+          card.querySelector(".canvas-card__title")?.textContent?.includes(SAMPLE.title)
+        );
+        splitReaderPaperCard?.querySelector(".canvas-card__action")?.click();
+        const splitReader = await waitFor(() => {
+          const drawer = document.querySelector(".canvas-reader-drawer");
+          return drawer?.querySelector(".au-reader-page__canvas") ? drawer : null;
+        }, 10_000);
+        canvasSplitReaderOpened = Boolean(splitReader);
+        canvasSplitReaderKeptContext =
+          Boolean(splitReader) &&
+          location.hash === canvasHashBeforeSplitReader &&
+          Boolean(document.querySelector(".canvas-workspace")) &&
+          !document.querySelector(".canvas-inspector--open");
+
+        const splitReaderAnnotation = await waitFor(
+          () =>
+            splitReader?.querySelector(
+              '.au-reader-annotation[data-annotation-id="' +
+                SAMPLE.annotationId +
+                '"]'
+            ) ?? null,
+          3_000
+        );
+        splitReaderAnnotation?.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true })
+        );
+        const splitReaderExcerptChip = await waitFor(
+          () =>
+            document.querySelector(
+              '[data-canvas-annotation-id="' + SAMPLE.annotationId + '"]'
+            ),
+          2_000
+        );
+        const splitReaderAddButton = splitReader?.querySelector(
+          ".canvas-reader-drawer__add"
+        );
+        if (splitReaderExcerptChip && splitReaderAddButton instanceof HTMLButtonElement) {
+          splitReaderAddButton.click();
+        }
+        const splitReaderLinkedExcerpt = await waitFor(async () => {
+          if (!persistedCanvasPaper) return null;
+          const excerptRows = await window.aura.db.query(
+            "SELECT id, data_json FROM canvas_nodes WHERE workspace_id = ? AND type = 'excerpt'",
+            ["canvas:default"]
+          );
+          const excerpt = excerptRows.find((row) => {
+            try {
+              const data = JSON.parse(row.data_json);
+              return (
+                data.workId === SAMPLE.workId &&
+                data.annotationId === SAMPLE.annotationId &&
+                data.highlightText === "AuraScholar Smoke PDF"
+              );
+            } catch {
+              return false;
+            }
+          });
+          if (!excerpt) return null;
+          const edgeRows = await window.aura.db.query(
+            "SELECT source_id, target_id, relation_type " +
+              "FROM canvas_edges " +
+              "WHERE workspace_id = ? AND source_id = ? AND target_id = ? " +
+              "AND relation_type = 'derived-from'",
+            ["canvas:default", persistedCanvasPaper.id, excerpt.id]
+          );
+          return edgeRows.length === 1 ? excerpt : null;
+        }, 5_000);
+        canvasSplitReaderExcerptLinked =
+          Boolean(splitReaderLinkedExcerpt) &&
+          Boolean(
+            Array.from(document.querySelectorAll(".canvas-card--excerpt")).find((card) =>
+              card.querySelector(".canvas-card__quote")?.textContent?.trim() ===
+              "AuraScholar Smoke PDF"
+            )
+          );
+        splitReader
+          ?.querySelector('button[aria-label="关闭同屏阅读器"]')
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        canvasSplitReaderClosed = Boolean(
+          await waitFor(() => !document.querySelector(".canvas-reader-drawer"), 2_000)
+        );
+        const splitReaderExcerptCard = Array.from(
+          document.querySelectorAll(".canvas-card--excerpt")
+        ).find(
+          (card) =>
+            card.querySelector(".canvas-card__quote")?.textContent?.trim() ===
+            "AuraScholar Smoke PDF"
+        );
+        splitReaderExcerptCard?.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true })
+        );
+        const splitReaderCleanupButton = await waitFor(() => {
+          const inspector = document.querySelector(".canvas-inspector--open");
+          if (!inspector?.textContent?.includes("文献摘录")) return null;
+          return (
+            Array.from(inspector.querySelectorAll("button")).find(
+              (button) => button.textContent?.replace(/\s+/g, " ").trim() === "仅从画布移除"
+            ) ?? null
+          );
+        }, 2_000);
+        if (splitReaderCleanupButton instanceof HTMLButtonElement) {
+          splitReaderCleanupButton.click();
+          canvasSplitReaderCleanupSucceeded = Boolean(
+            await waitFor(async () => {
+              const rows = await window.aura.db.query(
+                "SELECT data_json FROM canvas_nodes WHERE workspace_id = ? AND type = 'excerpt'",
+                ["canvas:default"]
+              );
+              return !rows.some((row) => {
+                try {
+                  return JSON.parse(row.data_json).annotationId === SAMPLE.annotationId;
+                } catch {
+                  return false;
+                }
+              });
+            }, 5_000)
+          );
+        }
 
         location.hash = "#/flashcards";
         await waitFor(
@@ -13465,6 +13598,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ? canvasPersistedNodeCount
               : Number(canvasPersistedNodeCount),
           canvasPersistedNodeReloaded,
+          canvasSplitReaderClosed,
+          canvasSplitReaderCleanupSucceeded,
+          canvasSplitReaderExcerptLinked,
+          canvasSplitReaderKeptContext,
+          canvasSplitReaderOpened,
           canvasReaderAnnotationDeepLinkHash,
           canvasReaderAnnotationDeepLinkNavigated,
           canvasReaderAnnotationPersisted,
@@ -14587,6 +14725,16 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 typeof renderer.canvasPersistedNodeCount === "number" &&
                 renderer.canvasPersistedNodeCount >= 2,
               detail: `reloaded=${renderer.canvasPersistedNodeReloaded}; count=${renderer.canvasPersistedNodeCount}`,
+            },
+            {
+              name: "canvas-split-reader-workflow",
+              pass:
+                renderer.canvasSplitReaderOpened &&
+                renderer.canvasSplitReaderKeptContext &&
+                renderer.canvasSplitReaderExcerptLinked &&
+                renderer.canvasSplitReaderClosed &&
+                renderer.canvasSplitReaderCleanupSucceeded,
+              detail: `opened=${renderer.canvasSplitReaderOpened}; context=${renderer.canvasSplitReaderKeptContext}; linked=${renderer.canvasSplitReaderExcerptLinked}; closed=${renderer.canvasSplitReaderClosed}; cleanup=${renderer.canvasSplitReaderCleanupSucceeded}`,
             },
             {
               name: "snippets-note-shortcut-ime-guard",
