@@ -10,6 +10,7 @@ import { RELATION_LABELS } from "./model";
 
 export interface RelationFlowEdgeData extends Record<string, unknown> {
   label?: string;
+  pending?: boolean;
   relationType: CanvasEdgeRelation;
 }
 
@@ -36,24 +37,25 @@ export function RelationEdge({
     targetPosition,
   });
   const relation = data?.relationType ?? "custom";
+  const pending = data?.pending === true;
   return (
     <>
       <BaseEdge
         path={edgePath}
         markerEnd={markerEnd}
         style={style}
-        className={
-          selected ? "canvas-relation-edge canvas-relation-edge--selected" : "canvas-relation-edge"
-        }
+        className={`canvas-relation-edge${selected ? " canvas-relation-edge--selected" : ""}${pending ? " canvas-relation-edge--pending" : ""}`}
       />
-      <EdgeLabelRenderer>
-        <span
-          className={`canvas-edge-label canvas-edge-label--${relation}`}
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-        >
-          {data?.label || RELATION_LABELS[relation]}
-        </span>
-      </EdgeLabelRenderer>
+      {!pending && (
+        <EdgeLabelRenderer>
+          <span
+            className={`canvas-edge-label canvas-edge-label--${relation}`}
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          >
+            {data?.label || RELATION_LABELS[relation]}
+          </span>
+        </EdgeLabelRenderer>
+      )}
     </>
   );
 }
