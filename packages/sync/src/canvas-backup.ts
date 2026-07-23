@@ -5,7 +5,7 @@ export const SPATIAL_CANVAS_BACKUP_TABLES = [
   "canvas_edges",
 ] as const;
 
-/** The current UI loads this workspace directly and has no workspace picker. */
+/** Legacy id used by installations created before multiple workspaces were exposed. */
 export const DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID = "canvas:default";
 
 export type SpatialCanvasBackupTable = (typeof SPATIAL_CANVAS_BACKUP_TABLES)[number];
@@ -68,12 +68,7 @@ export function remapSpatialCanvasBackupRow(
     const mapped = map.get(current);
     if (mapped && mapped !== current) update(field, mapped);
   };
-  const remapWorkspace = (field: string) => {
-    // Keep the imported default workspace visible in the current single-
-    // workspace UI even when a generic collision map contains a replacement.
-    if (next[field] === DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID) return;
-    remap(field, maps.workspaces);
-  };
+  const remapWorkspace = (field: string) => remap(field, maps.workspaces);
 
   if (table === "canvas_workspaces") {
     remapWorkspace("id");

@@ -24,6 +24,7 @@ import { canvasNodeTypes, type CanvasFlowNode } from "./CanvasCards";
 import { CanvasDock, type CanvasTool } from "./CanvasDock";
 import { CanvasInspector } from "./CanvasInspector";
 import { CANVAS_WORK_DRAG_TYPE, CanvasLibraryPanel } from "./CanvasLibraryPanel";
+import { CanvasWorkspaceSwitcher } from "./CanvasWorkspaceSwitcher";
 import { canvasEdgeTypes, type RelationFlowEdge } from "./RelationEdge";
 import {
   createAISynthNode,
@@ -36,10 +37,16 @@ import {
   type CanvasLibraryWork,
 } from "./model";
 import { synthesizeCanvasSelection } from "./synthesis";
+import type {
+  CanvasWorkspaceActionResult,
+  CanvasWorkspaceOption,
+  CreateCanvasWorkspace,
+} from "./workspace-controls";
 
 interface CanvasWorkspaceProps {
   document: CanvasWorkspaceDocument;
   libraryLoading: boolean;
+  onCreateWorkspace: CreateCanvasWorkspace;
   onDocumentChange: (
     updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
   ) => void;
@@ -51,8 +58,11 @@ interface CanvasWorkspaceProps {
     attachmentId?: string,
   ) => void;
   onOpenPaper: (workId: string) => void;
+  onRenameWorkspace: (workspaceId: string, name: string) => CanvasWorkspaceActionResult;
+  onSelectWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
   persistenceLabel: string;
   works: CanvasLibraryWork[];
+  workspaces: readonly CanvasWorkspaceOption[];
 }
 
 const COLLAPSED_GROUP_DIMENSIONS = { width: 260, height: 48 } as const;
@@ -84,12 +94,16 @@ function nodeMiniMapColor(node: CanvasFlowNode): string {
 function CanvasWorkspaceInner({
   document,
   libraryLoading,
+  onCreateWorkspace,
   onDocumentChange,
   onExit,
   onOpenExcerpt,
   onOpenPaper,
+  onRenameWorkspace,
+  onSelectWorkspace,
   persistenceLabel,
   works,
+  workspaces,
 }: CanvasWorkspaceProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [tool, setTool] = useState<CanvasTool>("select");
@@ -533,6 +547,7 @@ function CanvasWorkspaceInner({
         synthType,
         { x: averageX, y: bottom + 110 },
       );
+      const sourceWorkspaceId = document.workspaceId;
       setSynthesisBusy(true);
       showNotice(`正在生成${SYNTHESIS_LABELS[synthType]}…`);
       try {
@@ -553,12 +568,16 @@ function CanvasWorkspaceInner({
           ...createEdge(source.id, completedNode.id, "derived-from"),
           label: "合成来源",
         }));
-        onDocumentChange((current) => ({
-          ...current,
-          nodes: [...current.nodes, completedNode],
-          edges: [...current.edges, ...provenanceEdges],
-          updatedAt: Date.now(),
-        }));
+        onDocumentChange((current) =>
+          current.workspaceId !== sourceWorkspaceId
+            ? current
+            : {
+                ...current,
+                nodes: [...current.nodes, completedNode],
+                edges: [...current.edges, ...provenanceEdges],
+                updatedAt: Date.now(),
+              },
+        );
         setSelectedNodeIds(new Set([completedNode.id]));
         setSelectedEdgeId(null);
         setDrawerOpen(true);
@@ -570,7 +589,14 @@ function CanvasWorkspaceInner({
         setSynthesisBusy(false);
       }
     },
-    [document.nodes, onDocumentChange, selectedNodeIds, showNotice, synthesisBusy],
+    [
+      document.nodes,
+      document.workspaceId,
+      onDocumentChange,
+      selectedNodeIds,
+      showNotice,
+      synthesisBusy,
+    ],
   );
 
   const onDrop = useCallback(
@@ -693,7 +719,13 @@ function CanvasWorkspaceInner({
           <button type="button" onClick={onExit} aria-label="返回文献库" title="返回文献库">
             <ArrowLeft size={14} weight="bold" />
           </button>
-          <strong>{document.name}</strong>
+          <CanvasWorkspaceSwitcher
+            activeWorkspaceId={document.workspaceId}
+            workspaces={workspaces}
+            onSelectWorkspace={onSelectWorkspace}
+            onCreateWorkspace={onCreateWorkspace}
+            onRenameWorkspace={onRenameWorkspace}
+          />
           <span>
             {document.nodes.length} 张卡片 · {document.edges.length} 条关系
           </span>

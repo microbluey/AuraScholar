@@ -23,6 +23,9 @@ const GraphPage = lazy(() => import("./pages/GraphPage").then((m) => ({ default:
 const SpatialCanvasPage = lazy(() =>
   import("./pages/SpatialCanvasPage").then((m) => ({ default: m.SpatialCanvasPage })),
 );
+const SpatialCanvasIndexPage = lazy(() =>
+  import("./pages/SpatialCanvasPage").then((m) => ({ default: m.SpatialCanvasIndexPage })),
+);
 const SentinelPage = lazy(() =>
   import("./pages/SentinelPage").then((m) => ({ default: m.SentinelPage })),
 );
@@ -76,7 +79,8 @@ const router = createHashRouter([
       { path: "discovery", element: routeElement(<DiscoveryPage />, "学术检索") },
       { path: "reader", element: routeElement(<ReaderPage />, "PDF 阅读器") },
       { path: "graph", element: routeElement(<GraphPage />, "引文脉络") },
-      { path: "canvas", element: routeElement(<SpatialCanvasPage />, "空间白板") },
+      { path: "canvas", element: routeElement(<SpatialCanvasIndexPage />, "空间白板") },
+      { path: "canvas/:workspaceId", element: routeElement(<SpatialCanvasPage />, "空间白板") },
       { path: "flashcards", element: <Navigate to="/canvas" replace /> },
       { path: "snippets", element: routeElement(<SnippetsPage />, "写作素材") },
       { path: "sentinel", element: routeElement(<SentinelPage />, "检索哨兵") },

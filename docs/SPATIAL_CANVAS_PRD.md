@@ -9,22 +9,25 @@
 核心产品决策：
 
 - **完整文献可以直接成为节点。** 论文不需要先产生划线或摘录；研究者可在初筛阶段先把文献放入画布，再阅读、分组和连线。
+- **一个白板对应一个独立研究上下文。** 用户可为不同项目新建多个白板，每个白板拥有自己的视口、节点和关系；`GroupNode` 只用于单个白板内部的局部组织。
 - **不提供闪卡复习 UI。** 闪卡与 FSRS 更偏向记忆训练，不是空间白板的研究工作流。主导航只提供“空间白板”，旧 `/flashcards` 路由会重定向到 `/canvas`。
 - **卡片是可扩展的领域对象。** 当前提供五种内置节点类型；扩展点是 TypeScript 类型映射，而不是运行时插件系统。
 - **AI 只合成明确选择的材料。** 输出保留来源节点，并显式说明分析范围，避免把题录或摘要误表述为全文审读。
 
 ## 2. 当前用户体验
 
-画布基于 `@xyflow/react` 实现，提供无限点阵背景、缩放和平移、框选与多选、节点拖动、关系连线、可折叠逻辑分组、MiniMap、左侧文献面板、底部 Dock 和右侧检查器。折叠分组只隐藏组内卡片与内部连线，不会删除内容；连接组内卡片与外部节点的关系会代理到折叠后的组头。
+画布基于 `@xyflow/react` 实现，提供无限点阵背景、缩放和平移、框选与多选、节点拖动、关系连线、可折叠逻辑分组、MiniMap、左侧文献面板、底部 Dock 和右侧检查器。画布顶部显示当前白板名称，并提供新建、切换和就地重命名的轻量切换器。折叠分组只隐藏组内卡片与内部连线，不会删除内容；连接组内卡片与外部节点的关系会代理到折叠后的组头。
 
 主要流程如下：
 
-1. 从文献库进入白板，或在画布左侧面板点击/拖入任意文献，创建 `PaperNode`。
-2. 在 PDF 阅读器中，可将整篇文献加入白板，也可把一条批注作为 `ExcerptNode` 加入。
-3. 双击文献卡打开对应文献；双击摘录卡按 `attachmentId`、`annotationId` 和 `pageIndex` 深链回阅读器的具体附件、批注与页码。
-4. 选择多张卡片后可建立关系、放入分组，或从文献/摘录生成 AI 合成卡。
-5. 新建 Idea Note，在画布中记录 Markdown 与 LaTeX 研究笔记。
-6. 删除画布卡片只删除画布中的摆放及其关系，不会删除原文献或原批注。
+1. 主导航进入 `/canvas` 时，页面会以 `replace` 方式转到最近使用的 `/canvas/:workspaceId`；直接访问具名路由可打开对应白板。
+2. 在画布顶部切换器中新建、切换或重命名白板。新建白板为独立空画布，会在创建后立即打开。
+3. 从文献库或 PDF 阅读器加入整篇文献或批注时，如果只有一个白板则直接加入；如果有多个白板，则打开轻量目标选择器，默认选中最近活跃白板，支持回车确认或就地“新建并加入”。
+4. 在画布左侧面板点击/拖入任意文献，可在当前白板创建 `PaperNode`。
+5. 双击文献卡打开对应文献；双击摘录卡按 `attachmentId`、`annotationId` 和 `pageIndex` 深链回阅读器的具体附件、批注与页码。
+6. 选择多张卡片后可建立关系、放入分组，或从文献/摘录生成 AI 合成卡。
+7. 新建 Idea Note，在画布中记录 Markdown 与 LaTeX 研究笔记。
+8. 删除画布卡片只删除当前白板中的摆放及其关系，不会删除原文献或原批注。
 
 ## 3. 节点与关系模型
 
@@ -89,6 +92,8 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 
 输出经过 Zod 结构校验，并要求在 Markdown 中使用 `[S1]` 等来源标记。成功后一次性写入完成态 `AISynthNode`，同时为每个来源创建指向该节点的 `derived-from` 边；生成失败时不会留下永久的“生成中”占位卡。
 
+合成请求启动时会捕获来源白板 ID；请求返回后只在当前文档仍属于该白板时写入新节点。因此，生成期间切换白板不会把旧请求的结果写入新白板。
+
 `sourceNodeIds` 和来源边共同提供画布内溯源。它们表达的是“此结果由哪些当前节点生成”，不是对外部学术引用真实性的替代验证。
 
 ## 5. 持久化架构
@@ -101,7 +106,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - `canvas_nodes`：工作区、可选文献外键、类型、位置、尺寸、分组、排序、标签和类型 payload；
 - `canvas_edges`：工作区、端点、关系、标签、样式、排序和时间戳。
 
-当前 UI 使用单一默认工作区 `canvas:default`，尚无多工作区切换器。节点位置的主键与 `works.id` 分离；`paper`/`excerpt` 的 `work_id` 只是可空父引用，使用 `ON DELETE SET NULL`。即使原文献不存在，节点的 `data_json` 快照仍可保存和读取。
+当前 UI 可列出并切换多个工作区，新建和重命名通过 `CanvasRepo` 的独立工作区操作完成。从旧版升级时，既有 `canvas:default` 会被原样保留为第一个可见白板，其节点、关系和视口不需要迁移，并可在切换器中重命名。节点位置的主键与 `works.id` 分离；`paper`/`excerpt` 的 `work_id` 只是可空父引用，使用 `ON DELETE SET NULL`。即使原文献不存在，节点的 `data_json` 快照仍可保存和读取。
 
 `CanvasRepo` 在读写时校验：
 
@@ -117,7 +122,9 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 ### 5.2 Desktop 与浏览器预览
 
 - Desktop 使用 SQLite `CanvasRepo`；页面编辑后约 420 ms 防抖保存，离开页面时会尝试 flush 最新快照。
-- 浏览器预览使用 `localStorage`，只用于可交互预览，不代表桌面数据库。
+- 切换白板前会 flush 当前工作区；延迟保存和异步加载都以 `workspaceId` 分区或校验，避免旧白板的操作覆盖新白板。
+- 浏览器预览使用 `localStorage` 保存多白板 envelope，并会无损迁移旧的单白板预览数据；该模式只用于可交互预览，不代表桌面数据库。
+- 路由层使用 `/canvas/:workspaceId` 标识具体白板；无参数的 `/canvas` 只负责定位最近使用的工作区。
 
 ## 6. JSON 备份与迁移
 
@@ -133,7 +140,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - AI 合成的 `sourceNodeIds`；
 - 边的 source/target 端点。
 
-默认工作区 `canvas:default` 会合并到当前可见工作区。JSON 备份不包含 PDF 文件本体、API Key 或密码。
+导入时如果工作区 ID 发生冲突（包括旧版默认 ID `canvas:default`），会将导入白板及其节点、关系整体重映射为独立工作区，既有本地白板不会被覆盖。JSON 备份不包含 PDF 文件本体、API Key 或密码。
 
 当前 WebDAV 行级同步**不包含空间白板表**；空间白板跨设备迁移目前依赖整库 JSON 导出/导入。设置页也明确展示这一范围。
 
@@ -145,7 +152,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 
 ## 8. 当前边界
 
-- 当前只有一个默认工作区；数据库层可列出工作区，但 UI 没有创建/切换工作区流程。
+- 当前 P0 提供白板的新建、切换和重命名，尚无归档或删除白板的 UI。
 - 节点扩展需要类型、数据库、校验和 renderer 的协同代码变更，不是运行时插件机制。
 - AI 文献卡输入限于题录与可用摘要；只有摘录卡携带明确选择的 PDF 原文。
 - 空间白板支持整库 JSON 备份，但尚未加入 WebDAV 行级同步。
@@ -159,6 +166,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - AI 合成：`packages/ai/src/canvas-synthesis.ts`
 - 画布页面：`apps/desktop/src/pages/SpatialCanvasPage.tsx`
 - 画布 UI：`apps/desktop/src/features/canvas/`
+- 白板路由与加入目标：`apps/desktop/src/features/canvas/routes.ts`、`apps/desktop/src/features/canvas/useCanvasIngress.tsx`
 - 桌面 AI 适配：`apps/desktop/src/services/canvas-ai.ts`
 - JSON 备份引用处理：`packages/sync/src/canvas-backup.ts`
 - 备份/同步接入：`apps/desktop/src/services/sync.ts`

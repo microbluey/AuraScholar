@@ -15,7 +15,10 @@ import {
 import { PREVIEW_LIBRARY_WORK_SEEDS } from "../../services/preview-library";
 
 export const DEFAULT_CANVAS_WORKSPACE_ID = "canvas:default";
+/** Legacy single-workspace browser preview storage, retained for v2 migration. */
 export const CANVAS_STORAGE_KEY = "aurascholar:spatial-canvas:v1";
+export const CANVAS_STORAGE_V2_KEY = "aurascholar:spatial-canvas:v2";
+export const CANVAS_LAST_WORKSPACE_ID_KEY = "aurascholar:spatial-canvas:last-workspace-id:v1";
 
 export interface CanvasLibraryWork {
   abstract: string | null;

@@ -6646,7 +6646,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         location.hash = "#/canvas?workId=" + encodeURIComponent(SAMPLE.workId);
         await waitFor(
           () =>
-            location.hash.includes("/canvas?workId=" + encodeURIComponent(SAMPLE.workId)) &&
+            location.hash.startsWith("#/canvas/") &&
+            !location.hash.includes("workId=") &&
             Boolean(document.querySelector(".canvas-workspace")) &&
             Boolean(
               Array.from(document.querySelectorAll(".canvas-card--paper")).find((card) =>
@@ -6658,9 +6659,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         canvasLibraryWorkIngressHash = location.hash;
         canvasLibraryWorkIngressNavigated =
           libraryCanvasIngressSourceVisible &&
-          canvasLibraryWorkIngressHash.includes(
-            "/canvas?workId=" + encodeURIComponent(SAMPLE.workId)
-          );
+          canvasLibraryWorkIngressHash.startsWith("#/canvas/") &&
+          !canvasLibraryWorkIngressHash.includes("workId=");
         canvasLibraryWorkIngressVisible = Boolean(
           Array.from(document.querySelectorAll(".canvas-card--paper")).find((card) =>
             card.querySelector(".canvas-card__title")?.textContent?.includes(SAMPLE.title)
@@ -8037,12 +8037,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         readerAnnotationCanvasButton?.click();
         await waitFor(
           () =>
-            location.hash.includes(
-              "/canvas?workId=" + encodeURIComponent(SAMPLE.workId)
-            ) &&
-            location.hash.includes(
-              "annotationId=" + encodeURIComponent(SAMPLE.annotationId)
-            ) &&
+            location.hash.startsWith("#/canvas/") &&
+            !location.hash.includes("workId=") &&
+            !location.hash.includes("annotationId=") &&
             Boolean(document.querySelector(".canvas-workspace")) &&
             Boolean(
               Array.from(document.querySelectorAll(".canvas-card--excerpt")).find((card) =>
@@ -8056,12 +8053,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         canvasReaderAnnotationDeepLinkHash = location.hash;
         canvasReaderAnnotationDeepLinkNavigated =
           Boolean(readerAnnotationCanvasButton) &&
-          canvasReaderAnnotationDeepLinkHash.includes(
-            "/canvas?workId=" + encodeURIComponent(SAMPLE.workId)
-          ) &&
-          canvasReaderAnnotationDeepLinkHash.includes(
-            "annotationId=" + encodeURIComponent(SAMPLE.annotationId)
-          );
+          canvasReaderAnnotationDeepLinkHash.startsWith("#/canvas/") &&
+          !canvasReaderAnnotationDeepLinkHash.includes("workId=") &&
+          !canvasReaderAnnotationDeepLinkHash.includes("annotationId=");
         canvasReaderAnnotationVisible = Boolean(
           Array.from(document.querySelectorAll(".canvas-card--excerpt")).find((card) =>
             card.querySelector(".canvas-card__quote")?.textContent?.includes(

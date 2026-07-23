@@ -375,6 +375,68 @@ export class CanvasRepo {
     });
   }
 
+  /** Creates an empty workspace with a generated, globally unique id. */
+  async create(name: string, description?: string): Promise<StoredCanvasWorkspaceDocument> {
+    const trimmedName = name.trim();
+    assertNonEmptyString(trimmedName, "Canvas workspace name");
+    if (description !== undefined && typeof description !== "string") {
+      throw new Error("Canvas workspace description must be a string");
+    }
+
+    return this.withWriteLock(() =>
+      this.withSavepoint("canvas_create", async () => {
+        const workspaceId = newId();
+        const now = Date.now();
+        await this.db.run(
+          `INSERT INTO canvas_workspaces
+             (id, name, description, schema_version, viewport_json, created_at, updated_at)
+           VALUES (?, ?, ?, 1, ?, ?, ?)`,
+          [
+            workspaceId,
+            trimmedName,
+            description ?? null,
+            JSON.stringify({ x: 0, y: 0, zoom: 1 }),
+            now,
+            now,
+          ],
+        );
+
+        const workspace = await this.load(workspaceId);
+        if (!workspace) throw new Error(`Failed to create canvas workspace ${workspaceId}`);
+        return workspace;
+      }),
+    );
+  }
+
+  /** Renames one workspace without replacing its canvas snapshot. */
+  async rename(workspaceId: string, name: string): Promise<StoredCanvasWorkspaceDocument> {
+    assertNonEmptyString(workspaceId, "Canvas workspaceId");
+    const trimmedName = name.trim();
+    assertNonEmptyString(trimmedName, "Canvas workspace name");
+
+    return this.withWriteLock(() =>
+      this.withSavepoint("canvas_rename", async () => {
+        const rows = await this.db.query<{ updated_at: number }>(
+          `SELECT updated_at FROM canvas_workspaces WHERE id = ? LIMIT 1`,
+          [workspaceId],
+        );
+        const existing = rows[0];
+        if (!existing) throw new Error(`Canvas workspace ${workspaceId} does not exist`);
+
+        const updatedAt = Math.max(Date.now(), existing.updated_at + 1);
+        await this.db.run(`UPDATE canvas_workspaces SET name = ?, updated_at = ? WHERE id = ?`, [
+          trimmedName,
+          updatedAt,
+          workspaceId,
+        ]);
+
+        const workspace = await this.load(workspaceId);
+        if (!workspace) throw new Error(`Failed to rename canvas workspace ${workspaceId}`);
+        return workspace;
+      }),
+    );
+  }
+
   async list(): Promise<CanvasWorkspaceSummary[]> {
     const rows = await this.db.query<Omit<CanvasWorkspaceRow, "viewport_json">>(
       `SELECT id, name, description, schema_version, created_at, updated_at
@@ -460,6 +522,40 @@ export class CanvasRepo {
     };
     validateDocument(document);
     return document;
+  }
+
+  /**
+   * Deletes a workspace and its placements, but never library works. At least
+   * one workspace must remain so `/canvas` always has a valid destination.
+   */
+  async deleteWorkspace(workspaceId: string): Promise<boolean> {
+    assertNonEmptyString(workspaceId, "Canvas workspaceId");
+    return this.withWriteLock(() =>
+      this.withSavepoint("canvas_delete_workspace", async () => {
+        const rows = await this.db.query<{ id: string }>(
+          `SELECT id FROM canvas_workspaces WHERE id = ? LIMIT 1`,
+          [workspaceId],
+        );
+        if (!rows[0]) return false;
+
+        const counts = await this.db.query<{ total: number }>(
+          `SELECT COUNT(*) AS total FROM canvas_workspaces`,
+        );
+        if ((counts[0]?.total ?? 0) <= 1) {
+          throw new Error("Cannot delete the last canvas workspace");
+        }
+
+        // Keep this correct for drivers that do not enable foreign-key
+        // cascades themselves. The optional canvas_nodes.work_id relation is
+        // outbound, so these deletes never mutate works.
+        await this.db.run(`DELETE FROM canvas_edges WHERE workspace_id = ?`, [workspaceId]);
+        await this.db.run(`DELETE FROM canvas_nodes WHERE workspace_id = ?`, [workspaceId]);
+        const changed = await this.db.run(`DELETE FROM canvas_workspaces WHERE id = ?`, [
+          workspaceId,
+        ]);
+        return changed > 0;
+      }),
+    );
   }
 
   /**

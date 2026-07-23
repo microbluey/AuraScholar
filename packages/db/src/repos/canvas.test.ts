@@ -147,6 +147,71 @@ function makeDocument(
 }
 
 describe("CanvasRepo", () => {
+  it("creates uniquely identified empty workspaces and lists them independently", async () => {
+    const seed = await canvas.ensureDefault();
+    const methods = await canvas.create("  方法论对比  ", "候选方法与实验差异");
+    const evidence = await canvas.create("证据链");
+
+    expect(methods).toEqual({
+      schemaVersion: 1,
+      workspaceId: expect.any(String),
+      name: "方法论对比",
+      description: "候选方法与实验差异",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+      edges: [],
+      createdAt: expect.any(Number),
+      updatedAt: expect.any(Number),
+    });
+    expect(methods.workspaceId).not.toBe(DEFAULT_CANVAS_WORKSPACE_ID);
+    expect(evidence.workspaceId).not.toBe(methods.workspaceId);
+    expect(await canvas.load(seed.workspaceId)).toEqual(seed);
+    expect((await canvas.list()).map((workspace) => workspace.workspaceId)).toEqual(
+      expect.arrayContaining([seed.workspaceId, methods.workspaceId, evidence.workspaceId]),
+    );
+  });
+
+  it("renames only the selected workspace and rejects blank or missing targets", async () => {
+    const seed = await canvas.ensureDefault();
+    const sourceWorkId = await createSourceWork();
+    const methods = await canvas.create("Methods");
+    const populated = makeDocument(sourceWorkId, methods);
+    await canvas.save(populated);
+
+    const renamed = await canvas.rename(methods.workspaceId, "  方法比较  ");
+    expect(renamed).toEqual({
+      ...populated,
+      name: "方法比较",
+      updatedAt: expect.any(Number),
+    });
+    expect(renamed.updatedAt).toBeGreaterThan(populated.updatedAt);
+    expect(await canvas.load(seed.workspaceId)).toEqual(seed);
+
+    await expect(canvas.create("   ")).rejects.toThrow("must be a non-empty string");
+    await expect(canvas.rename(methods.workspaceId, "\t\n")).rejects.toThrow(
+      "must be a non-empty string",
+    );
+    await expect(canvas.rename("missing-workspace", "New name")).rejects.toThrow("does not exist");
+  });
+
+  it("deletes one workspace in isolation, never its source work, and preserves a last workspace", async () => {
+    const sourceWorkId = await createSourceWork();
+    const seed = await canvas.ensureDefault();
+    const disposable = await canvas.create("临时白板");
+    await canvas.save(makeDocument(sourceWorkId, disposable));
+
+    expect(await canvas.deleteWorkspace(disposable.workspaceId)).toBe(true);
+    expect(await canvas.deleteWorkspace(disposable.workspaceId)).toBe(false);
+    expect(await canvas.load(disposable.workspaceId)).toBeNull();
+    expect(await canvas.load(seed.workspaceId)).toEqual(seed);
+    expect((await works.get(sourceWorkId))?.deleted_at).toBeNull();
+
+    await expect(canvas.deleteWorkspace(seed.workspaceId)).rejects.toThrow(
+      "Cannot delete the last canvas workspace",
+    );
+    expect(await canvas.load(seed.workspaceId)).toEqual(seed);
+  });
+
   it("ensures one default workspace and round-trips viewport, all node kinds, and edges", async () => {
     const sourceWorkId = await createSourceWork();
     const first = await canvas.ensureDefault();
