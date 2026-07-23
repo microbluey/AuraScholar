@@ -1,5 +1,5 @@
 import type { CanvasEdge, CanvasNode } from "@aurascholar/core";
-import { Books, Compass, CornersOut, NotePencil, SidebarSimple, X } from "@phosphor-icons/react";
+import { Books, Compass, CornersOut, NotePencil, X } from "@phosphor-icons/react";
 import { useEffect, useRef, type ReactNode } from "react";
 import { CanvasDetailsPanel } from "./CanvasDetailsPanel";
 import { CanvasLibraryPanel } from "./CanvasLibraryPanel";
@@ -8,6 +8,7 @@ import type { CanvasLibraryWork } from "./model";
 
 interface CanvasToolboxProps {
   activePanel: CanvasToolboxPanel | null;
+  autoFocusDetails: boolean;
   addedWorkIds: Set<string>;
   edge: CanvasEdge | null;
   edges: CanvasEdge[];
@@ -36,10 +37,9 @@ const PANEL_META = {
   overview: { icon: Compass, label: "画布导航" },
 } as const;
 
-const PANELS = Object.keys(PANEL_META) as CanvasToolboxPanel[];
-
 export function CanvasToolbox({
   activePanel,
+  autoFocusDetails,
   addedWorkIds,
   edge,
   edges,
@@ -72,47 +72,17 @@ export function CanvasToolbox({
   const groupCount = nodes.filter((item) => item.type === "group").length;
 
   useEffect(() => {
-    if (activePanel !== "details") return;
+    if (activePanel !== "details" || !autoFocusDetails) return;
     const frame = window.requestAnimationFrame(() => {
       const panel = panelRef.current;
       const target = panel?.querySelector<HTMLElement>("[data-autofocus]") ?? panel;
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activePanel, edge?.id, node?.id, selectedCount]);
+  }, [activePanel, autoFocusDetails, edge?.id, node?.id, selectedCount]);
 
   return (
-    <aside
-      className={`canvas-toolbox nodrag nopan nowheel${activePanel ? " canvas-toolbox--open" : ""}`}
-      aria-label="画布工具箱"
-    >
-      <nav className="canvas-toolbox__rail" aria-label="画布工具" role="toolbar">
-        <span className="canvas-toolbox__brand" aria-hidden="true">
-          <SidebarSimple size={19} weight="duotone" />
-        </span>
-        {PANELS.map((panel) => {
-          const meta = PANEL_META[panel];
-          const Icon = meta.icon;
-          const active = activePanel === panel;
-          return (
-            <button
-              key={panel}
-              type="button"
-              className={active ? "canvas-toolbox__trigger--active" : undefined}
-              data-canvas-toolbox-trigger={panel}
-              aria-controls={`canvas-toolbox-panel-${panel}`}
-              aria-expanded={active}
-              aria-label={`${active ? "收起" : "打开"}${meta.label}`}
-              title={meta.label}
-              onClick={() => onPanelChange(active ? null : panel)}
-            >
-              <Icon size={20} weight={active ? "fill" : "duotone"} />
-              <span>{meta.label}</span>
-            </button>
-          );
-        })}
-      </nav>
-
+    <aside className="canvas-toolbox nodrag nopan nowheel" aria-label="画布工具箱">
       {activePanel && activeMeta && ActiveIcon && (
         <section
           ref={panelRef}

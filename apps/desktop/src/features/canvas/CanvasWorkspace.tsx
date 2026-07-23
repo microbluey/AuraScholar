@@ -37,7 +37,11 @@ import { canvasEdgeTypes, type RelationFlowEdge } from "./RelationEdge";
 import { SemanticLinkMenu } from "./SemanticLinkMenu";
 import {
   CANVAS_INTERACTIVE_TARGET_SELECTOR,
+  CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR,
+  applyCanvasSelectionDeletion,
   clampCanvasMenuPoint,
+  isCanvasSelectionDeleteShortcut,
+  planCanvasSelectionDeletion,
   primarySurfaceForCanvasNode,
   shouldActivateCanvasNode,
   type CanvasMenuPoint,
@@ -117,6 +121,18 @@ interface CanvasNodeMenuState {
   returnFocusElement: HTMLElement | null;
 }
 
+function readerTargetsNode(target: CanvasReaderTarget, node: CanvasNode): boolean {
+  if (node.type === "paper") {
+    return target.sourceNodeId === node.id || target.workId === node.data.workId;
+  }
+  return (
+    node.type === "excerpt" &&
+    target.fromExcerpt &&
+    target.workId === node.data.workId &&
+    target.annotationId === node.data.annotationId
+  );
+}
+
 function absoluteNodePosition(node: CanvasNode, allNodes: CanvasNode[]): CanvasPoint {
   if (!node.groupId) return node.position;
   const group = allNodes.find(
@@ -179,6 +195,7 @@ function CanvasWorkspaceInner({
   const selectedNodeIdsRef = useRef(selectedNodeIds);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [toolboxPanel, setToolboxPanel] = useState<CanvasToolboxPanel | null>(null);
+  const [autoFocusDetails, setAutoFocusDetails] = useState(false);
   const [nodeMenu, setNodeMenu] = useState<CanvasNodeMenuState | null>(null);
   const [synthesisBusy, setSynthesisBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -227,6 +244,7 @@ function CanvasWorkspaceInner({
       setPendingSemanticLink(null);
       setNodeMenu(null);
       setToolboxPanel(null);
+      setAutoFocusDetails(false);
       if (node.type === "paper") {
         setReaderTarget({
           workId: node.data.workId,
@@ -264,6 +282,7 @@ function CanvasWorkspaceInner({
       setPendingSemanticLink(null);
       setNodeMenu(null);
       closeReader();
+      setAutoFocusDetails(false);
       setToolboxPanel("details");
     },
     [cancelFlowConnection, closeReader, openNodeInReader],
@@ -288,9 +307,20 @@ function CanvasWorkspaceInner({
       closeReader();
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
+      setAutoFocusDetails(true);
       setToolboxPanel("details");
     },
     [closeReader, document.nodes],
+  );
+
+  const changeToolboxPanel = useCallback(
+    (panel: CanvasToolboxPanel | null) => {
+      dismissNodeMenu(false);
+      setAutoFocusDetails(false);
+      if (panel === "details") closeReader();
+      setToolboxPanel(panel);
+    },
+    [closeReader, dismissNodeMenu],
   );
 
   const requestNodeContextMenu = useCallback(
@@ -341,6 +371,7 @@ function CanvasWorkspaceInner({
     setSemanticLinkReturnFocus(null);
     setReaderTarget(null);
     setToolboxPanel(null);
+    setAutoFocusDetails(false);
   }, [document.workspaceId]);
 
   useEffect(() => {
@@ -727,6 +758,7 @@ function CanvasWorkspaceInner({
     setSelectedNodeIds(new Set([node.id]));
     setSelectedEdgeId(null);
     closeReader();
+    setAutoFocusDetails(true);
     setToolboxPanel("details");
   }, [closeReader, flow, onDocumentChange]);
 
@@ -810,11 +842,7 @@ function CanvasWorkspaceInner({
         ungroup(nodeId);
         return;
       }
-      if (
-        target?.type === "paper" &&
-        readerTarget &&
-        (readerTarget.sourceNodeId === nodeId || readerTarget.workId === target.data.workId)
-      ) {
+      if (target && readerTarget && readerTargetsNode(readerTarget, target)) {
         closeReader();
       }
       onDocumentChange((current) => ({
@@ -851,6 +879,76 @@ function CanvasWorkspaceInner({
     },
     [onDocumentChange, showNotice],
   );
+
+  const deleteSelection = useCallback(() => {
+    const selectedTargets = document.nodes.filter((node) => selectedNodeIds.has(node.id));
+    if (!selectedTargets.length && !selectedEdgeId) return;
+
+    const { removedNodeIds, selectedGroupIds } = planCanvasSelectionDeletion(
+      document,
+      selectedNodeIds,
+      selectedEdgeId,
+    );
+    onDocumentChange((current) =>
+      applyCanvasSelectionDeletion(current, selectedNodeIds, selectedEdgeId),
+    );
+
+    if (
+      readerTarget &&
+      selectedTargets.some(
+        (node) => removedNodeIds.has(node.id) && readerTargetsNode(readerTarget, node),
+      )
+    ) {
+      closeReader();
+    }
+    setSelectedNodeIds(new Set());
+    setSelectedEdgeId(null);
+    setNodeMenu(null);
+    setAutoFocusDetails(false);
+    cancelFlowConnection();
+    setPendingSemanticLink(null);
+
+    const messages = [
+      removedNodeIds.size ? `移除 ${removedNodeIds.size} 张卡片` : "",
+      selectedGroupIds.size ? `解除 ${selectedGroupIds.size} 个分组` : "",
+      selectedEdgeId ? "删除 1 条连线" : "",
+    ].filter(Boolean);
+    showNotice(`${messages.join("，")}；文献库、PDF 与组内保留卡片未受影响。`);
+  }, [
+    cancelFlowConnection,
+    closeReader,
+    document,
+    onDocumentChange,
+    readerTarget,
+    selectedEdgeId,
+    selectedNodeIds,
+    showNotice,
+  ]);
+
+  useEffect(() => {
+    const handleDeleteShortcut = (event: KeyboardEvent) => {
+      const wrapper = wrapperRef.current;
+      const target = event.target instanceof Element ? event.target : null;
+      const hasSelection = selectedNodeIds.size > 0 || Boolean(selectedEdgeId);
+      if (
+        !hasSelection ||
+        !isCanvasSelectionDeleteShortcut({
+          blockedSurface: Boolean(target?.closest(CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR)),
+          composing: event.isComposing,
+          defaultPrevented: event.defaultPrevented,
+          key: event.key,
+          repeat: event.repeat,
+          withinCanvas: Boolean(wrapper && target && wrapper.contains(target)),
+        })
+      ) {
+        return;
+      }
+      event.preventDefault();
+      deleteSelection();
+    };
+    window.addEventListener("keydown", handleDeleteShortcut);
+    return () => window.removeEventListener("keydown", handleDeleteShortcut);
+  }, [deleteSelection, selectedEdgeId, selectedNodeIds.size]);
 
   const connect = useCallback(
     (connection: Connection) => {
@@ -1016,6 +1114,7 @@ function CanvasWorkspaceInner({
         setSelectedNodeIds(new Set([completedNode.id]));
         setSelectedEdgeId(null);
         closeReader();
+        setAutoFocusDetails(false);
         setToolboxPanel("details");
         showNotice(result.preview ? "已生成未连接 AI 的交互预览。" : "AI 合成已完成。");
       } catch (error) {
@@ -1270,6 +1369,7 @@ function CanvasWorkspaceInner({
       <div
         className={`canvas-workspace canvas-workspace--tool-${tool}${connectionInProgress ? " canvas-workspace--connecting" : ""}`}
         ref={wrapperRef}
+        tabIndex={-1}
         onDrop={onDrop}
         onDragOver={(event) => {
           if (
@@ -1360,7 +1460,9 @@ function CanvasWorkspaceInner({
             setSelectedEdgeId(edge.id);
             setNodeMenu(null);
             closeReader();
+            setAutoFocusDetails(false);
             setToolboxPanel("details");
+            wrapperRef.current?.focus({ preventScroll: true });
           }}
           onConnect={connect}
           onConnectStart={startSemanticConnection}
@@ -1418,6 +1520,7 @@ function CanvasWorkspaceInner({
 
           <CanvasToolbox
             activePanel={toolboxPanel}
+            autoFocusDetails={autoFocusDetails}
             works={works}
             libraryLoading={libraryLoading}
             addedWorkIds={addedWorkIds}
@@ -1432,11 +1535,7 @@ function CanvasWorkspaceInner({
                 : 0
             }
             selectedCount={selectedNodeIds.size}
-            onPanelChange={(panel) => {
-              dismissNodeMenu(false);
-              if (panel === "details") closeReader();
-              setToolboxPanel(panel);
-            }}
+            onPanelChange={changeToolboxPanel}
             onActivateNode={activateNode}
             onUpdateNode={updateNode}
             onUpdateEdge={updateEdge}
@@ -1457,7 +1556,9 @@ function CanvasWorkspaceInner({
           />
 
           <CanvasDock
+            activePanel={toolboxPanel}
             tool={tool}
+            onPanelChange={changeToolboxPanel}
             onToolChange={changeTool}
             onZoomOut={() => void flow.zoomOut({ duration: 160 })}
             onZoomIn={() => void flow.zoomIn({ duration: 160 })}

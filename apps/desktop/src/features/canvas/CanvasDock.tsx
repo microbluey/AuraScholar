@@ -1,6 +1,8 @@
 import type { AISynthesisType } from "@aurascholar/core";
 import {
+  Books,
   BoundingBox,
+  Compass,
   CornersOut,
   CursorClick,
   Hand,
@@ -11,16 +13,19 @@ import {
   Sparkle,
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
+import type { CanvasToolboxPanel } from "./canvas-interactions";
 import { SYNTHESIS_LABELS } from "./model";
 
 export type CanvasTool = "select" | "pan" | "connect";
 
 interface CanvasDockProps {
+  activePanel: CanvasToolboxPanel | null;
   canGroup: boolean;
   canSynthesize: boolean;
   onAddNote: () => void;
   onFitView: () => void;
   onGroup: () => void;
+  onPanelChange: (panel: CanvasToolboxPanel | null) => void;
   onSynthesize: (type: AISynthesisType) => void;
   onToolChange: (tool: CanvasTool) => void;
   onZoomIn: () => void;
@@ -35,11 +40,13 @@ function toolClass(active: boolean): string {
 }
 
 export function CanvasDock({
+  activePanel,
   canGroup,
   canSynthesize,
   onAddNote,
   onFitView,
   onGroup,
+  onPanelChange,
   onSynthesize,
   onToolChange,
   onZoomIn,
@@ -61,6 +68,48 @@ export function CanvasDock({
 
   return (
     <div className="canvas-dock" role="toolbar" aria-label="空间白板工具栏">
+      <div className="canvas-dock__segment canvas-dock__segment--surfaces">
+        <button
+          className={toolClass(activePanel === "library")}
+          type="button"
+          data-canvas-toolbox-trigger="library"
+          onClick={() => onPanelChange(activePanel === "library" ? null : "library")}
+          aria-controls="canvas-toolbox-panel-library"
+          aria-expanded={activePanel === "library"}
+          aria-label={`${activePanel === "library" ? "收起" : "打开"}文献库`}
+          title="文献库"
+        >
+          <Books size={20} weight="duotone" />
+          <span>文献库</span>
+        </button>
+        <button
+          className={toolClass(activePanel === "details")}
+          type="button"
+          data-canvas-toolbox-trigger="details"
+          onClick={() => onPanelChange(activePanel === "details" ? null : "details")}
+          aria-controls="canvas-toolbox-panel-details"
+          aria-expanded={activePanel === "details"}
+          aria-label={`${activePanel === "details" ? "收起" : "打开"}详情与编辑`}
+          title="详情与编辑"
+        >
+          <NotePencil size={20} weight="duotone" />
+          <span>详情</span>
+        </button>
+        <button
+          className={toolClass(activePanel === "overview")}
+          type="button"
+          data-canvas-toolbox-trigger="overview"
+          onClick={() => onPanelChange(activePanel === "overview" ? null : "overview")}
+          aria-controls="canvas-toolbox-panel-overview"
+          aria-expanded={activePanel === "overview"}
+          aria-label={`${activePanel === "overview" ? "收起" : "打开"}画布导航`}
+          title="画布导航"
+        >
+          <Compass size={20} weight="duotone" />
+          <span>导航</span>
+        </button>
+      </div>
+
       <div className="canvas-dock__segment">
         <button
           className={toolClass(tool === "select")}
