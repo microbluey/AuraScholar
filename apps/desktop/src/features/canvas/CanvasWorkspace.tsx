@@ -10,24 +10,29 @@ import {
   type CanvasWorkspaceDocument,
 } from "@aurascholar/core";
 import { MAX_CANVAS_SYNTHESIS_SOURCES } from "@aurascholar/ai";
-import { ArrowLeft } from "@phosphor-icons/react";
+import { ArrowLeft, Trash } from "@phosphor-icons/react";
 import {
   Background,
   BackgroundVariant,
   ConnectionMode,
   MarkerType,
   MiniMap,
+  NodeToolbar,
   ReactFlow,
   ReactFlowProvider,
   type Connection,
   type EdgeChange,
+  type FinalConnectionState,
   type NodeChange,
+  type OnConnectStartParams,
   useReactFlow,
   useStoreApi,
+  useViewport,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { canvasNodeTypes, type CanvasFlowNode, type CanvasNodeMenuAnchor } from "./CanvasCards";
 import { CanvasCommandPalette } from "./CanvasCommandPalette";
+import { CanvasLinkTargetPicker, type CanvasLinkTargetRequest } from "./CanvasLinkTargetPicker";
 import { CanvasNodeContextMenu } from "./CanvasNodeContextMenu";
 import { CanvasDock, type CanvasTool } from "./CanvasDock";
 import { CANVAS_WORK_DRAG_TYPE } from "./CanvasLibraryPanel";
@@ -36,7 +41,9 @@ import {
   canvasReaderExcerptDragPayload,
   type CanvasReaderAnnotationPayload,
 } from "./CanvasReaderDrawer";
+import { CanvasSelectionToolbar } from "./CanvasSelectionToolbar";
 import { CanvasToolbox } from "./CanvasToolbox";
+import { CanvasViewportControls } from "./CanvasViewportControls";
 import { CanvasWorkspaceSwitcher } from "./CanvasWorkspaceSwitcher";
 import { canvasEdgeTypes, type RelationFlowEdge } from "./RelationEdge";
 import { SemanticLinkMenu } from "./SemanticLinkMenu";
@@ -78,6 +85,7 @@ import {
   applySemanticLink,
   COLLAPSED_GROUP_DIMENSIONS,
   planSemanticLink,
+  resolveSemanticLinkAnchor,
   resolveSemanticLinkHandles,
   type PendingSemanticLink,
   type QuickSemanticRelation,
@@ -225,11 +233,11 @@ function CanvasWorkspaceInner({
   const [nodeMenu, setNodeMenu] = useState<CanvasNodeMenuState | null>(null);
   const [synthesisBusy, setSynthesisBusy] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [layoutOpen, setLayoutOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [readerTarget, setReaderTarget] = useState<CanvasReaderTarget | null>(null);
   const [connectionInProgress, setConnectionInProgress] = useState(false);
   const [pendingSemanticLink, setPendingSemanticLink] = useState<PendingSemanticLink | null>(null);
+  const [linkTargetRequest, setLinkTargetRequest] = useState<CanvasLinkTargetRequest | null>(null);
   const [semanticCommitConfirmation, setSemanticCommitConfirmation] = useState<{
     edge: CanvasEdge;
     pending: PendingSemanticLink;
@@ -237,20 +245,35 @@ function CanvasWorkspaceInner({
   } | null>(null);
   const [semanticLinkReturnFocus, setSemanticLinkReturnFocus] = useState<HTMLElement | null>(null);
   const cancelledConnectionRef = useRef(false);
+  const completedConnectionRef = useRef(false);
+  const connectionStartRef = useRef<{
+    clientX?: number;
+    clientY?: number;
+    sourceHandle?: string;
+    sourceId: string;
+    workspaceId: string;
+  } | null>(null);
+  const linkTargetRequestRef = useRef<CanvasLinkTargetRequest | null>(null);
   const trustedReaderPayloadRef = useRef<string | null>(null);
   const commandAnchorRef = useRef<CanvasPoint | null>(null);
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
   const activeWorkspaceIdRef = useRef(document.workspaceId);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
+  const viewport = useViewport();
 
   const showNotice = useCallback((message: string) => setNotice(message), []);
 
   const cancelFlowConnection = useCallback(() => {
     cancelledConnectionRef.current = true;
+    completedConnectionRef.current = false;
+    connectionStartRef.current = null;
+    linkTargetRequestRef.current = null;
     flowStore.getState().cancelConnection();
     flowStore.setState({ connectionClickStartHandle: null });
     setConnectionInProgress(false);
+    setLinkTargetRequest(null);
+    setPendingSemanticLink(null);
   }, [flowStore]);
 
   const closeReader = useCallback(() => {
@@ -285,9 +308,7 @@ function CanvasWorkspaceInner({
           };
     commandAnchorRef.current = flow.screenToFlowPosition(screenPoint);
     cancelFlowConnection();
-    setPendingSemanticLink(null);
     dismissNodeMenu(false);
-    setLayoutOpen(false);
     setCommandOpen(true);
   }, [cancelFlowConnection, dismissNodeMenu, flow]);
 
@@ -308,7 +329,6 @@ function CanvasWorkspaceInner({
     (node: CanvasNode) => {
       trustedReaderPayloadRef.current = null;
       cancelFlowConnection();
-      setPendingSemanticLink(null);
       setNodeMenu(null);
       setToolboxPanel(null);
       setAutoFocusDetails(false);
@@ -346,7 +366,6 @@ function CanvasWorkspaceInner({
       }
       trustedReaderPayloadRef.current = null;
       cancelFlowConnection();
-      setPendingSemanticLink(null);
       setNodeMenu(null);
       closeReader();
       setAutoFocusDetails(false);
@@ -395,7 +414,6 @@ function CanvasWorkspaceInner({
       const wrapper = wrapperRef.current;
       if (!wrapper) return;
       cancelFlowConnection();
-      setPendingSemanticLink(null);
       if (!selectedNodeIdsRef.current.has(nodeId)) {
         setSelectedNodeIds(new Set([nodeId]));
       }
@@ -425,14 +443,24 @@ function CanvasWorkspaceInner({
   }, [selectedNodeIds]);
 
   useEffect(() => {
+    linkTargetRequestRef.current = linkTargetRequest;
+  }, [linkTargetRequest]);
+
+  useEffect(() => {
     if (activeWorkspaceIdRef.current === document.workspaceId) return;
     activeWorkspaceIdRef.current = document.workspaceId;
     trustedReaderPayloadRef.current = null;
     cancelledConnectionRef.current = true;
+    completedConnectionRef.current = false;
+    connectionStartRef.current = null;
+    linkTargetRequestRef.current = null;
+    flowStore.getState().cancelConnection();
+    flowStore.setState({ connectionClickStartHandle: null });
     setSelectedNodeIds(new Set());
     setSelectedEdgeId(null);
     setNodeMenu(null);
     setConnectionInProgress(false);
+    setLinkTargetRequest(null);
     setPendingSemanticLink(null);
     setSemanticCommitConfirmation(null);
     setSemanticLinkReturnFocus(null);
@@ -440,10 +468,9 @@ function CanvasWorkspaceInner({
     setToolboxPanel(null);
     setAutoFocusDetails(false);
     setCommandOpen(false);
-    setLayoutOpen(false);
     commandAnchorRef.current = null;
     lastCanvasPointerRef.current = null;
-  }, [document.workspaceId]);
+  }, [document.workspaceId, flowStore]);
 
   useEffect(() => {
     if (!notice) return;
@@ -507,7 +534,7 @@ function CanvasWorkspaceInner({
     const cancelOnOutsidePointer = (event: PointerEvent) => {
       if (
         event.target instanceof Element &&
-        event.target.closest(".react-flow__handle.connectablestart")
+        event.target.closest(".react-flow__pane, .react-flow__handle.connectablestart")
       ) {
         return;
       }
@@ -565,7 +592,6 @@ function CanvasWorkspaceInner({
       setSelectedNodeIds(new Set([groupId]));
       setSelectedEdgeId(null);
       cancelFlowConnection();
-      setPendingSemanticLink(null);
       showNotice(
         collapsed
           ? `已折叠「${groupTitle}」，隐藏 ${childCount} 张卡片。`
@@ -611,7 +637,7 @@ function CanvasWorkspaceInner({
         extent: node.groupId ? "parent" : undefined,
         draggable: tool !== "pan",
         selectable: tool !== "pan",
-        connectable: tool !== "pan" && !pendingSemanticLink,
+        connectable: tool !== "pan" && !pendingSemanticLink && !linkTargetRequest,
         focusable: false,
         selected: selectedNodeIds.has(node.id),
         zIndex: node.type === "group" ? 0 : 2,
@@ -638,6 +664,7 @@ function CanvasWorkspaceInner({
     document.nodes,
     hiddenNodeIds,
     nodeMenu?.nodeId,
+    linkTargetRequest,
     openNodeInReader,
     pendingSemanticLink,
     requestNodeContextMenu,
@@ -707,6 +734,18 @@ function CanvasWorkspaceInner({
       },
     ];
   }, [flowEdges, pendingSemanticLink]);
+
+  const linkTargetSourceAnchor = useMemo(
+    () =>
+      linkTargetRequest
+        ? resolveSemanticLinkAnchor(
+            document.nodes,
+            linkTargetRequest.sourceId,
+            linkTargetRequest.sourceHandle,
+          )
+        : null,
+    [document.nodes, linkTargetRequest],
+  );
 
   const updateNode = useCallback(
     (node: CanvasNode) => {
@@ -903,7 +942,6 @@ function CanvasWorkspaceInner({
       });
       setSelectedNodeIds(new Set());
       cancelFlowConnection();
-      setPendingSemanticLink(null);
       showNotice("已解除分组，组内卡片均已保留。");
     },
     [cancelFlowConnection, onDocumentChange, showNotice],
@@ -927,7 +965,6 @@ function CanvasWorkspaceInner({
       }));
       setSelectedNodeIds(new Set());
       cancelFlowConnection();
-      setPendingSemanticLink(null);
       showNotice("卡片已从画布移除，原文献与批注未被删除。");
     },
     [
@@ -980,7 +1017,6 @@ function CanvasWorkspaceInner({
     setNodeMenu(null);
     setAutoFocusDetails(false);
     cancelFlowConnection();
-    setPendingSemanticLink(null);
 
     const messages = [
       removedNodeIds.size ? `移除 ${removedNodeIds.size} 张卡片` : "",
@@ -1028,6 +1064,7 @@ function CanvasWorkspaceInner({
     (connection: Connection) => {
       if (cancelledConnectionRef.current) return;
       if (!connection.source || !connection.target) return;
+      completedConnectionRef.current = true;
       const plan = planSemanticLink(document, connection.source, connection.target, {
         sourceHandle: connection.sourceHandle,
         targetHandle: connection.targetHandle,
@@ -1059,7 +1096,6 @@ function CanvasWorkspaceInner({
 
   const cancelSemanticLink = useCallback(() => {
     cancelFlowConnection();
-    setPendingSemanticLink(null);
     showNotice("已取消关系连线。");
   }, [cancelFlowConnection, showNotice]);
 
@@ -1092,10 +1128,24 @@ function CanvasWorkspaceInner({
   );
 
   const startSemanticConnection = useCallback(
-    (event: MouseEvent | TouchEvent) => {
+    (event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
+      if (!params.nodeId) return;
+      const touch = "touches" in event ? event.touches[0] : null;
+      const clientX = touch?.clientX ?? ("clientX" in event ? event.clientX : null);
+      const clientY = touch?.clientY ?? ("clientY" in event ? event.clientY : null);
       cancelledConnectionRef.current = false;
+      completedConnectionRef.current = false;
+      connectionStartRef.current = {
+        sourceId: params.nodeId,
+        ...(params.handleId ? { sourceHandle: params.handleId } : {}),
+        ...(clientX === null ? {} : { clientX }),
+        ...(clientY === null ? {} : { clientY }),
+        workspaceId: document.workspaceId,
+      };
+      linkTargetRequestRef.current = null;
       setConnectionInProgress(true);
       setPendingSemanticLink(null);
+      setLinkTargetRequest(null);
       const target = event.target;
       setSemanticLinkReturnFocus(
         target instanceof Element
@@ -1104,27 +1154,233 @@ function CanvasWorkspaceInner({
       );
       showNotice("正在建立关系，请选择目标卡片。");
     },
-    [showNotice],
+    [document.workspaceId, showNotice],
+  );
+
+  const openLinkTargetAt = useCallback(
+    (input: {
+      clientX: number;
+      clientY: number;
+      sourceHandle?: string;
+      sourceId: string;
+      workspaceId: string;
+    }) => {
+      const wrapperBounds = wrapperRef.current?.getBoundingClientRect();
+      if (
+        !wrapperBounds ||
+        input.clientX < wrapperBounds.left ||
+        input.clientX > wrapperBounds.right ||
+        input.clientY < wrapperBounds.top ||
+        input.clientY > wrapperBounds.bottom ||
+        input.workspaceId !== document.workspaceId ||
+        input.workspaceId !== activeWorkspaceIdRef.current ||
+        !document.nodes.some((node) => node.id === input.sourceId)
+      ) {
+        cancelFlowConnection();
+        return false;
+      }
+      const request: CanvasLinkTargetRequest = {
+        position: flow.screenToFlowPosition({ x: input.clientX, y: input.clientY }),
+        sourceId: input.sourceId,
+        workspaceId: input.workspaceId,
+        ...(input.sourceHandle ? { sourceHandle: input.sourceHandle } : {}),
+      };
+      flowStore.getState().cancelConnection();
+      flowStore.setState({ connectionClickStartHandle: null });
+      connectionStartRef.current = null;
+      linkTargetRequestRef.current = request;
+      setConnectionInProgress(false);
+      setLinkTargetRequest(request);
+      setNodeMenu(null);
+      setSelectedEdgeId(null);
+      showNotice("在落点选择要连接的目标卡片。");
+      return true;
+    },
+    [cancelFlowConnection, document.nodes, document.workspaceId, flow, flowStore, showNotice],
   );
 
   const finishSemanticConnection = useCallback(
-    (event: MouseEvent | TouchEvent) => {
+    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
       setConnectionInProgress(false);
+      const start = connectionStartRef.current;
+      connectionStartRef.current = null;
+      const completedConnection = completedConnectionRef.current;
+      completedConnectionRef.current = false;
       if (cancelledConnectionRef.current) return;
       const touch = "changedTouches" in event ? event.changedTouches[0] : null;
       const clientX = touch?.clientX ?? ("clientX" in event ? event.clientX : null);
       const clientY = touch?.clientY ?? ("clientY" in event ? event.clientY : null);
       if (clientX === null || clientY === null) return;
-      const position = flow.screenToFlowPosition({ x: clientX, y: clientY });
-      setPendingSemanticLink((current) => (current ? { ...current, position } : current));
+      // React Flow's click-connect end state may still contain the pre-click
+      // connection snapshot. onConnect is the reliable success signal for both
+      // click and drag gestures; toNode remains a defensive fallback.
+      if (completedConnection || connectionState.toNode) {
+        const position = flow.screenToFlowPosition({ x: clientX, y: clientY });
+        setPendingSemanticLink((current) => (current ? { ...current, position } : current));
+        return;
+      }
+      if (
+        start?.clientX !== undefined &&
+        start.clientY !== undefined &&
+        Math.hypot(clientX - start.clientX, clientY - start.clientY) < 8
+      ) {
+        // A plain click on a handle begins React Flow's click-connect mode.
+        // Its pointer lifecycle also reaches onConnectEnd, so leave the
+        // subsequent click callback in charge instead of treating it as a drop.
+        return;
+      }
+      const sourceId = connectionState.fromNode?.id ?? start?.sourceId;
+      const sourceHandle = connectionState.fromHandle?.id ?? start?.sourceHandle;
+      const sourceWorkspaceId = start?.workspaceId ?? document.workspaceId;
+      if (!sourceId) {
+        cancelFlowConnection();
+        return;
+      }
+      openLinkTargetAt({
+        clientX,
+        clientY,
+        sourceId,
+        workspaceId: sourceWorkspaceId,
+        ...(sourceHandle ? { sourceHandle } : {}),
+      });
     },
-    [flow],
+    [cancelFlowConnection, document.workspaceId, flow, openLinkTargetAt],
+  );
+
+  const finishClickSemanticConnection = useCallback(
+    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      setConnectionInProgress(false);
+      connectionStartRef.current = null;
+      const completedConnection = completedConnectionRef.current;
+      completedConnectionRef.current = false;
+      if (cancelledConnectionRef.current) return;
+      const touch = "changedTouches" in event ? event.changedTouches[0] : null;
+      const clientX = touch?.clientX ?? ("clientX" in event ? event.clientX : null);
+      const clientY = touch?.clientY ?? ("clientY" in event ? event.clientY : null);
+      if (clientX === null || clientY === null) return;
+      if (completedConnection || connectionState.toNode) {
+        const position = flow.screenToFlowPosition({ x: clientX, y: clientY });
+        setPendingSemanticLink((current) => (current ? { ...current, position } : current));
+        return;
+      }
+      cancelFlowConnection();
+      showNotice("未连接到有效目标卡片。");
+    },
+    [cancelFlowConnection, flow, showNotice],
+  );
+
+  const cancelLinkTargetSelection = useCallback(() => {
+    const returnFocusElement = semanticLinkReturnFocus;
+    cancelFlowConnection();
+    if (returnFocusElement?.isConnected) {
+      window.requestAnimationFrame(() => returnFocusElement.focus({ preventScroll: true }));
+    }
+    showNotice("已取消关系连线。");
+  }, [cancelFlowConnection, semanticLinkReturnFocus, showNotice]);
+
+  const selectLinkTarget = useCallback(
+    (targetId: string) => {
+      const request = linkTargetRequestRef.current;
+      if (
+        !request ||
+        request.workspaceId !== document.workspaceId ||
+        request.workspaceId !== activeWorkspaceIdRef.current
+      ) {
+        cancelFlowConnection();
+        showNotice("白板已切换，本次连线未写入。");
+        return;
+      }
+      const source = document.nodes.find((node) => node.id === request.sourceId);
+      const target = document.nodes.find((node) => node.id === targetId);
+      if (!source || !target) {
+        cancelFlowConnection();
+        showNotice("连线端点已发生变化，请重试。");
+        return;
+      }
+      const resolvedHandles = resolveSemanticLinkHandles(
+        document.nodes,
+        request.sourceId,
+        targetId,
+      );
+      const plan = planSemanticLink(document, request.sourceId, targetId, {
+        sourceHandle: request.sourceHandle ?? resolvedHandles.sourceHandle,
+        targetHandle: resolvedHandles.targetHandle,
+      });
+      if (plan.status !== "ready") {
+        cancelFlowConnection();
+        if (plan.status === "duplicate") {
+          const existing = document.edges.find(
+            (edge) => edge.sourceId === request.sourceId && edge.targetId === targetId,
+          );
+          setSelectedNodeIds(new Set());
+          setSelectedEdgeId(existing?.id ?? null);
+        }
+        showNotice(
+          plan.status === "duplicate"
+            ? "这两个方向已经存在一条关系。"
+            : plan.status === "self-link"
+              ? "不能把卡片连接到自身。"
+              : "连线端点已发生变化，请重试。",
+        );
+        return;
+      }
+      if (target.groupId) {
+        const collapsedParent = document.nodes.find(
+          (node) =>
+            node.id === target.groupId && node.type === "group" && node.data.collapsed === true,
+        );
+        if (collapsedParent) {
+          onDocumentChange((current) => {
+            if (current.workspaceId !== request.workspaceId) return current;
+            return {
+              ...current,
+              nodes: current.nodes.map((node) =>
+                node.id === collapsedParent.id && node.type === "group"
+                  ? {
+                      ...node,
+                      data: { ...node.data, collapsed: false },
+                      updatedAt: Date.now(),
+                    }
+                  : node,
+              ),
+              updatedAt: Date.now(),
+            };
+          });
+        }
+      }
+      linkTargetRequestRef.current = null;
+      setLinkTargetRequest(null);
+      setSelectedNodeIds(new Set());
+      setSelectedEdgeId(null);
+      setPendingSemanticLink({ ...plan.pending, position: request.position });
+    },
+    [cancelFlowConnection, document, onDocumentChange, showNotice],
+  );
+
+  const focusExistingLinkFromPicker = useCallback(
+    (edgeId: string) => {
+      const edge = document.edges.find((candidate) => candidate.id === edgeId);
+      if (!edge) {
+        cancelFlowConnection();
+        showNotice("这条关系已发生变化，请重新选择目标。");
+        return;
+      }
+      linkTargetRequestRef.current = null;
+      setLinkTargetRequest(null);
+      setSelectedNodeIds(new Set());
+      setSelectedEdgeId(edge.id);
+      closeReader();
+      setAutoFocusDetails(false);
+      setToolboxPanel("details");
+      wrapperRef.current?.focus({ preventScroll: true });
+      showNotice("已定位现有关系。");
+    },
+    [cancelFlowConnection, closeReader, document.edges, showNotice],
   );
 
   const changeTool = useCallback(
     (nextTool: CanvasTool) => {
       cancelFlowConnection();
-      setPendingSemanticLink(null);
       setTool(nextTool);
     },
     [cancelFlowConnection],
@@ -1468,6 +1724,9 @@ function CanvasWorkspaceInner({
   const pendingSemanticTarget = pendingSemanticLink
     ? document.nodes.find((node) => node.id === pendingSemanticLink.targetId)
     : null;
+  const linkTargetSource = linkTargetRequest
+    ? document.nodes.find((node) => node.id === linkTargetRequest.sourceId)
+    : null;
   const nodeMenuTarget = nodeMenu
     ? document.nodes.find((node) => node.id === nodeMenu.nodeId) || null
     : null;
@@ -1481,12 +1740,6 @@ function CanvasWorkspaceInner({
   );
   const canLayout = timelineLayoutPlan.status === "success";
   const canCitationLayout = citationLayoutPlan.status === "success";
-
-  useEffect(() => {
-    if (!layoutOpen || canLayout) return;
-    const timeout = window.setTimeout(() => setLayoutOpen(false), 0);
-    return () => window.clearTimeout(timeout);
-  }, [canLayout, layoutOpen]);
 
   const applySelectedLayout = useCallback(
     (mode: CanvasLayoutMode) => {
@@ -1516,6 +1769,20 @@ function CanvasWorkspaceInner({
     [document, onDocumentChange, selectedNodeIds, showNotice],
   );
 
+  const openSelectionLayoutMenu = useCallback(() => {
+    dismissNodeMenu(false);
+    window.requestAnimationFrame(() => {
+      const trigger = wrapperRef.current?.querySelector<HTMLButtonElement>(
+        "[data-canvas-selection-layout-trigger='true']",
+      );
+      if (trigger) {
+        trigger.click();
+        return;
+      }
+      showNotice("请选择同一层级中的至少两张文献卡片。");
+    });
+  }, [dismissNodeMenu, showNotice]);
+
   useEffect(() => {
     const handleLayoutShortcut = (event: KeyboardEvent) => {
       const wrapper = wrapperRef.current;
@@ -1541,12 +1808,11 @@ function CanvasWorkspaceInner({
         showNotice(canvasLayoutFailureMessage(timelineLayoutPlan.reason));
         return;
       }
-      dismissNodeMenu(false);
-      setLayoutOpen(true);
+      openSelectionLayoutMenu();
     };
     window.addEventListener("keydown", handleLayoutShortcut);
     return () => window.removeEventListener("keydown", handleLayoutShortcut);
-  }, [dismissNodeMenu, showNotice, timelineLayoutPlan]);
+  }, [openSelectionLayoutMenu, showNotice, timelineLayoutPlan]);
 
   const addCommandWork = useCallback(
     (work: CanvasLibraryWork) => {
@@ -1590,6 +1856,29 @@ function CanvasWorkspaceInner({
             lastCanvasPointerRef.current = { x: event.clientX, y: event.clientY };
           }
         }}
+        onPointerDownCapture={(event) => {
+          const start = connectionStartRef.current;
+          if (
+            !start ||
+            cancelledConnectionRef.current ||
+            !(event.target instanceof Element) ||
+            !event.target.closest(".react-flow__pane") ||
+            event.target.closest(
+              ".react-flow__node, .react-flow__edge, .react-flow__handle, [data-canvas-interactive]",
+            )
+          ) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          openLinkTargetAt({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            sourceId: start.sourceId,
+            workspaceId: start.workspaceId,
+            ...(start.sourceHandle ? { sourceHandle: start.sourceHandle } : {}),
+          });
+        }}
         onDrop={onDrop}
         onDragOver={(event) => {
           if (
@@ -1608,6 +1897,7 @@ function CanvasWorkspaceInner({
           edgeTypes={canvasEdgeTypes}
           connectionMode={ConnectionMode.Loose}
           connectionRadius={28}
+          connectionDragThreshold={8}
           connectOnClick
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
@@ -1621,7 +1911,7 @@ function CanvasWorkspaceInner({
               button: event.button,
               connectionInProgress,
               interactiveTarget,
-              pendingSemanticLink: Boolean(pendingSemanticLink),
+              pendingSemanticLink: Boolean(pendingSemanticLink || linkTargetRequest),
               tool,
             };
             if (additive) {
@@ -1630,7 +1920,8 @@ function CanvasWorkspaceInner({
                 event.button !== 0 ||
                 interactiveTarget ||
                 connectionInProgress ||
-                pendingSemanticLink
+                pendingSemanticLink ||
+                linkTargetRequest
               ) {
                 return;
               }
@@ -1648,9 +1939,8 @@ function CanvasWorkspaceInner({
           onNodeContextMenu={(event, node) => {
             event.preventDefault();
             event.stopPropagation();
-            if (connectionInProgress || pendingSemanticLink) {
+            if (connectionInProgress || pendingSemanticLink || linkTargetRequest) {
               cancelFlowConnection();
-              setPendingSemanticLink(null);
               setNodeMenu(null);
               showNotice("已取消关系连线。");
               return;
@@ -1672,6 +1962,7 @@ function CanvasWorkspaceInner({
               tool !== "select" ||
               connectionInProgress ||
               pendingSemanticLink ||
+              linkTargetRequest ||
               event.button !== 0
             ) {
               return;
@@ -1688,16 +1979,27 @@ function CanvasWorkspaceInner({
           onConnectStart={startSemanticConnection}
           onConnectEnd={finishSemanticConnection}
           onClickConnectStart={startSemanticConnection}
-          onClickConnectEnd={finishSemanticConnection}
+          onClickConnectEnd={finishClickSemanticConnection}
           onMoveEnd={onMoveEnd}
           onMoveStart={() => dismissNodeMenu(false)}
           onNodeDragStart={() => dismissNodeMenu(false)}
           onSelectionEnd={() => {
             window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
           }}
-          onPaneClick={() => {
+          onPaneClick={(event) => {
+            const start = connectionStartRef.current;
+            if (start && !cancelledConnectionRef.current) {
+              openLinkTargetAt({
+                clientX: event.clientX,
+                clientY: event.clientY,
+                sourceId: start.sourceId,
+                workspaceId: start.workspaceId,
+                ...(start.sourceHandle ? { sourceHandle: start.sourceHandle } : {}),
+              });
+              return;
+            }
+            if (linkTargetRequestRef.current) return;
             cancelFlowConnection();
-            setPendingSemanticLink(null);
             dismissNodeMenu(false);
             setSelectedNodeIds(new Set());
             setSelectedEdgeId(null);
@@ -1711,7 +2013,7 @@ function CanvasWorkspaceInner({
           multiSelectionKeyCode="Shift"
           panActivationKeyCode="Space"
           nodesDraggable={tool !== "pan"}
-          nodesConnectable={tool !== "pan" && !pendingSemanticLink}
+          nodesConnectable={tool !== "pan" && !pendingSemanticLink && !linkTargetRequest}
           elementsSelectable={tool !== "pan"}
           deleteKeyCode={null}
           elevateNodesOnSelect
@@ -1749,8 +2051,6 @@ function CanvasWorkspaceInner({
             libraryLoading={libraryLoading}
             addedWorkIds={addedWorkIds}
             onAddWork={addPaper}
-            nodes={document.nodes}
-            edges={document.edges}
             node={selectedNode}
             edge={selectedEdge}
             groupChildCount={
@@ -1767,6 +2067,55 @@ function CanvasWorkspaceInner({
             onDeleteEdge={deleteEdge}
             onUngroup={ungroup}
             onSetGroupCollapsed={setGroupCollapsed}
+          />
+
+          <CanvasDock
+            activePanel={toolboxPanel}
+            tool={tool}
+            onPanelChange={changeToolboxPanel}
+            onToolChange={changeTool}
+            onOpenCommand={openCanvasCommand}
+            onAddNote={addNote}
+          />
+
+          {selectedNodeIds.size >= 2 && (
+            <NodeToolbar
+              nodeId={[...selectedNodeIds]}
+              isVisible
+              offset={14}
+              className="canvas-selection-toolbar-anchor"
+            >
+              <CanvasSelectionToolbar
+                className="nodrag nopan nowheel"
+                selectedCount={selectedNodeIds.size}
+                canGroup={canGroup}
+                canLayout={canLayout}
+                canCitationLayout={canCitationLayout}
+                canSynthesize={canSynthesize}
+                synthesisHint={synthesisHint}
+                onGroup={groupSelected}
+                onLayout={applySelectedLayout}
+                onSynthesize={(type) => void synthesize(type)}
+                moreActions={[
+                  {
+                    id: "delete-selection",
+                    label: "从画布移除",
+                    description: "不删除文献库论文或 PDF",
+                    danger: true,
+                    icon: <Trash size={17} weight="duotone" />,
+                    onSelect: deleteSelection,
+                  },
+                ]}
+              />
+            </NodeToolbar>
+          )}
+
+          <CanvasViewportControls
+            nodeCount={document.nodes.length}
+            edgeCount={document.edges.length}
+            onZoomOut={() => void flow.zoomOut({ duration: 160 })}
+            onZoomIn={() => void flow.zoomIn({ duration: 160 })}
+            onResetZoom={() => void flow.zoomTo(1, { duration: 180 })}
             onFitView={() => void flow.fitView({ duration: 260, padding: 0.18 })}
             miniMap={
               <MiniMap<CanvasFlowNode>
@@ -1779,39 +2128,41 @@ function CanvasWorkspaceInner({
             }
           />
 
-          <CanvasDock
-            activePanel={toolboxPanel}
-            tool={tool}
-            layoutOpen={layoutOpen}
-            onPanelChange={changeToolboxPanel}
-            onToolChange={changeTool}
-            onOpenCommand={openCanvasCommand}
-            onLayoutOpenChange={setLayoutOpen}
-            onLayout={applySelectedLayout}
-            onZoomOut={() => void flow.zoomOut({ duration: 160 })}
-            onZoomIn={() => void flow.zoomIn({ duration: 160 })}
-            onFitView={() => void flow.fitView({ duration: 260, padding: 0.18 })}
-            onAddNote={addNote}
-            onGroup={groupSelected}
-            onSynthesize={(type) => void synthesize(type)}
-            canGroup={canGroup}
-            canLayout={canLayout}
-            canCitationLayout={canCitationLayout}
-            canSynthesize={canSynthesize}
-            synthesisHint={synthesisHint}
-            selectedCount={selectedNodeIds.size}
-          />
-
           {document.nodes.length === 0 && (
             <div className="canvas-empty">
               <strong>把第一篇文献放到研究空间</strong>
-              <p>从左侧工具箱打开文献库，点击或拖入文献；也可以先新建研究笔记。</p>
+              <p>打开文献库拖入论文，或按 ⌘/Ctrl + K 搜索加入；也可以先新建研究笔记。</p>
               <button type="button" onClick={addNote}>
                 新建研究笔记
               </button>
             </div>
           )}
         </ReactFlow>
+        {linkTargetRequest && linkTargetSourceAnchor && (
+          <svg className="canvas-link-target-preview" aria-hidden="true">
+            <line
+              x1={linkTargetSourceAnchor.x * viewport.zoom + viewport.x}
+              y1={linkTargetSourceAnchor.y * viewport.zoom + viewport.y}
+              x2={linkTargetRequest.position.x * viewport.zoom + viewport.x}
+              y2={linkTargetRequest.position.y * viewport.zoom + viewport.y}
+            />
+            <circle
+              cx={linkTargetRequest.position.x * viewport.zoom + viewport.x}
+              cy={linkTargetRequest.position.y * viewport.zoom + viewport.y}
+              r={5}
+            />
+          </svg>
+        )}
+        {linkTargetRequest && linkTargetSource && (
+          <CanvasLinkTargetPicker
+            document={document}
+            request={linkTargetRequest}
+            sourceLabel={semanticNodeLabel(linkTargetSource)}
+            onCancel={cancelLinkTargetSelection}
+            onSelect={selectLinkTarget}
+            onFocusExistingEdge={focusExistingLinkFromPicker}
+          />
+        )}
         {pendingSemanticLink && pendingSemanticSource && pendingSemanticTarget && (
           <SemanticLinkMenu
             pending={pendingSemanticLink}
@@ -1832,7 +2183,7 @@ function CanvasWorkspaceInner({
             onActivate={activateNode}
             onOpenDetails={openNodeDetails}
             onOpenFullReader={openNodeInFullReader}
-            onOpenLayoutMenu={() => setLayoutOpen(true)}
+            onOpenLayoutMenu={openSelectionLayoutMenu}
             onGroupSelection={groupSelected}
             onSetGroupCollapsed={setGroupCollapsed}
             onUngroup={ungroup}

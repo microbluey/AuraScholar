@@ -1,49 +1,28 @@
-import type { AISynthesisType, CanvasLayoutMode } from "@aurascholar/core";
 import {
   Books,
-  BoundingBox,
-  CalendarDots,
-  Compass,
-  CornersOut,
+  CaretDown,
   CursorClick,
   Hand,
-  Link,
   MagnifyingGlass,
-  Minus,
   NotePencil,
   Plus,
-  Sparkle,
-  TreeStructure,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { isApplePlatform, shortcutLabel } from "../../shortcut-labels";
+import { shortcutLabel } from "../../shortcut-labels";
 import type { CanvasToolboxPanel } from "./canvas-interactions";
-import { SYNTHESIS_LABELS } from "./model";
 
-export type CanvasTool = "select" | "pan" | "connect";
+export type CanvasTool = "select" | "pan";
 
 interface CanvasDockProps {
   activePanel: CanvasToolboxPanel | null;
-  canCitationLayout: boolean;
-  canGroup: boolean;
-  canLayout: boolean;
-  canSynthesize: boolean;
-  layoutOpen: boolean;
   onAddNote: () => void;
-  onFitView: () => void;
-  onGroup: () => void;
-  onLayout: (mode: CanvasLayoutMode) => void;
-  onLayoutOpenChange: (open: boolean) => void;
   onOpenCommand: () => void;
   onPanelChange: (panel: CanvasToolboxPanel | null) => void;
-  onSynthesize: (type: AISynthesisType) => void;
   onToolChange: (tool: CanvasTool) => void;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  selectedCount: number;
-  synthesisHint: string;
   tool: CanvasTool;
 }
+
+type CanvasDockMenu = "create" | "pointer";
 
 function toolClass(active: boolean): string {
   return `canvas-dock__button${active ? " canvas-dock__button--active" : ""}`;
@@ -51,280 +30,161 @@ function toolClass(active: boolean): string {
 
 export function CanvasDock({
   activePanel,
-  canCitationLayout,
-  canGroup,
-  canLayout,
-  canSynthesize,
-  layoutOpen,
   onAddNote,
-  onFitView,
-  onGroup,
-  onLayout,
-  onLayoutOpenChange,
   onOpenCommand,
   onPanelChange,
-  onSynthesize,
   onToolChange,
-  onZoomIn,
-  onZoomOut,
-  selectedCount,
-  synthesisHint,
   tool,
 }: CanvasDockProps) {
-  const [synthesisOpen, setSynthesisOpen] = useState(false);
-  const firstLayoutActionRef = useRef<HTMLButtonElement>(null);
-  const layoutShortcutLabel = isApplePlatform() ? "⌘ ⇧ L" : "Ctrl + Shift + L";
+  const [openMenu, setOpenMenu] = useState<CanvasDockMenu | null>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const PointerIcon = tool === "pan" ? Hand : CursorClick;
 
   useEffect(() => {
-    if (!synthesisOpen && !layoutOpen) return;
+    if (!openMenu) return;
+    const frame = window.requestAnimationFrame(() => {
+      dockRef.current
+        ?.querySelector<HTMLElement>(
+          `[data-canvas-dock-menu="${openMenu}"] [role="menuitem"], [data-canvas-dock-menu="${openMenu}"] [role="menuitemradio"]`,
+        )
+        ?.focus({ preventScroll: true });
+    });
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setSynthesisOpen(false);
-      onLayoutOpenChange(false);
+      event.preventDefault();
+      event.stopPropagation();
+      setOpenMenu(null);
+      window.requestAnimationFrame(() => returnFocusRef.current?.focus({ preventScroll: true }));
     };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [layoutOpen, onLayoutOpenChange, synthesisOpen]);
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && dockRef.current?.contains(event.target)) return;
+      setOpenMenu(null);
+    };
+    window.addEventListener("keydown", closeOnEscape, true);
+    window.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", closeOnEscape, true);
+      window.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+    };
+  }, [openMenu]);
 
-  useEffect(() => {
-    if (!layoutOpen) return;
-    const frame = window.requestAnimationFrame(() => firstLayoutActionRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [layoutOpen]);
+  const toggleMenu = (menu: CanvasDockMenu, trigger: HTMLButtonElement) => {
+    returnFocusRef.current = trigger;
+    setOpenMenu((current) => (current === menu ? null : menu));
+  };
+
+  const runMenuAction = (action: () => void) => {
+    setOpenMenu(null);
+    action();
+  };
 
   return (
-    <div className="canvas-dock" role="toolbar" aria-label="空间白板工具栏">
-      <div className="canvas-dock__segment canvas-dock__segment--surfaces">
-        <button
-          className={toolClass(activePanel === "library")}
-          type="button"
-          data-canvas-toolbox-trigger="library"
-          onClick={() => onPanelChange(activePanel === "library" ? null : "library")}
-          aria-controls="canvas-toolbox-panel-library"
-          aria-expanded={activePanel === "library"}
-          aria-label={`${activePanel === "library" ? "收起" : "打开"}文献库`}
-          title="文献库"
-        >
-          <Books size={20} weight="duotone" />
-          <span>文献库</span>
-        </button>
-        <button
-          className={toolClass(activePanel === "details")}
-          type="button"
-          data-canvas-toolbox-trigger="details"
-          onClick={() => onPanelChange(activePanel === "details" ? null : "details")}
-          aria-controls="canvas-toolbox-panel-details"
-          aria-expanded={activePanel === "details"}
-          aria-label={`${activePanel === "details" ? "收起" : "打开"}详情与编辑`}
-          title="详情与编辑"
-        >
-          <NotePencil size={20} weight="duotone" />
-          <span>详情</span>
-        </button>
-        <button
-          className={toolClass(activePanel === "overview")}
-          type="button"
-          data-canvas-toolbox-trigger="overview"
-          onClick={() => onPanelChange(activePanel === "overview" ? null : "overview")}
-          aria-controls="canvas-toolbox-panel-overview"
-          aria-expanded={activePanel === "overview"}
-          aria-label={`${activePanel === "overview" ? "收起" : "打开"}画布导航`}
-          title="画布导航"
-        >
-          <Compass size={20} weight="duotone" />
-          <span>导航</span>
-        </button>
-      </div>
-
+    <div ref={dockRef} className="canvas-dock" role="toolbar" aria-label="空间白板工具栏">
       <button
-        className="canvas-dock__button"
+        className={toolClass(activePanel === "library")}
         type="button"
-        onClick={onOpenCommand}
-        title={`快速加入文献或运行 AI 命令（${shortcutLabel("K")}）`}
+        data-canvas-toolbox-trigger="library"
+        onClick={() => onPanelChange(activePanel === "library" ? null : "library")}
+        aria-controls="canvas-toolbox-panel-library"
+        aria-expanded={activePanel === "library"}
+        aria-label={`${activePanel === "library" ? "收起" : "打开"}文献库`}
+        title="文献库"
       >
-        <MagnifyingGlass size={20} weight="duotone" />
-        <span>快速加入</span>
+        <Books size={20} weight="duotone" />
+        <span>文献库</span>
       </button>
 
-      <div className="canvas-dock__segment">
+      <div className="canvas-dock__action">
         <button
-          className={toolClass(tool === "select")}
+          className={toolClass(openMenu === "create")}
           type="button"
-          onClick={() => onToolChange("select")}
-          aria-pressed={tool === "select"}
-          title="选择与框选（Shift 多选）"
+          aria-haspopup="menu"
+          aria-expanded={openMenu === "create"}
+          onClick={(event) => toggleMenu("create", event.currentTarget)}
+          title="新建或加入内容"
         >
-          <CursorClick size={20} weight="duotone" />
-          <span>选择</span>
+          <Plus size={20} weight="bold" />
+          <span>新建</span>
+          <CaretDown className="canvas-dock__caret" size={12} weight="bold" />
         </button>
-        <button
-          className={toolClass(tool === "pan")}
-          type="button"
-          onClick={() => onToolChange("pan")}
-          aria-pressed={tool === "pan"}
-          title="平移画布"
-        >
-          <Hand size={20} weight="duotone" />
-          <span>平移</span>
-        </button>
-      </div>
-
-      <div className="canvas-dock__segment canvas-dock__segment--compact">
-        <button
-          className="canvas-dock__icon-button"
-          type="button"
-          onClick={onZoomOut}
-          title="缩小"
-          aria-label="缩小画布"
-        >
-          <Minus size={18} weight="bold" />
-        </button>
-        <button
-          className="canvas-dock__icon-button"
-          type="button"
-          onClick={onZoomIn}
-          title="放大"
-          aria-label="放大画布"
-        >
-          <Plus size={18} weight="bold" />
-        </button>
-        <button
-          className="canvas-dock__icon-button"
-          type="button"
-          onClick={onFitView}
-          title="适配全部卡片"
-          aria-label="适配全部卡片"
-        >
-          <CornersOut size={18} weight="duotone" />
-        </button>
-      </div>
-
-      <button
-        className="canvas-dock__button"
-        type="button"
-        onClick={onAddNote}
-        title="新建研究笔记"
-      >
-        <NotePencil size={20} weight="duotone" />
-        <span>新建笔记</span>
-      </button>
-      <button
-        className="canvas-dock__button"
-        type="button"
-        onClick={onGroup}
-        disabled={!canGroup}
-        title={canGroup ? "将所选卡片编组" : "选择至少两张未分组卡片"}
-      >
-        <BoundingBox size={20} weight="duotone" />
-        <span>分组</span>
-      </button>
-      <button
-        className={toolClass(tool === "connect")}
-        type="button"
-        onClick={() => onToolChange(tool === "connect" ? "select" : "connect")}
-        aria-pressed={tool === "connect"}
-        title="拖动卡片连接点建立关系"
-      >
-        <Link size={20} weight="duotone" />
-        <span>连接</span>
-      </button>
-
-      <div className="canvas-dock__layout">
-        <button
-          className={toolClass(layoutOpen)}
-          type="button"
-          onClick={() => {
-            setSynthesisOpen(false);
-            onLayoutOpenChange(!layoutOpen);
-          }}
-          disabled={!canLayout}
-          aria-expanded={layoutOpen}
-          title={
-            canLayout
-              ? `整理所选文献（${layoutShortcutLabel}）`
-              : "选择同一层级中的至少两张文献卡片"
-          }
-        >
-          <TreeStructure size={20} weight="duotone" />
-          <span>整理</span>
-        </button>
-        {layoutOpen && canLayout && (
+        {openMenu === "create" && (
           <div
-            className="canvas-dock__menu canvas-dock__menu--layout"
+            className="canvas-dock__menu canvas-dock__menu--create"
+            data-canvas-dock-menu="create"
             role="menu"
-            aria-label="整理方式"
+            aria-label="新建或加入内容"
+          >
+            <button type="button" role="menuitem" onClick={() => runMenuAction(onAddNote)}>
+              <NotePencil size={17} weight="duotone" />
+              <span>
+                <strong>新建研究笔记</strong>
+                <small>在画布中央创建想法卡片</small>
+              </span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => runMenuAction(onOpenCommand)}>
+              <MagnifyingGlass size={17} weight="duotone" />
+              <span>
+                <strong>搜索并加入文献</strong>
+                <small>{shortcutLabel("K")}</small>
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      <span className="canvas-dock__divider" aria-hidden="true" />
+
+      <div className="canvas-dock__action">
+        <button
+          className={toolClass(openMenu === "pointer")}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={openMenu === "pointer"}
+          onClick={(event) => toggleMenu("pointer", event.currentTarget)}
+          title={tool === "select" ? "选择与框选" : "平移画布"}
+        >
+          <PointerIcon size={20} weight="duotone" />
+          <span>{tool === "select" ? "指针" : "平移"}</span>
+          <CaretDown className="canvas-dock__caret" size={12} weight="bold" />
+        </button>
+        {openMenu === "pointer" && (
+          <div
+            className="canvas-dock__menu canvas-dock__menu--pointer"
+            data-canvas-dock-menu="pointer"
+            role="menu"
+            aria-label="指针工具"
           >
             <button
-              ref={firstLayoutActionRef}
+              className={tool === "select" ? "canvas-dock__menu-item--selected" : undefined}
               type="button"
-              role="menuitem"
-              onClick={() => {
-                onLayoutOpenChange(false);
-                onLayout("timeline");
-              }}
+              role="menuitemradio"
+              aria-checked={tool === "select"}
+              onClick={() => runMenuAction(() => onToolChange("select"))}
             >
-              <CalendarDots size={17} weight="duotone" />
+              <CursorClick size={17} weight="duotone" />
               <span>
-                <strong>按发表年份排列</strong>
-                <small>从早到晚生成时间轴</small>
+                <strong>选择</strong>
+                <small>单击、多选或框选卡片</small>
               </span>
             </button>
             <button
+              className={tool === "pan" ? "canvas-dock__menu-item--selected" : undefined}
               type="button"
-              role="menuitem"
-              disabled={!canCitationLayout}
-              title={canCitationLayout ? "被引论文在左，衍生论文在右" : "所选文献间没有引用关系"}
-              onClick={() => {
-                onLayoutOpenChange(false);
-                onLayout("citation-tree");
-              }}
+              role="menuitemradio"
+              aria-checked={tool === "pan"}
+              onClick={() => runMenuAction(() => onToolChange("pan"))}
             >
-              <TreeStructure size={17} weight="duotone" />
+              <Hand size={17} weight="duotone" />
               <span>
-                <strong>按引用树排列</strong>
-                <small>被引在左，衍生在右</small>
+                <strong>平移</strong>
+                <small>也可按住空格或鼠标中键</small>
               </span>
             </button>
           </div>
         )}
       </div>
-
-      <div className="canvas-dock__synthesis">
-        <button
-          className="canvas-dock__button canvas-dock__button--ai"
-          type="button"
-          onClick={() => {
-            onLayoutOpenChange(false);
-            setSynthesisOpen((open) => !open);
-          }}
-          disabled={!canSynthesize}
-          aria-expanded={synthesisOpen}
-          title={synthesisHint}
-        >
-          <Sparkle size={20} weight="fill" />
-          <span>AI 合成</span>
-        </button>
-        {synthesisOpen && canSynthesize && (
-          <div className="canvas-dock__menu" role="menu" aria-label="选择合成方式">
-            {(
-              ["methodology_matrix", "contradiction_analysis", "research_gap", "tldr"] as const
-            ).map((type) => (
-              <button
-                key={type}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setSynthesisOpen(false);
-                  onSynthesize(type);
-                }}
-              >
-                {SYNTHESIS_LABELS[type]}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {selectedCount > 0 && <span className="canvas-dock__selection">已选 {selectedCount}</span>}
     </div>
   );
 }

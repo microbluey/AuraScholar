@@ -86,6 +86,40 @@ function nodeCenter(node: CanvasNode, allNodes: CanvasNode[]): CanvasPoint {
   };
 }
 
+export function resolveSemanticLinkAnchor(
+  nodes: CanvasNode[],
+  nodeId: string,
+  handleId?: string | null,
+): CanvasPoint | null {
+  const node = nodes.find((candidate) => candidate.id === nodeId);
+  if (!node) return null;
+  const position = absoluteNodePosition(node, nodes);
+  const dimensions =
+    node.type === "group" && node.data.collapsed ? COLLAPSED_GROUP_DIMENSIONS : node.dimensions;
+  if (handleId === "link-left") {
+    return { x: position.x, y: position.y + dimensions.height / 2 };
+  }
+  if (handleId === "link-right") {
+    return {
+      x: position.x + dimensions.width,
+      y: position.y + dimensions.height / 2,
+    };
+  }
+  if (handleId === "link-top") {
+    return { x: position.x + dimensions.width / 2, y: position.y };
+  }
+  if (handleId === "link-bottom") {
+    return {
+      x: position.x + dimensions.width / 2,
+      y: position.y + dimensions.height,
+    };
+  }
+  return {
+    x: position.x + dimensions.width / 2,
+    y: position.y + dimensions.height / 2,
+  };
+}
+
 function validateEndpoints(
   document: CanvasWorkspaceDocument,
   sourceId: string,
