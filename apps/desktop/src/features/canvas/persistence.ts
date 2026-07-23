@@ -368,20 +368,42 @@ export async function deleteCanvasWorkspace(workspaceId: string): Promise<boolea
       envelope.activeWorkspaceId = nextWorkspace.workspaceId;
     }
     persistPreviewEnvelope(envelope);
-    window.localStorage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, envelope.activeWorkspaceId);
-    dispatchCanvasUpdated();
+    // The envelope write above is the deletion commit point. Auxiliary state
+    // must never turn a committed deletion into a rejected promise: callers
+    // would otherwise resume autosave and recreate the workspace via UPSERT.
+    try {
+      window.localStorage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, envelope.activeWorkspaceId);
+    } catch {
+      // The envelope already contains the authoritative active workspace.
+    }
+    try {
+      dispatchCanvasUpdated();
+    } catch {
+      // Event delivery is best-effort after the committed storage write.
+    }
     return true;
   }
 
   const repo = new CanvasRepo(await getDb());
   const deleted = await repo.deleteWorkspace(normalizedId);
   if (!deleted) return false;
-  const remaining = await repo.list();
-  const remembered = readLastCanvasWorkspaceId();
-  if (remembered === normalizedId && remaining[0]) {
-    rememberLastCanvasWorkspaceId(remaining[0].workspaceId);
+  // repo.deleteWorkspace() has committed at this point. Keep every following
+  // synchronization step best-effort so a post-commit failure cannot make the
+  // page restore autosave and resurrect the deleted row.
+  try {
+    const remaining = await repo.list();
+    const remembered = readLastCanvasWorkspaceId();
+    if (remembered === normalizedId && remaining[0]) {
+      rememberLastCanvasWorkspaceId(remaining[0].workspaceId);
+    }
+  } catch {
+    // The route-level workspace refresh supplies the same fallback later.
   }
-  dispatchCanvasUpdated();
+  try {
+    dispatchCanvasUpdated();
+  } catch {
+    // Event delivery is best-effort after the database transaction commits.
+  }
   return true;
 }
 

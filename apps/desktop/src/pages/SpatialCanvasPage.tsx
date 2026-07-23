@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import "@xyflow/react/dist/style.css";
 import "katex/dist/katex.min.css";
+import { useConfirmDialog } from "../components/ConfirmDialog";
 import { CanvasWorkspace } from "../features/canvas/CanvasWorkspace";
 import {
   PREVIEW_LIBRARY_WORKS,
@@ -22,6 +23,7 @@ import {
 } from "../features/canvas/model";
 import {
   createCanvasWorkspace,
+  deleteCanvasWorkspace,
   listCanvasWorkspaces,
   loadCanvasWorkspace,
   readLastCanvasWorkspaceId,
@@ -34,6 +36,7 @@ import { setCanvasSynthesisService } from "../features/canvas/synthesis";
 import {
   applyCanvasWorkspaceUpdate,
   mergeRenamedCanvasWorkspace,
+  planCanvasWorkspaceDeletion,
 } from "../features/canvas/workspace-controls";
 import { getDb } from "../services/aura-db";
 import { synthesizeCanvasSelection as desktopSynthesizeCanvasSelection } from "../services/canvas-ai";
@@ -194,17 +197,20 @@ export function SpatialCanvasPage() {
   const [loadError, setLoadError] = useState("");
   const [reloadNonce, setReloadNonce] = useState(0);
   const [persistenceLabel, setPersistenceLabel] = useState("正在载入…");
+  const { confirm, confirmDialog } = useConfirmDialog();
   const activeDocumentRef = useRef<CanvasWorkspaceDocument | null>(null);
   const latestDocumentsRef = useRef(new Map<string, CanvasWorkspaceDocument>());
   const lastPersistedRef = useRef(new Map<string, string>());
   const pendingSaveRef = useRef(new Map<string, number>());
   const saveChainsRef = useRef(new Map<string, Promise<void>>());
+  const retiredWorkspaceIdsRef = useRef(new Set<string>());
   const loadRequestRef = useRef(0);
   const handledIngressRef = useRef(new Set<string>());
 
   const persistDocument = useCallback(
     (snapshot: CanvasWorkspaceDocument): Promise<void> => {
       const workspaceId = snapshot.workspaceId;
+      if (retiredWorkspaceIdsRef.current.has(workspaceId)) return Promise.resolve();
       const serialized = JSON.stringify(snapshot);
       const previous = saveChainsRef.current.get(workspaceId) ?? Promise.resolve();
       const run = previous
@@ -249,6 +255,10 @@ export function SpatialCanvasPage() {
       if (pending !== undefined) {
         window.clearTimeout(pending);
         pendingSaveRef.current.delete(workspaceId);
+      }
+      if (retiredWorkspaceIdsRef.current.has(workspaceId)) {
+        await saveChainsRef.current.get(workspaceId)?.catch(() => undefined);
+        return;
       }
       const latest = latestDocumentsRef.current.get(workspaceId);
       if (!latest) {
@@ -339,6 +349,7 @@ export function SpatialCanvasPage() {
 
   useEffect(() => {
     if (!document) return;
+    if (retiredWorkspaceIdsRef.current.has(document.workspaceId)) return;
     activeDocumentRef.current = document;
     latestDocumentsRef.current.set(document.workspaceId, document);
     const serialized = JSON.stringify(document);
@@ -349,6 +360,7 @@ export function SpatialCanvasPage() {
     const workspaceId = document.workspaceId;
     const timer = window.setTimeout(() => {
       pendingSaveRef.current.delete(workspaceId);
+      if (retiredWorkspaceIdsRef.current.has(workspaceId)) return;
       const latest = latestDocumentsRef.current.get(workspaceId);
       if (!latest) return;
       void persistDocument(latest).catch(() => undefined);
@@ -363,6 +375,7 @@ export function SpatialCanvasPage() {
         pendingSaveRef.current.delete(workspaceId);
       }
       for (const latest of latestDocumentsRef.current.values()) {
+        if (retiredWorkspaceIdsRef.current.has(latest.workspaceId)) continue;
         if (JSON.stringify(latest) === lastPersistedRef.current.get(latest.workspaceId)) continue;
         void persistDocument(latest).catch(() => undefined);
       }
@@ -416,6 +429,96 @@ export function SpatialCanvasPage() {
       setWorkspaces(await listCanvasWorkspaces());
     },
     [flushWorkspace],
+  );
+
+  const handleDeleteWorkspace = useCallback(
+    async (targetWorkspaceId: string) => {
+      const deletionPlan = planCanvasWorkspaceDeletion(
+        workspaces,
+        activeDocumentRef.current?.workspaceId ?? routeWorkspaceId,
+        targetWorkspaceId,
+      );
+      if (!deletionPlan.targetExists) throw new Error("白板不存在或已被删除");
+      if (!deletionPlan.canDelete) throw new Error("至少需要保留一个白板");
+      const target =
+        latestDocumentsRef.current.get(targetWorkspaceId) ??
+        (await loadCanvasWorkspace(targetWorkspaceId));
+      const fallbackBeforeDelete = workspaces.find(
+        (workspace) => workspace.workspaceId === deletionPlan.nextActiveWorkspaceId,
+      );
+      if (!fallbackBeforeDelete) throw new Error("至少需要保留一个白板");
+
+      const approved = await confirm({
+        title: `删除白板“${target.name}”？`,
+        eyebrow: "删除空间白板",
+        description: `该白板包含 ${target.nodes.length} 张卡片。删除后，该白板的卡片与连线将无法恢复。`,
+        details: [
+          `即将永久删除“${target.name}”及其中的 ${target.nodes.length} 张卡片。`,
+          "主文献库中的论文条目、批注与 PDF 源文件不会被删除。",
+        ],
+        confirmLabel: "删除白板",
+        cancelLabel: "保留白板",
+        tone: "danger",
+      });
+      if (!approved) return;
+
+      const wasActive = deletionPlan.deletingActiveWorkspace;
+      retiredWorkspaceIdsRef.current.add(targetWorkspaceId);
+      const pending = pendingSaveRef.current.get(targetWorkspaceId);
+      if (pending !== undefined) {
+        window.clearTimeout(pending);
+        pendingSaveRef.current.delete(targetWorkspaceId);
+      }
+
+      let deleted = false;
+      try {
+        await saveChainsRef.current.get(targetWorkspaceId)?.catch(() => undefined);
+        deleted = await deleteCanvasWorkspace(targetWorkspaceId);
+        if (!deleted) throw new Error("白板不存在或已被删除");
+
+        latestDocumentsRef.current.delete(targetWorkspaceId);
+        lastPersistedRef.current.delete(targetWorkspaceId);
+        saveChainsRef.current.delete(targetWorkspaceId);
+        for (const ingressKey of handledIngressRef.current) {
+          if (ingressKey.startsWith(`${targetWorkspaceId}:`)) {
+            handledIngressRef.current.delete(ingressKey);
+          }
+        }
+
+        const remaining = await listCanvasWorkspaces().catch(() =>
+          workspaces.filter((workspace) => workspace.workspaceId !== targetWorkspaceId),
+        );
+        const fallback = remaining[0] ?? fallbackBeforeDelete;
+        setWorkspaces(remaining);
+        setPersistenceLabel(`已删除白板“${target.name}”`);
+
+        if (wasActive) {
+          loadRequestRef.current += 1;
+          activeDocumentRef.current = null;
+          setDocument(null);
+          navigate(canvasWorkspacePath(fallback.workspaceId), { replace: true });
+          try {
+            rememberLastCanvasWorkspaceId(fallback.workspaceId);
+          } catch {
+            // The RESTful route is authoritative; storage is only a future
+            // no-parameter redirect hint and must not block this navigation.
+          }
+        }
+      } catch (error) {
+        if (!deleted) {
+          retiredWorkspaceIdsRef.current.delete(targetWorkspaceId);
+          const latest = latestDocumentsRef.current.get(targetWorkspaceId);
+          if (
+            latest &&
+            JSON.stringify(latest) !== lastPersistedRef.current.get(targetWorkspaceId)
+          ) {
+            void persistDocument(latest).catch(() => undefined);
+          }
+        }
+        throw error;
+      }
+    },
+    [confirm, navigate, persistDocument, routeWorkspaceId, workspaces],
   );
 
   useEffect(() => {
@@ -574,36 +677,43 @@ export function SpatialCanvasPage() {
   }
 
   return (
-    <main className="spatial-canvas-page">
-      <CanvasWorkspace
-        key={document.workspaceId}
-        document={document}
-        onDocumentChange={(updater) => {
-          const sourceWorkspaceId = document.workspaceId;
-          setDocument((current) => applyCanvasWorkspaceUpdate(current, sourceWorkspaceId, updater));
-        }}
-        works={works}
-        workspaces={workspaces}
-        libraryLoading={libraryLoading}
-        persistenceLabel={persistenceLabel}
-        onCreateWorkspace={handleCreateWorkspace}
-        onSelectWorkspace={handleSelectWorkspace}
-        onRenameWorkspace={handleRenameWorkspace}
-        onExit={() => navigate("/library")}
-        onOpenPaper={(workId) => navigate(`/reader?work=${encodeURIComponent(workId)}`)}
-        onOpenExcerpt={(workId, annotationId, pageIndex, attachmentId) => {
-          const annotationSuffix = annotationId
-            ? `&annotation=${encodeURIComponent(annotationId)}`
-            : "";
-          const pageSuffix = typeof pageIndex === "number" ? `&page=${pageIndex + 1}` : "";
-          const attachmentSuffix = attachmentId
-            ? `&attachment=${encodeURIComponent(attachmentId)}`
-            : "";
-          navigate(
-            `/reader?work=${encodeURIComponent(workId)}&tab=annotations${annotationSuffix}${pageSuffix}${attachmentSuffix}`,
-          );
-        }}
-      />
-    </main>
+    <>
+      <main className="spatial-canvas-page">
+        <CanvasWorkspace
+          key={document.workspaceId}
+          document={document}
+          onDocumentChange={(updater) => {
+            const sourceWorkspaceId = document.workspaceId;
+            if (retiredWorkspaceIdsRef.current.has(sourceWorkspaceId)) return;
+            setDocument((current) =>
+              applyCanvasWorkspaceUpdate(current, sourceWorkspaceId, updater),
+            );
+          }}
+          works={works}
+          workspaces={workspaces}
+          libraryLoading={libraryLoading}
+          persistenceLabel={persistenceLabel}
+          onCreateWorkspace={handleCreateWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
+          onSelectWorkspace={handleSelectWorkspace}
+          onRenameWorkspace={handleRenameWorkspace}
+          onExit={() => navigate("/library")}
+          onOpenPaper={(workId) => navigate(`/reader?work=${encodeURIComponent(workId)}`)}
+          onOpenExcerpt={(workId, annotationId, pageIndex, attachmentId) => {
+            const annotationSuffix = annotationId
+              ? `&annotation=${encodeURIComponent(annotationId)}`
+              : "";
+            const pageSuffix = typeof pageIndex === "number" ? `&page=${pageIndex + 1}` : "";
+            const attachmentSuffix = attachmentId
+              ? `&attachment=${encodeURIComponent(attachmentId)}`
+              : "";
+            navigate(
+              `/reader?work=${encodeURIComponent(workId)}&tab=annotations${annotationSuffix}${pageSuffix}${attachmentSuffix}`,
+            );
+          }}
+        />
+      </main>
+      {confirmDialog}
+    </>
   );
 }

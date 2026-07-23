@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
+import { AttachmentsRepo } from "./attachments";
 import { WorksRepo } from "./works";
 import {
   CanvasRepo,
@@ -10,12 +11,14 @@ import {
 
 let db: Database;
 let works: WorksRepo;
+let attachments: AttachmentsRepo;
 let canvas: CanvasRepo;
 
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
   works = new WorksRepo(db);
+  attachments = new AttachmentsRepo(db);
   canvas = new CanvasRepo(db);
 });
 
@@ -196,20 +199,97 @@ describe("CanvasRepo", () => {
 
   it("deletes one workspace in isolation, never its source work, and preserves a last workspace", async () => {
     const sourceWorkId = await createSourceWork();
+    const sourceAttachment = await attachments.create({
+      workId: sourceWorkId,
+      sha256: "canvas-delete-source-pdf",
+      byteSize: 42_000,
+      originalFilename: "attention-is-all-you-need.pdf",
+    });
     const seed = await canvas.ensureDefault();
     const disposable = await canvas.create("临时白板");
     await canvas.save(makeDocument(sourceWorkId, disposable));
 
+    expect(
+      await db.query<{ total: number }>(
+        `SELECT COUNT(*) AS total FROM canvas_nodes WHERE workspace_id = ?`,
+        [disposable.workspaceId],
+      ),
+    ).toEqual([{ total: 5 }]);
+    expect(
+      await db.query<{ total: number }>(
+        `SELECT COUNT(*) AS total FROM canvas_edges WHERE workspace_id = ?`,
+        [disposable.workspaceId],
+      ),
+    ).toEqual([{ total: 2 }]);
+
     expect(await canvas.deleteWorkspace(disposable.workspaceId)).toBe(true);
     expect(await canvas.deleteWorkspace(disposable.workspaceId)).toBe(false);
     expect(await canvas.load(disposable.workspaceId)).toBeNull();
+    expect(
+      await db.query<{ total: number }>(
+        `SELECT COUNT(*) AS total FROM canvas_nodes WHERE workspace_id = ?`,
+        [disposable.workspaceId],
+      ),
+    ).toEqual([{ total: 0 }]);
+    expect(
+      await db.query<{ total: number }>(
+        `SELECT COUNT(*) AS total FROM canvas_edges WHERE workspace_id = ?`,
+        [disposable.workspaceId],
+      ),
+    ).toEqual([{ total: 0 }]);
     expect(await canvas.load(seed.workspaceId)).toEqual(seed);
     expect((await works.get(sourceWorkId))?.deleted_at).toBeNull();
+    expect(await attachments.forWork(sourceWorkId)).toEqual([
+      expect.objectContaining({
+        id: sourceAttachment.id,
+        original_filename: "attention-is-all-you-need.pdf",
+      }),
+    ]);
 
     await expect(canvas.deleteWorkspace(seed.workspaceId)).rejects.toThrow(
       "Cannot delete the last canvas workspace",
     );
     expect(await canvas.load(seed.workspaceId)).toEqual(seed);
+  });
+
+  it("rolls back node and edge deletion when deleting the workspace row fails", async () => {
+    const sourceWorkId = await createSourceWork();
+    const sourceAttachment = await attachments.create({
+      workId: sourceWorkId,
+      sha256: "canvas-delete-rollback-pdf",
+      byteSize: 84_000,
+      originalFilename: "rollback-source.pdf",
+    });
+    await canvas.ensureDefault();
+    const disposable = await canvas.create("需要回滚的白板");
+    const populated = makeDocument(sourceWorkId, disposable);
+    await canvas.save(populated);
+
+    await db.exec(`
+      CREATE TEMP TRIGGER fail_canvas_workspace_delete
+      BEFORE DELETE ON canvas_workspaces
+      WHEN OLD.id = '${disposable.workspaceId}'
+      BEGIN
+        SELECT RAISE(FAIL, 'forced canvas workspace delete failure');
+      END;
+    `);
+
+    try {
+      await expect(canvas.deleteWorkspace(disposable.workspaceId)).rejects.toThrow(
+        "forced canvas workspace delete failure",
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS fail_canvas_workspace_delete");
+    }
+
+    expect(await canvas.load(disposable.workspaceId)).toEqual(populated);
+    expect((await works.get(sourceWorkId))?.deleted_at).toBeNull();
+    expect(await attachments.forWork(sourceWorkId)).toEqual([
+      expect.objectContaining({
+        id: sourceAttachment.id,
+        original_filename: "rollback-source.pdf",
+      }),
+    ]);
   });
 
   it("ensures one default workspace and round-trips viewport, all node kinds, and edges", async () => {

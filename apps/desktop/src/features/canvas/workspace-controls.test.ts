@@ -1,6 +1,10 @@
 import { CANVAS_SCHEMA_VERSION, type CanvasWorkspaceDocument } from "@aurascholar/core";
 import { describe, expect, it } from "vitest";
-import { applyCanvasWorkspaceUpdate, mergeRenamedCanvasWorkspace } from "./workspace-controls";
+import {
+  applyCanvasWorkspaceUpdate,
+  mergeRenamedCanvasWorkspace,
+  planCanvasWorkspaceDeletion,
+} from "./workspace-controls";
 
 function workspace(name: string, updatedAt: number): CanvasWorkspaceDocument {
   return {
@@ -51,5 +55,62 @@ describe("canvas workspace controls", () => {
 
     expect(result).toBe(activeWorkspace);
     expect(result?.name).toBe("Workspace B");
+  });
+
+  it("protects the last workspace and ignores a stale delete target", () => {
+    const onlyWorkspace = [{ workspaceId: "workspace-a", name: "Only" }];
+
+    expect(planCanvasWorkspaceDeletion(onlyWorkspace, "workspace-a", "workspace-a")).toMatchObject({
+      canDelete: false,
+      deletingActiveWorkspace: true,
+      nextActiveWorkspaceId: null,
+      remainingWorkspaces: [],
+      targetExists: true,
+    });
+    expect(
+      planCanvasWorkspaceDeletion(onlyWorkspace, "workspace-a", "missing-workspace"),
+    ).toMatchObject({
+      canDelete: false,
+      deletingActiveWorkspace: false,
+      nextActiveWorkspaceId: "workspace-a",
+      remainingWorkspaces: onlyWorkspace,
+      targetExists: false,
+    });
+  });
+
+  it("redirects an active deletion to the first remaining workspace in list order", () => {
+    const workspaces = [
+      { workspaceId: "workspace-newest", name: "Newest" },
+      { workspaceId: "workspace-active", name: "Active" },
+      { workspaceId: "workspace-oldest", name: "Oldest" },
+    ];
+
+    expect(planCanvasWorkspaceDeletion(workspaces, "workspace-active", "workspace-active")).toEqual(
+      {
+        canDelete: true,
+        deletingActiveWorkspace: true,
+        nextActiveWorkspaceId: "workspace-newest",
+        remainingWorkspaces: [workspaces[0], workspaces[2]],
+        targetExists: true,
+      },
+    );
+  });
+
+  it("keeps the current route when a different workspace is deleted", () => {
+    const workspaces = [
+      { workspaceId: "workspace-active", name: "Active" },
+      { workspaceId: "workspace-remove", name: "Remove" },
+      { workspaceId: "workspace-third", name: "Third" },
+    ];
+
+    expect(planCanvasWorkspaceDeletion(workspaces, "workspace-active", "workspace-remove")).toEqual(
+      {
+        canDelete: true,
+        deletingActiveWorkspace: false,
+        nextActiveWorkspaceId: "workspace-active",
+        remainingWorkspaces: [workspaces[0], workspaces[2]],
+        targetExists: true,
+      },
+    );
   });
 });

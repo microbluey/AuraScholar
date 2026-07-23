@@ -47,6 +47,7 @@ interface CanvasWorkspaceProps {
   document: CanvasWorkspaceDocument;
   libraryLoading: boolean;
   onCreateWorkspace: CreateCanvasWorkspace;
+  onDeleteWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
   onDocumentChange: (
     updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
   ) => void;
@@ -95,6 +96,7 @@ function CanvasWorkspaceInner({
   document,
   libraryLoading,
   onCreateWorkspace,
+  onDeleteWorkspace,
   onDocumentChange,
   onExit,
   onOpenExcerpt,
@@ -724,6 +726,7 @@ function CanvasWorkspaceInner({
             workspaces={workspaces}
             onSelectWorkspace={onSelectWorkspace}
             onCreateWorkspace={onCreateWorkspace}
+            onDeleteWorkspace={onDeleteWorkspace}
             onRenameWorkspace={onRenameWorkspace}
           />
           <span>

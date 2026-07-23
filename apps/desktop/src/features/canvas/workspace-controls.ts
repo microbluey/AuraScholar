@@ -13,6 +13,41 @@ export type CreateCanvasWorkspace = (
   name: string,
 ) => CanvasWorkspaceOption | Promise<CanvasWorkspaceOption>;
 
+export interface CanvasWorkspaceDeletionPlan {
+  canDelete: boolean;
+  deletingActiveWorkspace: boolean;
+  nextActiveWorkspaceId: string | null;
+  remainingWorkspaces: CanvasWorkspaceOption[];
+  targetExists: boolean;
+}
+
+export function planCanvasWorkspaceDeletion(
+  workspaces: readonly CanvasWorkspaceOption[],
+  activeWorkspaceId: string,
+  targetWorkspaceId: string,
+): CanvasWorkspaceDeletionPlan {
+  const targetExists = workspaces.some((workspace) => workspace.workspaceId === targetWorkspaceId);
+  const remainingWorkspaces = targetExists
+    ? workspaces.filter((workspace) => workspace.workspaceId !== targetWorkspaceId)
+    : [...workspaces];
+  const deletingActiveWorkspace = targetExists && activeWorkspaceId === targetWorkspaceId;
+  const canDelete = targetExists && remainingWorkspaces.length > 0;
+  const activeStillExists = remainingWorkspaces.some(
+    (workspace) => workspace.workspaceId === activeWorkspaceId,
+  );
+  return {
+    canDelete,
+    deletingActiveWorkspace,
+    nextActiveWorkspaceId: deletingActiveWorkspace
+      ? (remainingWorkspaces[0]?.workspaceId ?? null)
+      : activeStillExists
+        ? activeWorkspaceId
+        : (remainingWorkspaces[0]?.workspaceId ?? null),
+    remainingWorkspaces,
+    targetExists,
+  };
+}
+
 export function applyCanvasWorkspaceUpdate(
   current: CanvasWorkspaceDocument | null,
   sourceWorkspaceId: string,

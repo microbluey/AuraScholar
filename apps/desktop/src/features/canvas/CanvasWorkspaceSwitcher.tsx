@@ -1,4 +1,14 @@
-import { CaretDown, Check, CircleNotch, PencilSimple, Plus, Stack, X } from "@phosphor-icons/react";
+import {
+  CaretDown,
+  Check,
+  CircleNotch,
+  DotsThree,
+  PencilSimple,
+  Plus,
+  Stack,
+  Trash,
+  X,
+} from "@phosphor-icons/react";
 import {
   useCallback,
   useEffect,
@@ -21,13 +31,15 @@ export interface CanvasWorkspaceSwitcherProps {
   className?: string;
   disabled?: boolean;
   onCreateWorkspace: CreateCanvasWorkspace;
+  onDeleteWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
   onRenameWorkspace: (workspaceId: string, name: string) => CanvasWorkspaceActionResult;
   onSelectWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
   workspaces: readonly CanvasWorkspaceOption[];
 }
 
-function actionErrorMessage(action: "create" | "rename" | "select"): string {
+function actionErrorMessage(action: "create" | "delete" | "rename" | "select"): string {
   if (action === "create") return "新建白板失败，请重试。";
+  if (action === "delete") return "删除白板失败，内容仍保留，请重试。";
   if (action === "rename") return "重命名失败，请重试。";
   return "切换白板失败，请重试。";
 }
@@ -41,6 +53,7 @@ export function CanvasWorkspaceSwitcher({
   className,
   disabled = false,
   onCreateWorkspace,
+  onDeleteWorkspace,
   onRenameWorkspace,
   onSelectWorkspace,
   workspaces,
@@ -51,6 +64,7 @@ export function CanvasWorkspaceSwitcher({
   const [open, setOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [menuWorkspaceId, setMenuWorkspaceId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [creating, setCreating] = useState(false);
@@ -63,6 +77,7 @@ export function CanvasWorkspaceSwitcher({
 
   const resetTransientState = useCallback(() => {
     setError("");
+    setMenuWorkspaceId(null);
     setRenamingId(null);
     setRenameValue("");
     setCreating(false);
@@ -94,10 +109,13 @@ export function CanvasWorkspaceSwitcher({
     });
 
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) close(false);
+      if (!rootRef.current?.contains(event.target as Node) && !busyAction?.startsWith("delete:")) {
+        close(false);
+      }
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (isImeComposing(event) || event.key !== "Escape") return;
+      if (busyAction?.startsWith("delete:")) return;
       event.preventDefault();
       close(true);
     };
@@ -109,13 +127,14 @@ export function CanvasWorkspaceSwitcher({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeWorkspaceId, close, open]);
+  }, [activeWorkspaceId, busyAction, close, open]);
 
   const handlePopoverKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (isImeComposing(event) || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
       return;
     }
     if (event.target instanceof HTMLInputElement) return;
+    if ((event.target as HTMLElement).closest('[role="menu"]')) return;
     const items = Array.from(
       rootRef.current?.querySelectorAll<HTMLButtonElement>(
         "[data-workspace-focus-item='true']:not(:disabled)",
@@ -127,6 +146,54 @@ export function CanvasWorkspaceSwitcher({
     let nextIndex: number;
     if (event.key === "End") nextIndex = items.length - 1;
     else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "ArrowDown")
+      nextIndex = (currentIndex + 1 + items.length) % items.length;
+    else nextIndex = (currentIndex - 1 + items.length) % items.length;
+    items[nextIndex]?.focus({ preventScroll: true });
+  };
+
+  const toggleActionMenu = (workspaceId: string) => {
+    const opening = menuWorkspaceId !== workspaceId;
+    setError("");
+    setMenuWorkspaceId(opening ? workspaceId : null);
+    if (opening) {
+      window.requestAnimationFrame(() => {
+        rootRef.current
+          ?.querySelector<HTMLButtonElement>(
+            `[data-workspace-action-menu="${CSS.escape(workspaceId)}"] [role="menuitem"]`,
+          )
+          ?.focus({ preventScroll: true });
+      });
+    }
+  };
+
+  const handleActionMenuKeyDown = (
+    workspaceId: string,
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    if (isImeComposing(event)) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuWorkspaceId(null);
+      rootRef.current
+        ?.querySelector<HTMLButtonElement>(
+          `[data-workspace-menu-trigger="${CSS.escape(workspaceId)}"]`,
+        )
+        ?.focus({ preventScroll: true });
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'),
+    );
+    if (items.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex: number;
+    if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = items.length - 1;
     else if (event.key === "ArrowDown")
       nextIndex = (currentIndex + 1 + items.length) % items.length;
     else nextIndex = (currentIndex - 1 + items.length) % items.length;
@@ -151,11 +218,34 @@ export function CanvasWorkspaceSwitcher({
   };
 
   const beginRename = (workspace: CanvasWorkspaceOption) => {
+    setMenuWorkspaceId(null);
     setCreating(false);
     setCreateValue("");
     setError("");
     setRenamingId(workspace.workspaceId);
     setRenameValue(workspace.name);
+  };
+
+  const deleteWorkspace = async (workspaceId: string) => {
+    if (busyAction || workspaces.length <= 1) return;
+    setMenuWorkspaceId(null);
+    setBusyAction(`delete:${workspaceId}`);
+    setError("");
+    try {
+      await onDeleteWorkspace(workspaceId);
+      close(true);
+    } catch {
+      setError(actionErrorMessage("delete"));
+      window.requestAnimationFrame(() => {
+        rootRef.current
+          ?.querySelector<HTMLButtonElement>(
+            `[data-workspace-menu-trigger="${CSS.escape(workspaceId)}"]`,
+          )
+          ?.focus({ preventScroll: true });
+      });
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const submitRename = async () => {
@@ -253,10 +343,11 @@ export function CanvasWorkspaceSwitcher({
             {workspaces.map((workspace) => {
               const active = workspace.workspaceId === activeWorkspaceId;
               const renaming = workspace.workspaceId === renamingId;
+              const menuOpen = workspace.workspaceId === menuWorkspaceId;
               const rowBusy = busyAction?.endsWith(`:${workspace.workspaceId}`) ?? false;
               return (
                 <div
-                  className={`canvas-workspace-switcher__row${active ? " canvas-workspace-switcher__row--active" : ""}`}
+                  className={`canvas-workspace-switcher__row${active ? " canvas-workspace-switcher__row--active" : ""}${menuOpen ? " canvas-workspace-switcher__row--menu-open" : ""}`}
                   key={workspace.workspaceId}
                   role="listitem"
                 >
@@ -334,14 +425,51 @@ export function CanvasWorkspaceSwitcher({
                       </button>
                       <button
                         type="button"
-                        className="canvas-workspace-switcher__rename"
-                        aria-label={`重命名${workspace.name}`}
-                        title="重命名"
+                        className="canvas-workspace-switcher__more"
+                        aria-label={`${workspace.name}的更多操作`}
+                        aria-expanded={menuOpen}
+                        aria-haspopup="menu"
+                        data-workspace-focus-item="true"
+                        data-workspace-menu-trigger={workspace.workspaceId}
+                        title="更多操作"
                         disabled={Boolean(busyAction)}
-                        onClick={() => beginRename(workspace)}
+                        onClick={() => toggleActionMenu(workspace.workspaceId)}
                       >
-                        <PencilSimple size={14} weight="duotone" />
+                        <DotsThree size={18} weight="bold" />
                       </button>
+                      {menuOpen && (
+                        <div
+                          className="canvas-workspace-switcher__action-menu"
+                          role="menu"
+                          aria-label={`${workspace.name}的白板操作`}
+                          data-workspace-action-menu={workspace.workspaceId}
+                          onKeyDown={(event) =>
+                            handleActionMenuKeyDown(workspace.workspaceId, event)
+                          }
+                        >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={Boolean(busyAction)}
+                            onClick={() => beginRename(workspace)}
+                          >
+                            <PencilSimple size={14} weight="duotone" />
+                            <span>重命名</span>
+                          </button>
+                          {workspaces.length > 1 && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="canvas-workspace-switcher__delete"
+                              disabled={Boolean(busyAction)}
+                              onClick={() => void deleteWorkspace(workspace.workspaceId)}
+                            >
+                              <Trash size={14} weight="duotone" />
+                              <span>删除白板</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

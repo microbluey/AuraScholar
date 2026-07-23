@@ -16,6 +16,11 @@ vi.mock("../../services/aura-platform", () => ({ isDesktopRuntime: () => false }
 
 class MemoryStorage implements Storage {
   readonly values = new Map<string, string>();
+  private failingSetKey: string | null = null;
+
+  failNextSetFor(key: string): void {
+    this.failingSetKey = key;
+  }
 
   get length(): number {
     return this.values.size;
@@ -38,9 +43,15 @@ class MemoryStorage implements Storage {
   }
 
   setItem(key: string, value: string): void {
+    if (this.failingSetKey === key) {
+      this.failingSetKey = null;
+      throw new Error(`forced storage failure for ${key}`);
+    }
     this.values.set(key, value);
   }
 }
+
+let memoryStorage: MemoryStorage;
 
 function legacyWorkspace(): CanvasWorkspaceDocument {
   return {
@@ -57,9 +68,9 @@ function legacyWorkspace(): CanvasWorkspaceDocument {
 }
 
 beforeEach(() => {
-  const localStorage = new MemoryStorage();
+  memoryStorage = new MemoryStorage();
   vi.stubGlobal("window", {
-    localStorage,
+    localStorage: memoryStorage,
     dispatchEvent: vi.fn(),
   });
 });
@@ -169,6 +180,20 @@ describe("browser preview canvas persistence", () => {
 
     await expect(deleteCanvasWorkspace(removable.workspaceId)).resolves.toBe(true);
     expect(readLastCanvasWorkspaceId()).toBe(initial!.workspaceId);
+  });
+
+  it("does not reject or recreate a workspace when auxiliary state fails after deletion commits", async () => {
+    const [initial] = await listCanvasWorkspaces();
+    const removable = await createCanvasWorkspace("提交后故障测试");
+    vi.mocked(window.dispatchEvent).mockClear();
+    memoryStorage.failNextSetFor(CANVAS_LAST_WORKSPACE_ID_KEY);
+
+    await expect(deleteCanvasWorkspace(removable.workspaceId)).resolves.toBe(true);
+    await expect(loadCanvasWorkspace(removable.workspaceId)).rejects.toThrow("白板不存在");
+    await expect(listCanvasWorkspaces()).resolves.toEqual([
+      expect.objectContaining({ workspaceId: initial!.workspaceId }),
+    ]);
+    expect(window.dispatchEvent).toHaveBeenCalled();
   });
 
   it("rejects invalid workspace identifiers and leaves storage unchanged", async () => {

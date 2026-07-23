@@ -532,16 +532,20 @@ export class CanvasRepo {
     assertNonEmptyString(workspaceId, "Canvas workspaceId");
     return this.withWriteLock(() =>
       this.withSavepoint("canvas_delete_workspace", async () => {
-        const rows = await this.db.query<{ id: string }>(
-          `SELECT id FROM canvas_workspaces WHERE id = ? LIMIT 1`,
+        const rows = await this.db.query<{ id: string; workspace_total: number }>(
+          `SELECT target.id, totals.total AS workspace_total
+           FROM canvas_workspaces AS target
+           CROSS JOIN (SELECT COUNT(*) AS total FROM canvas_workspaces) AS totals
+           WHERE target.id = ?
+           LIMIT 1`,
           [workspaceId],
         );
-        if (!rows[0]) return false;
+        const target = rows[0];
+        if (!target) return false;
 
-        const counts = await this.db.query<{ total: number }>(
-          `SELECT COUNT(*) AS total FROM canvas_workspaces`,
-        );
-        if ((counts[0]?.total ?? 0) <= 1) {
+        // Resolve target existence and the invariant guard from the same
+        // transactional snapshot before touching any workspace-owned rows.
+        if (target.workspace_total <= 1) {
           throw new Error("Cannot delete the last canvas workspace");
         }
 
