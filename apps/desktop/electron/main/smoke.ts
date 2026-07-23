@@ -147,6 +147,7 @@ interface SmokeRendererResult {
   canvasLibraryWorkIngressNavigated: boolean;
   canvasLibraryWorkIngressPersisted: boolean;
   canvasLibraryWorkIngressVisible: boolean;
+  canvasNodeContextMenuVisible: boolean;
   canvasPersistedNodeCount: number | null;
   canvasPersistedNodeReloaded: boolean;
   canvasSemanticQuickLinkCandidateVisible: boolean;
@@ -159,6 +160,7 @@ interface SmokeRendererResult {
   canvasSplitReaderExcerptLinked: boolean;
   canvasSplitReaderKeptContext: boolean;
   canvasSplitReaderOpened: boolean;
+  canvasToolboxDetailsEditPersisted: boolean;
   canvasReaderAnnotationDeepLinkHash: string;
   canvasReaderAnnotationDeepLinkNavigated: boolean;
   canvasReaderAnnotationPersisted: boolean;
@@ -1454,6 +1456,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let canvasLibraryWorkIngressNavigated = false;
         let canvasLibraryWorkIngressPersisted = false;
         let canvasLibraryWorkIngressVisible = false;
+        let canvasNodeContextMenuVisible = false;
         let canvasPersistedNodeCount = null;
         let canvasPersistedNodeReloaded = false;
         let canvasSemanticQuickLinkCandidateVisible = false;
@@ -1466,6 +1469,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let canvasSplitReaderExcerptLinked = false;
         let canvasSplitReaderKeptContext = false;
         let canvasSplitReaderOpened = false;
+        let canvasToolboxDetailsEditPersisted = false;
         let canvasReaderAnnotationDeepLinkHash = "";
         let canvasReaderAnnotationDeepLinkNavigated = false;
         let canvasReaderAnnotationPersisted = false;
@@ -6708,7 +6712,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         ).find((card) =>
           card.querySelector(".canvas-card__title")?.textContent?.includes(SAMPLE.title)
         );
-        splitReaderPaperCard?.querySelector(".canvas-card__action")?.click();
+        splitReaderPaperCard?.dispatchEvent(
+          new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })
+        );
         const splitReader = await waitFor(() => {
           const drawer = document.querySelector(".canvas-reader-drawer");
           return drawer?.querySelector(".au-reader-page__canvas") ? drawer : null;
@@ -6718,7 +6724,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           Boolean(splitReader) &&
           location.hash === canvasHashBeforeSplitReader &&
           Boolean(document.querySelector(".canvas-workspace")) &&
-          !document.querySelector(".canvas-inspector--open");
+          !document.querySelector("[data-canvas-toolbox-panel]");
 
         const splitReaderAnnotation = await waitFor(
           () =>
@@ -6794,16 +6800,80 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             card.querySelector(".canvas-card__quote")?.textContent?.trim() ===
             "AuraScholar Smoke PDF"
         );
-        splitReaderExcerptCard?.dispatchEvent(
-          new MouseEvent("click", { bubbles: true, cancelable: true })
-        );
+        const splitReaderExcerptNodeId =
+          splitReaderExcerptCard?.getAttribute("data-canvas-node-id") ??
+          splitReaderLinkedExcerpt?.id ??
+          "";
+        if (splitReaderExcerptCard) {
+          const cardRect = splitReaderExcerptCard.getBoundingClientRect();
+          splitReaderExcerptCard.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              button: 2,
+              clientX: cardRect.left + Math.min(32, cardRect.width / 2),
+              clientY: cardRect.top + Math.min(32, cardRect.height / 2)
+            })
+          );
+        }
+        const splitReaderExcerptMenu = await waitFor(() => {
+          if (!splitReaderExcerptNodeId) return null;
+          const menu = document.querySelector(
+            '[data-canvas-node-menu-for="' +
+              CSS.escape(splitReaderExcerptNodeId) +
+              '"]'
+          );
+          return menu?.querySelector('[data-canvas-node-action="details"]') ? menu : null;
+        }, 2_000);
+        canvasNodeContextMenuVisible = Boolean(splitReaderExcerptMenu);
+        splitReaderExcerptMenu
+          ?.querySelector('[data-canvas-node-action="details"]')
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        const splitReaderExcerptDetails = await waitFor(() => {
+          if (!splitReaderExcerptNodeId) return null;
+          return document.querySelector(
+            '[data-canvas-toolbox-panel="details"] ' +
+              '[data-canvas-details-for="' +
+              CSS.escape(splitReaderExcerptNodeId) +
+              '"]'
+          );
+        }, 2_000);
+        const splitReaderExcerptMarginNote =
+          splitReaderExcerptDetails?.querySelector("textarea");
+        if (splitReaderExcerptMarginNote instanceof HTMLTextAreaElement) {
+          setInputValue(splitReaderExcerptMarginNote, "Smoke excerpt toolbox edit");
+          canvasToolboxDetailsEditPersisted = Boolean(
+            await waitFor(async () => {
+              const rows = await window.aura.db.query(
+                "SELECT data_json FROM canvas_nodes WHERE workspace_id = ? AND id = ?",
+                ["canvas:default", splitReaderExcerptNodeId]
+              );
+              if (!rows[0]?.data_json) return false;
+              try {
+                return (
+                  JSON.parse(rows[0].data_json).marginNote ===
+                  "Smoke excerpt toolbox edit"
+                );
+              } catch {
+                return false;
+              }
+            }, 5_000)
+          );
+        }
         const splitReaderCleanupButton = await waitFor(() => {
-          const inspector = document.querySelector(".canvas-inspector--open");
-          if (!inspector?.textContent?.includes("文献摘录")) return null;
+          const details = document.querySelector(
+            '[data-canvas-toolbox-panel="details"] ' +
+              '[data-canvas-details-for="' +
+              CSS.escape(splitReaderExcerptNodeId) +
+              '"]'
+          );
+          if (!details?.textContent?.includes("摘录与边注")) return null;
           return (
-            Array.from(inspector.querySelectorAll("button")).find(
+            details.querySelector(".canvas-details__delete") ??
+            Array.from(details.querySelectorAll("button")).find(
               (button) => button.textContent?.replace(/\s+/g, " ").trim() === "仅从画布移除"
-            ) ?? null
+            ) ??
+            null
           );
         }, 2_000);
         if (splitReaderCleanupButton instanceof HTMLButtonElement) {
@@ -6911,17 +6981,25 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           }, 5_000);
           canvasSemanticQuickLinkPersisted = Boolean(persistedSemanticEdge);
 
-          if (!document.querySelector(".canvas-inspector--open")) {
-            document.querySelector(".canvas-inspector-toggle")?.click();
+          if (!document.querySelector('[data-canvas-toolbox-panel="details"]')) {
+            document.querySelector('[data-canvas-toolbox-trigger="details"]')?.click();
           }
           const semanticCleanupButton = await waitFor(() => {
-            const inspector = document.querySelector(".canvas-inspector--open");
-            if (!inspector?.textContent?.includes("关系连线")) return null;
+            if (!persistedSemanticEdge?.id) return null;
+            const details = document.querySelector(
+              '[data-canvas-toolbox-panel="details"] ' +
+                '[data-canvas-details-for="' +
+                CSS.escape(persistedSemanticEdge.id) +
+                '"]'
+            );
+            if (!details?.textContent?.includes("关系连线编辑")) return null;
             return (
-              Array.from(inspector.querySelectorAll("button")).find(
+              details.querySelector(".canvas-details__delete") ??
+              Array.from(details.querySelectorAll("button")).find(
                 (button) =>
                   button.textContent?.replace(/\s+/g, " ").trim() === "删除这条连线"
-              ) ?? null
+              ) ??
+              null
             );
           }, 2_000);
           if (semanticCleanupButton instanceof HTMLButtonElement) {
@@ -13724,6 +13802,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           canvasLibraryWorkIngressNavigated,
           canvasLibraryWorkIngressPersisted,
           canvasLibraryWorkIngressVisible,
+          canvasNodeContextMenuVisible,
           canvasPersistedNodeCount:
             typeof canvasPersistedNodeCount === "number"
               ? canvasPersistedNodeCount
@@ -13739,6 +13818,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           canvasSplitReaderExcerptLinked,
           canvasSplitReaderKeptContext,
           canvasSplitReaderOpened,
+          canvasToolboxDetailsEditPersisted,
           canvasReaderAnnotationDeepLinkHash,
           canvasReaderAnnotationDeepLinkNavigated,
           canvasReaderAnnotationPersisted,
@@ -14871,6 +14951,14 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 renderer.canvasSplitReaderClosed &&
                 renderer.canvasSplitReaderCleanupSucceeded,
               detail: `opened=${renderer.canvasSplitReaderOpened}; context=${renderer.canvasSplitReaderKeptContext}; linked=${renderer.canvasSplitReaderExcerptLinked}; closed=${renderer.canvasSplitReaderClosed}; cleanup=${renderer.canvasSplitReaderCleanupSucceeded}`,
+            },
+            {
+              name: "canvas-node-context-toolbox-workflow",
+              pass:
+                renderer.canvasNodeContextMenuVisible &&
+                renderer.canvasToolboxDetailsEditPersisted &&
+                renderer.canvasSplitReaderCleanupSucceeded,
+              detail: `menu=${renderer.canvasNodeContextMenuVisible}; edit=${renderer.canvasToolboxDetailsEditPersisted}; delete=${renderer.canvasSplitReaderCleanupSucceeded}`,
             },
             {
               name: "canvas-semantic-quick-link-workflow",

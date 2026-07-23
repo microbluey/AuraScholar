@@ -1,34 +1,30 @@
 import type { CanvasEdge, CanvasEdgeRelation, CanvasNode } from "@aurascholar/core";
 import {
   Article,
+  ArrowSquareOut,
   BoundingBox,
   CaretDown,
   CaretRight,
   Link,
   Lightbulb,
   Quotes,
-  SidebarSimple,
   Sparkle,
   Trash,
-  X,
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { RELATION_LABELS, SYNTHESIS_LABELS } from "./model";
 
-interface CanvasInspectorProps {
+interface CanvasDetailsPanelProps {
   edge: CanvasEdge | null;
   groupChildCount: number;
-  miniMap: ReactNode;
   node: CanvasNode | null;
-  onClose: () => void;
+  onActivateNode: (node: CanvasNode) => void;
   onDeleteEdge: (edgeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
-  onOpenPaper: (workId: string) => void;
   onSetGroupCollapsed: (groupId: string, collapsed: boolean) => void;
   onUngroup: (groupId: string) => void;
   onUpdateEdge: (edge: CanvasEdge) => void;
   onUpdateNode: (node: CanvasNode) => void;
-  open: boolean;
   selectedCount: number;
 }
 
@@ -37,21 +33,21 @@ const RELATIONS = Object.keys(RELATION_LABELS) as CanvasEdgeRelation[];
 function nodeKind(node: CanvasNode): { icon: ReactNode; label: string } {
   switch (node.type) {
     case "paper":
-      return { icon: <Article size={18} weight="duotone" />, label: "文献卡片" };
+      return { icon: <Article size={18} weight="duotone" />, label: "文献信息" };
     case "excerpt":
-      return { icon: <Quotes size={18} weight="duotone" />, label: "文献摘录" };
+      return { icon: <Quotes size={18} weight="duotone" />, label: "摘录与边注" };
     case "ai-synth":
-      return { icon: <Sparkle size={18} weight="fill" />, label: "AI 合成" };
+      return { icon: <Sparkle size={18} weight="fill" />, label: "AI 合成编辑" };
     case "idea-note":
-      return { icon: <Lightbulb size={18} weight="duotone" />, label: "研究想法" };
+      return { icon: <Lightbulb size={18} weight="duotone" />, label: "研究笔记编辑" };
     case "group":
-      return { icon: <BoundingBox size={18} weight="duotone" />, label: "逻辑分组" };
+      return { icon: <BoundingBox size={18} weight="duotone" />, label: "分组设置" };
   }
 }
 
-function InspectorField({ children, label }: { children: ReactNode; label: string }) {
+function DetailsField({ children, label }: { children: ReactNode; label: string }) {
   return (
-    <label className="canvas-inspector__field">
+    <label className="canvas-details__field">
       <span>{label}</span>
       {children}
     </label>
@@ -61,19 +57,24 @@ function InspectorField({ children, label }: { children: ReactNode; label: strin
 function NodeFields({
   groupChildCount,
   node,
-  onOpenPaper,
+  onActivateNode,
   onSetGroupCollapsed,
   onUngroup,
   onUpdateNode,
 }: Pick<
-  CanvasInspectorProps,
-  "groupChildCount" | "node" | "onOpenPaper" | "onSetGroupCollapsed" | "onUngroup" | "onUpdateNode"
+  CanvasDetailsPanelProps,
+  | "groupChildCount"
+  | "node"
+  | "onActivateNode"
+  | "onSetGroupCollapsed"
+  | "onUngroup"
+  | "onUpdateNode"
 > & {
   node: CanvasNode;
 }) {
   if (node.type === "paper") {
     return (
-      <div className="canvas-inspector__metadata">
+      <div className="canvas-details__metadata">
         <h3>{node.data.title}</h3>
         <dl>
           <div>
@@ -97,11 +98,12 @@ function NodeFields({
         </dl>
         {node.data.abstractSnippet && <p>{node.data.abstractSnippet}</p>}
         <button
-          className="canvas-inspector__primary"
+          className="canvas-details__primary"
           type="button"
-          onClick={() => onOpenPaper(node.data.workId)}
+          onClick={() => onActivateNode(node)}
         >
-          在阅读器中打开
+          在同屏阅读器中打开
+          <ArrowSquareOut size={15} weight="bold" />
         </button>
       </div>
     );
@@ -109,12 +111,13 @@ function NodeFields({
 
   if (node.type === "excerpt") {
     return (
-      <div className="canvas-inspector__metadata">
+      <div className="canvas-details__metadata">
         <h3>{node.data.paperTitle}</h3>
-        <p className="canvas-inspector__quote">“{node.data.highlightText}”</p>
+        <p className="canvas-details__quote">“{node.data.highlightText}”</p>
         <p>第 {node.data.pageIndex + 1} 页</p>
-        <InspectorField label="边注">
+        <DetailsField label="边注">
           <textarea
+            data-autofocus
             value={node.data.marginNote || ""}
             onChange={(event) =>
               onUpdateNode({
@@ -125,16 +128,25 @@ function NodeFields({
             }
             rows={4}
           />
-        </InspectorField>
+        </DetailsField>
+        <button
+          className="canvas-details__primary"
+          type="button"
+          onClick={() => onActivateNode(node)}
+        >
+          在同屏阅读器中定位
+          <ArrowSquareOut size={15} weight="bold" />
+        </button>
       </div>
     );
   }
 
   if (node.type === "idea-note") {
     return (
-      <div className="canvas-inspector__form">
-        <InspectorField label="标题">
+      <div className="canvas-details__form">
+        <DetailsField label="标题">
           <input
+            data-autofocus
             value={node.data.title || ""}
             onChange={(event) =>
               onUpdateNode({
@@ -144,8 +156,8 @@ function NodeFields({
               })
             }
           />
-        </InspectorField>
-        <InspectorField label="Markdown / LaTeX 内容">
+        </DetailsField>
+        <DetailsField label="Markdown / LaTeX 内容">
           <textarea
             value={node.data.contentMarkdown}
             onChange={(event) => {
@@ -162,7 +174,7 @@ function NodeFields({
             }}
             rows={10}
           />
-        </InspectorField>
+        </DetailsField>
         <small>支持 GFM 表格、任务列表以及 `$...$` / `$$...$$` 数学公式。</small>
       </div>
     );
@@ -170,10 +182,11 @@ function NodeFields({
 
   if (node.type === "ai-synth") {
     return (
-      <div className="canvas-inspector__form">
-        <span className="canvas-inspector__mode">{SYNTHESIS_LABELS[node.data.synthType]}</span>
-        <InspectorField label="标题">
+      <div className="canvas-details__form">
+        <span className="canvas-details__mode">{SYNTHESIS_LABELS[node.data.synthType]}</span>
+        <DetailsField label="标题">
           <input
+            data-autofocus
             value={node.data.title}
             onChange={(event) =>
               onUpdateNode({
@@ -183,8 +196,8 @@ function NodeFields({
               })
             }
           />
-        </InspectorField>
-        <InspectorField label="合成内容">
+        </DetailsField>
+        <DetailsField label="合成内容">
           <textarea
             value={node.data.contentMarkdown}
             onChange={(event) =>
@@ -196,16 +209,17 @@ function NodeFields({
             }
             rows={10}
           />
-        </InspectorField>
+        </DetailsField>
         <small>{node.data.sourceNodeIds.length} 个来源节点</small>
       </div>
     );
   }
 
   return (
-    <div className="canvas-inspector__form">
-      <InspectorField label="分组标题">
+    <div className="canvas-details__form">
+      <DetailsField label="分组标题">
         <input
+          data-autofocus
           value={node.data.title}
           onChange={(event) =>
             onUpdateNode({
@@ -215,12 +229,12 @@ function NodeFields({
             })
           }
         />
-      </InspectorField>
-      <span className="canvas-inspector__group-status">
+      </DetailsField>
+      <span className="canvas-details__group-status">
         {groupChildCount} 张卡片 · {node.data.collapsed ? "已折叠" : "已展开"}
       </span>
       <button
-        className="canvas-inspector__secondary"
+        className="canvas-details__secondary"
         type="button"
         onClick={() => onSetGroupCollapsed(node.id, node.data.collapsed !== true)}
       >
@@ -233,7 +247,7 @@ function NodeFields({
       </button>
       <small>折叠只收起组内卡片与连线，不会删除内容。</small>
       <button
-        className="canvas-inspector__secondary"
+        className="canvas-details__secondary"
         type="button"
         onClick={() => onUngroup(node.id)}
       >
@@ -243,114 +257,94 @@ function NodeFields({
   );
 }
 
-export function CanvasInspector({
+export function CanvasDetailsPanel({
   edge,
   groupChildCount,
-  miniMap,
   node,
-  onClose,
+  onActivateNode,
   onDeleteEdge,
   onDeleteNode,
-  onOpenPaper,
   onSetGroupCollapsed,
   onUngroup,
   onUpdateEdge,
   onUpdateNode,
-  open,
   selectedCount,
-}: CanvasInspectorProps) {
+}: CanvasDetailsPanelProps) {
   const kind = node ? nodeKind(node) : null;
+  const targetId = node?.id ?? edge?.id ?? (selectedCount > 1 ? "selection" : "empty");
+
   return (
-    <aside
-      className={`canvas-inspector${open ? " canvas-inspector--open" : ""}`}
-      aria-label="画布检查器"
-      aria-hidden={!open}
-      inert={!open}
-    >
-      <header className="canvas-inspector__header">
-        <div>
-          {kind?.icon || <SidebarSimple size={18} weight="duotone" />}
-          <strong>{kind?.label || (edge ? "关系连线" : "画布检查器")}</strong>
-        </div>
-        <button type="button" onClick={onClose} aria-label="收起检查器" title="收起检查器">
-          <X size={18} weight="bold" />
-        </button>
-      </header>
-
-      <div className="canvas-inspector__body">
-        {selectedCount > 1 ? (
-          <div className="canvas-inspector__empty">
-            <BoundingBox size={28} weight="duotone" />
-            <strong>已选择 {selectedCount} 张卡片</strong>
-            <p>可以从底部工具栏创建分组，或用 AI 合成比较文献与摘录。</p>
-          </div>
-        ) : node ? (
-          <NodeFields
-            node={node}
-            groupChildCount={groupChildCount}
-            onOpenPaper={onOpenPaper}
-            onSetGroupCollapsed={onSetGroupCollapsed}
-            onUngroup={onUngroup}
-            onUpdateNode={onUpdateNode}
-          />
-        ) : edge ? (
-          <div className="canvas-inspector__form">
-            <InspectorField label="关系类型">
-              <select
-                value={edge.relationType}
-                onChange={(event) => {
-                  const relationType = event.target.value as CanvasEdgeRelation;
-                  onUpdateEdge({
-                    ...edge,
-                    relationType,
-                    label: RELATION_LABELS[relationType],
-                    updatedAt: Date.now(),
-                  });
-                }}
-              >
-                {RELATIONS.map((relation) => (
-                  <option key={relation} value={relation}>
-                    {RELATION_LABELS[relation]}
-                  </option>
-                ))}
-              </select>
-            </InspectorField>
-            <InspectorField label="关系说明">
-              <input
-                value={edge.label || ""}
-                onChange={(event) =>
-                  onUpdateEdge({ ...edge, label: event.target.value, updatedAt: Date.now() })
-                }
-              />
-            </InspectorField>
-          </div>
-        ) : (
-          <div className="canvas-inspector__empty">
-            <Link size={28} weight="duotone" />
-            <strong>选择一张卡片或连线</strong>
-            <p>在这里查看来源、编辑研究笔记和调整关系。</p>
-          </div>
-        )}
-
-        {(edge || (node && node.type !== "group")) && selectedCount <= 1 && (
-          <button
-            className="canvas-inspector__delete"
-            type="button"
-            onClick={() => (node ? onDeleteNode(node.id) : edge && onDeleteEdge(edge.id))}
-          >
-            <Trash size={17} weight="duotone" />
-            {node ? "仅从画布移除" : "删除这条连线"}
-          </button>
-        )}
+    <div className="canvas-details" data-canvas-details-for={targetId}>
+      <div className="canvas-details__kind">
+        {kind?.icon || (edge ? <Link size={18} weight="duotone" /> : <BoundingBox size={18} />)}
+        <strong>{kind?.label || (edge ? "关系连线编辑" : "选择详情")}</strong>
       </div>
 
-      <section className="canvas-inspector__minimap" aria-label="画布小地图">
-        <div className="canvas-inspector__section-title">
-          <span>MiniMap</span>
-          <small>拖动导航</small>
+      {selectedCount > 1 ? (
+        <div className="canvas-details__empty">
+          <BoundingBox size={28} weight="duotone" />
+          <strong>已选择 {selectedCount} 张卡片</strong>
+          <p>可从底部工具栏创建分组，或用 AI 合成比较文献与摘录。</p>
         </div>
-        {miniMap}
-      </section>
-    </aside>
+      ) : node ? (
+        <NodeFields
+          node={node}
+          groupChildCount={groupChildCount}
+          onActivateNode={onActivateNode}
+          onSetGroupCollapsed={onSetGroupCollapsed}
+          onUngroup={onUngroup}
+          onUpdateNode={onUpdateNode}
+        />
+      ) : edge ? (
+        <div className="canvas-details__form">
+          <DetailsField label="关系类型">
+            <select
+              data-autofocus
+              value={edge.relationType}
+              onChange={(event) => {
+                const relationType = event.target.value as CanvasEdgeRelation;
+                onUpdateEdge({
+                  ...edge,
+                  relationType,
+                  label: RELATION_LABELS[relationType],
+                  updatedAt: Date.now(),
+                });
+              }}
+            >
+              {RELATIONS.map((relation) => (
+                <option key={relation} value={relation}>
+                  {RELATION_LABELS[relation]}
+                </option>
+              ))}
+            </select>
+          </DetailsField>
+          <DetailsField label="关系说明">
+            <input
+              value={edge.label || ""}
+              onChange={(event) =>
+                onUpdateEdge({ ...edge, label: event.target.value, updatedAt: Date.now() })
+              }
+            />
+          </DetailsField>
+        </div>
+      ) : (
+        <div className="canvas-details__empty">
+          <Link size={28} weight="duotone" />
+          <strong>选择一张卡片或连线</strong>
+          <p>单击卡片打开内容；使用右键或卡片上的“…”执行更多操作。</p>
+        </div>
+      )}
+
+      {(edge || (node && node.type !== "group")) && selectedCount <= 1 && (
+        <button
+          className="canvas-details__delete"
+          type="button"
+          onClick={() => (node ? onDeleteNode(node.id) : edge && onDeleteEdge(edge.id))}
+        >
+          <Trash size={17} weight="duotone" />
+          {node ? "仅从画布移除" : "删除这条连线"}
+        </button>
+      )}
+    </div>
   );
 }

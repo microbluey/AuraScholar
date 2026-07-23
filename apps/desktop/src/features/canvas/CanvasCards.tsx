@@ -16,10 +16,19 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { isCanvasContextMenuShortcut } from "./canvas-interactions";
+
+export interface CanvasNodeMenuAnchor {
+  clientX: number;
+  clientY: number;
+  returnFocusElement: HTMLElement;
+}
 
 export interface CanvasFlowNodeData extends Record<string, unknown> {
   canvasNode: CanvasNode;
   groupChildCount: number;
+  menuOpen: boolean;
+  onActivateNode: (nodeId: string) => void;
   onOpenPaper: (workId: string) => void;
   onOpenExcerpt: (
     workId: string,
@@ -27,6 +36,7 @@ export interface CanvasFlowNodeData extends Record<string, unknown> {
     pageIndex?: number,
     attachmentId?: string,
   ) => void;
+  onRequestContextMenu: (nodeId: string, anchor: CanvasNodeMenuAnchor) => void;
   onToggleGroup: (groupId: string, collapsed: boolean) => void;
 }
 
@@ -83,19 +93,51 @@ function CardShell({
   className = "",
   isConnectable,
   label,
+  nodeId,
+  onActivateNode,
+  onRequestContextMenu,
   selected,
 }: {
   children: ReactNode;
   className?: string;
   isConnectable: boolean;
   label: string;
+  nodeId: string;
+  onActivateNode: (nodeId: string) => void;
+  onRequestContextMenu: (nodeId: string, anchor: CanvasNodeMenuAnchor) => void;
   selected: boolean;
 }) {
   return (
     <article
       className={`canvas-card ${className}${selected ? " canvas-card--selected" : ""}`}
       aria-label={label}
+      data-canvas-node-id={nodeId}
       tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          onActivateNode(nodeId);
+          return;
+        }
+        if (
+          !isCanvasContextMenuShortcut({
+            composing: event.nativeEvent.isComposing,
+            key: event.key,
+            repeat: event.repeat,
+            shiftKey: event.shiftKey,
+          })
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        onRequestContextMenu(nodeId, {
+          clientX: rect.right - 18,
+          clientY: rect.top + 22,
+          returnFocusElement: event.currentTarget,
+        });
+      }}
     >
       <ConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
       {children}
@@ -103,14 +145,47 @@ function CardShell({
   );
 }
 
-function CardHeader({ icon, label }: { icon: ReactNode; label: string }) {
+function CardHeader({
+  icon,
+  label,
+  menuLabel,
+  menuOpen,
+  nodeId,
+  onRequestContextMenu,
+}: {
+  icon: ReactNode;
+  label: string;
+  menuLabel: string;
+  menuOpen: boolean;
+  nodeId: string;
+  onRequestContextMenu: (nodeId: string, anchor: CanvasNodeMenuAnchor) => void;
+}) {
   return (
     <header className="canvas-card__header">
       <span className="canvas-card__kind">
         {icon}
         {label}
       </span>
-      <DotsThree aria-hidden="true" size={19} weight="bold" />
+      <button
+        type="button"
+        className="canvas-card__menu-button nodrag nopan"
+        data-canvas-interactive
+        aria-label={menuLabel}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          onRequestContextMenu(nodeId, {
+            clientX: rect.right,
+            clientY: rect.bottom + 4,
+            returnFocusElement: event.currentTarget,
+          });
+        }}
+      >
+        <DotsThree aria-hidden="true" size={19} weight="bold" />
+      </button>
     </header>
   );
 }
@@ -129,9 +204,19 @@ export function PaperCard({ data, isConnectable, selected }: NodeProps<CanvasFlo
       className="canvas-card--paper"
       isConnectable={isConnectable}
       label={`文献：${node.data.title}`}
+      nodeId={node.id}
+      onActivateNode={data.onActivateNode}
+      onRequestContextMenu={data.onRequestContextMenu}
       selected={selected}
     >
-      <CardHeader icon={<Article size={17} weight="duotone" />} label="文献卡片" />
+      <CardHeader
+        icon={<Article size={17} weight="duotone" />}
+        label="文献卡片"
+        menuLabel={`打开《${node.data.title}》的操作菜单`}
+        menuOpen={data.menuOpen}
+        nodeId={node.id}
+        onRequestContextMenu={data.onRequestContextMenu}
+      />
       <h2 className="canvas-card__title">{node.data.title}</h2>
       <p className="canvas-card__metadata">{metadata || "作者与年份待补全"}</p>
       {node.data.venue && <span className="canvas-card__venue">{node.data.venue}</span>}
@@ -163,9 +248,19 @@ export function ExcerptCard({ data, isConnectable, selected }: NodeProps<CanvasF
       className="canvas-card--excerpt"
       isConnectable={isConnectable}
       label={`摘录：${node.data.paperTitle} 第 ${node.data.pageIndex + 1} 页`}
+      nodeId={node.id}
+      onActivateNode={data.onActivateNode}
+      onRequestContextMenu={data.onRequestContextMenu}
       selected={selected}
     >
-      <CardHeader icon={<Quotes size={17} weight="duotone" />} label="文献摘录" />
+      <CardHeader
+        icon={<Quotes size={17} weight="duotone" />}
+        label="文献摘录"
+        menuLabel={`打开《${node.data.paperTitle}》摘录的操作菜单`}
+        menuOpen={data.menuOpen}
+        nodeId={node.id}
+        onRequestContextMenu={data.onRequestContextMenu}
+      />
       <p className="canvas-card__source" title={node.data.paperTitle}>
         {node.data.paperTitle}
       </p>
@@ -227,9 +322,19 @@ export function AISynthCard({ data, isConnectable, selected }: NodeProps<CanvasF
       className="canvas-card--ai"
       isConnectable={isConnectable}
       label={`AI 合成：${node.data.title}`}
+      nodeId={node.id}
+      onActivateNode={data.onActivateNode}
+      onRequestContextMenu={data.onRequestContextMenu}
       selected={selected}
     >
-      <CardHeader icon={<Sparkle size={17} weight="fill" />} label="AI 合成" />
+      <CardHeader
+        icon={<Sparkle size={17} weight="fill" />}
+        label="AI 合成"
+        menuLabel={`打开“${node.data.title}”的操作菜单`}
+        menuOpen={data.menuOpen}
+        nodeId={node.id}
+        onRequestContextMenu={data.onRequestContextMenu}
+      />
       <div className="canvas-card__ai-title-row">
         <h2 className="canvas-card__title">{node.data.title}</h2>
         {preview && <span className="canvas-card__preview-badge">预览</span>}
@@ -282,9 +387,19 @@ export function IdeaNoteCard({ data, isConnectable, selected }: NodeProps<Canvas
       className="canvas-card--idea"
       isConnectable={isConnectable}
       label={`研究笔记：${node.data.title || "未命名"}`}
+      nodeId={node.id}
+      onActivateNode={data.onActivateNode}
+      onRequestContextMenu={data.onRequestContextMenu}
       selected={selected}
     >
-      <CardHeader icon={<Lightbulb size={17} weight="duotone" />} label="研究想法" />
+      <CardHeader
+        icon={<Lightbulb size={17} weight="duotone" />}
+        label="研究想法"
+        menuLabel={`打开“${node.data.title || "未命名笔记"}”的操作菜单`}
+        menuOpen={data.menuOpen}
+        nodeId={node.id}
+        onRequestContextMenu={data.onRequestContextMenu}
+      />
       <h2 className="canvas-card__title">{node.data.title || "未命名笔记"}</h2>
       <MarkdownPreview markdown={node.data.contentMarkdown} />
       {node.data.hasEquations && <span className="canvas-card__equation-label">包含公式</span>}
@@ -302,7 +417,33 @@ export function GroupCard({ data, isConnectable, selected }: NodeProps<CanvasFlo
     <section
       className={`canvas-group-node${collapsed ? " canvas-group-node--collapsed" : ""}${selected ? " canvas-group-node--selected" : ""}`}
       aria-label={label}
+      data-canvas-node-id={node.id}
       tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          data.onActivateNode(node.id);
+          return;
+        }
+        if (
+          !isCanvasContextMenuShortcut({
+            composing: event.nativeEvent.isComposing,
+            key: event.key,
+            repeat: event.repeat,
+            shiftKey: event.shiftKey,
+          })
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        data.onRequestContextMenu(node.id, {
+          clientX: rect.right - 18,
+          clientY: rect.top + 22,
+          returnFocusElement: event.currentTarget,
+        });
+      }}
     >
       <ConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
       <div className="canvas-group-node__label">
@@ -333,6 +474,26 @@ export function GroupCard({ data, isConnectable, selected }: NodeProps<CanvasFlo
         <BoundingBox size={17} weight="duotone" />
         <span className="canvas-group-node__title">{node.data.title}</span>
         <small className="canvas-group-node__count">{data.groupChildCount} 张</small>
+        <button
+          type="button"
+          className="canvas-group-node__menu nodrag nopan"
+          data-canvas-interactive
+          aria-label={`打开分组“${node.data.title}”的操作菜单`}
+          aria-haspopup="menu"
+          aria-expanded={data.menuOpen}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            data.onRequestContextMenu(node.id, {
+              clientX: rect.right,
+              clientY: rect.bottom + 4,
+              returnFocusElement: event.currentTarget,
+            });
+          }}
+        >
+          <DotsThree aria-hidden="true" size={18} weight="bold" />
+        </button>
       </div>
     </section>
   );

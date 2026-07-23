@@ -6,7 +6,7 @@ import type {
   CanvasWorkspaceDocument,
 } from "@aurascholar/core";
 import { MAX_CANVAS_SYNTHESIS_SOURCES } from "@aurascholar/ai";
-import { ArrowLeft, SidebarSimple } from "@phosphor-icons/react";
+import { ArrowLeft } from "@phosphor-icons/react";
 import {
   Background,
   BackgroundVariant,
@@ -22,18 +22,27 @@ import {
   useStoreApi,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { canvasNodeTypes, type CanvasFlowNode } from "./CanvasCards";
+import { canvasNodeTypes, type CanvasFlowNode, type CanvasNodeMenuAnchor } from "./CanvasCards";
+import { CanvasNodeContextMenu } from "./CanvasNodeContextMenu";
 import { CanvasDock, type CanvasTool } from "./CanvasDock";
-import { CanvasInspector } from "./CanvasInspector";
-import { CANVAS_WORK_DRAG_TYPE, CanvasLibraryPanel } from "./CanvasLibraryPanel";
+import { CANVAS_WORK_DRAG_TYPE } from "./CanvasLibraryPanel";
 import {
   CanvasReaderDrawer,
   canvasReaderExcerptDragPayload,
   type CanvasReaderAnnotationPayload,
 } from "./CanvasReaderDrawer";
+import { CanvasToolbox } from "./CanvasToolbox";
 import { CanvasWorkspaceSwitcher } from "./CanvasWorkspaceSwitcher";
 import { canvasEdgeTypes, type RelationFlowEdge } from "./RelationEdge";
 import { SemanticLinkMenu } from "./SemanticLinkMenu";
+import {
+  CANVAS_INTERACTIVE_TARGET_SELECTOR,
+  clampCanvasMenuPoint,
+  primarySurfaceForCanvasNode,
+  shouldActivateCanvasNode,
+  type CanvasMenuPoint,
+  type CanvasToolboxPanel,
+} from "./canvas-interactions";
 import {
   CANVAS_EXCERPT_DRAG_MIME,
   CanvasExcerptDropError,
@@ -102,6 +111,12 @@ interface CanvasReaderTarget {
   workId: string;
 }
 
+interface CanvasNodeMenuState {
+  nodeId: string;
+  position: CanvasMenuPoint;
+  returnFocusElement: HTMLElement | null;
+}
+
 function absoluteNodePosition(node: CanvasNode, allNodes: CanvasNode[]): CanvasPoint {
   if (!node.groupId) return node.position;
   const group = allNodes.find(
@@ -163,9 +178,8 @@ function CanvasWorkspaceInner({
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(() => new Set());
   const selectedNodeIdsRef = useRef(selectedNodeIds);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(
-    () => !window.matchMedia("(max-width: 980px)").matches,
-  );
+  const [toolboxPanel, setToolboxPanel] = useState<CanvasToolboxPanel | null>(null);
+  const [nodeMenu, setNodeMenu] = useState<CanvasNodeMenuState | null>(null);
   const [synthesisBusy, setSynthesisBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [readerTarget, setReaderTarget] = useState<CanvasReaderTarget | null>(null);
@@ -179,6 +193,7 @@ function CanvasWorkspaceInner({
   const [semanticLinkReturnFocus, setSemanticLinkReturnFocus] = useState<HTMLElement | null>(null);
   const cancelledConnectionRef = useRef(false);
   const trustedReaderPayloadRef = useRef<string | null>(null);
+  const activeWorkspaceIdRef = useRef(document.workspaceId);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
 
@@ -196,16 +211,22 @@ function CanvasWorkspaceInner({
     setReaderTarget(null);
   }, []);
 
-  const openInspector = useCallback(() => {
-    if (readerTarget) return;
-    setDrawerOpen(true);
-  }, [readerTarget]);
+  const dismissNodeMenu = useCallback((restoreFocus: boolean) => {
+    setNodeMenu((current) => {
+      if (restoreFocus && current?.returnFocusElement?.isConnected) {
+        window.requestAnimationFrame(() => current.returnFocusElement?.focus());
+      }
+      return null;
+    });
+  }, []);
 
   const openNodeInReader = useCallback(
     (node: CanvasNode) => {
       trustedReaderPayloadRef.current = null;
       cancelFlowConnection();
       setPendingSemanticLink(null);
+      setNodeMenu(null);
+      setToolboxPanel(null);
       if (node.type === "paper") {
         setReaderTarget({
           workId: node.data.workId,
@@ -213,7 +234,6 @@ function CanvasWorkspaceInner({
           fromExcerpt: false,
           paperTitle: node.data.title,
         });
-        setDrawerOpen(false);
         return;
       }
       if (node.type !== "excerpt") return;
@@ -229,28 +249,99 @@ function CanvasWorkspaceInner({
         attachmentId: node.data.attachmentId,
         pageIndex: node.data.pageIndex,
       });
-      setDrawerOpen(false);
     },
     [cancelFlowConnection, document.nodes],
   );
 
-  const openWorkInReader = useCallback(
-    (workId: string) => {
-      const paper = document.nodes.find(
-        (node) => node.type === "paper" && node.data.workId === workId,
-      );
-      if (paper) {
-        openNodeInReader(paper);
+  const activateNode = useCallback(
+    (node: CanvasNode) => {
+      if (primarySurfaceForCanvasNode(node) === "reader") {
+        openNodeInReader(node);
         return;
       }
-      onOpenPaper(workId);
+      trustedReaderPayloadRef.current = null;
+      cancelFlowConnection();
+      setPendingSemanticLink(null);
+      setNodeMenu(null);
+      closeReader();
+      setToolboxPanel("details");
     },
-    [document.nodes, onOpenPaper, openNodeInReader],
+    [cancelFlowConnection, closeReader, openNodeInReader],
+  );
+
+  const activateNodeById = useCallback(
+    (nodeId: string) => {
+      const node = document.nodes.find((candidate) => candidate.id === nodeId);
+      if (!node) return;
+      setSelectedNodeIds(new Set([node.id]));
+      setSelectedEdgeId(null);
+      activateNode(node);
+    },
+    [activateNode, document.nodes],
+  );
+
+  const openNodeDetails = useCallback(
+    (nodeId: string) => {
+      const node = document.nodes.find((candidate) => candidate.id === nodeId);
+      if (!node) return;
+      trustedReaderPayloadRef.current = null;
+      closeReader();
+      setSelectedNodeIds(new Set([node.id]));
+      setSelectedEdgeId(null);
+      setToolboxPanel("details");
+    },
+    [closeReader, document.nodes],
+  );
+
+  const requestNodeContextMenu = useCallback(
+    (nodeId: string, anchor: CanvasNodeMenuAnchor) => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      cancelFlowConnection();
+      setPendingSemanticLink(null);
+      if (!selectedNodeIdsRef.current.has(nodeId)) {
+        setSelectedNodeIds(new Set([nodeId]));
+      }
+      setSelectedEdgeId(null);
+
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const nodeRect = anchor.returnFocusElement
+        .closest<HTMLElement>("[data-canvas-node-id]")
+        ?.getBoundingClientRect();
+      const clientX = anchor.clientX || nodeRect?.right || wrapperRect.left + 24;
+      const clientY = anchor.clientY || nodeRect?.top || wrapperRect.top + 24;
+      setNodeMenu({
+        nodeId,
+        position: clampCanvasMenuPoint(
+          { x: clientX - wrapperRect.left, y: clientY - wrapperRect.top },
+          { width: wrapperRect.width, height: wrapperRect.height },
+          { width: 238, height: 350 },
+        ),
+        returnFocusElement: anchor.returnFocusElement,
+      });
+    },
+    [cancelFlowConnection],
   );
 
   useEffect(() => {
     selectedNodeIdsRef.current = selectedNodeIds;
   }, [selectedNodeIds]);
+
+  useEffect(() => {
+    if (activeWorkspaceIdRef.current === document.workspaceId) return;
+    activeWorkspaceIdRef.current = document.workspaceId;
+    trustedReaderPayloadRef.current = null;
+    cancelledConnectionRef.current = true;
+    setSelectedNodeIds(new Set());
+    setSelectedEdgeId(null);
+    setNodeMenu(null);
+    setConnectionInProgress(false);
+    setPendingSemanticLink(null);
+    setSemanticCommitConfirmation(null);
+    setSemanticLinkReturnFocus(null);
+    setReaderTarget(null);
+    setToolboxPanel(null);
+  }, [document.workspaceId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -373,16 +464,16 @@ function CanvasWorkspaceInner({
       setSelectedEdgeId(null);
       cancelFlowConnection();
       setPendingSemanticLink(null);
-      openInspector();
       showNotice(
         collapsed
           ? `已折叠「${groupTitle}」，隐藏 ${childCount} 张卡片。`
           : `已展开「${groupTitle}」。`,
       );
     },
-    [cancelFlowConnection, document.nodes, onDocumentChange, openInspector, showNotice],
+    [cancelFlowConnection, document.nodes, onDocumentChange, showNotice],
   );
 
+  /* eslint-disable react-hooks/refs -- React Flow stores these callbacks as event handlers; it does not invoke them during render. */
   const flowNodes = useMemo<CanvasFlowNode[]>(() => {
     const excerptCounts = new Map<string, number>();
     const groupChildCounts = new Map<string, number>();
@@ -419,6 +510,7 @@ function CanvasWorkspaceInner({
         draggable: tool !== "pan",
         selectable: tool !== "pan",
         connectable: tool !== "pan" && !pendingSemanticLink,
+        focusable: false,
         selected: selectedNodeIds.has(node.id),
         zIndex: node.type === "group" ? 0 : 2,
         width: dimensions.width,
@@ -430,21 +522,28 @@ function CanvasWorkspaceInner({
         data: {
           canvasNode: node,
           groupChildCount: groupChildCounts.get(node.id) ?? 0,
+          menuOpen: nodeMenu?.nodeId === node.id,
+          onActivateNode: activateNodeById,
           onOpenPaper: () => openNodeInReader(node),
           onOpenExcerpt: () => openNodeInReader(node),
+          onRequestContextMenu: requestNodeContextMenu,
           onToggleGroup: setGroupCollapsed,
         },
       };
     });
   }, [
+    activateNodeById,
     document.nodes,
     hiddenNodeIds,
+    nodeMenu?.nodeId,
     openNodeInReader,
     pendingSemanticLink,
+    requestNodeContextMenu,
     selectedNodeIds,
     setGroupCollapsed,
     tool,
   ]);
+  /* eslint-enable react-hooks/refs */
 
   const flowEdges = useMemo<RelationFlowEdge[]>(
     () =>
@@ -546,7 +645,6 @@ function CanvasWorkspaceInner({
         });
         if (selectionChanges.some((change) => change.selected)) {
           setSelectedEdgeId(null);
-          openInspector();
         }
       }
       const positions = new Map<string, CanvasPoint>();
@@ -564,29 +662,25 @@ function CanvasWorkspaceInner({
         updatedAt: Date.now(),
       }));
     },
-    [onDocumentChange, openInspector],
+    [onDocumentChange],
   );
 
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange<RelationFlowEdge>[]) => {
-      const selectionChanges = changes.filter(
-        (change): change is Extract<EdgeChange<RelationFlowEdge>, { type: "select" }> =>
-          change.type === "select",
-      );
-      if (!selectionChanges.length) return;
-      const selected = selectionChanges.find((change) => change.selected);
-      if (selected) {
-        setSelectedNodeIds(new Set());
-        setSelectedEdgeId(selected.id);
-        openInspector();
-        return;
-      }
-      setSelectedEdgeId((current) =>
-        selectionChanges.some((change) => change.id === current) ? null : current,
-      );
-    },
-    [openInspector],
-  );
+  const onEdgesChange = useCallback((changes: EdgeChange<RelationFlowEdge>[]) => {
+    const selectionChanges = changes.filter(
+      (change): change is Extract<EdgeChange<RelationFlowEdge>, { type: "select" }> =>
+        change.type === "select",
+    );
+    if (!selectionChanges.length) return;
+    const selected = selectionChanges.find((change) => change.selected);
+    if (selected) {
+      setSelectedNodeIds(new Set());
+      setSelectedEdgeId(selected.id);
+      return;
+    }
+    setSelectedEdgeId((current) =>
+      selectionChanges.some((change) => change.id === current) ? null : current,
+    );
+  }, []);
 
   const addPaper = useCallback(
     (work: CanvasLibraryWork, position?: CanvasPoint) => {
@@ -613,10 +707,9 @@ function CanvasWorkspaceInner({
       }));
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
-      openInspector();
       showNotice(`已将《${work.title}》加入画布。`);
     },
-    [document.nodes, flow, onDocumentChange, openInspector, showNotice],
+    [document.nodes, flow, onDocumentChange, showNotice],
   );
 
   const addNote = useCallback(() => {
@@ -633,8 +726,9 @@ function CanvasWorkspaceInner({
     }));
     setSelectedNodeIds(new Set([node.id]));
     setSelectedEdgeId(null);
-    openInspector();
-  }, [flow, onDocumentChange, openInspector]);
+    closeReader();
+    setToolboxPanel("details");
+  }, [closeReader, flow, onDocumentChange]);
 
   const groupSelected = useCallback(() => {
     const selected = document.nodes.filter(
@@ -716,6 +810,13 @@ function CanvasWorkspaceInner({
         ungroup(nodeId);
         return;
       }
+      if (
+        target?.type === "paper" &&
+        readerTarget &&
+        (readerTarget.sourceNodeId === nodeId || readerTarget.workId === target.data.workId)
+      ) {
+        closeReader();
+      }
       onDocumentChange((current) => ({
         ...current,
         nodes: current.nodes.filter((node) => node.id !== nodeId),
@@ -727,7 +828,15 @@ function CanvasWorkspaceInner({
       setPendingSemanticLink(null);
       showNotice("卡片已从画布移除，原文献与批注未被删除。");
     },
-    [cancelFlowConnection, document.nodes, onDocumentChange, showNotice, ungroup],
+    [
+      cancelFlowConnection,
+      closeReader,
+      document.nodes,
+      onDocumentChange,
+      readerTarget,
+      showNotice,
+      ungroup,
+    ],
   );
 
   const deleteEdge = useCallback(
@@ -903,9 +1012,11 @@ function CanvasWorkspaceInner({
                 updatedAt: Date.now(),
               },
         );
+        if (activeWorkspaceIdRef.current !== sourceWorkspaceId) return;
         setSelectedNodeIds(new Set([completedNode.id]));
         setSelectedEdgeId(null);
-        openInspector();
+        closeReader();
+        setToolboxPanel("details");
         showNotice(result.preview ? "已生成未连接 AI 的交互预览。" : "AI 合成已完成。");
       } catch (error) {
         const message = error instanceof Error ? error.message : "AI 合成暂时不可用";
@@ -917,8 +1028,8 @@ function CanvasWorkspaceInner({
     [
       document.nodes,
       document.workspaceId,
+      closeReader,
       onDocumentChange,
-      openInspector,
       selectedNodeIds,
       showNotice,
       synthesisBusy,
@@ -1089,6 +1200,44 @@ function CanvasWorkspaceInner({
     [onDocumentChange],
   );
 
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      const node = document.nodes.find((candidate) => candidate.id === nodeId);
+      if (!node) return;
+      const position = absoluteNodePosition(node, document.nodes);
+      setSelectedNodeIds(new Set([node.id]));
+      setSelectedEdgeId(null);
+      void flow.setCenter(
+        position.x + node.dimensions.width / 2,
+        position.y + node.dimensions.height / 2,
+        { duration: 240, zoom: Math.max(document.viewport.zoom, 0.9) },
+      );
+      window.requestAnimationFrame(() => {
+        wrapperRef.current
+          ?.querySelector<HTMLElement>(`[data-canvas-node-id="${CSS.escape(node.id)}"]`)
+          ?.focus();
+      });
+    },
+    [document.nodes, document.viewport.zoom, flow],
+  );
+
+  const openNodeInFullReader = useCallback(
+    (node: CanvasNode) => {
+      if (node.type === "paper") {
+        onOpenPaper(node.data.workId);
+        return;
+      }
+      if (node.type !== "excerpt") return;
+      onOpenExcerpt(
+        node.data.workId,
+        node.data.annotationId,
+        node.data.pageIndex,
+        node.data.attachmentId,
+      );
+    },
+    [onOpenExcerpt, onOpenPaper],
+  );
+
   const selectedNode =
     selectedNodeIds.size === 1
       ? document.nodes.find((node) => selectedNodeIds.has(node.id)) || null
@@ -1109,6 +1258,9 @@ function CanvasWorkspaceInner({
     : null;
   const pendingSemanticTarget = pendingSemanticLink
     ? document.nodes.find((node) => node.id === pendingSemanticLink.targetId)
+    : null;
+  const nodeMenuTarget = nodeMenu
+    ? document.nodes.find((node) => node.id === nodeMenu.nodeId) || null
     : null;
 
   return (
@@ -1141,12 +1293,74 @@ function CanvasWorkspaceInner({
           onEdgesChange={onEdgesChange}
           onNodeClick={(event, node) => {
             const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+            const interactiveTarget =
+              event.target instanceof Element &&
+              Boolean(event.target.closest(CANVAS_INTERACTIVE_TARGET_SELECTOR));
+            const activationIntent = {
+              additive,
+              button: event.button,
+              connectionInProgress,
+              interactiveTarget,
+              pendingSemanticLink: Boolean(pendingSemanticLink),
+              tool,
+            };
+            if (additive) {
+              if (
+                tool !== "select" ||
+                event.button !== 0 ||
+                interactiveTarget ||
+                connectionInProgress ||
+                pendingSemanticLink
+              ) {
+                return;
+              }
+            } else if (!shouldActivateCanvasNode(activationIntent)) {
+              return;
+            }
             const next = additive ? new Set(selectedNodeIdsRef.current) : new Set<string>();
             if (additive && next.has(node.id)) next.delete(node.id);
             else next.add(node.id);
             setSelectedNodeIds(next);
             setSelectedEdgeId(null);
-            openInspector();
+            setNodeMenu(null);
+            if (!additive) activateNode(node.data.canvasNode);
+          }}
+          onNodeContextMenu={(event, node) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (connectionInProgress || pendingSemanticLink) {
+              cancelFlowConnection();
+              setPendingSemanticLink(null);
+              setNodeMenu(null);
+              showNotice("已取消关系连线。");
+              return;
+            }
+            if (tool !== "select") return;
+            const returnFocusElement =
+              event.target instanceof Element
+                ? event.target.closest<HTMLElement>("[data-canvas-node-id]")
+                : null;
+            if (!returnFocusElement) return;
+            requestNodeContextMenu(node.id, {
+              clientX: event.clientX,
+              clientY: event.clientY,
+              returnFocusElement,
+            });
+          }}
+          onEdgeClick={(event, edge) => {
+            if (
+              tool !== "select" ||
+              connectionInProgress ||
+              pendingSemanticLink ||
+              event.button !== 0
+            ) {
+              return;
+            }
+            setSelectedNodeIds(new Set());
+            setSelectedEdgeId(edge.id);
+            setNodeMenu(null);
+            closeReader();
+            setToolboxPanel("details");
           }}
           onConnect={connect}
           onConnectStart={startSemanticConnection}
@@ -1154,17 +1368,19 @@ function CanvasWorkspaceInner({
           onClickConnectStart={startSemanticConnection}
           onClickConnectEnd={finishSemanticConnection}
           onMoveEnd={onMoveEnd}
-          onNodeDoubleClick={(_event, node) => openNodeInReader(node.data.canvasNode)}
+          onMoveStart={() => dismissNodeMenu(false)}
+          onNodeDragStart={() => dismissNodeMenu(false)}
           onPaneClick={() => {
             cancelFlowConnection();
             setPendingSemanticLink(null);
+            dismissNodeMenu(false);
             setSelectedNodeIds(new Set());
             setSelectedEdgeId(null);
           }}
           defaultViewport={document.viewport}
           minZoom={0.2}
           maxZoom={2.4}
-          panOnDrag={tool === "pan" ? true : [1, 2]}
+          panOnDrag={tool === "pan" ? true : [1]}
           selectionOnDrag={tool === "select"}
           multiSelectionKeyCode="Shift"
           panActivationKeyCode="Space"
@@ -1200,11 +1416,44 @@ function CanvasWorkspaceInner({
             <small>{persistenceLabel}</small>
           </div>
 
-          <CanvasLibraryPanel
+          <CanvasToolbox
+            activePanel={toolboxPanel}
             works={works}
-            loading={libraryLoading}
+            libraryLoading={libraryLoading}
             addedWorkIds={addedWorkIds}
             onAddWork={addPaper}
+            nodes={document.nodes}
+            edges={document.edges}
+            node={selectedNode}
+            edge={selectedEdge}
+            groupChildCount={
+              selectedNode?.type === "group"
+                ? document.nodes.filter((node) => node.groupId === selectedNode.id).length
+                : 0
+            }
+            selectedCount={selectedNodeIds.size}
+            onPanelChange={(panel) => {
+              dismissNodeMenu(false);
+              if (panel === "details") closeReader();
+              setToolboxPanel(panel);
+            }}
+            onActivateNode={activateNode}
+            onUpdateNode={updateNode}
+            onUpdateEdge={updateEdge}
+            onDeleteNode={deleteNode}
+            onDeleteEdge={deleteEdge}
+            onUngroup={ungroup}
+            onSetGroupCollapsed={setGroupCollapsed}
+            onFitView={() => void flow.fitView({ duration: 260, padding: 0.18 })}
+            miniMap={
+              <MiniMap<CanvasFlowNode>
+                nodeColor={nodeMiniMapColor}
+                nodeStrokeWidth={2}
+                pannable
+                zoomable
+                maskColor="color-mix(in srgb, var(--color-bg) 78%, transparent)"
+              />
+            }
           />
 
           <CanvasDock
@@ -1232,51 +1481,10 @@ function CanvasWorkspaceInner({
             selectedCount={selectedNodeIds.size}
           />
 
-          <CanvasInspector
-            open={drawerOpen && !readerTarget}
-            onClose={() => setDrawerOpen(false)}
-            node={selectedNode}
-            edge={selectedEdge}
-            groupChildCount={
-              selectedNode?.type === "group"
-                ? document.nodes.filter((node) => node.groupId === selectedNode.id).length
-                : 0
-            }
-            selectedCount={selectedNodeIds.size}
-            onUpdateNode={updateNode}
-            onUpdateEdge={updateEdge}
-            onDeleteNode={deleteNode}
-            onDeleteEdge={deleteEdge}
-            onUngroup={ungroup}
-            onSetGroupCollapsed={setGroupCollapsed}
-            onOpenPaper={openWorkInReader}
-            miniMap={
-              <MiniMap<CanvasFlowNode>
-                nodeColor={nodeMiniMapColor}
-                nodeStrokeWidth={2}
-                pannable
-                zoomable
-                maskColor="color-mix(in srgb, var(--color-bg) 78%, transparent)"
-              />
-            }
-          />
-
-          {!drawerOpen && !readerTarget && (
-            <button
-              className="canvas-inspector-toggle"
-              type="button"
-              onClick={openInspector}
-              title="展开检查器"
-              aria-label="展开画布检查器"
-            >
-              <SidebarSimple size={19} weight="duotone" />
-            </button>
-          )}
-
           {document.nodes.length === 0 && (
             <div className="canvas-empty">
               <strong>把第一篇文献放到研究空间</strong>
-              <p>从左侧文献库点击或拖入文献，也可以先新建一张研究笔记。</p>
+              <p>从左侧工具箱打开文献库，点击或拖入文献；也可以先新建研究笔记。</p>
               <button type="button" onClick={addNote}>
                 新建研究笔记
               </button>
@@ -1291,6 +1499,22 @@ function CanvasWorkspaceInner({
             returnFocusElement={semanticLinkReturnFocus}
             onCancel={cancelSemanticLink}
             onSelect={commitSemanticLink}
+          />
+        )}
+        {nodeMenu && nodeMenuTarget && (
+          <CanvasNodeContextMenu
+            node={nodeMenuTarget}
+            position={nodeMenu.position}
+            canGroupSelection={canGroup}
+            onClose={dismissNodeMenu}
+            onActivate={activateNode}
+            onOpenDetails={openNodeDetails}
+            onOpenFullReader={openNodeInFullReader}
+            onGroupSelection={groupSelected}
+            onSetGroupCollapsed={setGroupCollapsed}
+            onUngroup={ungroup}
+            onFocusNode={focusNode}
+            onRemoveNode={deleteNode}
           />
         )}
         <div className="canvas-live-notice" aria-live="polite" role="status">
