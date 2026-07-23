@@ -43,7 +43,7 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 
 ### 🧠 Spatial canvas & AI synthesis
 
-- **Multiple independent canvases**: separate research projects into their own workspaces. The canvas header switcher creates, switches, and renames canvases; opening `/canvas` resumes the most recently used workspace at its RESTful `/canvas/:workspaceId` route. Existing default-canvas data is preserved as the first workspace; archive and delete controls are not yet exposed.
+- **Multiple independent canvases**: separate research projects into their own workspaces. The canvas header switcher creates and switches canvases, while each workspace's `...` menu supports rename and safe deletion. Deletion requires confirmation, reports the card count, and always preserves at least one canvas; Library papers and PDF sources are never removed. Opening `/canvas` resumes the most recently used workspace at its RESTful `/canvas/:workspaceId` route, and existing default-canvas data is preserved as the first workspace.
 - **Infinite research canvas**: place whole papers, PDF excerpts, researcher ideas, and AI synthesis results on one pannable, zoomable dot-grid canvas, with box selection, multi-select, relationships, collapsible groups, and a MiniMap.
 - **Five built-in node types**: add a paper from the library or reader before making any excerpt; arrange paper, excerpt, AI synthesis, Markdown/LaTeX idea-note, and logical group nodes.
 - **Relationships and source navigation**: connect evidence with citation, support, contradiction, extension, and custom relationships; open paper cards in the reader and jump from excerpts back to their anchored attachment, annotation, and page.
