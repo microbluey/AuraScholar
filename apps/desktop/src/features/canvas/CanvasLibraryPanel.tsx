@@ -1,4 +1,4 @@
-import { Books, CaretLeft, CaretRight, MagnifyingGlass, Plus } from "@phosphor-icons/react";
+import { MagnifyingGlass, Plus } from "@phosphor-icons/react";
 import { useMemo, useState, type DragEvent } from "react";
 import type { CanvasLibraryWork } from "./model";
 
@@ -17,7 +17,6 @@ export function CanvasLibraryPanel({
   onAddWork,
   works,
 }: CanvasLibraryPanelProps) {
-  const [collapsed, setCollapsed] = useState(() => window.matchMedia("(max-width: 760px)").matches);
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -41,84 +40,56 @@ export function CanvasLibraryPanel({
   };
 
   return (
-    <aside
-      className={`canvas-library${collapsed ? " canvas-library--collapsed" : ""}`}
-      aria-label="文献库面板"
-    >
-      <header className="canvas-library__header">
-        <div>
-          <Books size={19} weight="duotone" />
-          {!collapsed && <strong>文献库</strong>}
-        </div>
-        <button
-          type="button"
-          onClick={() => setCollapsed((value) => !value)}
-          title={collapsed ? "展开文献库" : "收起文献库"}
-          aria-label={collapsed ? "展开文献库" : "收起文献库"}
-        >
-          {collapsed ? (
-            <CaretRight size={17} weight="bold" />
-          ) : (
-            <CaretLeft size={17} weight="bold" />
-          )}
-        </button>
-      </header>
-
-      {!collapsed && (
-        <>
-          <label className="canvas-library__search">
-            <MagnifyingGlass size={17} aria-hidden="true" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索标题、作者或期刊"
-              aria-label="搜索可添加到画布的文献"
-            />
-          </label>
-          <p className="canvas-library__hint">点击添加，或拖到画布中的目标位置。</p>
-          <div className="canvas-library__list">
-            {loading ? (
-              <p className="canvas-library__empty" role="status">
-                正在读取文献库…
-              </p>
-            ) : filtered.length ? (
-              filtered.map((work) => {
-                const added = addedWorkIds.has(work.id);
-                return (
-                  <div
-                    className={`canvas-library__item${added ? " canvas-library__item--added" : ""}`}
-                    key={work.id}
-                    draggable={!added}
-                    onDragStart={(event) => beginDrag(event, work)}
-                    title={added ? "已在当前画布中" : "拖到画布中添加"}
-                  >
-                    <div>
-                      <strong>{work.title}</strong>
-                      <span>
-                        {[work.authorNames[0], work.year, work.venue].filter(Boolean).join(" · ") ||
-                          "元数据待补全"}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onAddWork(work)}
-                      disabled={added}
-                      aria-label={
-                        added ? `《${work.title}》已在画布` : `添加《${work.title}》到画布`
-                      }
-                      title={added ? "已添加" : "添加到画布"}
-                    >
-                      <Plus size={16} weight="bold" />
-                    </button>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="canvas-library__empty">没有匹配的文献。</p>
-            )}
-          </div>
-        </>
-      )}
-    </aside>
+    <div className="canvas-library" aria-label="文献库面板">
+      <label className="canvas-library__search">
+        <MagnifyingGlass size={17} aria-hidden="true" />
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索标题、作者或期刊"
+          aria-label="搜索可添加到画布的文献"
+        />
+      </label>
+      <p className="canvas-library__hint">点击添加，或拖到画布中的目标位置。</p>
+      <div className="canvas-library__list">
+        {loading ? (
+          <p className="canvas-library__empty" role="status">
+            正在读取文献库…
+          </p>
+        ) : filtered.length ? (
+          filtered.map((work) => {
+            const added = addedWorkIds.has(work.id);
+            return (
+              <div
+                className={`canvas-library__item${added ? " canvas-library__item--added" : ""}`}
+                key={work.id}
+                draggable={!added}
+                onDragStart={(event) => beginDrag(event, work)}
+                title={added ? "已在当前画布中" : "拖到画布中添加"}
+              >
+                <div>
+                  <strong>{work.title}</strong>
+                  <span>
+                    {[work.authorNames[0], work.year, work.venue].filter(Boolean).join(" · ") ||
+                      "元数据待补全"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onAddWork(work)}
+                  disabled={added}
+                  aria-label={added ? `《${work.title}》已在画布` : `添加《${work.title}》到画布`}
+                  title={added ? "已添加" : "添加到画布"}
+                >
+                  <Plus size={16} weight="bold" />
+                </button>
+              </div>
+            );
+          })
+        ) : (
+          <p className="canvas-library__empty">没有匹配的文献。</p>
+        )}
+      </div>
+    </div>
   );
 }
