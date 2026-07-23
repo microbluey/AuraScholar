@@ -32,13 +32,48 @@ export interface CanvasFlowNodeData extends Record<string, unknown> {
 
 export type CanvasFlowNode = Node<CanvasFlowNodeData, CanvasNodeType>;
 
-function ConnectionHandles() {
+const CONNECTION_HANDLES = [
+  { id: "link-left", label: "左侧", position: Position.Left },
+  { id: "link-top", label: "上侧", position: Position.Top },
+  { id: "link-right", label: "右侧", position: Position.Right },
+  { id: "link-bottom", label: "下侧", position: Position.Bottom },
+] as const;
+
+function ConnectionHandles({
+  isConnectable,
+  nodeLabel,
+}: {
+  isConnectable: boolean;
+  nodeLabel: string;
+}) {
   return (
     <>
-      <Handle id="target-left" type="target" position={Position.Left} />
-      <Handle id="target-top" type="target" position={Position.Top} />
-      <Handle id="source-right" type="source" position={Position.Right} />
-      <Handle id="source-bottom" type="source" position={Position.Bottom} />
+      {CONNECTION_HANDLES.map((handle) => {
+        const keyboardHandle = handle.id === "link-right";
+        return (
+          <Handle
+            key={handle.id}
+            id={handle.id}
+            type="source"
+            position={handle.position}
+            isConnectable={isConnectable}
+            isConnectableStart={isConnectable}
+            isConnectableEnd={isConnectable}
+            role={isConnectable && keyboardHandle ? "button" : undefined}
+            tabIndex={isConnectable && keyboardHandle ? 0 : -1}
+            aria-hidden={!isConnectable || !keyboardHandle}
+            aria-label={`关系连接点：${nodeLabel}`}
+            title={`从${handle.label}拖动建立关系`}
+            onKeyDown={(event) => {
+              if (!isConnectable || !keyboardHandle) return;
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.click();
+            }}
+          />
+        );
+      })}
     </>
   );
 }
@@ -46,11 +81,13 @@ function ConnectionHandles() {
 function CardShell({
   children,
   className = "",
+  isConnectable,
   label,
   selected,
 }: {
   children: ReactNode;
   className?: string;
+  isConnectable: boolean;
   label: string;
   selected: boolean;
 }) {
@@ -60,7 +97,7 @@ function CardShell({
       aria-label={label}
       tabIndex={0}
     >
-      <ConnectionHandles />
+      <ConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
       {children}
     </article>
   );
@@ -83,13 +120,14 @@ function compactAuthors(authors: string[]): string {
   return `${authors.slice(0, 3).join(", ")} 等`;
 }
 
-export function PaperCard({ data, selected }: NodeProps<CanvasFlowNode>) {
+export function PaperCard({ data, isConnectable, selected }: NodeProps<CanvasFlowNode>) {
   const node = data.canvasNode;
   if (node.type !== "paper") return null;
   const metadata = [compactAuthors(node.data.authors), node.data.year].filter(Boolean).join(" · ");
   return (
     <CardShell
       className="canvas-card--paper"
+      isConnectable={isConnectable}
       label={`文献：${node.data.title}`}
       selected={selected}
     >
@@ -117,12 +155,13 @@ export function PaperCard({ data, selected }: NodeProps<CanvasFlowNode>) {
   );
 }
 
-export function ExcerptCard({ data, selected }: NodeProps<CanvasFlowNode>) {
+export function ExcerptCard({ data, isConnectable, selected }: NodeProps<CanvasFlowNode>) {
   const node = data.canvasNode;
   if (node.type !== "excerpt") return null;
   return (
     <CardShell
       className="canvas-card--excerpt"
+      isConnectable={isConnectable}
       label={`摘录：${node.data.paperTitle} 第 ${node.data.pageIndex + 1} 页`}
       selected={selected}
     >
@@ -179,13 +218,14 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
   );
 }
 
-export function AISynthCard({ data, selected }: NodeProps<CanvasFlowNode>) {
+export function AISynthCard({ data, isConnectable, selected }: NodeProps<CanvasFlowNode>) {
   const node = data.canvasNode;
   if (node.type !== "ai-synth") return null;
   const preview = node.data.modelName === "preview" || node.data.modelName === "preview-fallback";
   return (
     <CardShell
       className="canvas-card--ai"
+      isConnectable={isConnectable}
       label={`AI 合成：${node.data.title}`}
       selected={selected}
     >
@@ -234,12 +274,13 @@ export function AISynthCard({ data, selected }: NodeProps<CanvasFlowNode>) {
   );
 }
 
-export function IdeaNoteCard({ data, selected }: NodeProps<CanvasFlowNode>) {
+export function IdeaNoteCard({ data, isConnectable, selected }: NodeProps<CanvasFlowNode>) {
   const node = data.canvasNode;
   if (node.type !== "idea-note") return null;
   return (
     <CardShell
       className="canvas-card--idea"
+      isConnectable={isConnectable}
       label={`研究笔记：${node.data.title || "未命名"}`}
       selected={selected}
     >
@@ -251,18 +292,19 @@ export function IdeaNoteCard({ data, selected }: NodeProps<CanvasFlowNode>) {
   );
 }
 
-export function GroupCard({ data, selected }: NodeProps<CanvasFlowNode>) {
+export function GroupCard({ data, isConnectable, selected }: NodeProps<CanvasFlowNode>) {
   const node = data.canvasNode;
   if (node.type !== "group") return null;
   const collapsed = node.data.collapsed === true;
   const action = collapsed ? "展开" : "折叠";
+  const label = `分组：${node.data.title}，${collapsed ? "已折叠" : "已展开"}，${data.groupChildCount} 张卡片`;
   return (
     <section
       className={`canvas-group-node${collapsed ? " canvas-group-node--collapsed" : ""}${selected ? " canvas-group-node--selected" : ""}`}
-      aria-label={`分组：${node.data.title}，${collapsed ? "已折叠" : "已展开"}，${data.groupChildCount} 张卡片`}
+      aria-label={label}
       tabIndex={0}
     >
-      <ConnectionHandles />
+      <ConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
       <div className="canvas-group-node__label">
         <button
           className="canvas-group-node__toggle nodrag nopan"

@@ -71,6 +71,8 @@
 .canvas-workspace {
   --canvas-grid-dot: color-mix(in srgb, var(--color-text-faint) 55%, transparent);
   position: relative;
+  container-name: canvas-workspace;
+  container-type: inline-size;
   width: 100%;
   height: 100%;
   min-height: 560px;
@@ -626,17 +628,52 @@
 }
 
 .canvas-workspace .react-flow__handle {
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--color-surface-raised);
-  background: var(--color-accent);
+  z-index: 4;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
   opacity: 0;
   transition: opacity 120ms ease;
 }
 
-.canvas-workspace--tool-connect .react-flow__handle,
-.react-flow__node:hover .react-flow__handle {
+.canvas-workspace .react-flow__handle::after {
+  position: absolute;
+  inset: 6px;
+  border: 2px solid var(--color-surface-raised);
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 1px 5px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  content: "";
+  transition:
+    inset 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.canvas-workspace--tool-connect .react-flow__handle.connectable,
+.canvas-workspace--connecting .react-flow__handle.connectable,
+.canvas-workspace:not(.canvas-workspace--tool-pan)
+  .react-flow__node:hover
+  .react-flow__handle.connectable,
+.canvas-workspace:not(.canvas-workspace--tool-pan)
+  .react-flow__node:focus-within
+  .react-flow__handle.connectable,
+.canvas-workspace:not(.canvas-workspace--tool-pan)
+  .react-flow__node.selected
+  .react-flow__handle.connectable {
   opacity: 1;
+}
+
+.canvas-workspace .react-flow__handle:focus-visible {
+  opacity: 1;
+  outline: none;
+}
+
+.canvas-workspace .react-flow__handle:focus-visible::after {
+  inset: 4px;
+  box-shadow:
+    0 0 0 3px var(--color-surface-raised),
+    0 0 0 5px var(--color-accent);
 }
 
 .canvas-relation-edge {
@@ -645,6 +682,156 @@
 
 .canvas-relation-edge--selected {
   stroke: var(--color-accent) !important;
+}
+
+.canvas-relation-edge--pending {
+  pointer-events: none;
+}
+
+.canvas-semantic-link-menu {
+  position: absolute;
+  top: clamp(70px, var(--canvas-semantic-link-y), calc(100% - 116px));
+  left: clamp(230px, var(--canvas-semantic-link-x), calc(100% - 230px));
+  z-index: 16;
+  display: grid;
+  width: max-content;
+  max-width: min(460px, calc(100% - 32px));
+  gap: 9px;
+  padding: 10px;
+  border: var(--border-width) solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface-raised) 97%, transparent);
+  box-shadow:
+    0 18px 48px color-mix(in srgb, var(--color-text) 16%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 8%, transparent);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+}
+
+.canvas-semantic-link-menu__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.canvas-semantic-link-menu__header > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.canvas-semantic-link-menu__header strong {
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.canvas-semantic-link-menu__header span {
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-semantic-link-menu__close {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.canvas-semantic-link-menu__close:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.canvas-semantic-link-menu__options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(82px, 1fr));
+  gap: 6px;
+}
+
+.canvas-semantic-link-menu__option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  min-height: 48px;
+  padding: 7px 9px;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 11px;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.canvas-semantic-link-menu__option:hover,
+.canvas-semantic-link-menu__option:focus-visible {
+  border-color: color-mix(in srgb, currentColor 42%, var(--color-border));
+  background: color-mix(in srgb, currentColor 6%, var(--color-surface));
+}
+
+.canvas-semantic-link-menu__option:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.canvas-semantic-link-menu__option kbd {
+  display: inline-grid;
+  grid-row: 1 / span 2;
+  width: 22px;
+  height: 22px;
+  margin-right: 7px;
+  place-items: center;
+  border: var(--border-width) solid currentColor;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 760;
+  opacity: 0.72;
+}
+
+.canvas-semantic-link-menu__option span {
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.canvas-semantic-link-menu__option strong {
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.canvas-semantic-link-menu__option--cites {
+  color: var(--color-accent);
+}
+
+.canvas-semantic-link-menu__option--supports,
+.canvas-semantic-link-menu__option--extends {
+  color: var(--color-success);
+}
+
+.canvas-semantic-link-menu__option--contradicts {
+  color: var(--color-danger);
+}
+
+.canvas-semantic-link-menu > small {
+  color: var(--color-text-faint);
+  font-size: 9px;
+  text-align: center;
 }
 
 .canvas-edge-label {
@@ -677,6 +864,36 @@
 
 .canvas-edge-label--derived-from {
   color: var(--color-ai);
+}
+
+@container canvas-workspace (max-width: 520px) {
+  .canvas-semantic-link-menu {
+    top: clamp(98px, var(--canvas-semantic-link-y), calc(100% - 98px));
+    left: clamp(147px, var(--canvas-semantic-link-x), calc(100% - 147px));
+    width: min(270px, calc(100% - 24px));
+  }
+
+  .canvas-semantic-link-menu__options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container canvas-workspace (max-width: 310px) {
+  .canvas-semantic-link-menu {
+    left: 50%;
+  }
+}
+
+@media (pointer: coarse) {
+  .canvas-workspace:not(.canvas-workspace--tool-pan) .react-flow__handle.connectable {
+    width: 36px;
+    height: 36px;
+    opacity: 0.78;
+  }
+
+  .canvas-workspace:not(.canvas-workspace--tool-pan) .react-flow__handle.connectable::after {
+    inset: 12px;
+  }
 }
 
 .canvas-workspace__meta {
