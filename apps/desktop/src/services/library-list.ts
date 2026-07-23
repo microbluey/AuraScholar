@@ -2,6 +2,8 @@ import type { WorkWithAuthors } from "@aurascholar/db/work-list";
 import {
   listDeletedWorks as listDbDeletedWorks,
   listWorks as listDbWorks,
+  parseWorkMetadataSearch,
+  searchWorksByMetadata as searchDbWorksByMetadata,
 } from "@aurascholar/db/work-list";
 import { getDb } from "./aura-db";
 
@@ -21,3 +23,10 @@ export async function listDeletedWorks(
   const db = await getDb();
   return listDbDeletedWorks(db, { search, limit });
 }
+
+export async function searchWorksByMetadata(search: string, limit = 40) {
+  const db = await getDb();
+  return searchDbWorksByMetadata(db, search, limit);
+}
+
+export { parseWorkMetadataSearch };

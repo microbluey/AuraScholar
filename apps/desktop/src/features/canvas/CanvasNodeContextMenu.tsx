@@ -7,11 +7,13 @@ import {
   CornersIn,
   NotePencil,
   Trash,
+  TreeStructure,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { CanvasMenuPoint } from "./canvas-interactions";
 
 interface CanvasNodeContextMenuProps {
+  canArrangeSelection: boolean;
   canGroupSelection: boolean;
   node: CanvasNode;
   onActivate: (node: CanvasNode) => void;
@@ -20,6 +22,7 @@ interface CanvasNodeContextMenuProps {
   onGroupSelection: () => void;
   onOpenDetails: (nodeId: string) => void;
   onOpenFullReader: (node: CanvasNode) => void;
+  onOpenLayoutMenu: () => void;
   onRemoveNode: (nodeId: string) => void;
   onSetGroupCollapsed: (groupId: string, collapsed: boolean) => void;
   onUngroup: (groupId: string) => void;
@@ -54,6 +57,7 @@ function MenuAction({
 }
 
 export function CanvasNodeContextMenu({
+  canArrangeSelection,
   canGroupSelection,
   node,
   onActivate,
@@ -62,6 +66,7 @@ export function CanvasNodeContextMenu({
   onGroupSelection,
   onOpenDetails,
   onOpenFullReader,
+  onOpenLayoutMenu,
   onRemoveNode,
   onSetGroupCollapsed,
   onUngroup,
@@ -175,6 +180,16 @@ export function CanvasNodeContextMenu({
           onSelect={() => run(onGroupSelection)}
         >
           将所选卡片编组
+        </MenuAction>
+      )}
+
+      {canArrangeSelection && (
+        <MenuAction
+          action="arrange"
+          icon={<TreeStructure size={17} weight="duotone" />}
+          onSelect={() => run(onOpenLayoutMenu)}
+        >
+          整理所选文献…
         </MenuAction>
       )}
 

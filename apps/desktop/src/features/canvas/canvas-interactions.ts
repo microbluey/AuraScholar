@@ -1,4 +1,5 @@
 import type { CanvasNode, CanvasWorkspaceDocument } from "@aurascholar/core";
+import { isApplePlatform } from "../../shortcut-labels";
 import type { CanvasTool } from "./CanvasDock";
 
 export type CanvasToolboxPanel = "library" | "details" | "overview";
@@ -61,6 +62,38 @@ export function isCanvasSelectionDeleteShortcut(input: {
     !input.repeat &&
     (input.key === "Delete" || input.key === "Backspace")
   );
+}
+
+export function isCanvasLayoutShortcut(
+  input: {
+    altKey: boolean;
+    blockedSurface: boolean;
+    composing: boolean;
+    ctrlKey: boolean;
+    defaultPrevented: boolean;
+    key: string;
+    metaKey: boolean;
+    repeat: boolean;
+    shiftKey: boolean;
+    withinCanvas: boolean;
+  },
+  platform = globalThis.navigator?.platform ?? "",
+): boolean {
+  if (
+    !input.withinCanvas ||
+    input.blockedSurface ||
+    input.composing ||
+    input.defaultPrevented ||
+    input.repeat ||
+    input.altKey ||
+    !input.shiftKey ||
+    input.key.toLocaleLowerCase() !== "l"
+  ) {
+    return false;
+  }
+  return isApplePlatform(platform)
+    ? input.metaKey && !input.ctrlKey
+    : input.ctrlKey && !input.metaKey;
 }
 
 export interface CanvasSelectionDeletionPlan {

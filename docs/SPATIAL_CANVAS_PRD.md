@@ -24,6 +24,10 @@
 
 画布顶部显示当前白板名称，并提供新建与切换；列表项 hover/focus 后出现 `...` 菜单，可就地重命名或安全删除。在“选择”模式下 hover/focus 卡片会显示上、下、左、右四个磁力连接点，用户无需先切换到底部“连接”工具即可拖出关系。折叠分组只隐藏组内卡片与内部连线，不会删除内容；连接组内卡片与外部节点的关系会代理到折叠后的组头。
 
+画布内按 `Cmd` / `Ctrl` + `K` 会打开专用指令面板，可按题名、作者、期刊、年份或标签检索完整文献库，并在最近一次画布指针位置创建 `PaperNode`。如果文献已经位于当前白板，执行后会定位已有节点；节点处于折叠分组时会先自动展开分组，不会创建重复卡片。输入 `/ai` 只提供方法论对比、分歧分析、研究空白和简明综述四种现有合成操作，不提供自由 AI 对话。
+
+选择同一层级的至少两张 `PaperNode` 后，可从 Dock、多选右键菜单或 `Cmd` / `Ctrl` + `Shift` + `L` 打开自动整理菜单：时间轴按发表年份排列，引用树则按所选节点间的 `cites` 关系排列。引用树只在所选文献间至少存在一条 `cites` 关系时可用；循环引用会作为同一强连通分量保留在同一列，避免循环导致布局失败。根节点与分组内节点不会混合排布。
+
 主要流程如下：
 
 1. 主导航进入 `/canvas` 时，页面会以 `replace` 方式转到最近使用的 `/canvas/:workspaceId`；直接访问具名路由可打开对应白板。
@@ -39,6 +43,8 @@
 11. 选择多张卡片后可放入分组，或从文献/摘录生成 AI 合成卡。
 12. 新建 Idea Note，在画布中记录 Markdown 与 LaTeX 研究笔记。
 13. 画布聚焦且不在输入、弹窗/菜单或阅读器上下文时，可用 `Delete` / `Backspace` 删除选中的节点或关系。删除分组只移除外壳并保留子卡片；删除其他画布卡片也只删除当前白板中的摆放及其关系，不会删除原文献、原批注或 PDF。
+14. 按 `Cmd` / `Ctrl` + `K` 检索完整文献库并在最近指针位置放入文献；选择已经加入当前白板的结果会展开其折叠分组并定位已有节点。输入 `/ai` 可直接选择四种现有合成操作。
+15. 选择同一层级的至少两张文献卡，通过 Dock、多选右键菜单或 `Cmd` / `Ctrl` + `Shift` + `L` 按年份时间轴或引用树整理；引用树要求所选文献之间存在 `cites` 关系，循环引用节点排列在同一列。
 
 ## 3. 节点与关系模型
 
@@ -176,7 +182,8 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - 空间白板支持整库 JSON 备份，但尚未加入 WebDAV 行级同步。
 - JSON 备份不携带 PDF 二进制；恢复后附件需要重新挂载。
 - 同屏阅读器的本地 PDF 加载与高亮摘录只在桌面应用中可用；浏览器预览不读取本机 PDF。
-- 当前 P0 尚未实现 `Cmd + K` 指令面板或时间轴/引用树自动布局。
+- 画布指令面板中的 `/ai` 只调用四种已有合成模式，不提供自由对话或任意 Prompt 执行。
+- 自动整理只作用于同一层级的至少两张文献卡；引用树只使用所选节点之间已经存在的 `cites` 关系。
 
 ## 9. 关键实现位置
 
@@ -188,6 +195,8 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - 画布 UI：`apps/desktop/src/features/canvas/`
 - 底部统一功能栏与左侧内容面板：`apps/desktop/src/features/canvas/CanvasDock.tsx`、`apps/desktop/src/features/canvas/CanvasToolbox.tsx`、`apps/desktop/src/features/canvas/CanvasDetailsPanel.tsx`
 - 节点上下文菜单与交互判定：`apps/desktop/src/features/canvas/CanvasNodeContextMenu.tsx`、`apps/desktop/src/features/canvas/canvas-interactions.ts`
+- 画布指令面板与全库检索：`apps/desktop/src/features/canvas/CanvasCommandPalette.tsx`、`apps/desktop/src/features/canvas/canvas-command.ts`、`packages/db/src/work-list.ts`
+- 时间轴与引用树整理：`packages/core/src/canvas/layout.ts`
 - 快捷语义连线：`apps/desktop/src/features/canvas/semantic-link.ts`、`apps/desktop/src/features/canvas/SemanticLinkMenu.tsx`
 - 同屏阅读器：`apps/desktop/src/features/canvas/CanvasReaderDrawer.tsx`
 - 摘录拖放与节点创建：`apps/desktop/src/features/canvas/canvas-excerpt-dnd.ts`、`apps/desktop/src/features/canvas/excerpt-node.ts`
