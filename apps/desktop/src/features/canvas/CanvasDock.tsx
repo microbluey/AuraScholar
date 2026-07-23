@@ -1,18 +1,22 @@
-import type { AISynthesisType } from "@aurascholar/core";
+import type { AISynthesisType, CanvasLayoutMode } from "@aurascholar/core";
 import {
   Books,
   BoundingBox,
+  CalendarDots,
   Compass,
   CornersOut,
   CursorClick,
   Hand,
   Link,
+  MagnifyingGlass,
   Minus,
   NotePencil,
   Plus,
   Sparkle,
+  TreeStructure,
 } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { isApplePlatform, shortcutLabel } from "../../shortcut-labels";
 import type { CanvasToolboxPanel } from "./canvas-interactions";
 import { SYNTHESIS_LABELS } from "./model";
 
@@ -20,11 +24,17 @@ export type CanvasTool = "select" | "pan" | "connect";
 
 interface CanvasDockProps {
   activePanel: CanvasToolboxPanel | null;
+  canCitationLayout: boolean;
   canGroup: boolean;
+  canLayout: boolean;
   canSynthesize: boolean;
+  layoutOpen: boolean;
   onAddNote: () => void;
   onFitView: () => void;
   onGroup: () => void;
+  onLayout: (mode: CanvasLayoutMode) => void;
+  onLayoutOpenChange: (open: boolean) => void;
+  onOpenCommand: () => void;
   onPanelChange: (panel: CanvasToolboxPanel | null) => void;
   onSynthesize: (type: AISynthesisType) => void;
   onToolChange: (tool: CanvasTool) => void;
@@ -41,11 +51,17 @@ function toolClass(active: boolean): string {
 
 export function CanvasDock({
   activePanel,
+  canCitationLayout,
   canGroup,
+  canLayout,
   canSynthesize,
+  layoutOpen,
   onAddNote,
   onFitView,
   onGroup,
+  onLayout,
+  onLayoutOpenChange,
+  onOpenCommand,
   onPanelChange,
   onSynthesize,
   onToolChange,
@@ -56,15 +72,25 @@ export function CanvasDock({
   tool,
 }: CanvasDockProps) {
   const [synthesisOpen, setSynthesisOpen] = useState(false);
+  const firstLayoutActionRef = useRef<HTMLButtonElement>(null);
+  const layoutShortcutLabel = isApplePlatform() ? "⌘ ⇧ L" : "Ctrl + Shift + L";
 
   useEffect(() => {
-    if (!synthesisOpen) return;
+    if (!synthesisOpen && !layoutOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSynthesisOpen(false);
+      if (event.key !== "Escape") return;
+      setSynthesisOpen(false);
+      onLayoutOpenChange(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [synthesisOpen]);
+  }, [layoutOpen, onLayoutOpenChange, synthesisOpen]);
+
+  useEffect(() => {
+    if (!layoutOpen) return;
+    const frame = window.requestAnimationFrame(() => firstLayoutActionRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [layoutOpen]);
 
   return (
     <div className="canvas-dock" role="toolbar" aria-label="空间白板工具栏">
@@ -109,6 +135,16 @@ export function CanvasDock({
           <span>导航</span>
         </button>
       </div>
+
+      <button
+        className="canvas-dock__button"
+        type="button"
+        onClick={onOpenCommand}
+        title={`快速加入文献或运行 AI 命令（${shortcutLabel("K")}）`}
+      >
+        <MagnifyingGlass size={20} weight="duotone" />
+        <span>快速加入</span>
+      </button>
 
       <div className="canvas-dock__segment">
         <button
@@ -193,11 +229,74 @@ export function CanvasDock({
         <span>连接</span>
       </button>
 
+      <div className="canvas-dock__layout">
+        <button
+          className={toolClass(layoutOpen)}
+          type="button"
+          onClick={() => {
+            setSynthesisOpen(false);
+            onLayoutOpenChange(!layoutOpen);
+          }}
+          disabled={!canLayout}
+          aria-expanded={layoutOpen}
+          title={
+            canLayout
+              ? `整理所选文献（${layoutShortcutLabel}）`
+              : "选择同一层级中的至少两张文献卡片"
+          }
+        >
+          <TreeStructure size={20} weight="duotone" />
+          <span>整理</span>
+        </button>
+        {layoutOpen && canLayout && (
+          <div
+            className="canvas-dock__menu canvas-dock__menu--layout"
+            role="menu"
+            aria-label="整理方式"
+          >
+            <button
+              ref={firstLayoutActionRef}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onLayoutOpenChange(false);
+                onLayout("timeline");
+              }}
+            >
+              <CalendarDots size={17} weight="duotone" />
+              <span>
+                <strong>按发表年份排列</strong>
+                <small>从早到晚生成时间轴</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canCitationLayout}
+              title={canCitationLayout ? "被引论文在左，衍生论文在右" : "所选文献间没有引用关系"}
+              onClick={() => {
+                onLayoutOpenChange(false);
+                onLayout("citation-tree");
+              }}
+            >
+              <TreeStructure size={17} weight="duotone" />
+              <span>
+                <strong>按引用树排列</strong>
+                <small>被引在左，衍生在右</small>
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="canvas-dock__synthesis">
         <button
           className="canvas-dock__button canvas-dock__button--ai"
           type="button"
-          onClick={() => setSynthesisOpen((open) => !open)}
+          onClick={() => {
+            onLayoutOpenChange(false);
+            setSynthesisOpen((open) => !open);
+          }}
           disabled={!canSynthesize}
           aria-expanded={synthesisOpen}
           title={synthesisHint}

@@ -13,6 +13,7 @@ import { Graph } from "@phosphor-icons/react";
 import { ThemeToggle } from "@aurascholar/ui";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { useModalFocusTrap } from "./components/useModalFocusTrap";
+import { CANVAS_COMMAND_PALETTE_REQUEST_EVENT } from "./features/canvas/canvas-command";
 import { isImeComposing } from "./keyboard";
 import { isPlatformShortcut, shortcutLabel } from "./shortcut-labels";
 import { readLocalStorageJson } from "./storage";
@@ -154,6 +155,42 @@ const NAV_DESCRIPTIONS: Record<(typeof NAV)[number]["to"], string> = {
 const AI_UNCONFIGURED_LABEL = "AI 未配置";
 const AI_CHECKING_LABEL = "AI 检查中";
 const AI_PREVIEW_MODEL_LABEL = "deepseek-chat";
+
+type AppCommandShortcutAction = "close-global" | "open-canvas" | "open-global";
+
+interface AppCommandShortcutEvent {
+  altKey?: boolean;
+  ctrlKey?: boolean;
+  defaultPrevented?: boolean;
+  isComposing?: boolean;
+  key?: string;
+  keyCode?: number;
+  metaKey?: boolean;
+  nativeEvent?: { isComposing?: boolean };
+  repeat?: boolean;
+  shiftKey?: boolean;
+}
+
+export function resolveAppCommandShortcut({
+  blockingModal = false,
+  commandOpen,
+  event,
+  pathname,
+  platform,
+}: {
+  blockingModal?: boolean;
+  commandOpen: boolean;
+  event: AppCommandShortcutEvent;
+  pathname: string;
+  platform?: string;
+}): AppCommandShortcutAction | null {
+  if (event.defaultPrevented || event.repeat || isImeComposing(event)) return null;
+  if (!isPlatformShortcut(event, "k", platform)) return null;
+  if (commandOpen) return "close-global";
+  if (blockingModal) return null;
+  if (pathname === "/canvas" || pathname.startsWith("/canvas/")) return "open-canvas";
+  return "open-global";
+}
 
 function readStoredAiModelLabel(): string {
   const parsed = readLocalStorageJson<{ model?: unknown } | null>("ai-settings", null);
@@ -746,14 +783,32 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isPlatformShortcut(event, "k")) {
-        event.preventDefault();
-        toggleCommandPalette();
+      const modalRoots = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-modal-root='true']"),
+      );
+      const topModal = modalRoots.at(-1);
+      const action = resolveAppCommandShortcut({
+        blockingModal: Boolean(topModal && topModal.dataset.canvasCommandPalette !== "true"),
+        commandOpen,
+        event,
+        pathname: location.pathname,
+      });
+      if (!action) return;
+
+      event.preventDefault();
+      if (action === "open-canvas") {
+        window.dispatchEvent(
+          new CustomEvent(CANVAS_COMMAND_PALETTE_REQUEST_EVENT, {
+            detail: { source: "keyboard" },
+          }),
+        );
+        return;
       }
+      toggleCommandPalette();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [toggleCommandPalette]);
+  }, [commandOpen, location.pathname, toggleCommandPalette]);
 
   useEffect(() => {
     const onLibraryUpdated = () => void refreshLibraryStats();

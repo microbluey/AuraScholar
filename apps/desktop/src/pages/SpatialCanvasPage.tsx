@@ -41,7 +41,11 @@ import {
 import { getDb } from "../services/aura-db";
 import { synthesizeCanvasSelection as desktopSynthesizeCanvasSelection } from "../services/canvas-ai";
 import { isDesktopRuntime } from "../services/aura-platform";
-import { listWorks } from "../services/library-list";
+import {
+  listWorks,
+  parseWorkMetadataSearch,
+  searchWorksByMetadata,
+} from "../services/library-list";
 import "../features/canvas/canvas.css";
 
 interface AnnotationCanvasRow {
@@ -74,7 +78,9 @@ function annotationColor(value: string | null): ExcerptHighlightColor {
   return HIGHLIGHT_COLOR_MAP[value?.trim().toLocaleLowerCase() || ""] || "yellow";
 }
 
-function canvasLibraryWork(row: Awaited<ReturnType<typeof listWorks>>[number]): CanvasLibraryWork {
+function canvasLibraryWork(
+  row: Awaited<ReturnType<typeof listWorks>>[number] & { tagNames?: string[] },
+): CanvasLibraryWork {
   return {
     id: row.id,
     title: row.title,
@@ -84,6 +90,7 @@ function canvasLibraryWork(row: Awaited<ReturnType<typeof listWorks>>[number]): 
     venue: row.venue_name,
     doi: row.doi,
     readingStatus: row.reading_status,
+    tags: row.tagNames ?? [],
   };
 }
 
@@ -206,6 +213,32 @@ export function SpatialCanvasPage() {
   const retiredWorkspaceIdsRef = useRef(new Set<string>());
   const loadRequestRef = useRef(0);
   const handledIngressRef = useRef(new Set<string>());
+
+  const searchCanvasWorks = useCallback(
+    async (query: string): Promise<CanvasLibraryWork[]> => {
+      if (desktopRuntime) {
+        const rows = await searchWorksByMetadata(query, 40);
+        return rows.map(canvasLibraryWork);
+      }
+      const { normalized, tokens } = parseWorkMetadataSearch(query);
+      if (!normalized) return PREVIEW_LIBRARY_WORKS.slice(0, 40);
+      if (tokens.length === 0) return [];
+      return PREVIEW_LIBRARY_WORKS.filter((work) => {
+        const haystack = [
+          work.title,
+          work.abstract ?? "",
+          work.authorNames.join(" "),
+          work.venue ?? "",
+          work.year ? String(work.year) : "",
+          ...(work.tags ?? []),
+        ]
+          .join(" ")
+          .toLocaleLowerCase();
+        return tokens.every((token) => haystack.includes(token));
+      }).slice(0, 40);
+    },
+    [desktopRuntime],
+  );
 
   const persistDocument = useCallback(
     (snapshot: CanvasWorkspaceDocument): Promise<void> => {
@@ -690,6 +723,7 @@ export function SpatialCanvasPage() {
             );
           }}
           works={works}
+          searchWorks={searchCanvasWorks}
           workspaces={workspaces}
           libraryLoading={libraryLoading}
           persistenceLabel={persistenceLabel}

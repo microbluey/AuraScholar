@@ -3,6 +3,7 @@ import {
   applyCanvasSelectionDeletion,
   clampCanvasMenuPoint,
   isCanvasContextMenuShortcut,
+  isCanvasLayoutShortcut,
   isCanvasSelectionDeleteShortcut,
   planCanvasSelectionDeletion,
   primarySurfaceForCanvasNode,
@@ -90,6 +91,34 @@ describe("canvas node interactions", () => {
     expect(isCanvasSelectionDeleteShortcut({ ...base, defaultPrevented: true })).toBe(false);
     expect(isCanvasSelectionDeleteShortcut({ ...base, repeat: true })).toBe(false);
     expect(isCanvasSelectionDeleteShortcut({ ...base, withinCanvas: false })).toBe(false);
+  });
+
+  it("recognizes the platform auto-layout shortcut only on an unblocked canvas surface", () => {
+    const base = {
+      altKey: false,
+      blockedSurface: false,
+      composing: false,
+      ctrlKey: false,
+      defaultPrevented: false,
+      key: "L",
+      metaKey: true,
+      repeat: false,
+      shiftKey: true,
+      withinCanvas: true,
+    };
+    expect(isCanvasLayoutShortcut(base, "MacIntel")).toBe(true);
+    expect(isCanvasLayoutShortcut({ ...base, ctrlKey: true, metaKey: false }, "Linux x86_64")).toBe(
+      true,
+    );
+    expect(isCanvasLayoutShortcut({ ...base, shiftKey: false }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, altKey: true }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, blockedSurface: true }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, composing: true }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, defaultPrevented: true }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, repeat: true }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, withinCanvas: false }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, ctrlKey: true }, "MacIntel")).toBe(false);
+    expect(isCanvasLayoutShortcut({ ...base, metaKey: false }, "MacIntel")).toBe(false);
   });
 
   it("removes selected cards and their relationships without touching other cards", () => {

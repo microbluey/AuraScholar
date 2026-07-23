@@ -13,6 +13,10 @@ export interface WorkCitationCounts {
   citedBy: number;
 }
 
+export interface WorkWithAuthorsAndTags extends WorkWithAuthors {
+  tagNames: string[];
+}
+
 async function attachAuthors(db: Database, rows: WorkRow[]): Promise<WorkWithAuthors[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
@@ -34,6 +38,140 @@ async function attachAuthors(db: Database, rows: WorkRow[]): Promise<WorkWithAut
     byWork.set(author.work_id, list);
   }
   return rows.map((row) => ({ ...row, authorNames: byWork.get(row.id) ?? [] }));
+}
+
+async function attachAuthorsAndTags(
+  db: Database,
+  rows: WorkRow[],
+): Promise<WorkWithAuthorsAndTags[]> {
+  if (rows.length === 0) return [];
+  const withAuthors = await attachAuthors(db, rows);
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const tagRows = await db.query<{ name: string; work_id: string }>(
+    `SELECT wt.work_id, t.name
+     FROM work_tags wt
+     JOIN tags t ON t.id = wt.tag_id AND t.deleted_at IS NULL
+     WHERE wt.work_id IN (${placeholders})
+     ORDER BY t.name COLLATE NOCASE`,
+    ids,
+  );
+  const tagsByWork = new Map<string, string[]>();
+  for (const tag of tagRows) {
+    const names = tagsByWork.get(tag.work_id) ?? [];
+    names.push(tag.name);
+    tagsByWork.set(tag.work_id, names);
+  }
+  return withAuthors.map((row) => ({
+    ...row,
+    tagNames: tagsByWork.get(row.id) ?? [],
+  }));
+}
+
+const METADATA_SEARCH_TOKEN_RE = /[\p{L}\p{N}]+/gu;
+const METADATA_SEARCH_QUERY_LIMIT = 512;
+const METADATA_SEARCH_TOKEN_LIMIT = 12;
+
+export interface WorkMetadataSearchTerms {
+  normalized: string;
+  tokens: string[];
+}
+
+export function parseWorkMetadataSearch(search: string): WorkMetadataSearchTerms {
+  const normalized = search.trim().slice(0, METADATA_SEARCH_QUERY_LIMIT).toLocaleLowerCase();
+  return {
+    normalized,
+    tokens: (normalized.match(METADATA_SEARCH_TOKEN_RE) ?? []).slice(
+      0,
+      METADATA_SEARCH_TOKEN_LIMIT,
+    ),
+  };
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+export async function searchWorksByMetadata(
+  db: Database,
+  search: string,
+  limit = 40,
+): Promise<WorkWithAuthorsAndTags[]> {
+  const boundedLimit = Math.min(100, Math.max(1, Math.trunc(limit) || 40));
+  const { normalized, tokens } = parseWorkMetadataSearch(search);
+  if (!normalized) {
+    const recent = await db.query<WorkRow>(
+      `SELECT w.* FROM works w
+       WHERE w.deleted_at IS NULL
+       ORDER BY w.starred DESC, w.updated_at DESC
+       LIMIT ?`,
+      [boundedLimit],
+    );
+    return attachAuthorsAndTags(db, recent);
+  }
+  if (tokens.length === 0) return [];
+
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  for (const token of tokens) {
+    const pattern = `%${escapeLikePattern(token)}%`;
+    clauses.push(`(
+      LOWER(w.title) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(w.abstract, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(w.venue_name, '')) LIKE ? ESCAPE '\\'
+      OR CAST(w.year AS TEXT) LIKE ? ESCAPE '\\'
+      OR EXISTS (
+        SELECT 1
+        FROM work_authors swa
+        JOIN authors sa ON sa.id = swa.author_id
+        WHERE swa.work_id = w.id
+          AND LOWER(sa.display_name) LIKE ? ESCAPE '\\'
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM work_tags swt
+        JOIN tags st ON st.id = swt.tag_id AND st.deleted_at IS NULL
+        WHERE swt.work_id = w.id
+          AND LOWER(st.name) LIKE ? ESCAPE '\\'
+      )
+    )`);
+    params.push(pattern, pattern, pattern, pattern, pattern, pattern);
+  }
+
+  const phrase = escapeLikePattern(normalized);
+  const prefix = `${phrase}%`;
+  const rows = await db.query<WorkRow>(
+    `SELECT w.* FROM works w
+     WHERE w.deleted_at IS NULL
+       AND ${clauses.join(" AND ")}
+     ORDER BY
+       CASE
+         WHEN LOWER(w.title) = ? THEN 0
+         WHEN LOWER(w.title) LIKE ? ESCAPE '\\' THEN 1
+         WHEN EXISTS (
+           SELECT 1
+           FROM work_authors owa
+           JOIN authors oa ON oa.id = owa.author_id
+           WHERE owa.work_id = w.id
+             AND LOWER(oa.display_name) LIKE ? ESCAPE '\\'
+         ) THEN 2
+         WHEN EXISTS (
+           SELECT 1
+           FROM work_tags owt
+           JOIN tags ot ON ot.id = owt.tag_id AND ot.deleted_at IS NULL
+           WHERE owt.work_id = w.id
+             AND LOWER(ot.name) LIKE ? ESCAPE '\\'
+         ) THEN 3
+         WHEN LOWER(COALESCE(w.venue_name, '')) LIKE ? ESCAPE '\\' THEN 4
+         WHEN CAST(w.year AS TEXT) LIKE ? ESCAPE '\\' THEN 5
+         ELSE 6
+       END,
+       w.starred DESC,
+       w.updated_at DESC
+     LIMIT ?`,
+    [...params, normalized, prefix, prefix, prefix, prefix, prefix, boundedLimit],
+  );
+  return attachAuthorsAndTags(db, rows);
 }
 
 export async function listWorks(

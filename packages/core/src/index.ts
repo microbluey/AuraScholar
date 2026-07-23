@@ -42,6 +42,14 @@ export type {
   SourceCursor,
 } from "./discovery/search.js";
 export { CANVAS_SCHEMA_VERSION } from "./canvas/types.js";
+export {
+  applyCanvasLayout,
+  CANVAS_GROUP_LAYOUT_PADDING,
+  CANVAS_TIMELINE_HORIZONTAL_GAP,
+  CANVAS_TREE_HORIZONTAL_GAP,
+  CANVAS_TREE_VERTICAL_GAP,
+  planCanvasLayout,
+} from "./canvas/layout.js";
 export type {
   AISynthesisType,
   AISynthNode,
@@ -71,3 +79,12 @@ export type {
   PaperNode,
   PaperNodeData,
 } from "./canvas/types.js";
+export type {
+  CanvasLayoutErrorPlan,
+  CanvasLayoutFailure,
+  CanvasLayoutGroupResize,
+  CanvasLayoutMode,
+  CanvasLayoutNodePosition,
+  CanvasLayoutPlan,
+  CanvasLayoutSuccessPlan,
+} from "./canvas/layout.js";

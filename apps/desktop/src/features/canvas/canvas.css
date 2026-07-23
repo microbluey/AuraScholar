@@ -1307,6 +1307,7 @@
   background: var(--color-ai-subtle);
 }
 
+.canvas-dock__layout,
 .canvas-dock__synthesis {
   position: relative;
 }
@@ -1337,9 +1338,62 @@
   cursor: pointer;
 }
 
-.canvas-dock__menu button:hover {
+.canvas-dock__menu button:hover:not(:disabled),
+.canvas-dock__menu button:focus-visible {
+  outline: none;
   background: var(--color-ai-subtle);
   color: var(--color-ai);
+}
+
+.canvas-dock__menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.canvas-dock__menu--layout {
+  right: auto;
+  left: 50%;
+  width: 232px;
+  transform: translateX(-50%);
+}
+
+.canvas-dock__menu--layout button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.canvas-dock__menu--layout button:hover:not(:disabled),
+.canvas-dock__menu--layout button:focus-visible {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-strong);
+}
+
+.canvas-dock__menu--layout button > svg {
+  flex: 0 0 auto;
+}
+
+.canvas-dock__menu--layout button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.canvas-dock__menu--layout strong,
+.canvas-dock__menu--layout small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-dock__menu--layout strong {
+  color: inherit;
+  font-size: 11px;
+}
+
+.canvas-dock__menu--layout small {
+  color: var(--color-text-muted);
+  font-size: 9px;
 }
 
 .canvas-dock__selection {
@@ -1693,6 +1747,33 @@
   height: var(--border-width);
   margin: 5px 7px;
   background: var(--color-border);
+}
+
+.canvas-command-palette {
+  width: min(680px, calc(100vw - 36px));
+}
+
+.canvas-command-list[aria-busy="true"] {
+  min-height: 112px;
+}
+
+.canvas-command-item--added .app-command-item__icon {
+  color: var(--color-success);
+}
+
+.canvas-command-palette .canvas-command-empty {
+  padding: 24px 18px 28px;
+}
+
+.canvas-command-palette__hint {
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+  min-height: 34px;
+  padding: 8px 14px;
+  border-top: var(--border-width) solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 10px;
 }
 
 .canvas-empty {

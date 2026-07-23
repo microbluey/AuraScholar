@@ -1,9 +1,13 @@
-import type {
-  AISynthesisType,
-  CanvasEdge,
-  CanvasNode,
-  CanvasPoint,
-  CanvasWorkspaceDocument,
+import {
+  applyCanvasLayout,
+  planCanvasLayout,
+  type AISynthesisType,
+  type CanvasEdge,
+  type CanvasLayoutFailure,
+  type CanvasLayoutMode,
+  type CanvasNode,
+  type CanvasPoint,
+  type CanvasWorkspaceDocument,
 } from "@aurascholar/core";
 import { MAX_CANVAS_SYNTHESIS_SOURCES } from "@aurascholar/ai";
 import { ArrowLeft } from "@phosphor-icons/react";
@@ -23,6 +27,7 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { canvasNodeTypes, type CanvasFlowNode, type CanvasNodeMenuAnchor } from "./CanvasCards";
+import { CanvasCommandPalette } from "./CanvasCommandPalette";
 import { CanvasNodeContextMenu } from "./CanvasNodeContextMenu";
 import { CanvasDock, type CanvasTool } from "./CanvasDock";
 import { CANVAS_WORK_DRAG_TYPE } from "./CanvasLibraryPanel";
@@ -40,6 +45,7 @@ import {
   CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR,
   applyCanvasSelectionDeletion,
   clampCanvasMenuPoint,
+  isCanvasLayoutShortcut,
   isCanvasSelectionDeleteShortcut,
   planCanvasSelectionDeletion,
   primarySurfaceForCanvasNode,
@@ -47,6 +53,7 @@ import {
   type CanvasMenuPoint,
   type CanvasToolboxPanel,
 } from "./canvas-interactions";
+import { CANVAS_COMMAND_PALETTE_REQUEST_EVENT } from "./canvas-command";
 import {
   CANVAS_EXCERPT_DRAG_MIME,
   CanvasExcerptDropError,
@@ -101,6 +108,7 @@ interface CanvasWorkspaceProps {
   onRenameWorkspace: (workspaceId: string, name: string) => CanvasWorkspaceActionResult;
   onSelectWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
   persistenceLabel: string;
+  searchWorks: (query: string) => Promise<CanvasLibraryWork[]>;
   works: CanvasLibraryWork[];
   workspaces: readonly CanvasWorkspaceOption[];
 }
@@ -174,6 +182,23 @@ function semanticNodeLabel(node: CanvasNode): string {
   }
 }
 
+function canvasLayoutFailureMessage(reason: CanvasLayoutFailure): string {
+  switch (reason) {
+    case "selection-too-small":
+      return "请选择至少两张文献卡片后再整理。";
+    case "mixed-node-types":
+      return "自动整理目前仅支持文献卡片。";
+    case "mixed-parent":
+      return "请只选择画布根层级，或同一分组内的文献。";
+    case "collapsed-parent-group":
+      return "请先展开分组，再整理其中的文献。";
+    case "no-citation-edges":
+      return "所选文献之间还没有“引用”关系。";
+    default:
+      return "所选文献已发生变化，请重新选择后再试。";
+  }
+}
+
 function CanvasWorkspaceInner({
   document,
   libraryLoading,
@@ -186,6 +211,7 @@ function CanvasWorkspaceInner({
   onRenameWorkspace,
   onSelectWorkspace,
   persistenceLabel,
+  searchWorks,
   works,
   workspaces,
 }: CanvasWorkspaceProps) {
@@ -198,6 +224,8 @@ function CanvasWorkspaceInner({
   const [autoFocusDetails, setAutoFocusDetails] = useState(false);
   const [nodeMenu, setNodeMenu] = useState<CanvasNodeMenuState | null>(null);
   const [synthesisBusy, setSynthesisBusy] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [layoutOpen, setLayoutOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [readerTarget, setReaderTarget] = useState<CanvasReaderTarget | null>(null);
   const [connectionInProgress, setConnectionInProgress] = useState(false);
@@ -210,6 +238,8 @@ function CanvasWorkspaceInner({
   const [semanticLinkReturnFocus, setSemanticLinkReturnFocus] = useState<HTMLElement | null>(null);
   const cancelledConnectionRef = useRef(false);
   const trustedReaderPayloadRef = useRef<string | null>(null);
+  const commandAnchorRef = useRef<CanvasPoint | null>(null);
+  const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
   const activeWorkspaceIdRef = useRef(document.workspaceId);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
@@ -236,6 +266,43 @@ function CanvasWorkspaceInner({
       return null;
     });
   }, []);
+
+  const openCanvasCommand = useCallback(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const rect = wrapper.getBoundingClientRect();
+    const lastPointer = lastCanvasPointerRef.current;
+    const screenPoint =
+      lastPointer &&
+      lastPointer.x >= rect.left &&
+      lastPointer.x <= rect.right &&
+      lastPointer.y >= rect.top &&
+      lastPointer.y <= rect.bottom
+        ? lastPointer
+        : {
+            x: rect.left + rect.width * 0.5,
+            y: rect.top + rect.height * 0.46,
+          };
+    commandAnchorRef.current = flow.screenToFlowPosition(screenPoint);
+    cancelFlowConnection();
+    setPendingSemanticLink(null);
+    dismissNodeMenu(false);
+    setLayoutOpen(false);
+    setCommandOpen(true);
+  }, [cancelFlowConnection, dismissNodeMenu, flow]);
+
+  useEffect(() => {
+    const toggleCanvasCommand = () => {
+      if (commandOpen) {
+        setCommandOpen(false);
+        return;
+      }
+      openCanvasCommand();
+    };
+    window.addEventListener(CANVAS_COMMAND_PALETTE_REQUEST_EVENT, toggleCanvasCommand);
+    return () =>
+      window.removeEventListener(CANVAS_COMMAND_PALETTE_REQUEST_EVENT, toggleCanvasCommand);
+  }, [commandOpen, openCanvasCommand]);
 
   const openNodeInReader = useCallback(
     (node: CanvasNode) => {
@@ -345,7 +412,7 @@ function CanvasWorkspaceInner({
         position: clampCanvasMenuPoint(
           { x: clientX - wrapperRect.left, y: clientY - wrapperRect.top },
           { width: wrapperRect.width, height: wrapperRect.height },
-          { width: 238, height: 350 },
+          { width: 238, height: 392 },
         ),
         returnFocusElement: anchor.returnFocusElement,
       });
@@ -372,6 +439,10 @@ function CanvasWorkspaceInner({
     setReaderTarget(null);
     setToolboxPanel(null);
     setAutoFocusDetails(false);
+    setCommandOpen(false);
+    setLayoutOpen(false);
+    commandAnchorRef.current = null;
+    lastCanvasPointerRef.current = null;
   }, [document.workspaceId]);
 
   useEffect(() => {
@@ -717,7 +788,7 @@ function CanvasWorkspaceInner({
     (work: CanvasLibraryWork, position?: CanvasPoint) => {
       if (document.nodes.some((node) => node.type === "paper" && node.data.workId === work.id)) {
         showNotice("这篇文献已经在当前画布中。");
-        return;
+        return null;
       }
       const rect = wrapperRef.current?.getBoundingClientRect();
       const center =
@@ -726,7 +797,9 @@ function CanvasWorkspaceInner({
           x: (rect?.left || 0) + (rect?.width || 900) * 0.46,
           y: (rect?.top || 0) + (rect?.height || 640) * 0.42,
         });
-      const offset = document.nodes.filter((node) => node.type === "paper").length % 5;
+      const offset = position
+        ? 0
+        : document.nodes.filter((node) => node.type === "paper").length % 5;
       const node = createPaperNode(work, {
         x: center.x + offset * 24,
         y: center.y + offset * 20,
@@ -739,6 +812,7 @@ function CanvasWorkspaceInner({
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
       showNotice(`已将《${work.title}》加入画布。`);
+      return node.id;
     },
     [document.nodes, flow, onDocumentChange, showNotice],
   );
@@ -1303,6 +1377,30 @@ function CanvasWorkspaceInner({
     (nodeId: string) => {
       const node = document.nodes.find((candidate) => candidate.id === nodeId);
       if (!node) return;
+      const collapsedParent = node.groupId
+        ? document.nodes.find(
+            (candidate) =>
+              candidate.id === node.groupId &&
+              candidate.type === "group" &&
+              candidate.data.collapsed === true,
+          )
+        : undefined;
+      if (collapsedParent?.type === "group") {
+        onDocumentChange((current) => ({
+          ...current,
+          nodes: current.nodes.map((candidate) =>
+            candidate.id === collapsedParent.id && candidate.type === "group"
+              ? {
+                  ...candidate,
+                  data: { ...candidate.data, collapsed: false },
+                  updatedAt: Date.now(),
+                }
+              : candidate,
+          ),
+          updatedAt: Date.now(),
+        }));
+        showNotice(`已展开「${collapsedParent.data.title}」并定位文献。`);
+      }
       const position = absoluteNodePosition(node, document.nodes);
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
@@ -1312,12 +1410,14 @@ function CanvasWorkspaceInner({
         { duration: 240, zoom: Math.max(document.viewport.zoom, 0.9) },
       );
       window.requestAnimationFrame(() => {
-        wrapperRef.current
-          ?.querySelector<HTMLElement>(`[data-canvas-node-id="${CSS.escape(node.id)}"]`)
-          ?.focus();
+        window.requestAnimationFrame(() => {
+          wrapperRef.current
+            ?.querySelector<HTMLElement>(`[data-canvas-node-id="${CSS.escape(node.id)}"]`)
+            ?.focus();
+        });
       });
     },
-    [document.nodes, document.viewport.zoom, flow],
+    [document.nodes, document.viewport.zoom, flow, onDocumentChange, showNotice],
   );
 
   const openNodeInFullReader = useCallback(
@@ -1349,6 +1449,16 @@ function CanvasWorkspaceInner({
     selectedNodes.length >= 2 &&
     selectedNodes.every((node) => node.type !== "group" && !node.groupId);
   const synthesisSourceCount = selectedNodes.filter(isSynthesisSource).length;
+  const canSynthesize =
+    synthesisSourceCount >= 2 &&
+    synthesisSourceCount <= MAX_CANVAS_SYNTHESIS_SOURCES &&
+    !synthesisBusy;
+  const synthesisHint =
+    synthesisSourceCount > MAX_CANVAS_SYNTHESIS_SOURCES
+      ? `一次最多选择 ${MAX_CANVAS_SYNTHESIS_SOURCES} 张文献或摘录卡片`
+      : synthesisSourceCount >= 2
+        ? "合成所选文献与摘录"
+        : "至少选择两张文献或摘录卡片";
   const addedWorkIds = new Set(
     document.nodes.filter((node) => node.type === "paper").map((node) => node.data.workId),
   );
@@ -1361,6 +1471,111 @@ function CanvasWorkspaceInner({
   const nodeMenuTarget = nodeMenu
     ? document.nodes.find((node) => node.id === nodeMenu.nodeId) || null
     : null;
+  const timelineLayoutPlan = useMemo(
+    () => planCanvasLayout(document, selectedNodeIds, "timeline"),
+    [document, selectedNodeIds],
+  );
+  const citationLayoutPlan = useMemo(
+    () => planCanvasLayout(document, selectedNodeIds, "citation-tree"),
+    [document, selectedNodeIds],
+  );
+  const canLayout = timelineLayoutPlan.status === "success";
+  const canCitationLayout = citationLayoutPlan.status === "success";
+
+  useEffect(() => {
+    if (!layoutOpen || canLayout) return;
+    const timeout = window.setTimeout(() => setLayoutOpen(false), 0);
+    return () => window.clearTimeout(timeout);
+  }, [canLayout, layoutOpen]);
+
+  const applySelectedLayout = useCallback(
+    (mode: CanvasLayoutMode) => {
+      const plan = planCanvasLayout(document, selectedNodeIds, mode);
+      if (plan.status === "error") {
+        showNotice(canvasLayoutFailureMessage(plan.reason));
+        return;
+      }
+      onDocumentChange((current) => applyCanvasLayout(current, plan));
+      const focusNodeId = plan.nodePositions[0]?.nodeId;
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          const nodeElement = focusNodeId
+            ? wrapperRef.current?.querySelector<HTMLElement>(
+                `[data-canvas-node-id="${CSS.escape(focusNodeId)}"]`,
+              )
+            : null;
+          (nodeElement ?? wrapperRef.current)?.focus({ preventScroll: true });
+        });
+      });
+      showNotice(
+        mode === "timeline"
+          ? `已按发表年份整理 ${plan.nodePositions.length} 张文献。`
+          : `已按引用关系整理 ${plan.nodePositions.length} 张文献。`,
+      );
+    },
+    [document, onDocumentChange, selectedNodeIds, showNotice],
+  );
+
+  useEffect(() => {
+    const handleLayoutShortcut = (event: KeyboardEvent) => {
+      const wrapper = wrapperRef.current;
+      const target = event.target instanceof Element ? event.target : null;
+      if (
+        !isCanvasLayoutShortcut({
+          altKey: event.altKey,
+          blockedSurface: Boolean(target?.closest(CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR)),
+          composing: event.isComposing,
+          ctrlKey: event.ctrlKey,
+          defaultPrevented: event.defaultPrevented,
+          key: event.key,
+          metaKey: event.metaKey,
+          repeat: event.repeat,
+          shiftKey: event.shiftKey,
+          withinCanvas: Boolean(wrapper && target && wrapper.contains(target)),
+        })
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (timelineLayoutPlan.status === "error") {
+        showNotice(canvasLayoutFailureMessage(timelineLayoutPlan.reason));
+        return;
+      }
+      dismissNodeMenu(false);
+      setLayoutOpen(true);
+    };
+    window.addEventListener("keydown", handleLayoutShortcut);
+    return () => window.removeEventListener("keydown", handleLayoutShortcut);
+  }, [dismissNodeMenu, showNotice, timelineLayoutPlan]);
+
+  const addCommandWork = useCallback(
+    (work: CanvasLibraryWork) => {
+      const nodeId = addPaper(work, commandAnchorRef.current ?? undefined);
+      if (!nodeId) return;
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          wrapperRef.current
+            ?.querySelector<HTMLElement>(`[data-canvas-node-id="${CSS.escape(nodeId)}"]`)
+            ?.focus();
+        });
+      });
+    },
+    [addPaper],
+  );
+
+  const focusCommandWork = useCallback(
+    (work: CanvasLibraryWork) => {
+      const node = document.nodes.find(
+        (candidate) => candidate.type === "paper" && candidate.data.workId === work.id,
+      );
+      if (!node) {
+        showNotice("这篇文献已不在当前白板，请重新搜索后加入。");
+        return;
+      }
+      focusNode(node.id);
+    },
+    [document.nodes, focusNode, showNotice],
+  );
 
   return (
     <div
@@ -1370,6 +1585,11 @@ function CanvasWorkspaceInner({
         className={`canvas-workspace canvas-workspace--tool-${tool}${connectionInProgress ? " canvas-workspace--connecting" : ""}`}
         ref={wrapperRef}
         tabIndex={-1}
+        onPointerMove={(event) => {
+          if (event.target instanceof Element && event.target.closest(".react-flow__renderer")) {
+            lastCanvasPointerRef.current = { x: event.clientX, y: event.clientY };
+          }
+        }}
         onDrop={onDrop}
         onDragOver={(event) => {
           if (
@@ -1472,12 +1692,16 @@ function CanvasWorkspaceInner({
           onMoveEnd={onMoveEnd}
           onMoveStart={() => dismissNodeMenu(false)}
           onNodeDragStart={() => dismissNodeMenu(false)}
+          onSelectionEnd={() => {
+            window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
+          }}
           onPaneClick={() => {
             cancelFlowConnection();
             setPendingSemanticLink(null);
             dismissNodeMenu(false);
             setSelectedNodeIds(new Set());
             setSelectedEdgeId(null);
+            wrapperRef.current?.focus({ preventScroll: true });
           }}
           defaultViewport={document.viewport}
           minZoom={0.2}
@@ -1558,8 +1782,12 @@ function CanvasWorkspaceInner({
           <CanvasDock
             activePanel={toolboxPanel}
             tool={tool}
+            layoutOpen={layoutOpen}
             onPanelChange={changeToolboxPanel}
             onToolChange={changeTool}
+            onOpenCommand={openCanvasCommand}
+            onLayoutOpenChange={setLayoutOpen}
+            onLayout={applySelectedLayout}
             onZoomOut={() => void flow.zoomOut({ duration: 160 })}
             onZoomIn={() => void flow.zoomIn({ duration: 160 })}
             onFitView={() => void flow.fitView({ duration: 260, padding: 0.18 })}
@@ -1567,18 +1795,10 @@ function CanvasWorkspaceInner({
             onGroup={groupSelected}
             onSynthesize={(type) => void synthesize(type)}
             canGroup={canGroup}
-            canSynthesize={
-              synthesisSourceCount >= 2 &&
-              synthesisSourceCount <= MAX_CANVAS_SYNTHESIS_SOURCES &&
-              !synthesisBusy
-            }
-            synthesisHint={
-              synthesisSourceCount > MAX_CANVAS_SYNTHESIS_SOURCES
-                ? `一次最多选择 ${MAX_CANVAS_SYNTHESIS_SOURCES} 张文献或摘录卡片`
-                : synthesisSourceCount >= 2
-                  ? "合成所选文献与摘录"
-                  : "至少选择两张文献或摘录卡片"
-            }
+            canLayout={canLayout}
+            canCitationLayout={canCitationLayout}
+            canSynthesize={canSynthesize}
+            synthesisHint={synthesisHint}
             selectedCount={selectedNodeIds.size}
           />
 
@@ -1606,16 +1826,32 @@ function CanvasWorkspaceInner({
           <CanvasNodeContextMenu
             node={nodeMenuTarget}
             position={nodeMenu.position}
+            canArrangeSelection={canLayout}
             canGroupSelection={canGroup}
             onClose={dismissNodeMenu}
             onActivate={activateNode}
             onOpenDetails={openNodeDetails}
             onOpenFullReader={openNodeInFullReader}
+            onOpenLayoutMenu={() => setLayoutOpen(true)}
             onGroupSelection={groupSelected}
             onSetGroupCollapsed={setGroupCollapsed}
             onUngroup={ungroup}
             onFocusNode={focusNode}
             onRemoveNode={deleteNode}
+          />
+        )}
+        {commandOpen && (
+          <CanvasCommandPalette
+            addedWorkIds={addedWorkIds}
+            canSynthesize={canSynthesize}
+            onAddWork={addCommandWork}
+            onClose={() => setCommandOpen(false)}
+            onFocusWork={focusCommandWork}
+            onSynthesize={(type) => void synthesize(type)}
+            open
+            searchWorks={searchWorks}
+            synthesisHint={synthesisHint}
+            works={works}
           />
         )}
         <div className="canvas-live-notice" aria-live="polite" role="status">

@@ -2,8 +2,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "./database";
 import { runMigrations } from "./migrations";
 import { CollectionsRepo } from "./repos/collections";
+import { TagsRepo } from "./repos/tags";
 import { WorksRepo } from "./repos/works";
-import { citationCountsForWorks, listDeletedWorks, listWorks } from "./work-list";
+import {
+  citationCountsForWorks,
+  listDeletedWorks,
+  listWorks,
+  parseWorkMetadataSearch,
+  searchWorksByMetadata,
+} from "./work-list";
 
 let db: Database;
 let works: WorksRepo;
@@ -40,6 +47,7 @@ describe("work-list lightweight queries", () => {
       title: "Attention Is All You Need",
       abstract: "Transformer sequence transduction",
       year: 2017,
+      venueName: "NeurIPS",
     });
     await works.upsert({
       title: "Deep Residual Learning for Image Recognition",
@@ -55,6 +63,51 @@ describe("work-list lightweight queries", () => {
     });
 
     expect(rows.map((row) => row.title)).toEqual(["Attention Is All You Need"]);
+  });
+
+  it("searches canvas command candidates by title, author, and active tag", async () => {
+    const tags = new TagsRepo(db);
+    const attention = await works.upsert({
+      title: "Attention Is All You Need",
+      abstract: "Transformer sequence transduction",
+      venueName: "NeurIPS",
+      year: 2017,
+      authors: [{ displayName: "Ashish Vaswani", position: 0 }],
+    });
+    const residual = await works.upsert({
+      title: "Deep Residual Learning",
+      abstract: "Computer vision",
+      year: 2016,
+      authors: [{ displayName: "Kaiming He", position: 0 }],
+    });
+    await tags.addToWorks([residual.id], "方法论");
+
+    await expect(searchWorksByMetadata(db, "attention")).resolves.toMatchObject([
+      { id: attention.id, tagNames: [] },
+    ]);
+    await expect(searchWorksByMetadata(db, "Vaswani")).resolves.toMatchObject([
+      { id: attention.id, authorNames: ["Ashish Vaswani"] },
+    ]);
+    await expect(searchWorksByMetadata(db, "NeurIPS")).resolves.toMatchObject([
+      { id: attention.id },
+    ]);
+    await expect(searchWorksByMetadata(db, "2017")).resolves.toMatchObject([{ id: attention.id }]);
+    await expect(
+      searchWorksByMetadata(db, Array.from({ length: 100 }, () => "attention").join(" ")),
+    ).resolves.toMatchObject([{ id: attention.id }]);
+    await expect(searchWorksByMetadata(db, "方法论")).resolves.toMatchObject([
+      { id: residual.id, tagNames: ["方法论"] },
+    ]);
+    await expect(searchWorksByMetadata(db, "/// +++")).resolves.toEqual([]);
+    expect(parseWorkMetadataSearch(" Retrieval/Augmented ")).toEqual({
+      normalized: "retrieval/augmented",
+      tokens: ["retrieval", "augmented"],
+    });
+
+    const tag = (await tags.list()).find((candidate) => candidate.name === "方法论");
+    expect(tag).toBeDefined();
+    await tags.softDelete(tag!.id);
+    await expect(searchWorksByMetadata(db, "方法论")).resolves.toEqual([]);
   });
 
   it("tolerates punctuation-heavy search input without FTS syntax errors", async () => {

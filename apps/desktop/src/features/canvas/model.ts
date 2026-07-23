@@ -26,6 +26,7 @@ export interface CanvasLibraryWork {
   doi: string | null;
   id: string;
   readingStatus: string;
+  tags?: string[];
   title: string;
   venue: string | null;
   year: number | null;
@@ -59,7 +60,7 @@ export function createPaperNode(work: CanvasLibraryWork, position: CanvasPoint):
     type: "paper",
     position,
     dimensions: { width: 320, height: 278 },
-    tags: [],
+    tags: work.tags ?? [],
     createdAt: now,
     updatedAt: now,
     data: {
