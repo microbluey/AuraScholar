@@ -106,8 +106,8 @@ export function PaperCard({ data, selected }: NodeProps<CanvasFlowNode>) {
           className="canvas-card__action nodrag"
           type="button"
           onClick={() => data.onOpenPaper(node.data.workId)}
-          title="在阅读器中打开"
-          aria-label={`在阅读器中打开《${node.data.title}》`}
+          title="在同屏阅读器中打开"
+          aria-label={`在同屏阅读器中打开《${node.data.title}》`}
         >
           打开
           <ArrowSquareOut size={15} weight="bold" />
@@ -147,7 +147,8 @@ export function ExcerptCard({ data, selected }: NodeProps<CanvasFlowNode>) {
               node.data.attachmentId,
             )
           }
-          title="回到原文"
+          title="在同屏阅读器中定位原文"
+          aria-label={`在同屏阅读器中定位《${node.data.paperTitle}》第 ${node.data.pageIndex + 1} 页`}
         >
           定位原文
           <ArrowSquareOut size={15} weight="bold" />

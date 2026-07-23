@@ -16,7 +16,7 @@
 
 ## 2. 当前用户体验
 
-画布基于 `@xyflow/react` 实现，提供无限点阵背景、缩放和平移、框选与多选、节点拖动、关系连线、可折叠逻辑分组、MiniMap、左侧文献面板、底部 Dock 和右侧检查器。画布顶部显示当前白板名称，并提供新建与切换；列表项 hover/focus 后出现 `...` 菜单，可就地重命名或安全删除。折叠分组只隐藏组内卡片与内部连线，不会删除内容；连接组内卡片与外部节点的关系会代理到折叠后的组头。
+画布基于 `@xyflow/react` 实现，提供无限点阵背景、缩放和平移、框选与多选、节点拖动、关系连线、可折叠逻辑分组、MiniMap、左侧文献面板、底部 Dock 和右侧检查器。打开文献或摘录时，检查器让位给与 React Flow 视口并列的右侧阅读器；桌面端默认约按白板 60%、阅读器 40% 分屏，分隔条可拖动或用键盘调整。阅读器不是画布变换层的子元素，因此缩放和平移白板不会缩放阅读器。画布顶部显示当前白板名称，并提供新建与切换；列表项 hover/focus 后出现 `...` 菜单，可就地重命名或安全删除。折叠分组只隐藏组内卡片与内部连线，不会删除内容；连接组内卡片与外部节点的关系会代理到折叠后的组头。
 
 主要流程如下：
 
@@ -24,10 +24,11 @@
 2. 在画布顶部切换器中新建或切换白板；每个列表项的 `...` 菜单提供重命名和删除。删除前弹窗会显示白板名称与卡片数；只剩一个白板时不展示删除操作。删除当前白板后，路由以 `replace` 方式转到剩余列表第一项。
 3. 从文献库或 PDF 阅读器加入整篇文献或批注时，如果只有一个白板则直接加入；如果有多个白板，则打开轻量目标选择器，默认选中最近活跃白板，支持回车确认或就地“新建并加入”。
 4. 在画布左侧面板点击/拖入任意文献，可在当前白板创建 `PaperNode`。
-5. 双击文献卡打开对应文献；双击摘录卡按 `attachmentId`、`annotationId` 和 `pageIndex` 深链回阅读器的具体附件、批注与页码。
-6. 选择多张卡片后可建立关系、放入分组，或从文献/摘录生成 AI 合成卡。
-7. 新建 Idea Note，在画布中记录 Markdown 与 LaTeX 研究笔记。
-8. 删除画布卡片只删除当前白板中的摆放及其关系，不会删除原文献或原批注。
+5. 双击文献卡会在白板右侧打开同屏阅读器；双击摘录卡会按 `attachmentId`、`annotationId` 和 `pageIndex` 在同一分屏中定位具体附件、批注与页码。阅读器标题栏仍提供进入完整阅读器的回退入口。
+6. 在右侧阅读器中选择文本并保存高亮后，底部会出现可拖动的摘录条。把它拖到左侧白板的目标位置，或点击「加入当前白板」，会创建一个保留完整批注锚点的 `ExcerptNode`，并从来源 `PaperNode` 自动建立 `derived-from` 边。重复加入同一批注会聚焦已有摘录，并在缺失时补齐来源边，而不是复制卡片。
+7. 选择多张卡片后可建立关系、放入分组，或从文献/摘录生成 AI 合成卡。
+8. 新建 Idea Note，在画布中记录 Markdown 与 LaTeX 研究笔记。
+9. 删除画布卡片只删除当前白板中的摆放及其关系，不会删除原文献或原批注。
 
 ## 3. 节点与关系模型
 
@@ -125,6 +126,9 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - 切换白板前会 flush 当前工作区；延迟保存和异步加载都以 `workspaceId` 分区或校验，避免旧白板的操作覆盖新白板。
 - 删除白板时会先退休该 `workspaceId`、清理延迟保存与缓存并等待既有写入结束，再执行原子删除；后续 pagehide 保存和 AI 回调都会跳过该 ID，避免 `save()` 的 upsert 让已删除白板复活。
 - 浏览器预览使用 `localStorage` 保存多白板 envelope，并会无损迁移旧的单白板预览数据；该模式只用于可交互预览，不代表桌面数据库。
+- 同屏阅读器只在 Desktop 读取本地 PDF、加载批注并保存新高亮。浏览器预览会展示明确的不可用状态，不会尝试访问本机 PDF；因此浏览器只能验证分屏外壳、响应式布局和错误状态，不能验证真实 PDF 选区与拖放。
+- 每次打开文献、切换来源或更换白板都会取消上一轮未完成的阅读器加载；加载结果还会按请求序号、`workspaceId`、`workId`、来源节点和附件身份复核。已经成功写入数据库的高亮仍是有效的文献库批注，但旧视图的完成回调不能把它加入后来切换到的白板。
+- 高亮拖放 payload 带有版本、`workspaceId`、`workId`、来源 `PaperNode`、附件和批注锚点。画布只接受当前阅读会话登记且与当前工作区完全匹配的 payload，并从来源 `PaperNode` 读取可信题名；创建摘录和 `derived-from` 边作为同一次画布文档变更提交，不能跨白板落点。
 - 路由层使用 `/canvas/:workspaceId` 标识具体白板；无参数的 `/canvas` 只负责定位最近使用的工作区。
 
 ## 6. JSON 备份与迁移
@@ -158,6 +162,8 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - AI 文献卡输入限于题录与可用摘要；只有摘录卡携带明确选择的 PDF 原文。
 - 空间白板支持整库 JSON 备份，但尚未加入 WebDAV 行级同步。
 - JSON 备份不携带 PDF 二进制；恢复后附件需要重新挂载。
+- 同屏阅读器的本地 PDF 加载与高亮摘录只在桌面应用中可用；浏览器预览不读取本机 PDF。
+- 当前 P0 尚未实现 `Cmd + K` 指令面板、快捷语义连线气泡或时间轴/引用树自动布局。
 
 ## 9. 关键实现位置
 
@@ -167,6 +173,9 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - AI 合成：`packages/ai/src/canvas-synthesis.ts`
 - 画布页面：`apps/desktop/src/pages/SpatialCanvasPage.tsx`
 - 画布 UI：`apps/desktop/src/features/canvas/`
+- 同屏阅读器：`apps/desktop/src/features/canvas/CanvasReaderDrawer.tsx`
+- 摘录拖放与节点创建：`apps/desktop/src/features/canvas/canvas-excerpt-dnd.ts`、`apps/desktop/src/features/canvas/excerpt-node.ts`
+- 阅读器会话隔离：`apps/desktop/src/features/reader/library-reader-session.ts`
 - 白板路由与加入目标：`apps/desktop/src/features/canvas/routes.ts`、`apps/desktop/src/features/canvas/useCanvasIngress.tsx`
 - 桌面 AI 适配：`apps/desktop/src/services/canvas-ai.ts`
 - JSON 备份引用处理：`packages/sync/src/canvas-backup.ts`

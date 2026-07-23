@@ -49,7 +49,9 @@ export const PdfPage = memo(function PdfPage({
       setTextIndex(idx);
       const vp = p.getViewport({ scale: 1 });
       setSize({ w: vp.width, h: vp.height });
-    })();
+    })().catch(() => {
+      // A host such as the Canvas drawer may destroy the PDF while this page is loading.
+    });
     return () => {
       cancelled = true;
     };
@@ -141,6 +143,7 @@ export const PdfPage = memo(function PdfPage({
             const h = r.y2 - r.y1;
             const common = {
               key: `${annotation.id}-${i}`,
+              "data-annotation-id": annotation.id,
               onClick: () => onAnnotationClick?.(annotation.id),
               className: clsx(
                 "au-reader-annotation",
