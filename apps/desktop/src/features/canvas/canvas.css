@@ -1438,8 +1438,8 @@
     max-width: calc(100% - 152px);
   }
 
-  .canvas-workspace__meta span,
-  .canvas-workspace__meta small {
+  .canvas-workspace__meta > span,
+  .canvas-workspace__meta > small {
     display: none;
   }
 

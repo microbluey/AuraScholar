@@ -9,7 +9,6 @@ import {
   SyncEngine,
   WebDavProvider,
   HlcClock,
-  DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID,
   SPATIAL_CANVAS_BACKUP_TABLES,
   assertSpatialCanvasBackupOrder,
   columnsForSyncedTable,
@@ -799,20 +798,10 @@ export async function importLibraryBackupJson(text: string): Promise<LibraryBack
           continue;
         }
         const placeholders = insertColumns.map(() => "?").join(", ");
-        const updateColumns = insertColumns.filter((column) => column !== "id");
-        const mergeVisibleDefaultWorkspace =
-          table === "canvas_workspaces" &&
-          importRow.id === DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID &&
-          updateColumns.length > 0;
-        const conflictClause = mergeVisibleDefaultWorkspace
-          ? ` ON CONFLICT(id) DO UPDATE SET ${updateColumns
-              .map((column) => `${quoteIdentifier(column)} = excluded.${quoteIdentifier(column)}`)
-              .join(", ")}`
-          : "";
         const changes = await db.run(
-          `${mergeVisibleDefaultWorkspace ? "INSERT" : "INSERT OR IGNORE"} INTO ${quoteIdentifier(table)} (${insertColumns
+          `INSERT OR IGNORE INTO ${quoteIdentifier(table)} (${insertColumns
             .map(quoteIdentifier)
-            .join(", ")}) VALUES (${placeholders})${conflictClause}`,
+            .join(", ")}) VALUES (${placeholders})`,
           insertColumns.map((column) => importRow[column] ?? null),
         );
         if (changes > 0) {
@@ -1073,7 +1062,6 @@ async function buildGeneratedBackupIdMaps(
   const maps: BackupImportIdMaps["generated"] = {};
   for (const table of GENERATED_BACKUP_ID_TABLES) {
     const map = await buildConflictingPrimaryIdMap(db, backup.tables[table] ?? [], table);
-    if (table === "canvas_workspaces") map.delete(DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID);
     if (map.size > 0) maps[table] = map;
   }
   return maps;

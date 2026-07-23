@@ -32,6 +32,7 @@ import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { writeClipboardText } from "../clipboard";
 import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
 import { downloadBlob } from "../download";
+import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
 import { getDb } from "../services/aura-db";
 import { fulltextLandingUrl } from "../services/fulltext";
 import { isDesktopRuntime } from "../services/aura-platform";
@@ -516,6 +517,8 @@ export function ReaderPage() {
     useState<AnnotationDeleteUndoState | null>(null);
   const [annotationDeleteUndoBusy, setAnnotationDeleteUndoBusy] = useState(false);
   const { confirm, confirmDialog } = useConfirmDialog();
+  const reportCanvasIngressError = useCallback((error: string) => setSnippetToast(error), []);
+  const { openInCanvas, targetPicker } = useCanvasIngress(reportCanvasIngressError);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const savingSnippetRef = useRef(false);
   const deletingAnnotationIdRef = useRef<string | null>(null);
@@ -1098,6 +1101,7 @@ export function ReaderPage() {
         </div>
       )}
       {confirmDialog}
+      {targetPicker}
       {commentDraftDirty && <ReaderCommentDraftNavigationGuard confirm={confirm} />}
       <div className="reader-topbar">
         <div className="reader-topbar__identity">
@@ -1142,7 +1146,12 @@ export function ReaderPage() {
             <Button
               variant="ghost"
               style={{ fontSize: 13 }}
-              onClick={() => navigate(`/canvas?workId=${encodeURIComponent(ctx.workId!)}`)}
+              onClick={() =>
+                void openInCanvas({
+                  workId: ctx.workId!,
+                  sourceLabel: ctx.workTitle ?? ctx.fileName,
+                })
+              }
             >
               加入空间白板
             </Button>
@@ -1258,13 +1267,12 @@ export function ReaderPage() {
                   onSaveComment={handleSaveComment}
                   onAddToCanvas={
                     ctx.workId
-                      ? (annotation) => {
-                          const nextParams = new URLSearchParams({
+                      ? (annotation) =>
+                          void openInCanvas({
                             workId: ctx.workId!,
                             annotationId: annotation.id,
-                          });
-                          navigate(`/canvas?${nextParams.toString()}`);
-                        }
+                            sourceLabel: `${ctx.workTitle ?? ctx.fileName} · 第 ${annotation.pageIndex + 1} 页批注`,
+                          })
                       : undefined
                   }
                   onDelete={handleDelete}

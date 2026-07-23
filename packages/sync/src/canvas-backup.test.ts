@@ -38,7 +38,7 @@ describe("Spatial Canvas backup guards", () => {
     );
   });
 
-  it("keeps canvas:default as the visible merge target despite an id collision", () => {
+  it("remaps a colliding legacy default workspace as one isolated imported workspace", () => {
     const collisionMaps: SpatialCanvasBackupIdMaps = {
       ...maps,
       workspaces: new Map([
@@ -52,7 +52,7 @@ describe("Spatial Canvas backup guards", () => {
         { id: DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID, name: "Restored canvas" },
         collisionMaps,
       ).row.id,
-    ).toBe(DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID);
+    ).toBe("invisible-replacement");
     expect(
       remapSpatialCanvasBackupRow(
         "canvas_nodes",
@@ -64,7 +64,7 @@ describe("Spatial Canvas backup guards", () => {
         },
         collisionMaps,
       ).row.workspace_id,
-    ).toBe(DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID);
+    ).toBe("invisible-replacement");
     expect(
       remapSpatialCanvasBackupRow(
         "canvas_edges",
@@ -76,7 +76,7 @@ describe("Spatial Canvas backup guards", () => {
         },
         collisionMaps,
       ).row.workspace_id,
-    ).toBe(DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID);
+    ).toBe("invisible-replacement");
   });
 
   it("keeps node ids and nullable work ids in separate remap namespaces", () => {

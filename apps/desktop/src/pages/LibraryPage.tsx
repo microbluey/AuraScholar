@@ -50,6 +50,7 @@ import {
   type PreviewLibraryWorkSeed,
 } from "../services/preview-library";
 import { describeSafeError } from "../services/sensitive-text";
+import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
 
 const MetadataEditor = lazy(() =>
   import("../components/MetadataEditor").then((m) => ({ default: m.MetadataEditor })),
@@ -883,6 +884,8 @@ export function LibraryPage() {
   const pendingKeyboardFocusIndexRef = useRef<number | null>(null);
   const skipNextPageResetRef = useRef(false);
   const { confirm, confirmDialog } = useConfirmDialog();
+  const reportCanvasIngressError = useCallback((error: string) => setMessage(error), []);
+  const { openInCanvas, targetPicker } = useCanvasIngress(reportCanvasIngressError);
   const findShortcut = useMemo(() => shortcutLabel("F"), []);
 
   useEffect(() => {
@@ -3716,9 +3719,11 @@ export function LibraryPage() {
               onFindFulltext={() => void handleFindFulltext()}
               findingFulltext={findingFulltext}
               onAddToCanvas={() =>
-                navigate(`/canvas?workId=${encodeURIComponent(selectedWork.id)}`)
+                void openInCanvas({ workId: selectedWork.id, sourceLabel: selectedWork.title })
               }
-              onOpenCanvas={() => navigate(`/canvas?workId=${encodeURIComponent(selectedWork.id)}`)}
+              onOpenCanvas={() =>
+                void openInCanvas({ workId: selectedWork.id, sourceLabel: selectedWork.title })
+              }
               onOpenGraph={() => {
                 if (!isDesktopRuntime()) {
                   const graphKey = selectedWork.doi ?? selectedWork.arxiv_id;
@@ -3906,6 +3911,8 @@ export function LibraryPage() {
           onConfirm={() => void confirmImport()}
         />
       )}
+
+      {targetPicker}
     </div>
   );
 }

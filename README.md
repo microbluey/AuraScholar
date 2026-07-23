@@ -43,10 +43,12 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 
 ### 🧠 Spatial canvas & AI synthesis
 
+- **Multiple independent canvases**: separate research projects into their own workspaces. The canvas header switcher creates, switches, and renames canvases; opening `/canvas` resumes the most recently used workspace at its RESTful `/canvas/:workspaceId` route. Existing default-canvas data is preserved as the first workspace; archive and delete controls are not yet exposed.
 - **Infinite research canvas**: place whole papers, PDF excerpts, researcher ideas, and AI synthesis results on one pannable, zoomable dot-grid canvas, with box selection, multi-select, relationships, collapsible groups, and a MiniMap.
 - **Five built-in node types**: add a paper from the library or reader before making any excerpt; arrange paper, excerpt, AI synthesis, Markdown/LaTeX idea-note, and logical group nodes.
 - **Relationships and source navigation**: connect evidence with citation, support, contradiction, extension, and custom relationships; open paper cards in the reader and jump from excerpts back to their anchored attachment, annotation, and page.
 - **Source-bounded AI synthesis**: select 2–10 paper or excerpt nodes to generate a methodology matrix, contradiction analysis, research-gap analysis, or concise synthesis. Paper nodes provide metadata and available abstracts—not full PDF text—while excerpt nodes provide selected source text. Results retain source nodes and provenance edges; actual generation requires a configured AI provider.
+- **Library and reader intake**: adding a paper or excerpt goes directly to the only canvas when one exists; with multiple canvases, a lightweight picker defaults to the active canvas and can create a new target in place.
 - **Local persistence**: the desktop app stores the canvas in SQLite, and whole-library JSON backups include canvas data. Spatial Canvas is not yet included in row-level WebDAV sync. See the [Spatial Canvas product and architecture notes](./docs/SPATIAL_CANVAS_PRD.md) (Chinese).
 
 ![Spatial research canvas](./assets/screenshots/canvas.jpg)
