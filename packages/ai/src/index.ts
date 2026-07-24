@@ -24,6 +24,7 @@ export {
   CanvasSynthesisOutputSchema,
   MAX_CANVAS_SYNTHESIS_SOURCES,
   generateCanvasSynthesis,
+  normalizeCanvasSynthesisSource,
 } from "./canvas-synthesis.js";
 export type {
   CanvasSynthesisMode,
