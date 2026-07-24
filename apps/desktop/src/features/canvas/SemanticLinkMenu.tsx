@@ -96,16 +96,6 @@ export function SemanticLinkMenu({
         } as CSSProperties
       }
       onPointerDown={(event) => event.stopPropagation()}
-      onBlur={(event) => {
-        if (
-          event.relatedTarget instanceof Node &&
-          event.currentTarget.contains(event.relatedTarget)
-        ) {
-          return;
-        }
-        restoreFocusOnUnmountRef.current = false;
-        onCancel();
-      }}
       data-source-id={pending.sourceId}
       data-target-id={pending.targetId}
     >

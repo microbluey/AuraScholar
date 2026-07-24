@@ -50,7 +50,7 @@ export function CanvasLibraryPanel({
           aria-label="搜索可添加到画布的文献"
         />
       </label>
-      <p className="canvas-library__hint">点击添加，或拖到画布中的目标位置。</p>
+      <p className="canvas-library__hint">点击添加或拖到目标位置；也可按 ⌘/Ctrl + K 快速搜索。</p>
       <div className="canvas-library__list">
         {loading ? (
           <p className="canvas-library__empty" role="status">

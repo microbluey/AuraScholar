@@ -8,6 +8,7 @@ import {
   applySemanticLink,
   planSemanticLink,
   QUICK_SEMANTIC_RELATIONS,
+  resolveSemanticLinkAnchor,
   resolveSemanticLinkHandles,
   resolveSemanticLinkShortcut,
 } from "./semantic-link";
@@ -110,6 +111,27 @@ describe("semantic canvas links", () => {
       sourceHandle: "link-bottom",
       targetHandle: "link-top",
     });
+  });
+
+  it("resolves blank-drop preview anchors from the requested magnet and grouped position", () => {
+    const nodes = [
+      node("group", 100, 80, {
+        type: "group",
+        dimensions: { width: 500, height: 300 },
+        data: { title: "Group", colorTheme: "accent", collapsed: false },
+      }),
+      node("source", 20, 30, { groupId: "group" }),
+    ];
+
+    expect(resolveSemanticLinkAnchor(nodes, "source", "link-right")).toEqual({
+      x: 320,
+      y: 160,
+    });
+    expect(resolveSemanticLinkAnchor(nodes, "source", "link-top")).toEqual({
+      x: 220,
+      y: 110,
+    });
+    expect(resolveSemanticLinkAnchor(nodes, "missing", "link-left")).toBeNull();
   });
 
   it("creates one canonical semantic edge without mutating the input document", () => {

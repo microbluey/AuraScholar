@@ -2,13 +2,13 @@ import type { CanvasNode, CanvasWorkspaceDocument } from "@aurascholar/core";
 import { isApplePlatform } from "../../shortcut-labels";
 import type { CanvasTool } from "./CanvasDock";
 
-export type CanvasToolboxPanel = "library" | "details" | "overview";
+export type CanvasToolboxPanel = "library" | "details";
 export type CanvasNodePrimarySurface = "details" | "reader";
 
 export const CANVAS_INTERACTIVE_TARGET_SELECTOR =
   "button, a, input, textarea, select, [contenteditable='true'], .react-flow__handle, [data-canvas-interactive]";
 export const CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR =
-  "button, a, input, textarea, select, [contenteditable='true'], [role='dialog'], [role='textbox'], .canvas-node-menu, .canvas-semantic-link-menu, .canvas-dock__menu, .canvas-reader-drawer";
+  "button, a, input, textarea, select, [contenteditable='true'], [role='dialog'], [role='textbox'], .canvas-node-menu, .canvas-semantic-link-menu, .canvas-link-target-picker, .canvas-dock__menu, .canvas-selection-toolbar__menu, .canvas-reader-drawer";
 
 export function primarySurfaceForCanvasNode(
   node: Pick<CanvasNode, "type">,

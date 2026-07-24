@@ -284,7 +284,7 @@ export function CanvasDetailsPanel({
         <div className="canvas-details__empty">
           <BoundingBox size={28} weight="duotone" />
           <strong>已选择 {selectedCount} 张卡片</strong>
-          <p>可从底部工具栏创建分组，或用 AI 合成比较文献与摘录。</p>
+          <p>选择多张卡片后，可从选区上方的浮条创建分组、整理或进行 AI 合成。</p>
         </div>
       ) : node ? (
         <NodeFields

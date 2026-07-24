@@ -36,7 +36,6 @@ describe("canvas node interactions", () => {
     expect(shouldActivateCanvasNode({ ...base, connectionInProgress: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, pendingSemanticLink: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, tool: "pan" })).toBe(false);
-    expect(shouldActivateCanvasNode({ ...base, tool: "connect" })).toBe(false);
   });
 
   it("recognizes native keyboard context-menu shortcuts", () => {
