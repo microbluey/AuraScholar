@@ -27,7 +27,6 @@ describe("canvas node interactions", () => {
       button: 0,
       connectionInProgress: false,
       interactiveTarget: false,
-      pendingSemanticLink: false,
       tool: "select" as const,
     };
     expect(shouldActivateCanvasNode(base)).toBe(true);
@@ -35,7 +34,6 @@ describe("canvas node interactions", () => {
     expect(shouldActivateCanvasNode({ ...base, button: 2 })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, interactiveTarget: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, connectionInProgress: true })).toBe(false);
-    expect(shouldActivateCanvasNode({ ...base, pendingSemanticLink: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, tool: "pan" })).toBe(false);
   });
 

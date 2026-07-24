@@ -8,7 +8,7 @@ export type CanvasNodePrimarySurface = "details" | "reader";
 export const CANVAS_INTERACTIVE_TARGET_SELECTOR =
   "button, a, input, textarea, select, [contenteditable='true'], .react-flow__handle, [data-canvas-interactive]";
 export const CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR =
-  "button, a, input, textarea, select, [contenteditable='true'], [role='dialog'], [role='textbox'], .canvas-node-menu, .canvas-semantic-link-menu, .canvas-link-target-picker, .canvas-dock__menu, .canvas-selection-toolbar__menu, .canvas-reader-drawer";
+  "button, a, input, textarea, select, [contenteditable='true'], [role='dialog'], [role='textbox'], .canvas-node-menu, .canvas-dock__menu, .canvas-selection-toolbar__menu, .canvas-reader-drawer";
 export const CANVAS_HISTORY_SHORTCUT_BLOCKING_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='dialog'], [role='menu'], [role='listbox'], [data-modal-root='true'], [data-canvas-native-history='true'], .canvas-reader-drawer";
 
@@ -23,7 +23,6 @@ export interface CanvasNodeActivationIntent {
   button: number;
   connectionInProgress: boolean;
   interactiveTarget: boolean;
-  pendingSemanticLink: boolean;
   tool: CanvasTool;
 }
 
@@ -33,7 +32,6 @@ export function shouldActivateCanvasNode(intent: CanvasNodeActivationIntent): bo
     intent.button === 0 &&
     !intent.additive &&
     !intent.connectionInProgress &&
-    !intent.pendingSemanticLink &&
     !intent.interactiveTarget
   );
 }

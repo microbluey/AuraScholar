@@ -2,7 +2,6 @@ import {
   applyCanvasLayout,
   planCanvasLayout,
   type AISynthesisType,
-  type CanvasEdge,
   type CanvasLayoutFailure,
   type CanvasLayoutMode,
   type CanvasNode,
@@ -27,13 +26,12 @@ import {
   type OnConnectStartParams,
   useReactFlow,
   useStoreApi,
-  useViewport,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { isImeComposing } from "../../keyboard";
 import { canvasNodeTypes, type CanvasFlowNode, type CanvasNodeMenuAnchor } from "./CanvasCards";
 import { CanvasCommandPalette } from "./CanvasCommandPalette";
-import { CanvasLinkTargetPicker, type CanvasLinkTargetRequest } from "./CanvasLinkTargetPicker";
+import { CanvasEdgeLabelEditor } from "./CanvasEdgeLabelEditor";
 import { CanvasNodeContextMenu } from "./CanvasNodeContextMenu";
 import { CanvasDock, type CanvasTool } from "./CanvasDock";
 import { CANVAS_WORK_DRAG_TYPE } from "./CanvasLibraryPanel";
@@ -47,7 +45,6 @@ import { CanvasToolbox } from "./CanvasToolbox";
 import { CanvasViewportControls } from "./CanvasViewportControls";
 import { CanvasWorkspaceSwitcher } from "./CanvasWorkspaceSwitcher";
 import { canvasEdgeTypes, type RelationFlowEdge } from "./RelationEdge";
-import { SemanticLinkMenu } from "./SemanticLinkMenu";
 import {
   CANVAS_HISTORY_SHORTCUT_BLOCKING_SELECTOR,
   CANVAS_INTERACTIVE_TARGET_SELECTOR,
@@ -79,20 +76,20 @@ import {
   createGroupNode,
   createIdeaNoteNode,
   createPaperNode,
+  canvasEdgeFreeText,
   isSynthesisSource,
-  RELATION_LABELS,
   SYNTHESIS_LABELS,
   type CanvasLibraryWork,
 } from "./model";
 import {
-  applySemanticLink,
+  applyCanvasLink,
+  applyCanvasLinkedNote,
   COLLAPSED_GROUP_DIMENSIONS,
-  planSemanticLink,
-  resolveSemanticLinkAnchor,
-  resolveSemanticLinkHandles,
-  type PendingSemanticLink,
-  type QuickSemanticRelation,
-} from "./semantic-link";
+  hasReciprocalCanvasLink,
+  prepareCanvasLink,
+  prepareCanvasLinkedNote,
+  resolveCanvasLinkHandles,
+} from "./canvas-link";
 import {
   applyCompletedCanvasSynthesis,
   canvasSynthesisSourceFingerprint,
@@ -150,6 +147,14 @@ interface CanvasNodeMenuState {
   returnFocusElement: HTMLElement | null;
 }
 
+interface CanvasEdgeLabelEditorState {
+  edgeId: string;
+  initialValue: string;
+  position: CanvasMenuPoint;
+  returnFocusElement: HTMLElement | SVGElement | null;
+  workspaceId: string;
+}
+
 function readerTargetsNode(target: CanvasReaderTarget, node: CanvasNode): boolean {
   if (node.type === "paper") {
     return target.sourceNodeId === node.id || target.workId === node.data.workId;
@@ -186,7 +191,7 @@ function nodeMiniMapColor(node: CanvasFlowNode): string {
   }
 }
 
-function semanticNodeLabel(node: CanvasNode): string {
+function canvasNodeLabel(node: CanvasNode): string {
   const compact = (value: string) =>
     value.length > 72 ? `${value.slice(0, 69).trimEnd()}…` : value;
   switch (node.type) {
@@ -214,7 +219,7 @@ function canvasLayoutFailureMessage(reason: CanvasLayoutFailure): string {
     case "collapsed-parent-group":
       return "请先展开分组，再整理其中的文献。";
     case "no-citation-edges":
-      return "所选文献之间还没有“引用”关系。";
+      return "所选文献之间还没有可用于整理的引文数据。";
     default:
       return "所选文献已发生变化，请重新选择后再试。";
   }
@@ -253,24 +258,21 @@ function CanvasWorkspaceInner({
   const [notice, setNotice] = useState("");
   const [readerTarget, setReaderTarget] = useState<CanvasReaderTarget | null>(null);
   const [connectionInProgress, setConnectionInProgress] = useState(false);
-  const [pendingSemanticLink, setPendingSemanticLink] = useState<PendingSemanticLink | null>(null);
-  const [linkTargetRequest, setLinkTargetRequest] = useState<CanvasLinkTargetRequest | null>(null);
-  const [semanticCommitConfirmation, setSemanticCommitConfirmation] = useState<{
-    edge: CanvasEdge;
-    pending: PendingSemanticLink;
-    relationType: QuickSemanticRelation;
-  } | null>(null);
-  const [semanticLinkReturnFocus, setSemanticLinkReturnFocus] = useState<HTMLElement | null>(null);
+  const [edgeLabelEditor, setEdgeLabelEditor] = useState<CanvasEdgeLabelEditorState | null>(null);
+  const activeEdgeLabelEditor =
+    edgeLabelEditor &&
+    edgeLabelEditor.workspaceId === document.workspaceId &&
+    document.edges.some((edge) => edge.id === edgeLabelEditor.edgeId)
+      ? edgeLabelEditor
+      : null;
   const cancelledConnectionRef = useRef(false);
   const completedConnectionRef = useRef(false);
   const connectionStartRef = useRef<{
     clientX?: number;
     clientY?: number;
-    sourceHandle?: string;
     sourceId: string;
     workspaceId: string;
   } | null>(null);
-  const linkTargetRequestRef = useRef<CanvasLinkTargetRequest | null>(null);
   const trustedReaderPayloadRef = useRef<string | null>(null);
   const commandAnchorRef = useRef<CanvasPoint | null>(null);
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -280,7 +282,6 @@ function CanvasWorkspaceInner({
   const dragHistorySequenceRef = useRef(0);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
-  const viewport = useViewport();
 
   const showNotice = useCallback((message: string) => setNotice(message), []);
 
@@ -295,12 +296,9 @@ function CanvasWorkspaceInner({
     cancelledConnectionRef.current = true;
     completedConnectionRef.current = false;
     connectionStartRef.current = null;
-    linkTargetRequestRef.current = null;
     flowStore.getState().cancelConnection();
     flowStore.setState({ connectionClickStartHandle: null });
     setConnectionInProgress(false);
-    setLinkTargetRequest(null);
-    setPendingSemanticLink(null);
   }, [flowStore]);
 
   const closeReader = useCallback(() => {
@@ -336,6 +334,7 @@ function CanvasWorkspaceInner({
     commandAnchorRef.current = flow.screenToFlowPosition(screenPoint);
     cancelFlowConnection();
     dismissNodeMenu(false);
+    setEdgeLabelEditor(null);
     setCommandOpen(true);
   }, [cancelFlowConnection, dismissNodeMenu, flow]);
 
@@ -357,6 +356,7 @@ function CanvasWorkspaceInner({
       trustedReaderPayloadRef.current = null;
       cancelFlowConnection();
       setNodeMenu(null);
+      setEdgeLabelEditor(null);
       setToolboxPanel(null);
       setAutoFocusDetails(false);
       if (node.type === "paper") {
@@ -394,6 +394,7 @@ function CanvasWorkspaceInner({
       trustedReaderPayloadRef.current = null;
       cancelFlowConnection();
       setNodeMenu(null);
+      setEdgeLabelEditor(null);
       closeReader();
       setAutoFocusDetails(false);
       setToolboxPanel("details");
@@ -418,6 +419,7 @@ function CanvasWorkspaceInner({
       if (!node) return;
       trustedReaderPayloadRef.current = null;
       closeReader();
+      setEdgeLabelEditor(null);
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
       setAutoFocusDetails(true);
@@ -429,6 +431,7 @@ function CanvasWorkspaceInner({
   const changeToolboxPanel = useCallback(
     (panel: CanvasToolboxPanel | null) => {
       dismissNodeMenu(false);
+      setEdgeLabelEditor(null);
       setAutoFocusDetails(false);
       if (panel === "details") closeReader();
       setToolboxPanel(panel);
@@ -441,6 +444,7 @@ function CanvasWorkspaceInner({
       const wrapper = wrapperRef.current;
       if (!wrapper) return;
       cancelFlowConnection();
+      setEdgeLabelEditor(null);
       if (!selectedNodeIdsRef.current.has(nodeId)) {
         setSelectedNodeIds(new Set([nodeId]));
       }
@@ -470,10 +474,6 @@ function CanvasWorkspaceInner({
   }, [selectedNodeIds]);
 
   useEffect(() => {
-    linkTargetRequestRef.current = linkTargetRequest;
-  }, [linkTargetRequest]);
-
-  useEffect(() => {
     if (activeWorkspaceIdRef.current === document.workspaceId) return;
     activeWorkspaceIdRef.current = document.workspaceId;
     activeSynthesisRequestIdRef.current = null;
@@ -482,17 +482,13 @@ function CanvasWorkspaceInner({
     cancelledConnectionRef.current = true;
     completedConnectionRef.current = false;
     connectionStartRef.current = null;
-    linkTargetRequestRef.current = null;
     flowStore.getState().cancelConnection();
     flowStore.setState({ connectionClickStartHandle: null });
     setSelectedNodeIds(new Set());
     setSelectedEdgeId(null);
     setNodeMenu(null);
     setConnectionInProgress(false);
-    setLinkTargetRequest(null);
-    setPendingSemanticLink(null);
-    setSemanticCommitConfirmation(null);
-    setSemanticLinkReturnFocus(null);
+    setEdgeLabelEditor(null);
     setReaderTarget(null);
     setToolboxPanel(null);
     setAutoFocusDetails(false);
@@ -508,56 +504,13 @@ function CanvasWorkspaceInner({
   }, [notice]);
 
   useEffect(() => {
-    if (!semanticCommitConfirmation) return;
-    const committedEdge = document.edges.find(
-      (edge) => edge.id === semanticCommitConfirmation.edge.id,
-    );
-    if (committedEdge) {
-      const timeout = window.setTimeout(() => {
-        setSelectedNodeIds(new Set());
-        setSelectedEdgeId(committedEdge.id);
-        showNotice(`已创建“${committedEdge.label}”关系。`);
-        setSemanticCommitConfirmation(null);
-      }, 0);
-      return () => window.clearTimeout(timeout);
-    }
-    const validation = applySemanticLink(
-      document,
-      semanticCommitConfirmation.pending,
-      semanticCommitConfirmation.relationType,
-      semanticCommitConfirmation.edge,
-    );
-    if (validation.status === "created") return;
-    const timeout = window.setTimeout(() => {
-      if (validation.status === "duplicate") {
-        const existing = document.edges.find(
-          (edge) =>
-            edge.sourceId === semanticCommitConfirmation.pending.sourceId &&
-            edge.targetId === semanticCommitConfirmation.pending.targetId,
-        );
-        setSelectedNodeIds(new Set());
-        setSelectedEdgeId(existing?.id ?? null);
-      }
-      showNotice(
-        validation.status === "duplicate"
-          ? "这两个方向已经存在一条关系。"
-          : validation.status === "workspace-mismatch"
-            ? "白板已切换，本次连线未写入。"
-            : "连线端点已发生变化，请重试。",
-      );
-      setSemanticCommitConfirmation(null);
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [document, semanticCommitConfirmation, showNotice]);
-
-  useEffect(() => {
-    if (!connectionInProgress || pendingSemanticLink) return;
+    if (!connectionInProgress) return;
     const cancelOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
         cancelFlowConnection();
-        showNotice("已取消关系连线。");
+        showNotice("已取消连线。");
       }
     };
     const cancelOnOutsidePointer = (event: PointerEvent) => {
@@ -568,7 +521,7 @@ function CanvasWorkspaceInner({
         return;
       }
       cancelFlowConnection();
-      showNotice("已取消关系连线。");
+      showNotice("已取消连线。");
     };
     window.addEventListener("keydown", cancelOnEscape, true);
     window.addEventListener("pointerdown", cancelOnOutsidePointer, true);
@@ -576,7 +529,7 @@ function CanvasWorkspaceInner({
       window.removeEventListener("keydown", cancelOnEscape, true);
       window.removeEventListener("pointerdown", cancelOnOutsidePointer, true);
     };
-  }, [cancelFlowConnection, connectionInProgress, pendingSemanticLink, showNotice]);
+  }, [cancelFlowConnection, connectionInProgress, showNotice]);
 
   const collapsedGroupIds = useMemo(
     () =>
@@ -669,7 +622,7 @@ function CanvasWorkspaceInner({
         extent: node.groupId ? "parent" : undefined,
         draggable: tool !== "pan",
         selectable: tool !== "pan",
-        connectable: tool !== "pan" && !pendingSemanticLink && !linkTargetRequest,
+        connectable: tool !== "pan",
         focusable: false,
         selected: selectedNodeIds.has(node.id),
         zIndex: node.type === "group" ? 0 : 2,
@@ -696,88 +649,13 @@ function CanvasWorkspaceInner({
     document.nodes,
     hiddenNodeIds,
     nodeMenu?.nodeId,
-    linkTargetRequest,
     openNodeInReader,
-    pendingSemanticLink,
     requestNodeContextMenu,
     selectedNodeIds,
     setGroupCollapsed,
     tool,
   ]);
   /* eslint-enable react-hooks/refs */
-
-  const flowEdges = useMemo<RelationFlowEdge[]>(
-    () =>
-      document.edges
-        .map((edge) => ({
-          edge,
-          source: hiddenNodeProxyIds.get(edge.sourceId) ?? edge.sourceId,
-          target: hiddenNodeProxyIds.get(edge.targetId) ?? edge.targetId,
-        }))
-        .filter(({ source, target }) => source !== target)
-        .map(({ edge, source, target }) => {
-          const handles = resolveSemanticLinkHandles(document.nodes, source, target);
-          const sourceNode = document.nodes.find((node) => node.id === source);
-          const targetNode = document.nodes.find((node) => node.id === target);
-          return {
-            id: edge.id,
-            source,
-            target,
-            ariaLabel:
-              sourceNode && targetNode
-                ? `${semanticNodeLabel(sourceNode)} ${edge.label || RELATION_LABELS[edge.relationType]} ${semanticNodeLabel(targetNode)}`
-                : undefined,
-            sourceHandle: handles.sourceHandle,
-            targetHandle: handles.targetHandle,
-            type: "relation",
-            data: { relationType: edge.relationType, label: edge.label },
-            markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-            animated: edge.style?.animated,
-            selected: selectedEdgeId === edge.id,
-            style: {
-              stroke: edge.style?.stroke || "var(--color-text-faint)",
-              strokeWidth: selectedEdgeId === edge.id ? 2.2 : 1.45,
-            },
-          };
-        }),
-    [document.edges, document.nodes, hiddenNodeProxyIds, selectedEdgeId],
-  );
-
-  const displayedFlowEdges = useMemo<RelationFlowEdge[]>(() => {
-    if (!pendingSemanticLink) return flowEdges;
-    return [
-      ...flowEdges,
-      {
-        id: "canvas:pending-semantic-link",
-        source: pendingSemanticLink.sourceId,
-        target: pendingSemanticLink.targetId,
-        sourceHandle: pendingSemanticLink.sourceHandle,
-        targetHandle: pendingSemanticLink.targetHandle,
-        type: "relation",
-        data: { relationType: "custom", pending: true },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-        selectable: false,
-        focusable: false,
-        style: {
-          stroke: "var(--color-accent)",
-          strokeDasharray: "5 5",
-          strokeWidth: 1.8,
-        },
-      },
-    ];
-  }, [flowEdges, pendingSemanticLink]);
-
-  const linkTargetSourceAnchor = useMemo(
-    () =>
-      linkTargetRequest
-        ? resolveSemanticLinkAnchor(
-            document.nodes,
-            linkTargetRequest.sourceId,
-            linkTargetRequest.sourceHandle,
-          )
-        : null,
-    [document.nodes, linkTargetRequest],
-  );
 
   const updateNode = useCallback(
     (node: CanvasNode) => {
@@ -793,18 +671,229 @@ function CanvasWorkspaceInner({
     [onDocumentChange],
   );
 
-  const updateEdge = useCallback(
-    (edge: CanvasEdge) => {
-      onDocumentChange(
-        (current) => ({
-          ...current,
-          edges: current.edges.map((candidate) => (candidate.id === edge.id ? edge : candidate)),
-          updatedAt: Date.now(),
-        }),
-        { history: { label: "编辑关系", mergeKey: `edit-edge:${edge.id}` } },
+  const restoreEdgeFocus = useCallback((editor: CanvasEdgeLabelEditorState) => {
+    window.requestAnimationFrame(() => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const fallback = wrapper.querySelector<HTMLElement | SVGElement>(
+        `.canvas-edge-label[data-edge-id="${CSS.escape(editor.edgeId)}"], .react-flow__edge[data-id="${CSS.escape(editor.edgeId)}"]`,
       );
+      const target = editor.returnFocusElement?.isConnected ? editor.returnFocusElement : fallback;
+      (target ?? wrapper).focus({ preventScroll: true });
+    });
+  }, []);
+
+  const openEdgeLabelEditor = useCallback(
+    (
+      edgeId: string,
+      clientPosition?: CanvasMenuPoint,
+      returnFocusElement?: HTMLElement | SVGElement | null,
+    ) => {
+      const wrapper = wrapperRef.current;
+      const edge = document.edges.find((candidate) => candidate.id === edgeId);
+      if (!wrapper || !edge) return;
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const edgeRect = wrapper
+        .querySelector<SVGGraphicsElement>(
+          `.react-flow__edge[data-id="${CSS.escape(edgeId)}"] path`,
+        )
+        ?.getBoundingClientRect();
+      const anchorPosition = clientPosition
+        ? {
+            x: clientPosition.x - wrapperRect.left,
+            y: clientPosition.y - wrapperRect.top,
+          }
+        : {
+            x:
+              (edgeRect?.left ?? wrapperRect.left + wrapperRect.width / 2) -
+              wrapperRect.left +
+              (edgeRect?.width ?? 0) / 2,
+            y:
+              (edgeRect?.top ?? wrapperRect.top + wrapperRect.height / 2) -
+              wrapperRect.top +
+              (edgeRect?.height ?? 0) / 2,
+          };
+      const position = clampCanvasMenuPoint(
+        { x: anchorPosition.x - 135, y: anchorPosition.y - 24 },
+        { width: wrapperRect.width, height: wrapperRect.height },
+        { width: 270, height: 76 },
+      );
+      cancelFlowConnection();
+      dismissNodeMenu(false);
+      closeReader();
+      setSelectedNodeIds(new Set());
+      setSelectedEdgeId(edge.id);
+      setToolboxPanel(null);
+      setAutoFocusDetails(false);
+      setEdgeLabelEditor({
+        edgeId: edge.id,
+        initialValue: canvasEdgeFreeText(edge) || "",
+        position,
+        returnFocusElement:
+          returnFocusElement ??
+          wrapper.querySelector<HTMLElement | SVGElement>(
+            `.canvas-edge-label[data-edge-id="${CSS.escape(edge.id)}"], .react-flow__edge[data-id="${CSS.escape(edge.id)}"]`,
+          ),
+        workspaceId: document.workspaceId,
+      });
     },
-    [onDocumentChange],
+    [cancelFlowConnection, closeReader, dismissNodeMenu, document.edges, document.workspaceId],
+  );
+
+  const commitEdgeLabel = useCallback(
+    (value: string) => {
+      const editor = edgeLabelEditor;
+      if (!editor) return;
+      if (editor.initialValue === value) {
+        setEdgeLabelEditor(null);
+        restoreEdgeFocus(editor);
+        return;
+      }
+      const updatedAt = Date.now();
+      const commitOutcome: {
+        status: "applied" | "missing-edge" | "unchanged" | "workspace-mismatch";
+      } = { status: "missing-edge" };
+      const applied = onDocumentChange(
+        (current) => {
+          if (current.workspaceId !== editor.workspaceId) {
+            commitOutcome.status = "workspace-mismatch";
+            return current;
+          }
+          const currentEdge = current.edges.find((edge) => edge.id === editor.edgeId);
+          if (!currentEdge) {
+            commitOutcome.status = "missing-edge";
+            return current;
+          }
+          if ((canvasEdgeFreeText(currentEdge) || "") === value) {
+            commitOutcome.status = "unchanged";
+            return current;
+          }
+          commitOutcome.status = "applied";
+          return {
+            ...current,
+            edges: current.edges.map((edge) =>
+              edge.id === editor.edgeId
+                ? {
+                    ...edge,
+                    label: value || undefined,
+                    updatedAt,
+                  }
+                : edge,
+            ),
+            updatedAt,
+          };
+        },
+        {
+          history: {
+            label: "编辑连线文字",
+            mergeKey: `edge-label:${editor.edgeId}`,
+          },
+        },
+      );
+      setEdgeLabelEditor(null);
+      if (applied && commitOutcome.status === "applied") {
+        showNotice(value ? "已更新连线文字。" : "已清除连线文字。");
+      } else if (commitOutcome.status !== "unchanged") {
+        showNotice("连线已发生变化，本次文字未写入。");
+      }
+      restoreEdgeFocus(editor);
+    },
+    [edgeLabelEditor, onDocumentChange, restoreEdgeFocus, showNotice],
+  );
+
+  useEffect(() => {
+    const handleEdgeEditShortcut = (event: KeyboardEvent) => {
+      if (
+        event.key !== "F2" ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        !selectedEdgeId ||
+        activeEdgeLabelEditor ||
+        !(event.target instanceof Element) ||
+        !wrapperRef.current?.contains(event.target) ||
+        (event.target.closest(CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR) &&
+          !event.target.closest(".canvas-edge-label"))
+      ) {
+        return;
+      }
+      event.preventDefault();
+      openEdgeLabelEditor(selectedEdgeId);
+    };
+    window.addEventListener("keydown", handleEdgeEditShortcut);
+    return () => window.removeEventListener("keydown", handleEdgeEditShortcut);
+  }, [activeEdgeLabelEditor, openEdgeLabelEditor, selectedEdgeId]);
+
+  const selectEdge = useCallback(
+    (edgeId: string, returnFocusElement?: HTMLElement | SVGElement | null) => {
+      if (tool !== "select" || connectionInProgress) return;
+      setSelectedNodeIds(new Set());
+      setSelectedEdgeId(edgeId);
+      setNodeMenu(null);
+      closeReader();
+      setAutoFocusDetails(false);
+      setToolboxPanel(null);
+      (returnFocusElement ?? wrapperRef.current)?.focus({ preventScroll: true });
+    },
+    [closeReader, connectionInProgress, tool],
+  );
+
+  const flowEdges = useMemo<RelationFlowEdge[]>(
+    () =>
+      document.edges
+        .map((edge) => ({
+          edge,
+          source: hiddenNodeProxyIds.get(edge.sourceId) ?? edge.sourceId,
+          target: hiddenNodeProxyIds.get(edge.targetId) ?? edge.targetId,
+        }))
+        .filter(({ source, target }) => source !== target)
+        .map(({ edge, source, target }) => {
+          const handles = resolveCanvasLinkHandles(document.nodes, source, target);
+          const freeTextLabel = canvasEdgeFreeText(edge);
+          const sourceNode = document.nodes.find((node) => node.id === source);
+          const targetNode = document.nodes.find((node) => node.id === target);
+          return {
+            id: edge.id,
+            source,
+            target,
+            ariaLabel:
+              sourceNode && targetNode
+                ? `${canvasNodeLabel(sourceNode)} 到 ${canvasNodeLabel(targetNode)}${freeTextLabel ? `，连线文字：${freeTextLabel}` : "，无连线文字"}，按 F2 编辑`
+                : undefined,
+            sourceHandle: handles.sourceHandle,
+            targetHandle: handles.targetHandle,
+            type: "relation",
+            data: {
+              label: freeTextLabel,
+              reciprocal: hasReciprocalCanvasLink(document.edges, edge),
+              onSelect: (returnFocusElement: HTMLButtonElement) =>
+                selectEdge(edge.id, returnFocusElement),
+              onEditLabel: (
+                clientPosition: CanvasMenuPoint,
+                returnFocusElement: HTMLButtonElement,
+              ) => openEdgeLabelEditor(edge.id, clientPosition, returnFocusElement),
+            },
+            markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+            animated: edge.style?.animated,
+            selected: selectedEdgeId === edge.id,
+            style: {
+              stroke: edge.style?.stroke || "var(--color-text-faint)",
+              strokeWidth: selectedEdgeId === edge.id ? 2.2 : 1.45,
+            },
+          };
+        }),
+    [
+      document.edges,
+      document.nodes,
+      hiddenNodeProxyIds,
+      openEdgeLabelEditor,
+      selectedEdgeId,
+      selectEdge,
+    ],
   );
 
   const onNodesChange = useCallback(
@@ -1046,22 +1135,6 @@ function CanvasWorkspaceInner({
     ],
   );
 
-  const deleteEdge = useCallback(
-    (edgeId: string) => {
-      onDocumentChange(
-        (current) => ({
-          ...current,
-          edges: current.edges.filter((edge) => edge.id !== edgeId),
-          updatedAt: Date.now(),
-        }),
-        { history: { label: "删除关系" } },
-      );
-      setSelectedEdgeId(null);
-      showNotice("关系连线已删除。");
-    },
-    [onDocumentChange, showNotice],
-  );
-
   const deleteSelection = useCallback(() => {
     const selectedTargets = document.nodes.filter((node) => selectedNodeIds.has(node.id));
     if (!selectedTargets.length && !selectedEdgeId) return;
@@ -1087,6 +1160,7 @@ function CanvasWorkspaceInner({
     setSelectedNodeIds(new Set());
     setSelectedEdgeId(null);
     setNodeMenu(null);
+    setEdgeLabelEditor(null);
     setAutoFocusDetails(false);
     cancelFlowConnection();
 
@@ -1115,7 +1189,10 @@ function CanvasWorkspaceInner({
       if (
         !hasSelection ||
         !isCanvasSelectionDeleteShortcut({
-          blockedSurface: Boolean(target?.closest(CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR)),
+          blockedSurface: Boolean(
+            target?.closest(CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR) &&
+            !target.closest(".canvas-edge-label"),
+          ),
           composing: event.isComposing,
           defaultPrevented: event.defaultPrevented,
           key: event.key,
@@ -1142,10 +1219,7 @@ function CanvasWorkspaceInner({
       setSelectedNodeIds(new Set());
       setSelectedEdgeId(null);
       setNodeMenu(null);
-      setPendingSemanticLink(null);
-      setLinkTargetRequest(null);
-      setSemanticCommitConfirmation(null);
-      setSemanticLinkReturnFocus(null);
+      setEdgeLabelEditor(null);
       closeReader();
       setAutoFocusDetails(false);
       setToolboxPanel((current) => (current === "details" ? null : current));
@@ -1185,15 +1259,11 @@ function CanvasWorkspaceInner({
 
   const connect = useCallback(
     (connection: Connection) => {
-      if (cancelledConnectionRef.current) return;
-      if (!connection.source || !connection.target) return;
+      if (cancelledConnectionRef.current || !connection.source || !connection.target) return;
       completedConnectionRef.current = true;
-      const plan = planSemanticLink(document, connection.source, connection.target, {
-        sourceHandle: connection.sourceHandle,
-        targetHandle: connection.targetHandle,
-      });
+      setConnectionInProgress(false);
+      const plan = prepareCanvasLink(document, connection.source, connection.target);
       if (plan.status !== "ready") {
-        setPendingSemanticLink(null);
         if (plan.status === "duplicate") {
           const existing = document.edges.find(
             (edge) => edge.sourceId === connection.source && edge.targetId === connection.target,
@@ -1203,55 +1273,33 @@ function CanvasWorkspaceInner({
         }
         showNotice(
           plan.status === "duplicate"
-            ? "这两个方向已经存在一条关系。"
+            ? "这两个方向已经存在一条连线。"
             : plan.status === "self-link"
               ? "不能把卡片连接到自身。"
               : "连线端点已发生变化，请重试。",
         );
         return;
       }
-      setSelectedNodeIds(new Set());
-      setSelectedEdgeId(null);
-      setPendingSemanticLink(plan.pending);
-    },
-    [document, showNotice],
-  );
 
-  const cancelSemanticLink = useCallback(() => {
-    cancelFlowConnection();
-    showNotice("已取消关系连线。");
-  }, [cancelFlowConnection, showNotice]);
-
-  const commitSemanticLink = useCallback(
-    (relationType: QuickSemanticRelation) => {
-      if (!pendingSemanticLink) return;
-      const result = applySemanticLink(document, pendingSemanticLink, relationType);
-      setPendingSemanticLink(null);
-      if (result.status !== "created") {
-        showNotice(
-          result.status === "duplicate"
-            ? "这两个方向已经存在一条关系。"
-            : result.status === "workspace-mismatch"
-              ? "白板已切换，本次连线未写入。"
-              : "连线端点已发生变化，请重试。",
-        );
+      const applied = onDocumentChange(
+        (current) => applyCanvasLink(current, plan.prepared).document,
+        { history: { label: "创建连线" } },
+      );
+      if (!applied) {
+        showNotice("连线端点已发生变化，本次连线未写入。");
         return;
       }
-      onDocumentChange(
-        (current) =>
-          applySemanticLink(current, pendingSemanticLink, relationType, result.edge).document,
-        { history: { label: "创建语义关系" } },
-      );
-      setSemanticCommitConfirmation({
-        edge: result.edge,
-        pending: pendingSemanticLink,
-        relationType,
-      });
+      setSelectedNodeIds(new Set());
+      setSelectedEdgeId(plan.prepared.edge.id);
+      setNodeMenu(null);
+      setEdgeLabelEditor(null);
+      setToolboxPanel(null);
+      showNotice("已创建连线；双击连线可添加文字。");
     },
-    [document, onDocumentChange, pendingSemanticLink, showNotice],
+    [document, onDocumentChange, showNotice],
   );
 
-  const startSemanticConnection = useCallback(
+  const startCanvasConnection = useCallback(
     (event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
       if (!params.nodeId) return;
       const touch = "touches" in event ? event.touches[0] : null;
@@ -1261,253 +1309,108 @@ function CanvasWorkspaceInner({
       completedConnectionRef.current = false;
       connectionStartRef.current = {
         sourceId: params.nodeId,
-        ...(params.handleId ? { sourceHandle: params.handleId } : {}),
         ...(clientX === null ? {} : { clientX }),
         ...(clientY === null ? {} : { clientY }),
         workspaceId: document.workspaceId,
       };
-      linkTargetRequestRef.current = null;
       setConnectionInProgress(true);
-      setPendingSemanticLink(null);
-      setLinkTargetRequest(null);
-      const target = event.target;
-      setSemanticLinkReturnFocus(
-        target instanceof Element
-          ? (target.closest(".react-flow__handle") as HTMLElement | null)
-          : null,
-      );
-      showNotice("正在建立关系，请选择目标卡片。");
+      setEdgeLabelEditor(null);
+      setNodeMenu(null);
+      showNotice("拖到卡片直接连接，拖到空白处新建笔记。");
     },
     [document.workspaceId, showNotice],
   );
 
-  const openLinkTargetAt = useCallback(
-    (input: {
-      clientX: number;
-      clientY: number;
-      sourceHandle?: string;
-      sourceId: string;
-      workspaceId: string;
-    }) => {
-      const wrapperBounds = wrapperRef.current?.getBoundingClientRect();
-      if (
-        !wrapperBounds ||
-        input.clientX < wrapperBounds.left ||
-        input.clientX > wrapperBounds.right ||
-        input.clientY < wrapperBounds.top ||
-        input.clientY > wrapperBounds.bottom ||
-        input.workspaceId !== document.workspaceId ||
-        input.workspaceId !== activeWorkspaceIdRef.current ||
-        !document.nodes.some((node) => node.id === input.sourceId)
-      ) {
-        cancelFlowConnection();
-        return false;
-      }
-      const request: CanvasLinkTargetRequest = {
-        position: flow.screenToFlowPosition({ x: input.clientX, y: input.clientY }),
-        sourceId: input.sourceId,
-        workspaceId: input.workspaceId,
-        ...(input.sourceHandle ? { sourceHandle: input.sourceHandle } : {}),
-      };
-      flowStore.getState().cancelConnection();
-      flowStore.setState({ connectionClickStartHandle: null });
-      connectionStartRef.current = null;
-      linkTargetRequestRef.current = request;
-      setConnectionInProgress(false);
-      setLinkTargetRequest(request);
-      setNodeMenu(null);
-      setSelectedEdgeId(null);
-      showNotice("在落点选择要连接的目标卡片。");
-      return true;
-    },
-    [cancelFlowConnection, document.nodes, document.workspaceId, flow, flowStore, showNotice],
-  );
-
-  const finishSemanticConnection = useCallback(
+  const finishCanvasConnection = useCallback(
     (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
       setConnectionInProgress(false);
       const start = connectionStartRef.current;
       connectionStartRef.current = null;
       const completedConnection = completedConnectionRef.current;
       completedConnectionRef.current = false;
-      if (cancelledConnectionRef.current) return;
+      if (cancelledConnectionRef.current || !start) return;
       const touch = "changedTouches" in event ? event.changedTouches[0] : null;
       const clientX = touch?.clientX ?? ("clientX" in event ? event.clientX : null);
       const clientY = touch?.clientY ?? ("clientY" in event ? event.clientY : null);
       if (clientX === null || clientY === null) return;
-      // React Flow's click-connect end state may still contain the pre-click
-      // connection snapshot. onConnect is the reliable success signal for both
-      // click and drag gestures; toNode remains a defensive fallback.
-      if (completedConnection || connectionState.toNode) {
-        const position = flow.screenToFlowPosition({ x: clientX, y: clientY });
-        setPendingSemanticLink((current) => (current ? { ...current, position } : current));
-        return;
-      }
+      if (completedConnection || connectionState.toNode) return;
       if (
         start?.clientX !== undefined &&
         start.clientY !== undefined &&
         Math.hypot(clientX - start.clientX, clientY - start.clientY) < 8
       ) {
-        // A plain click on a handle begins React Flow's click-connect mode.
-        // Its pointer lifecycle also reaches onConnectEnd, so leave the
-        // subsequent click callback in charge instead of treating it as a drop.
         return;
       }
-      const sourceId = connectionState.fromNode?.id ?? start?.sourceId;
-      const sourceHandle = connectionState.fromHandle?.id ?? start?.sourceHandle;
-      const sourceWorkspaceId = start?.workspaceId ?? document.workspaceId;
-      if (!sourceId) {
-        cancelFlowConnection();
-        return;
-      }
-      openLinkTargetAt({
-        clientX,
-        clientY,
-        sourceId,
-        workspaceId: sourceWorkspaceId,
-        ...(sourceHandle ? { sourceHandle } : {}),
-      });
-    },
-    [cancelFlowConnection, document.workspaceId, flow, openLinkTargetAt],
-  );
-
-  const finishClickSemanticConnection = useCallback(
-    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
-      setConnectionInProgress(false);
-      connectionStartRef.current = null;
-      const completedConnection = completedConnectionRef.current;
-      completedConnectionRef.current = false;
-      if (cancelledConnectionRef.current) return;
-      const touch = "changedTouches" in event ? event.changedTouches[0] : null;
-      const clientX = touch?.clientX ?? ("clientX" in event ? event.clientX : null);
-      const clientY = touch?.clientY ?? ("clientY" in event ? event.clientY : null);
-      if (clientX === null || clientY === null) return;
-      if (completedConnection || connectionState.toNode) {
-        const position = flow.screenToFlowPosition({ x: clientX, y: clientY });
-        setPendingSemanticLink((current) => (current ? { ...current, position } : current));
-        return;
-      }
-      cancelFlowConnection();
-      showNotice("未连接到有效目标卡片。");
-    },
-    [cancelFlowConnection, flow, showNotice],
-  );
-
-  const cancelLinkTargetSelection = useCallback(() => {
-    const returnFocusElement = semanticLinkReturnFocus;
-    cancelFlowConnection();
-    if (returnFocusElement?.isConnected) {
-      window.requestAnimationFrame(() => returnFocusElement.focus({ preventScroll: true }));
-    }
-    showNotice("已取消关系连线。");
-  }, [cancelFlowConnection, semanticLinkReturnFocus, showNotice]);
-
-  const selectLinkTarget = useCallback(
-    (targetId: string) => {
-      const request = linkTargetRequestRef.current;
+      const sourceId = connectionState.fromNode?.id ?? start.sourceId;
+      const sourceWorkspaceId = start.workspaceId;
+      const wrapper = wrapperRef.current;
+      const wrapperBounds = wrapper?.getBoundingClientRect();
+      const dropTarget = window.document.elementFromPoint(clientX, clientY);
       if (
-        !request ||
-        request.workspaceId !== document.workspaceId ||
-        request.workspaceId !== activeWorkspaceIdRef.current
+        !sourceId ||
+        !wrapper ||
+        !wrapperBounds ||
+        sourceWorkspaceId !== document.workspaceId ||
+        sourceWorkspaceId !== activeWorkspaceIdRef.current ||
+        clientX < wrapperBounds.left ||
+        clientX > wrapperBounds.right ||
+        clientY < wrapperBounds.top ||
+        clientY > wrapperBounds.bottom ||
+        !dropTarget ||
+        !wrapper.contains(dropTarget) ||
+        !dropTarget.closest(".react-flow__pane") ||
+        dropTarget.closest(
+          ".react-flow__node, .react-flow__edge, .react-flow__handle, [data-canvas-interactive]",
+        )
       ) {
         cancelFlowConnection();
-        showNotice("白板已切换，本次连线未写入。");
         return;
       }
-      const source = document.nodes.find((node) => node.id === request.sourceId);
-      const target = document.nodes.find((node) => node.id === targetId);
-      if (!source || !target) {
-        cancelFlowConnection();
-        showNotice("连线端点已发生变化，请重试。");
-        return;
-      }
-      const resolvedHandles = resolveSemanticLinkHandles(
-        document.nodes,
-        request.sourceId,
-        targetId,
+      const plan = prepareCanvasLinkedNote(
+        document,
+        sourceId,
+        flow.screenToFlowPosition({ x: clientX, y: clientY }),
       );
-      const plan = planSemanticLink(document, request.sourceId, targetId, {
-        sourceHandle: request.sourceHandle ?? resolvedHandles.sourceHandle,
-        targetHandle: resolvedHandles.targetHandle,
-      });
       if (plan.status !== "ready") {
         cancelFlowConnection();
-        if (plan.status === "duplicate") {
-          const existing = document.edges.find(
-            (edge) => edge.sourceId === request.sourceId && edge.targetId === targetId,
-          );
-          setSelectedNodeIds(new Set());
-          setSelectedEdgeId(existing?.id ?? null);
-        }
         showNotice(
-          plan.status === "duplicate"
-            ? "这两个方向已经存在一条关系。"
-            : plan.status === "self-link"
-              ? "不能把卡片连接到自身。"
-              : "连线端点已发生变化，请重试。",
+          plan.status === "workspace-mismatch"
+            ? "白板已切换，本次连线未写入。"
+            : "来源卡片已发生变化，请重试。",
         );
         return;
       }
-      if (target.groupId) {
-        const collapsedParent = document.nodes.find(
-          (node) =>
-            node.id === target.groupId && node.type === "group" && node.data.collapsed === true,
-        );
-        if (collapsedParent) {
-          onDocumentChange(
-            (current) => {
-              if (current.workspaceId !== request.workspaceId) return current;
-              return {
-                ...current,
-                nodes: current.nodes.map((node) =>
-                  node.id === collapsedParent.id && node.type === "group"
-                    ? {
-                        ...node,
-                        data: { ...node.data, collapsed: false },
-                        updatedAt: Date.now(),
-                      }
-                    : node,
-                ),
-                updatedAt: Date.now(),
-              };
-            },
-            { history: false },
-          );
-        }
+      const applied = onDocumentChange(
+        (current) => applyCanvasLinkedNote(current, plan.prepared).document,
+        { history: { label: "连线并新建笔记" } },
+      );
+      if (!applied) {
+        showNotice("来源卡片或白板已发生变化，本次笔记与连线均未写入。");
+        return;
       }
-      linkTargetRequestRef.current = null;
-      setLinkTargetRequest(null);
-      setSelectedNodeIds(new Set());
+      setSelectedNodeIds(new Set([plan.prepared.node.id]));
       setSelectedEdgeId(null);
-      setPendingSemanticLink({ ...plan.pending, position: request.position });
+      setNodeMenu(null);
+      setEdgeLabelEditor(null);
+      setToolboxPanel(null);
+      showNotice("已创建空白笔记并连线；双击连线可添加文字。");
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          wrapperRef.current
+            ?.querySelector<HTMLElement>(
+              `[data-canvas-node-id="${CSS.escape(plan.prepared.node.id)}"]`,
+            )
+            ?.focus({ preventScroll: true });
+        });
+      });
     },
-    [cancelFlowConnection, document, onDocumentChange, showNotice],
-  );
-
-  const focusExistingLinkFromPicker = useCallback(
-    (edgeId: string) => {
-      const edge = document.edges.find((candidate) => candidate.id === edgeId);
-      if (!edge) {
-        cancelFlowConnection();
-        showNotice("这条关系已发生变化，请重新选择目标。");
-        return;
-      }
-      linkTargetRequestRef.current = null;
-      setLinkTargetRequest(null);
-      setSelectedNodeIds(new Set());
-      setSelectedEdgeId(edge.id);
-      closeReader();
-      setAutoFocusDetails(false);
-      setToolboxPanel("details");
-      wrapperRef.current?.focus({ preventScroll: true });
-      showNotice("已定位现有关系。");
-    },
-    [cancelFlowConnection, closeReader, document.edges, showNotice],
+    [cancelFlowConnection, document, flow, onDocumentChange, showNotice],
   );
 
   const changeTool = useCallback(
     (nextTool: CanvasTool) => {
       cancelFlowConnection();
+      setEdgeLabelEditor(null);
       setTool(nextTool);
     },
     [cancelFlowConnection],
@@ -1859,9 +1762,6 @@ function CanvasWorkspaceInner({
     selectedNodeIds.size === 1
       ? document.nodes.find((node) => selectedNodeIds.has(node.id)) || null
       : null;
-  const selectedEdge = selectedEdgeId
-    ? document.edges.find((edge) => edge.id === selectedEdgeId) || null
-    : null;
   const selectedNodes = document.nodes.filter((node) => selectedNodeIds.has(node.id));
   const canGroup =
     selectedNodes.length >= 2 &&
@@ -1880,15 +1780,6 @@ function CanvasWorkspaceInner({
   const addedWorkIds = new Set(
     document.nodes.filter((node) => node.type === "paper").map((node) => node.data.workId),
   );
-  const pendingSemanticSource = pendingSemanticLink
-    ? document.nodes.find((node) => node.id === pendingSemanticLink.sourceId)
-    : null;
-  const pendingSemanticTarget = pendingSemanticLink
-    ? document.nodes.find((node) => node.id === pendingSemanticLink.targetId)
-    : null;
-  const linkTargetSource = linkTargetRequest
-    ? document.nodes.find((node) => node.id === linkTargetRequest.sourceId)
-    : null;
   const nodeMenuTarget = nodeMenu
     ? document.nodes.find((node) => node.id === nodeMenu.nodeId) || null
     : null;
@@ -1929,7 +1820,7 @@ function CanvasWorkspaceInner({
       showNotice(
         mode === "timeline"
           ? `已按发表年份整理 ${plan.nodePositions.length} 张文献。`
-          : `已按引用关系整理 ${plan.nodePositions.length} 张文献。`,
+          : `已按引文树整理 ${plan.nodePositions.length} 张文献。`,
       );
     },
     [document, onDocumentChange, selectedNodeIds, showNotice],
@@ -2022,29 +1913,6 @@ function CanvasWorkspaceInner({
             lastCanvasPointerRef.current = { x: event.clientX, y: event.clientY };
           }
         }}
-        onPointerDownCapture={(event) => {
-          const start = connectionStartRef.current;
-          if (
-            !start ||
-            cancelledConnectionRef.current ||
-            !(event.target instanceof Element) ||
-            !event.target.closest(".react-flow__pane") ||
-            event.target.closest(
-              ".react-flow__node, .react-flow__edge, .react-flow__handle, [data-canvas-interactive]",
-            )
-          ) {
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          openLinkTargetAt({
-            clientX: event.clientX,
-            clientY: event.clientY,
-            sourceId: start.sourceId,
-            workspaceId: start.workspaceId,
-            ...(start.sourceHandle ? { sourceHandle: start.sourceHandle } : {}),
-          });
-        }}
         onDrop={onDrop}
         onDragOver={(event) => {
           if (
@@ -2058,13 +1926,13 @@ function CanvasWorkspaceInner({
       >
         <ReactFlow<CanvasFlowNode, RelationFlowEdge>
           nodes={flowNodes}
-          edges={displayedFlowEdges}
+          edges={flowEdges}
           nodeTypes={canvasNodeTypes}
           edgeTypes={canvasEdgeTypes}
           connectionMode={ConnectionMode.Loose}
           connectionRadius={28}
           connectionDragThreshold={8}
-          connectOnClick
+          connectOnClick={false}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={(event, node) => {
@@ -2077,7 +1945,6 @@ function CanvasWorkspaceInner({
               button: event.button,
               connectionInProgress,
               interactiveTarget,
-              pendingSemanticLink: Boolean(pendingSemanticLink || linkTargetRequest),
               tool,
             };
             if (additive) {
@@ -2085,9 +1952,7 @@ function CanvasWorkspaceInner({
                 tool !== "select" ||
                 event.button !== 0 ||
                 interactiveTarget ||
-                connectionInProgress ||
-                pendingSemanticLink ||
-                linkTargetRequest
+                connectionInProgress
               ) {
                 return;
               }
@@ -2105,10 +1970,10 @@ function CanvasWorkspaceInner({
           onNodeContextMenu={(event, node) => {
             event.preventDefault();
             event.stopPropagation();
-            if (connectionInProgress || pendingSemanticLink || linkTargetRequest) {
+            if (connectionInProgress) {
               cancelFlowConnection();
               setNodeMenu(null);
-              showNotice("已取消关系连线。");
+              showNotice("已取消连线。");
               return;
             }
             if (tool !== "select") return;
@@ -2124,28 +1989,26 @@ function CanvasWorkspaceInner({
             });
           }}
           onEdgeClick={(event, edge) => {
-            if (
-              tool !== "select" ||
-              connectionInProgress ||
-              pendingSemanticLink ||
-              linkTargetRequest ||
-              event.button !== 0
-            ) {
+            if (tool !== "select" || connectionInProgress || event.button !== 0) {
               return;
             }
-            setSelectedNodeIds(new Set());
-            setSelectedEdgeId(edge.id);
-            setNodeMenu(null);
-            closeReader();
-            setAutoFocusDetails(false);
-            setToolboxPanel("details");
-            wrapperRef.current?.focus({ preventScroll: true });
+            selectEdge(edge.id);
+          }}
+          onEdgeDoubleClick={(event, edge) => {
+            if (tool !== "select" || connectionInProgress || event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            openEdgeLabelEditor(
+              edge.id,
+              { x: event.clientX, y: event.clientY },
+              event.target instanceof Element
+                ? event.target.closest<SVGElement>(".react-flow__edge")
+                : null,
+            );
           }}
           onConnect={connect}
-          onConnectStart={startSemanticConnection}
-          onConnectEnd={finishSemanticConnection}
-          onClickConnectStart={startSemanticConnection}
-          onClickConnectEnd={finishClickSemanticConnection}
+          onConnectStart={startCanvasConnection}
+          onConnectEnd={finishCanvasConnection}
           onMoveEnd={onMoveEnd}
           onMoveStart={() => dismissNodeMenu(false)}
           onNodeDragStart={() => {
@@ -2159,21 +2022,10 @@ function CanvasWorkspaceInner({
           onSelectionEnd={() => {
             window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
           }}
-          onPaneClick={(event) => {
-            const start = connectionStartRef.current;
-            if (start && !cancelledConnectionRef.current) {
-              openLinkTargetAt({
-                clientX: event.clientX,
-                clientY: event.clientY,
-                sourceId: start.sourceId,
-                workspaceId: start.workspaceId,
-                ...(start.sourceHandle ? { sourceHandle: start.sourceHandle } : {}),
-              });
-              return;
-            }
-            if (linkTargetRequestRef.current) return;
+          onPaneClick={() => {
             cancelFlowConnection();
             dismissNodeMenu(false);
+            setEdgeLabelEditor(null);
             setSelectedNodeIds(new Set());
             setSelectedEdgeId(null);
             wrapperRef.current?.focus({ preventScroll: true });
@@ -2186,7 +2038,7 @@ function CanvasWorkspaceInner({
           multiSelectionKeyCode="Shift"
           panActivationKeyCode="Space"
           nodesDraggable={tool !== "pan"}
-          nodesConnectable={tool !== "pan" && !pendingSemanticLink && !linkTargetRequest}
+          nodesConnectable={tool !== "pan"}
           elementsSelectable={tool !== "pan"}
           deleteKeyCode={null}
           elevateNodesOnSelect
@@ -2212,7 +2064,7 @@ function CanvasWorkspaceInner({
               onRenameWorkspace={onRenameWorkspace}
             />
             <span>
-              {document.nodes.length} 张卡片 · {document.edges.length} 条关系
+              {document.nodes.length} 张卡片 · {document.edges.length} 条连线
             </span>
             <small>{persistenceLabel}</small>
           </div>
@@ -2225,7 +2077,6 @@ function CanvasWorkspaceInner({
             addedWorkIds={addedWorkIds}
             onAddWork={addPaper}
             node={selectedNode}
-            edge={selectedEdge}
             groupChildCount={
               selectedNode?.type === "group"
                 ? document.nodes.filter((node) => node.groupId === selectedNode.id).length
@@ -2235,9 +2086,7 @@ function CanvasWorkspaceInner({
             onPanelChange={changeToolboxPanel}
             onActivateNode={activateNode}
             onUpdateNode={updateNode}
-            onUpdateEdge={updateEdge}
             onDeleteNode={deleteNode}
-            onDeleteEdge={deleteEdge}
             onUngroup={ungroup}
             onSetGroupCollapsed={setGroupCollapsed}
           />
@@ -2315,39 +2164,17 @@ function CanvasWorkspaceInner({
             </div>
           )}
         </ReactFlow>
-        {linkTargetRequest && linkTargetSourceAnchor && (
-          <svg className="canvas-link-target-preview" aria-hidden="true">
-            <line
-              x1={linkTargetSourceAnchor.x * viewport.zoom + viewport.x}
-              y1={linkTargetSourceAnchor.y * viewport.zoom + viewport.y}
-              x2={linkTargetRequest.position.x * viewport.zoom + viewport.x}
-              y2={linkTargetRequest.position.y * viewport.zoom + viewport.y}
-            />
-            <circle
-              cx={linkTargetRequest.position.x * viewport.zoom + viewport.x}
-              cy={linkTargetRequest.position.y * viewport.zoom + viewport.y}
-              r={5}
-            />
-          </svg>
-        )}
-        {linkTargetRequest && linkTargetSource && (
-          <CanvasLinkTargetPicker
-            document={document}
-            request={linkTargetRequest}
-            sourceLabel={semanticNodeLabel(linkTargetSource)}
-            onCancel={cancelLinkTargetSelection}
-            onSelect={selectLinkTarget}
-            onFocusExistingEdge={focusExistingLinkFromPicker}
-          />
-        )}
-        {pendingSemanticLink && pendingSemanticSource && pendingSemanticTarget && (
-          <SemanticLinkMenu
-            pending={pendingSemanticLink}
-            sourceLabel={semanticNodeLabel(pendingSemanticSource)}
-            targetLabel={semanticNodeLabel(pendingSemanticTarget)}
-            returnFocusElement={semanticLinkReturnFocus}
-            onCancel={cancelSemanticLink}
-            onSelect={commitSemanticLink}
+        {activeEdgeLabelEditor && (
+          <CanvasEdgeLabelEditor
+            key={`${activeEdgeLabelEditor.workspaceId}:${activeEdgeLabelEditor.edgeId}`}
+            initialValue={activeEdgeLabelEditor.initialValue}
+            position={activeEdgeLabelEditor.position}
+            onCancel={() => {
+              const editor = activeEdgeLabelEditor;
+              setEdgeLabelEditor(null);
+              restoreEdgeFocus(editor);
+            }}
+            onCommit={commitEdgeLabel}
           />
         )}
         {nodeMenu && nodeMenuTarget && (

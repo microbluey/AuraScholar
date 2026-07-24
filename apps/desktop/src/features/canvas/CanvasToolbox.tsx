@@ -1,4 +1,4 @@
-import type { CanvasEdge, CanvasNode } from "@aurascholar/core";
+import type { CanvasNode } from "@aurascholar/core";
 import { Books, NotePencil, X } from "@phosphor-icons/react";
 import { useEffect, useRef } from "react";
 import { CanvasDetailsPanel } from "./CanvasDetailsPanel";
@@ -10,18 +10,15 @@ interface CanvasToolboxProps {
   activePanel: CanvasToolboxPanel | null;
   autoFocusDetails: boolean;
   addedWorkIds: Set<string>;
-  edge: CanvasEdge | null;
   groupChildCount: number;
   libraryLoading: boolean;
   node: CanvasNode | null;
   onActivateNode: (node: CanvasNode) => void;
   onAddWork: (work: CanvasLibraryWork) => void;
-  onDeleteEdge: (edgeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onPanelChange: (panel: CanvasToolboxPanel | null) => void;
   onSetGroupCollapsed: (groupId: string, collapsed: boolean) => void;
   onUngroup: (groupId: string) => void;
-  onUpdateEdge: (edge: CanvasEdge) => void;
   onUpdateNode: (node: CanvasNode) => void;
   selectedCount: number;
   works: CanvasLibraryWork[];
@@ -36,18 +33,15 @@ export function CanvasToolbox({
   activePanel,
   autoFocusDetails,
   addedWorkIds,
-  edge,
   groupChildCount,
   libraryLoading,
   node,
   onActivateNode,
   onAddWork,
-  onDeleteEdge,
   onDeleteNode,
   onPanelChange,
   onSetGroupCollapsed,
   onUngroup,
-  onUpdateEdge,
   onUpdateNode,
   selectedCount,
   works,
@@ -64,7 +58,7 @@ export function CanvasToolbox({
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activePanel, autoFocusDetails, edge?.id, node?.id, selectedCount]);
+  }, [activePanel, autoFocusDetails, node?.id, selectedCount]);
 
   if (!activePanel || !activeMeta || !ActiveIcon) return null;
 
@@ -105,14 +99,11 @@ export function CanvasToolbox({
           {activePanel === "details" && (
             <CanvasDetailsPanel
               node={node}
-              edge={edge}
               groupChildCount={groupChildCount}
               selectedCount={selectedCount}
               onActivateNode={onActivateNode}
               onUpdateNode={onUpdateNode}
-              onUpdateEdge={onUpdateEdge}
               onDeleteNode={onDeleteNode}
-              onDeleteEdge={onDeleteEdge}
               onUngroup={onUngroup}
               onSetGroupCollapsed={onSetGroupCollapsed}
             />

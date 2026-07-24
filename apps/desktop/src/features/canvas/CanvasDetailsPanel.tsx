@@ -1,34 +1,28 @@
-import type { CanvasEdge, CanvasEdgeRelation, CanvasNode } from "@aurascholar/core";
+import type { CanvasNode } from "@aurascholar/core";
 import {
   Article,
   ArrowSquareOut,
   BoundingBox,
   CaretDown,
   CaretRight,
-  Link,
   Lightbulb,
   Quotes,
   Sparkle,
   Trash,
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
-import { RELATION_LABELS, SYNTHESIS_LABELS } from "./model";
+import { SYNTHESIS_LABELS } from "./model";
 
 interface CanvasDetailsPanelProps {
-  edge: CanvasEdge | null;
   groupChildCount: number;
   node: CanvasNode | null;
   onActivateNode: (node: CanvasNode) => void;
-  onDeleteEdge: (edgeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onSetGroupCollapsed: (groupId: string, collapsed: boolean) => void;
   onUngroup: (groupId: string) => void;
-  onUpdateEdge: (edge: CanvasEdge) => void;
   onUpdateNode: (node: CanvasNode) => void;
   selectedCount: number;
 }
-
-const RELATIONS = Object.keys(RELATION_LABELS) as CanvasEdgeRelation[];
 
 function nodeKind(node: CanvasNode): { icon: ReactNode; label: string } {
   switch (node.type) {
@@ -258,26 +252,23 @@ function NodeFields({
 }
 
 export function CanvasDetailsPanel({
-  edge,
   groupChildCount,
   node,
   onActivateNode,
-  onDeleteEdge,
   onDeleteNode,
   onSetGroupCollapsed,
   onUngroup,
-  onUpdateEdge,
   onUpdateNode,
   selectedCount,
 }: CanvasDetailsPanelProps) {
   const kind = node ? nodeKind(node) : null;
-  const targetId = node?.id ?? edge?.id ?? (selectedCount > 1 ? "selection" : "empty");
+  const targetId = node?.id ?? (selectedCount > 1 ? "selection" : "empty");
 
   return (
     <div className="canvas-details" data-canvas-details-for={targetId}>
       <div className="canvas-details__kind">
-        {kind?.icon || (edge ? <Link size={18} weight="duotone" /> : <BoundingBox size={18} />)}
-        <strong>{kind?.label || (edge ? "关系连线编辑" : "选择详情")}</strong>
+        {kind?.icon || <BoundingBox size={18} />}
+        <strong>{kind?.label || "选择详情"}</strong>
       </div>
 
       {selectedCount > 1 ? (
@@ -295,54 +286,22 @@ export function CanvasDetailsPanel({
           onUngroup={onUngroup}
           onUpdateNode={onUpdateNode}
         />
-      ) : edge ? (
-        <div className="canvas-details__form">
-          <DetailsField label="关系类型">
-            <select
-              data-autofocus
-              value={edge.relationType}
-              onChange={(event) => {
-                const relationType = event.target.value as CanvasEdgeRelation;
-                onUpdateEdge({
-                  ...edge,
-                  relationType,
-                  label: RELATION_LABELS[relationType],
-                  updatedAt: Date.now(),
-                });
-              }}
-            >
-              {RELATIONS.map((relation) => (
-                <option key={relation} value={relation}>
-                  {RELATION_LABELS[relation]}
-                </option>
-              ))}
-            </select>
-          </DetailsField>
-          <DetailsField label="关系说明">
-            <input
-              value={edge.label || ""}
-              onChange={(event) =>
-                onUpdateEdge({ ...edge, label: event.target.value, updatedAt: Date.now() })
-              }
-            />
-          </DetailsField>
-        </div>
       ) : (
         <div className="canvas-details__empty">
-          <Link size={28} weight="duotone" />
-          <strong>选择一张卡片或连线</strong>
+          <BoundingBox size={28} weight="duotone" />
+          <strong>选择一张卡片</strong>
           <p>单击卡片打开内容；使用右键或卡片上的“…”执行更多操作。</p>
         </div>
       )}
 
-      {(edge || (node && node.type !== "group")) && selectedCount <= 1 && (
+      {node && node.type !== "group" && selectedCount <= 1 && (
         <button
           className="canvas-details__delete"
           type="button"
-          onClick={() => (node ? onDeleteNode(node.id) : edge && onDeleteEdge(edge.id))}
+          onClick={() => onDeleteNode(node.id)}
         >
           <Trash size={17} weight="duotone" />
-          {node ? "仅从画布移除" : "删除这条连线"}
+          仅从画布移除
         </button>
       )}
     </div>

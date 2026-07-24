@@ -59,7 +59,6 @@ function ConnectionHandles({
   return (
     <>
       {CONNECTION_HANDLES.map((handle) => {
-        const keyboardHandle = handle.id === "link-right";
         return (
           <Handle
             key={handle.id}
@@ -69,18 +68,9 @@ function ConnectionHandles({
             isConnectable={isConnectable}
             isConnectableStart={isConnectable}
             isConnectableEnd={isConnectable}
-            role={isConnectable && keyboardHandle ? "button" : undefined}
-            tabIndex={isConnectable && keyboardHandle ? 0 : -1}
-            aria-hidden={!isConnectable || !keyboardHandle}
-            aria-label={`关系连接点：${nodeLabel}`}
-            title={`从${handle.label}拖动建立关系`}
-            onKeyDown={(event) => {
-              if (!isConnectable || !keyboardHandle) return;
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              event.stopPropagation();
-              event.currentTarget.click();
-            }}
+            tabIndex={-1}
+            aria-hidden="true"
+            title={`从“${nodeLabel}”的${handle.label}拖动建立连线`}
           />
         );
       })}
@@ -221,7 +211,7 @@ export function PaperCard({ data, isConnectable, selected }: NodeProps<CanvasFlo
       <p className="canvas-card__metadata">{metadata || "作者与年份待补全"}</p>
       {node.data.venue && <span className="canvas-card__venue">{node.data.venue}</span>}
       <p className="canvas-card__abstract">
-        {node.data.abstractSnippet || "这篇文献尚无摘要，可先在画布中占位、分组和建立关系。"}
+        {node.data.abstractSnippet || "这篇文献尚无摘要，可先在画布中占位、分组和建立连线。"}
       </p>
       <footer className="canvas-card__footer">
         <span>画布内 {node.data.annotationCount} 条摘录</span>
