@@ -16,6 +16,29 @@ export interface CanvasWorkspaceWriteBarrier {
   persistDocument: (document: CanvasWorkspaceDocument) => Promise<void>;
 }
 
+export interface GuardedCanvasWorkspaceWrite {
+  getLatestDocument: () => CanvasWorkspaceDocument | undefined;
+  isRetired: () => boolean;
+  persist: (document: CanvasWorkspaceDocument) => Promise<void>;
+  snapshot: CanvasWorkspaceDocument;
+}
+
+/**
+ * Executes a queued write only while its exact snapshot is still the latest
+ * document for the workspace. This keeps an optimistic transaction that was
+ * rolled back from being written later by an already queued save.
+ */
+export async function persistCurrentCanvasWorkspaceSnapshot({
+  getLatestDocument,
+  isRetired,
+  persist,
+  snapshot,
+}: GuardedCanvasWorkspaceWrite): Promise<"persisted" | "superseded"> {
+  if (isRetired() || getLatestDocument() !== snapshot) return "superseded";
+  await persist(snapshot);
+  return isRetired() || getLatestDocument() !== snapshot ? "superseded" : "persisted";
+}
+
 /**
  * Drains every write that can affect a workspace, then persists the latest
  * snapshot if an older in-flight save changed the stored version.

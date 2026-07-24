@@ -5,8 +5,17 @@ export interface IdeaNotePatch {
   title?: string;
 }
 
+export interface IdeaNotePatchOptions {
+  expectedValue?: {
+    contentMarkdown: string;
+    title: string;
+  };
+  timestamp?: number;
+}
+
 export type IdeaNotePatchStatus =
   | "applied"
+  | "content-mismatch"
   | "missing-node"
   | "not-idea-note"
   | "unchanged"
@@ -29,8 +38,9 @@ export function applyIdeaNotePatch(
   workspaceId: string,
   nodeId: string,
   patch: IdeaNotePatch,
-  timestamp = Date.now(),
+  options: IdeaNotePatchOptions | number = {},
 ): IdeaNotePatchResult {
+  const timestamp = typeof options === "number" ? options : (options.timestamp ?? Date.now());
   if (document.workspaceId !== workspaceId) {
     return { document, status: "workspace-mismatch" };
   }
@@ -45,7 +55,7 @@ export function applyIdeaNotePatch(
 
   const hasTitlePatch = Object.prototype.hasOwnProperty.call(patch, "title");
   const hasContentPatch = Object.prototype.hasOwnProperty.call(patch, "contentMarkdown");
-  const nextTitle = hasTitlePatch ? patch.title?.trim() || undefined : node.data.title;
+  const nextTitle = hasTitlePatch ? normalizeIdeaNoteTitle(patch.title) : node.data.title;
   const nextContentMarkdown = hasContentPatch
     ? (patch.contentMarkdown ?? "")
     : node.data.contentMarkdown;
@@ -62,6 +72,15 @@ export function applyIdeaNotePatch(
     nextData.hasEquations === node.data.hasEquations
   ) {
     return { document, status: "unchanged" };
+  }
+
+  const expectedValue = typeof options === "number" ? undefined : options.expectedValue;
+  if (
+    expectedValue &&
+    (normalizeIdeaNoteTitle(expectedValue.title) !== normalizeIdeaNoteTitle(node.data.title) ||
+      expectedValue.contentMarkdown !== node.data.contentMarkdown)
+  ) {
+    return { document, status: "content-mismatch" };
   }
 
   const updatedAt = Math.max(timestamp, document.updatedAt + 1, node.updatedAt + 1);
@@ -81,4 +100,8 @@ export function applyIdeaNotePatch(
       updatedAt,
     },
   };
+}
+
+function normalizeIdeaNoteTitle(title: string | undefined): string | undefined {
+  return title?.trim() || undefined;
 }

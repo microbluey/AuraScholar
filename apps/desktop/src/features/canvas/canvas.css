@@ -1056,6 +1056,71 @@
   color: var(--color-accent-strong);
 }
 
+.canvas-note-editor__title-region {
+  display: grid;
+  min-width: 0;
+}
+
+.canvas-note-editor__draft-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 10px 20px 0;
+  padding: 9px 11px;
+  border: var(--border-width) solid color-mix(in srgb, var(--color-accent) 32%, var(--color-border));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--color-accent-subtle) 72%, var(--color-surface-raised));
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.canvas-note-editor__draft-banner--conflict {
+  border-color: color-mix(in srgb, var(--color-warning) 42%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 9%, var(--color-surface-raised));
+}
+
+.canvas-note-editor__draft-banner > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.canvas-note-editor__draft-banner svg {
+  flex: 0 0 auto;
+  color: var(--color-accent-strong);
+}
+
+.canvas-note-editor__draft-banner--conflict svg {
+  color: var(--color-warning);
+}
+
+.canvas-note-editor__draft-banner-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.canvas-note-editor__draft-banner-actions button {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.canvas-note-editor__draft-banner-actions button:hover,
+.canvas-note-editor__draft-banner-actions button:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+  color: var(--color-accent-strong);
+}
+
 .canvas-note-editor__title-field {
   display: grid;
   align-items: center;
@@ -1111,6 +1176,11 @@
   outline: none;
   background: var(--color-accent-subtle);
   color: var(--color-accent-strong);
+}
+
+.canvas-note-editor__format-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .canvas-note-editor__toolbar-hint {
@@ -1229,6 +1299,16 @@
   font-size: 10px;
 }
 
+.canvas-note-editor__draft-error,
+.canvas-note-editor__commit-error {
+  color: var(--color-danger);
+  font-weight: 720;
+}
+
+.canvas-note-editor__commit-error {
+  flex-basis: 100%;
+}
+
 .canvas-note-editor__actions {
   display: flex;
   align-items: center;
@@ -1247,6 +1327,7 @@
   background: var(--color-surface-raised);
   font-size: 11px;
   font-weight: 740;
+  white-space: nowrap;
 }
 
 .canvas-note-editor__actions button:hover,
@@ -1254,6 +1335,11 @@
   border-color: var(--color-accent);
   outline: none;
   color: var(--color-accent-strong);
+}
+
+.canvas-note-editor__actions button:disabled {
+  opacity: 0.52;
+  cursor: wait;
 }
 
 .canvas-note-editor__actions .canvas-note-editor__save {
@@ -1267,6 +1353,81 @@
   opacity: 0.72;
   font: inherit;
   font-size: 9px;
+}
+
+.canvas-note-exit-overlay {
+  position: fixed;
+  z-index: 240;
+  display: grid;
+  inset: 0;
+  padding: 24px;
+  overflow: auto;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-bg) 48%, transparent);
+  backdrop-filter: blur(7px);
+}
+
+.canvas-note-exit-dialog {
+  display: grid;
+  width: min(470px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  gap: 16px;
+  box-sizing: border-box;
+  padding: 22px;
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: 18px;
+  outline: none;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-overlay);
+  color: var(--color-text);
+  overflow: auto;
+}
+
+.canvas-note-exit-dialog__heading {
+  display: grid;
+  align-items: start;
+  gap: 12px;
+  grid-template-columns: 40px minmax(0, 1fr);
+}
+
+.canvas-note-exit-dialog__heading h2 {
+  margin: 7px 0 0;
+  font-family: var(--font-heading);
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+.canvas-note-exit-dialog__icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface));
+  color: var(--color-warning);
+  place-items: center;
+}
+
+.canvas-note-exit-dialog > p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.canvas-note-exit-dialog > .canvas-note-exit-dialog__error {
+  padding: 9px 10px;
+  border: var(--border-width) solid color-mix(in srgb, var(--color-danger) 38%, var(--color-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  color: var(--color-danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.canvas-note-exit-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @media (max-width: 760px) {
@@ -1296,6 +1457,16 @@
     padding-inline: 14px;
   }
 
+  .canvas-note-editor__draft-banner {
+    align-items: stretch;
+    margin-inline: 14px;
+    flex-direction: column;
+  }
+
+  .canvas-note-editor__draft-banner-actions {
+    justify-content: flex-end;
+  }
+
   .canvas-note-editor__toolbar {
     overflow-x: auto;
     padding-inline: 14px;
@@ -1323,9 +1494,49 @@
   .canvas-note-editor__footer > div:first-child {
     gap: 6px 10px;
   }
+
+  .canvas-note-exit-overlay {
+    padding: 14px;
+  }
+
+  .canvas-note-exit-dialog {
+    width: calc(100vw - 28px);
+    max-height: calc(100dvh - 28px);
+  }
+
+  .canvas-note-exit-dialog__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .canvas-note-editor__save kbd {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .canvas-note-editor__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .canvas-note-editor__actions {
+    justify-content: flex-end;
+  }
 }
 
 @media (pointer: coarse) {
+  .canvas-note-editor__view-switch button,
+  .canvas-note-editor__actions button {
+    min-height: 42px;
+  }
+
+  .canvas-note-editor__close,
+  .canvas-note-editor__format-button {
+    width: 42px;
+    height: 42px;
+  }
+
   .canvas-workspace:not(.canvas-workspace--tool-pan) .react-flow__handle.connectable {
     width: 36px;
     height: 36px;

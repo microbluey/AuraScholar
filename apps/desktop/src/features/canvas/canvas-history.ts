@@ -39,6 +39,18 @@ export interface CanvasHistoryCommandResult {
   label: string;
 }
 
+export interface CanvasHistoryTransaction {
+  afterDocument: CanvasWorkspaceDocument;
+  afterHistory: CanvasHistoryState;
+  beforeDocument: CanvasWorkspaceDocument;
+  beforeHistory: CanvasHistoryState;
+}
+
+export interface CanvasHistoryTransactionRollback {
+  document: CanvasWorkspaceDocument;
+  history: CanvasHistoryState;
+}
+
 export function createCanvasHistoryState(document: CanvasWorkspaceDocument): CanvasHistoryState {
   return {
     workspaceId: document.workspaceId,
@@ -226,6 +238,46 @@ export function recordCanvasHistory(
     future: [],
     present: canvasHistorySnapshot(after),
     presentFingerprint: "",
+  };
+}
+
+export function beginCanvasHistoryTransaction(
+  history: CanvasHistoryState | undefined,
+  before: CanvasWorkspaceDocument,
+  after: CanvasWorkspaceDocument,
+  mutation: CanvasHistoryMutation,
+  timestamp = Date.now(),
+): CanvasHistoryTransaction | null {
+  if (!canvasHistoryContentChanged(before, after)) return null;
+  const beforeHistory = reconcileCanvasHistory(history, before);
+  return {
+    beforeDocument: before,
+    afterDocument: after,
+    beforeHistory,
+    afterHistory: recordCanvasHistory(beforeHistory, before, after, mutation, timestamp),
+  };
+}
+
+export function rollbackCanvasHistoryTransaction(
+  transaction: CanvasHistoryTransaction,
+  currentHistory: CanvasHistoryState | undefined,
+  currentDocument: CanvasWorkspaceDocument,
+  restoredDocument: CanvasWorkspaceDocument,
+): CanvasHistoryTransactionRollback | null {
+  if (
+    currentHistory !== transaction.afterHistory ||
+    currentDocument.workspaceId !== transaction.afterDocument.workspaceId ||
+    canvasHistoryFingerprint(currentDocument) !==
+      canvasHistorySnapshotFingerprint(transaction.afterHistory.present) ||
+    restoredDocument.workspaceId !== transaction.beforeDocument.workspaceId ||
+    canvasHistoryFingerprint(restoredDocument) !==
+      canvasHistorySnapshotFingerprint(transaction.beforeHistory.present)
+  ) {
+    return null;
+  }
+  return {
+    document: restoredDocument,
+    history: reconcileCanvasHistory(transaction.beforeHistory, restoredDocument),
   };
 }
 

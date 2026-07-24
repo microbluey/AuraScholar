@@ -71,7 +71,7 @@ import {
   type CanvasEdgePrimaryClick,
   type CanvasToolboxPanel,
 } from "./canvas-interactions";
-import type { CanvasDocumentChangeOptions } from "./canvas-history";
+import type { CanvasDocumentChangeOptions, CanvasHistoryMutation } from "./canvas-history";
 import { CANVAS_COMMAND_PALETTE_REQUEST_EVENT } from "./canvas-command";
 import {
   CANVAS_EXCERPT_DRAG_MIME,
@@ -113,7 +113,7 @@ import type {
   CreateCanvasWorkspace,
 } from "./workspace-controls";
 import { applyIdeaNotePatch, type IdeaNotePatch } from "./idea-note-edit";
-import type { CanvasNoteEditorValue } from "./CanvasNoteEditorDialog";
+import type { CanvasNoteEditorCommitResult, CanvasNoteEditorValue } from "./CanvasNoteEditorDialog";
 
 const LazyCanvasNoteEditorDialog = lazy(() =>
   import("./CanvasNoteEditorDialog").then((module) => ({
@@ -132,7 +132,15 @@ interface CanvasWorkspaceProps {
     updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
     options?: CanvasDocumentChangeOptions,
   ) => boolean;
+  onDocumentTransaction: (
+    updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
+    mutation: CanvasHistoryMutation,
+  ) => {
+    commit: () => boolean;
+    rollback: (updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument) => boolean;
+  } | null;
   onExit: () => void;
+  onFlushDocument: (workspaceId: string) => Promise<void>;
   onOpenExcerpt: (
     workId: string,
     annotationId?: string,
@@ -175,7 +183,9 @@ interface CanvasEdgeLabelEditorState {
 }
 
 interface CanvasNoteEditorState extends CanvasNoteEditorValue {
+  baseValue: CanvasNoteEditorValue;
   nodeId: string;
+  openingBaseValue: CanvasNoteEditorValue;
   workspaceId: string;
 }
 
@@ -257,7 +267,9 @@ function CanvasWorkspaceInner({
   onCreateWorkspace,
   onDeleteWorkspace,
   onDocumentChange,
+  onDocumentTransaction,
   onExit,
+  onFlushDocument,
   onOpenExcerpt,
   onOpenPaper,
   onRedo,
@@ -316,6 +328,10 @@ function CanvasWorkspaceInner({
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
 
   const showNotice = useCallback((message: string) => setNotice(message), []);
+  const invalidateActiveSynthesis = useCallback(() => {
+    activeSynthesisRequestIdRef.current = null;
+    setSynthesisBusy(false);
+  }, []);
 
   useEffect(
     () => () => {
@@ -359,6 +375,11 @@ function CanvasWorkspaceInner({
         (candidate) => candidate.id === nodeId && candidate.type === "idea-note",
       );
       if (!node || node.type !== "idea-note") return;
+      const baseValue = {
+        title: node.data.title ?? "",
+        contentMarkdown: node.data.contentMarkdown,
+      };
+      invalidateActiveSynthesis();
       cancelFlowConnection();
       dismissNodeMenu(false);
       closeReader();
@@ -370,11 +391,20 @@ function CanvasWorkspaceInner({
       setNoteEditor({
         workspaceId: document.workspaceId,
         nodeId: node.id,
-        title: draft?.title ?? node.data.title ?? "",
-        contentMarkdown: draft?.contentMarkdown ?? node.data.contentMarkdown,
+        baseValue,
+        openingBaseValue: baseValue,
+        title: draft?.title ?? baseValue.title,
+        contentMarkdown: draft?.contentMarkdown ?? baseValue.contentMarkdown,
       });
     },
-    [cancelFlowConnection, closeReader, dismissNodeMenu, document.nodes, document.workspaceId],
+    [
+      cancelFlowConnection,
+      closeReader,
+      dismissNodeMenu,
+      document.nodes,
+      document.workspaceId,
+      invalidateActiveSynthesis,
+    ],
   );
 
   const openCanvasCommand = useCallback(() => {
@@ -698,31 +728,96 @@ function CanvasWorkspaceInner({
   }, []);
 
   const saveIdeaNoteEditor = useCallback(
-    (value: CanvasNoteEditorValue) => {
+    async (value: CanvasNoteEditorValue): Promise<CanvasNoteEditorCommitResult> => {
       const editor = noteEditor;
-      if (!editor) return;
+      if (!editor) return "rejected";
       const outcome: {
         status: ReturnType<typeof applyIdeaNotePatch>["status"];
       } = { status: "missing-node" };
-      const applied = onDocumentChange(
+      const transaction = onDocumentTransaction(
         (current) => {
-          const result = applyIdeaNotePatch(current, editor.workspaceId, editor.nodeId, {
-            title: value.title,
-            contentMarkdown: value.contentMarkdown,
-          });
+          const result = applyIdeaNotePatch(
+            current,
+            editor.workspaceId,
+            editor.nodeId,
+            {
+              title: value.title,
+              contentMarkdown: value.contentMarkdown,
+            },
+            {
+              expectedValue: {
+                title: editor.baseValue.title,
+                contentMarkdown: editor.baseValue.contentMarkdown,
+              },
+            },
+          );
           outcome.status = result.status;
           return result.document;
         },
-        { history: { label: "编辑研究笔记" } },
+        { label: "编辑研究笔记" },
       );
-      setNoteEditor(null);
-      if (applied && outcome.status === "applied") {
-        showNotice("研究笔记已保存。");
-      } else if (outcome.status !== "unchanged") {
-        showNotice("笔记或白板已发生变化，本次编辑未写入。");
+      const rollbackUnpersistedValue = () => {
+        const rollbackOutcome: {
+          status: ReturnType<typeof applyIdeaNotePatch>["status"];
+        } = { status: "missing-node" };
+        const rolledBack = transaction?.rollback((current) => {
+          const result = applyIdeaNotePatch(
+            current,
+            editor.workspaceId,
+            editor.nodeId,
+            editor.openingBaseValue,
+            { expectedValue: value },
+          );
+          rollbackOutcome.status = result.status;
+          return result.document;
+        });
+        if (
+          rolledBack &&
+          (rollbackOutcome.status === "applied" || rollbackOutcome.status === "unchanged")
+        ) {
+          setNoteEditor((current) =>
+            current?.workspaceId === editor.workspaceId && current.nodeId === editor.nodeId
+              ? { ...current, baseValue: editor.openingBaseValue }
+              : current,
+          );
+          return true;
+        }
+        return false;
+      };
+      if (transaction && outcome.status === "applied") {
+        setNoteEditor((current) =>
+          current?.workspaceId === editor.workspaceId && current.nodeId === editor.nodeId
+            ? { ...current, baseValue: value }
+            : current,
+        );
+        try {
+          await onFlushDocument(editor.workspaceId);
+          transaction.commit();
+          showNotice("研究笔记已保存。");
+          return "saved";
+        } catch {
+          const rolledBack = rollbackUnpersistedValue();
+          showNotice(
+            rolledBack
+              ? "笔记已保留为本地草稿，但写入白板存储失败，请重试。"
+              : "写入失败后白板又发生了变化，未自动覆盖；本地草稿仍已保留。",
+          );
+          return "rejected";
+        }
       }
+      if (outcome.status === "unchanged") {
+        try {
+          await onFlushDocument(editor.workspaceId);
+          return "unchanged";
+        } catch {
+          showNotice("笔记已保留为本地草稿，但写入白板存储失败，请重试。");
+          return "rejected";
+        }
+      }
+      showNotice("笔记或白板已发生变化，本次编辑未写入；本地草稿已保留。");
+      return "rejected";
     },
-    [noteEditor, onDocumentChange, showNotice],
+    [noteEditor, onDocumentTransaction, onFlushDocument, showNotice],
   );
 
   /* eslint-disable react-hooks/refs -- React Flow stores these callbacks as event handlers; it does not invoke them during render. */
@@ -1173,6 +1268,7 @@ function CanvasWorkspaceInner({
       y: (rect?.top || 0) + (rect?.height || 640) * 0.46,
     });
     const node = createIdeaNoteNode(position);
+    invalidateActiveSynthesis();
     onDocumentChange(
       (current) => ({
         ...current,
@@ -1186,13 +1282,18 @@ function CanvasWorkspaceInner({
     closeReader();
     setAutoFocusDetails(false);
     setToolboxPanel(null);
+    const baseValue = {
+      title: node.data.title || "",
+      contentMarkdown: node.data.contentMarkdown,
+    };
     setNoteEditor({
       workspaceId: document.workspaceId,
       nodeId: node.id,
-      title: node.data.title || "",
-      contentMarkdown: node.data.contentMarkdown,
+      baseValue,
+      openingBaseValue: baseValue,
+      ...baseValue,
     });
-  }, [closeReader, document.workspaceId, flow, onDocumentChange]);
+  }, [closeReader, document.workspaceId, flow, invalidateActiveSynthesis, onDocumentChange]);
 
   const groupSelected = useCallback(() => {
     const selected = document.nodes.filter(
@@ -2363,12 +2464,15 @@ function CanvasWorkspaceInner({
           >
             <LazyCanvasNoteEditorDialog
               key={`${activeNoteEditor.workspaceId}:${activeNoteEditor.nodeId}`}
+              workspaceId={activeNoteEditor.workspaceId}
+              nodeId={activeNoteEditor.nodeId}
+              baseValue={activeNoteEditor.openingBaseValue}
               initialValue={{
                 title: activeNoteEditor.title,
                 contentMarkdown: activeNoteEditor.contentMarkdown,
               }}
-              onCancel={closeIdeaNoteEditor}
-              onSave={saveIdeaNoteEditor}
+              onClose={closeIdeaNoteEditor}
+              onCommit={saveIdeaNoteEditor}
             />
           </Suspense>
         )}
