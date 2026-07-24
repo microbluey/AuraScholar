@@ -7,6 +7,7 @@ import {
   isCanvasSelectionDeleteShortcut,
   planCanvasSelectionDeletion,
   primarySurfaceForCanvasNode,
+  resolveCanvasHistoryShortcut,
   shouldActivateCanvasNode,
 } from "./canvas-interactions";
 import { createPreviewWorkspace } from "./model";
@@ -118,6 +119,87 @@ describe("canvas node interactions", () => {
     expect(isCanvasLayoutShortcut({ ...base, withinCanvas: false }, "MacIntel")).toBe(false);
     expect(isCanvasLayoutShortcut({ ...base, ctrlKey: true }, "MacIntel")).toBe(false);
     expect(isCanvasLayoutShortcut({ ...base, metaKey: false }, "MacIntel")).toBe(false);
+  });
+
+  it("resolves native undo and redo shortcuts for each platform", () => {
+    const base = {
+      altKey: false,
+      blockedSurface: false,
+      composing: false,
+      ctrlKey: false,
+      defaultPrevented: false,
+      key: "z",
+      metaKey: true,
+      repeat: false,
+      shiftKey: false,
+      withinCanvas: true,
+    };
+
+    expect(resolveCanvasHistoryShortcut(base, "MacIntel")).toBe("undo");
+    expect(resolveCanvasHistoryShortcut({ ...base, shiftKey: true }, "MacIntel")).toBe("redo");
+
+    const windowsBase = { ...base, ctrlKey: true, metaKey: false };
+    expect(resolveCanvasHistoryShortcut(windowsBase, "Win32")).toBe("undo");
+    expect(resolveCanvasHistoryShortcut({ ...windowsBase, key: "Y" }, "Win32")).toBe("redo");
+    expect(resolveCanvasHistoryShortcut({ ...windowsBase, shiftKey: true }, "Win32")).toBe("redo");
+
+    const linuxBase = { ...windowsBase };
+    expect(resolveCanvasHistoryShortcut(linuxBase, "Linux x86_64")).toBe("undo");
+    expect(resolveCanvasHistoryShortcut({ ...linuxBase, key: "y" }, "Linux x86_64")).toBe("redo");
+    expect(resolveCanvasHistoryShortcut({ ...linuxBase, shiftKey: true }, "Linux x86_64")).toBe(
+      "redo",
+    );
+  });
+
+  it("ignores history shortcuts outside the canvas or from blocked keyboard surfaces", () => {
+    const base = {
+      altKey: false,
+      blockedSurface: false,
+      composing: false,
+      ctrlKey: false,
+      defaultPrevented: false,
+      key: "z",
+      metaKey: true,
+      repeat: false,
+      shiftKey: false,
+      withinCanvas: true,
+    };
+
+    expect(resolveCanvasHistoryShortcut({ ...base, altKey: true }, "MacIntel")).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...base, blockedSurface: true }, "MacIntel")).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...base, composing: true }, "MacIntel")).toBeNull();
+    expect(
+      resolveCanvasHistoryShortcut({ ...base, defaultPrevented: true }, "MacIntel"),
+    ).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...base, repeat: true }, "MacIntel")).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...base, withinCanvas: false }, "MacIntel")).toBeNull();
+  });
+
+  it("rejects history shortcuts with the wrong modifiers or unsupported keys", () => {
+    const macBase = {
+      altKey: false,
+      blockedSurface: false,
+      composing: false,
+      ctrlKey: false,
+      defaultPrevented: false,
+      key: "z",
+      metaKey: true,
+      repeat: false,
+      shiftKey: false,
+      withinCanvas: true,
+    };
+
+    expect(resolveCanvasHistoryShortcut({ ...macBase, ctrlKey: true }, "MacIntel")).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...macBase, metaKey: false }, "MacIntel")).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...macBase, key: "y" }, "MacIntel")).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...macBase, key: "x" }, "MacIntel")).toBeNull();
+
+    const windowsBase = { ...macBase, ctrlKey: true, metaKey: false };
+    expect(resolveCanvasHistoryShortcut({ ...windowsBase, metaKey: true }, "Win32")).toBeNull();
+    expect(resolveCanvasHistoryShortcut({ ...windowsBase, ctrlKey: false }, "Win32")).toBeNull();
+    expect(
+      resolveCanvasHistoryShortcut({ ...windowsBase, key: "y", shiftKey: true }, "Win32"),
+    ).toBeNull();
   });
 
   it("removes selected cards and their relationships without touching other cards", () => {

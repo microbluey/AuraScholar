@@ -63,6 +63,17 @@ const MODE_INSTRUCTIONS: Record<CanvasSynthesisMode, string> = {
   tldr: "Synthesize the shared thread, distinct contributions, and the most important caveat into a concise literature overview.",
 };
 
+export function normalizeCanvasSynthesisSource(
+  source: CanvasSynthesisSource,
+): CanvasSynthesisSource {
+  return {
+    ...source,
+    id: source.id.trim(),
+    title: source.title.trim(),
+    content: source.content.replace(/\s+/g, " ").trim().slice(0, MAX_SOURCE_CHARS),
+  };
+}
+
 function normalizedSources(sources: CanvasSynthesisSource[]): CanvasSynthesisSource[] {
   if (sources.length < 2) throw new Error("AI synthesis requires at least two source nodes");
   if (sources.length > MAX_CANVAS_SYNTHESIS_SOURCES) {
@@ -71,13 +82,11 @@ function normalizedSources(sources: CanvasSynthesisSource[]): CanvasSynthesisSou
     );
   }
   return sources.map((source) => {
-    const id = source.id.trim();
-    const title = source.title.trim();
-    const content = source.content.replace(/\s+/g, " ").trim().slice(0, MAX_SOURCE_CHARS);
-    if (!id || !title || !content) {
+    const normalized = normalizeCanvasSynthesisSource(source);
+    if (!normalized.id || !normalized.title || !normalized.content) {
       throw new Error("Every AI synthesis source needs an id, title, and content");
     }
-    return { ...source, id, title, content };
+    return normalized;
   });
 }
 

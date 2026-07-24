@@ -1549,6 +1549,17 @@
   color: var(--color-accent-strong);
 }
 
+.canvas-dock__menu button:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
+.canvas-dock__menu-divider {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--color-border);
+}
+
 .canvas-dock__menu button > svg {
   flex: 0 0 auto;
 }

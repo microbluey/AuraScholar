@@ -9,6 +9,8 @@ export const CANVAS_INTERACTIVE_TARGET_SELECTOR =
   "button, a, input, textarea, select, [contenteditable='true'], .react-flow__handle, [data-canvas-interactive]";
 export const CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR =
   "button, a, input, textarea, select, [contenteditable='true'], [role='dialog'], [role='textbox'], .canvas-node-menu, .canvas-semantic-link-menu, .canvas-link-target-picker, .canvas-dock__menu, .canvas-selection-toolbar__menu, .canvas-reader-drawer";
+export const CANVAS_HISTORY_SHORTCUT_BLOCKING_SELECTOR =
+  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='dialog'], [role='menu'], [role='listbox'], [data-modal-root='true'], [data-canvas-native-history='true'], .canvas-reader-drawer";
 
 export function primarySurfaceForCanvasNode(
   node: Pick<CanvasNode, "type">,
@@ -94,6 +96,46 @@ export function isCanvasLayoutShortcut(
   return isApplePlatform(platform)
     ? input.metaKey && !input.ctrlKey
     : input.ctrlKey && !input.metaKey;
+}
+
+export type CanvasHistoryShortcut = "redo" | "undo";
+
+export function resolveCanvasHistoryShortcut(
+  input: {
+    altKey: boolean;
+    blockedSurface: boolean;
+    composing: boolean;
+    ctrlKey: boolean;
+    defaultPrevented: boolean;
+    key: string;
+    metaKey: boolean;
+    repeat: boolean;
+    shiftKey: boolean;
+    withinCanvas: boolean;
+  },
+  platform = globalThis.navigator?.platform ?? "",
+): CanvasHistoryShortcut | null {
+  if (
+    !input.withinCanvas ||
+    input.blockedSurface ||
+    input.composing ||
+    input.defaultPrevented ||
+    input.repeat ||
+    input.altKey
+  ) {
+    return null;
+  }
+
+  const applePlatform = isApplePlatform(platform);
+  const hasPlatformModifier = applePlatform
+    ? input.metaKey && !input.ctrlKey
+    : input.ctrlKey && !input.metaKey;
+  if (!hasPlatformModifier) return null;
+
+  const key = input.key.toLocaleLowerCase();
+  if (key === "z") return input.shiftKey ? "redo" : "undo";
+  if (!applePlatform && key === "y" && !input.shiftKey) return "redo";
+  return null;
 }
 
 export interface CanvasSelectionDeletionPlan {

@@ -4,30 +4,11 @@ import {
   type CanvasSynthesisSource,
 } from "@aurascholar/ai";
 import type { AISynthNodeData, CanvasNode } from "@aurascholar/core";
+import { canvasSynthesisInputSource } from "../features/canvas/synthesis";
 import { makeProvider } from "./ai";
 
 function synthesisSource(node: CanvasNode): CanvasSynthesisSource | null {
-  if (node.type === "paper") {
-    return {
-      id: node.id,
-      kind: "paper",
-      title: node.data.title,
-      content:
-        node.data.abstractSnippet?.trim() ||
-        [node.data.title, node.data.authors.join(", "), node.data.venue, node.data.year]
-          .filter(Boolean)
-          .join(" · "),
-    };
-  }
-  if (node.type === "excerpt") {
-    return {
-      id: node.id,
-      kind: "excerpt",
-      title: `${node.data.paperTitle} · 第 ${node.data.pageIndex + 1} 页`,
-      content: [node.data.highlightText, node.data.marginNote].filter(Boolean).join("\n\n"),
-    };
-  }
-  return null;
+  return node.type === "paper" || node.type === "excerpt" ? canvasSynthesisInputSource(node) : null;
 }
 
 export async function synthesizeCanvasSelection(

@@ -22,6 +22,8 @@
 
 画布聚焦且当前不在输入控件、内容编辑区、弹窗/菜单或同屏阅读器上下文时，`Delete` / `Backspace` 会删除当前选中的节点或关系；这些 guard 防止用户在编辑文本、确认操作或阅读 PDF 时误删画布内容。删除分组节点会解除其子卡片的 `groupId` 并只移除分组外壳，子卡片继续保留；删除文献或摘录节点也始终只影响当前白板，不会删除文献库条目、批注或 PDF 文件。
 
+画布聚焦且不在原生文本编辑、弹窗/菜单或阅读器上下文时，`Cmd` / `Ctrl` + `Z` 撤销，`Cmd` + `Shift` + `Z` 或 `Ctrl` + `Y` / `Ctrl` + `Shift` + `Z` 重做；“指针”菜单也提供同一入口和禁用状态。历史按 `workspaceId` 隔离，每个白板在当前页面会话内保留最近 50 步，切换后返回仍可继续使用自己的历史。节点拖动按一次真实手势合并，卡片/关系字段的连续编辑按短时间窗合并；平移、缩放、仅定位操作和分组折叠/展开不入历史，执行撤销或重做时仍保留当前分组显隐状态。输入框与内容编辑器继续使用浏览器原生文本撤销，不会被画布接管。
+
 画布顶部显示当前白板名称，并提供新建与切换；列表项 hover/focus 后出现 `...` 菜单，可就地重命名或安全删除。hover/focus 卡片会显示上、下、左、右四个磁力连接点，不存在独立“连接”模式。连接拖到空白处会保留来源到落点的虚线预览，并打开当前白板目标卡片选择器；选择折叠分组内卡片时会先展开分组，同时保持真实子卡片为关系端点。
 
 画布内按 `Cmd` / `Ctrl` + `K` 会打开专用指令面板，可按题名、作者、期刊、年份或标签检索完整文献库，并在最近一次画布指针位置创建 `PaperNode`。如果文献已经位于当前白板，执行后会定位已有节点；节点处于折叠分组时会先自动展开分组，不会创建重复卡片。输入 `/ai` 只提供方法论对比、分歧分析、研究空白和简明综述四种现有合成操作，不提供自由 AI 对话。
@@ -45,6 +47,7 @@
 13. 画布聚焦且不在输入、弹窗/菜单或阅读器上下文时，可用 `Delete` / `Backspace` 删除选中的节点或关系。删除分组只移除外壳并保留子卡片；删除其他画布卡片也只删除当前白板中的摆放及其关系，不会删除原文献、原批注或 PDF。
 14. 按 `Cmd` / `Ctrl` + `K` 检索完整文献库并在最近指针位置放入文献；选择已经加入当前白板的结果会展开其折叠分组并定位已有节点。输入 `/ai` 可直接选择四种现有合成操作。
 15. 选择同一层级的至少两张文献卡，通过选区浮条、多选右键菜单或 `Cmd` / `Ctrl` + `Shift` + `L` 按年份时间轴或引用树整理；引用树要求所选文献之间存在 `cites` 关系，循环引用节点排列在同一列。
+16. 用 `Cmd` / `Ctrl` + `Z` 撤销当前白板的节点、关系、分组、整理及内容编辑，用平台对应的重做快捷键恢复；切到另一张白板时只会操作该白板自己的历史。白板刷新或离开页面后会话历史清空，已保存的画布内容不受影响。
 
 ## 3. 节点与关系模型
 
@@ -111,7 +114,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 
 输出经过 Zod 结构校验，并要求在 Markdown 中使用 `[S1]` 等来源标记。成功后一次性写入完成态 `AISynthNode`，同时为每个来源创建指向该节点的 `derived-from` 边；生成失败时不会留下永久的“生成中”占位卡。
 
-合成请求启动时会捕获来源白板 ID；请求返回后只在当前文档仍属于该白板时写入新节点。因此，生成期间切换白板不会把旧请求的结果写入新白板。
+合成请求启动时会捕获唯一请求 ID、来源白板 ID，以及每个来源节点精确的 `{ id, type, inputFingerprint }` 快照，并预分配合成节点与来源边 ID。`inputFingerprint` 复用底层 prompt 的标准化规则，只覆盖实际送给 AI 的题名、摘要/题录、摘录原文与边注，不包含卡片坐标、分组或时间戳。请求返回后会对当前活动请求、白板、全部来源身份、类型与 AI 输入、生成 ID 冲突进行一次原子校验；任一来源被删除、类型或输入内容变化、请求被替换、执行过撤销/重做或白板已切换时，整次结果原样丢弃，既不创建 AI 节点也不创建来源边；仅移动、整理卡片或等价的空白变化不会误丢结果，结果卡会按提交时来源卡片的最新位置落位。即使发生 A → B → A 的白板往返，旧组件请求也会因请求 ID 失效而被拒绝。
 
 `sourceNodeIds` 和来源边共同提供画布内溯源。它们表达的是“此结果由哪些当前节点生成”，不是对外部学术引用真实性的替代验证。
 
@@ -142,6 +145,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 
 - Desktop 使用 SQLite `CanvasRepo`；页面编辑后约 420 ms 防抖保存，离开页面时会尝试 flush 最新快照。
 - 切换白板前会 flush 当前工作区；延迟保存和异步加载都以 `workspaceId` 分区或校验，避免旧白板的操作覆盖新白板。
+- 撤销/重做历史只保存节点与关系内容快照，恢复时保留当前白板名称、说明、视口和分组折叠状态；每个工作区最多 50 步。历史只存在于当前页面会话，不进入 SQLite、JSON 备份或 WebDAV；白板切换保留各自栈，删除白板会同步丢弃该栈，重新加载内容若与历史头不一致则只重置对应白板的历史。内容指纹使用递归稳定键排序，避免 SQLite 重载后的字段顺序差异误清历史。
 - 删除白板时会先退休该 `workspaceId`、清理延迟保存与缓存并等待既有写入结束，再执行原子删除；后续 pagehide 保存和 AI 回调都会跳过该 ID，避免 `save()` 的 upsert 让已删除白板复活。
 - 浏览器预览使用 `localStorage` 保存多白板 envelope，并会无损迁移旧的单白板预览数据；该模式只用于可交互预览，不代表桌面数据库。
 - 只有打开右下导航岛的“画布概览”时才挂载 React Flow `MiniMap`；收起概览会直接卸载它，避免对不可见容器持续尺寸观测。
@@ -177,6 +181,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 ## 8. 当前边界
 
 - 当前轻量管理提供白板的新建、切换、重命名与安全删除，尚无归档功能。
+- 撤销/重做是页面会话级能力；刷新、离开空间白板或重启应用后不保留历史。
 - 节点扩展需要类型、数据库、校验和 renderer 的协同代码变更，不是运行时插件机制。
 - AI 文献卡输入限于题录与可用摘要；只有摘录卡携带明确选择的 PDF 原文。
 - 空间白板支持整库 JSON 备份，但尚未加入 WebDAV 行级同步。
@@ -193,6 +198,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - AI 合成：`packages/ai/src/canvas-synthesis.ts`
 - 画布页面：`apps/desktop/src/pages/SpatialCanvasPage.tsx`
 - 画布 UI：`apps/desktop/src/features/canvas/`
+- 白板历史与快捷键：`apps/desktop/src/features/canvas/canvas-history.ts`、`apps/desktop/src/features/canvas/canvas-interactions.ts`
 - 底部统一功能栏与左侧内容面板：`apps/desktop/src/features/canvas/CanvasDock.tsx`、`apps/desktop/src/features/canvas/CanvasToolbox.tsx`、`apps/desktop/src/features/canvas/CanvasDetailsPanel.tsx`
 - 节点上下文菜单与交互判定：`apps/desktop/src/features/canvas/CanvasNodeContextMenu.tsx`、`apps/desktop/src/features/canvas/canvas-interactions.ts`
 - 画布指令面板与全库检索：`apps/desktop/src/features/canvas/CanvasCommandPalette.tsx`、`apps/desktop/src/features/canvas/canvas-command.ts`、`packages/db/src/work-list.ts`
@@ -202,6 +208,6 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - 摘录拖放与节点创建：`apps/desktop/src/features/canvas/canvas-excerpt-dnd.ts`、`apps/desktop/src/features/canvas/excerpt-node.ts`
 - 阅读器会话隔离：`apps/desktop/src/features/reader/library-reader-session.ts`
 - 白板路由与加入目标：`apps/desktop/src/features/canvas/routes.ts`、`apps/desktop/src/features/canvas/useCanvasIngress.tsx`
-- 桌面 AI 适配：`apps/desktop/src/services/canvas-ai.ts`
+- AI 完成态原子校验与桌面适配：`apps/desktop/src/features/canvas/synthesis.ts`、`apps/desktop/src/services/canvas-ai.ts`
 - JSON 备份引用处理：`packages/sync/src/canvas-backup.ts`
 - 备份/同步接入：`apps/desktop/src/services/sync.ts`

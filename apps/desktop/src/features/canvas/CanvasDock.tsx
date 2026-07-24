@@ -1,4 +1,6 @@
 import {
+  ArrowClockwise,
+  ArrowCounterClockwise,
   Books,
   CaretDown,
   CursorClick,
@@ -8,17 +10,21 @@ import {
   Plus,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { shortcutLabel } from "../../shortcut-labels";
+import { isApplePlatform, shortcutLabel } from "../../shortcut-labels";
 import type { CanvasToolboxPanel } from "./canvas-interactions";
 
 export type CanvasTool = "select" | "pan";
 
 interface CanvasDockProps {
   activePanel: CanvasToolboxPanel | null;
+  canRedo: boolean;
+  canUndo: boolean;
   onAddNote: () => void;
   onOpenCommand: () => void;
   onPanelChange: (panel: CanvasToolboxPanel | null) => void;
+  onRedo: () => void;
   onToolChange: (tool: CanvasTool) => void;
+  onUndo: () => void;
   tool: CanvasTool;
 }
 
@@ -30,16 +36,23 @@ function toolClass(active: boolean): string {
 
 export function CanvasDock({
   activePanel,
+  canRedo,
+  canUndo,
   onAddNote,
   onOpenCommand,
   onPanelChange,
+  onRedo,
   onToolChange,
+  onUndo,
   tool,
 }: CanvasDockProps) {
   const [openMenu, setOpenMenu] = useState<CanvasDockMenu | null>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLButtonElement | null>(null);
   const PointerIcon = tool === "pan" ? Hand : CursorClick;
+  const applePlatform = isApplePlatform();
+  const undoShortcut = shortcutLabel("Z");
+  const redoShortcut = applePlatform ? "⇧ ⌘ Z" : "Ctrl Y / Ctrl Shift Z";
 
   useEffect(() => {
     if (!openMenu) return;
@@ -180,6 +193,39 @@ export function CanvasDock({
               <span>
                 <strong>平移</strong>
                 <small>也可按住空格或鼠标中键</small>
+              </span>
+            </button>
+            <span className="canvas-dock__menu-divider" role="separator" />
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canUndo}
+              aria-disabled={!canUndo}
+              aria-label={`撤销（${undoShortcut}）`}
+              aria-keyshortcuts={applePlatform ? "Meta+Z" : "Control+Z"}
+              title={`撤销 · ${undoShortcut}`}
+              onClick={() => runMenuAction(onUndo)}
+            >
+              <ArrowCounterClockwise size={17} weight="duotone" />
+              <span>
+                <strong>撤销</strong>
+                <small>{undoShortcut}</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canRedo}
+              aria-disabled={!canRedo}
+              aria-label={`重做（${redoShortcut}）`}
+              aria-keyshortcuts={applePlatform ? "Meta+Shift+Z" : "Control+Y Control+Shift+Z"}
+              title={`重做 · ${redoShortcut}`}
+              onClick={() => runMenuAction(onRedo)}
+            >
+              <ArrowClockwise size={17} weight="duotone" />
+              <span>
+                <strong>重做</strong>
+                <small>{redoShortcut}</small>
               </span>
             </button>
           </div>

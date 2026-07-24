@@ -30,6 +30,7 @@ import {
   useViewport,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { isImeComposing } from "../../keyboard";
 import { canvasNodeTypes, type CanvasFlowNode, type CanvasNodeMenuAnchor } from "./CanvasCards";
 import { CanvasCommandPalette } from "./CanvasCommandPalette";
 import { CanvasLinkTargetPicker, type CanvasLinkTargetRequest } from "./CanvasLinkTargetPicker";
@@ -48,6 +49,7 @@ import { CanvasWorkspaceSwitcher } from "./CanvasWorkspaceSwitcher";
 import { canvasEdgeTypes, type RelationFlowEdge } from "./RelationEdge";
 import { SemanticLinkMenu } from "./SemanticLinkMenu";
 import {
+  CANVAS_HISTORY_SHORTCUT_BLOCKING_SELECTOR,
   CANVAS_INTERACTIVE_TARGET_SELECTOR,
   CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR,
   applyCanvasSelectionDeletion,
@@ -56,10 +58,12 @@ import {
   isCanvasSelectionDeleteShortcut,
   planCanvasSelectionDeletion,
   primarySurfaceForCanvasNode,
+  resolveCanvasHistoryShortcut,
   shouldActivateCanvasNode,
   type CanvasMenuPoint,
   type CanvasToolboxPanel,
 } from "./canvas-interactions";
+import type { CanvasDocumentChangeOptions } from "./canvas-history";
 import { CANVAS_COMMAND_PALETTE_REQUEST_EVENT } from "./canvas-command";
 import {
   CANVAS_EXCERPT_DRAG_MIME,
@@ -72,7 +76,6 @@ import {
 import {
   createAISynthNode,
   createCanvasId,
-  createEdge,
   createGroupNode,
   createIdeaNoteNode,
   createPaperNode,
@@ -90,7 +93,12 @@ import {
   type PendingSemanticLink,
   type QuickSemanticRelation,
 } from "./semantic-link";
-import { synthesizeCanvasSelection } from "./synthesis";
+import {
+  applyCompletedCanvasSynthesis,
+  canvasSynthesisSourceFingerprint,
+  synthesizeCanvasSelection,
+  type CanvasSynthesisCommitStatus,
+} from "./synthesis";
 import type {
   CanvasWorkspaceActionResult,
   CanvasWorkspaceOption,
@@ -98,13 +106,16 @@ import type {
 } from "./workspace-controls";
 
 interface CanvasWorkspaceProps {
+  canRedo: boolean;
+  canUndo: boolean;
   document: CanvasWorkspaceDocument;
   libraryLoading: boolean;
   onCreateWorkspace: CreateCanvasWorkspace;
   onDeleteWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
   onDocumentChange: (
     updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
-  ) => void;
+    options?: CanvasDocumentChangeOptions,
+  ) => boolean;
   onExit: () => void;
   onOpenExcerpt: (
     workId: string,
@@ -113,8 +124,10 @@ interface CanvasWorkspaceProps {
     attachmentId?: string,
   ) => void;
   onOpenPaper: (workId: string) => void;
+  onRedo: () => string | null;
   onRenameWorkspace: (workspaceId: string, name: string) => CanvasWorkspaceActionResult;
   onSelectWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
+  onUndo: () => string | null;
   persistenceLabel: string;
   searchWorks: (query: string) => Promise<CanvasLibraryWork[]>;
   works: CanvasLibraryWork[];
@@ -208,6 +221,8 @@ function canvasLayoutFailureMessage(reason: CanvasLayoutFailure): string {
 }
 
 function CanvasWorkspaceInner({
+  canRedo,
+  canUndo,
   document,
   libraryLoading,
   onCreateWorkspace,
@@ -216,8 +231,10 @@ function CanvasWorkspaceInner({
   onExit,
   onOpenExcerpt,
   onOpenPaper,
+  onRedo,
   onRenameWorkspace,
   onSelectWorkspace,
+  onUndo,
   persistenceLabel,
   searchWorks,
   works,
@@ -258,11 +275,21 @@ function CanvasWorkspaceInner({
   const commandAnchorRef = useRef<CanvasPoint | null>(null);
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
   const activeWorkspaceIdRef = useRef(document.workspaceId);
+  const activeSynthesisRequestIdRef = useRef<string | null>(null);
+  const dragHistoryKeyRef = useRef<string | null>(null);
+  const dragHistorySequenceRef = useRef(0);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
   const viewport = useViewport();
 
   const showNotice = useCallback((message: string) => setNotice(message), []);
+
+  useEffect(
+    () => () => {
+      activeSynthesisRequestIdRef.current = null;
+    },
+    [],
+  );
 
   const cancelFlowConnection = useCallback(() => {
     cancelledConnectionRef.current = true;
@@ -449,6 +476,8 @@ function CanvasWorkspaceInner({
   useEffect(() => {
     if (activeWorkspaceIdRef.current === document.workspaceId) return;
     activeWorkspaceIdRef.current = document.workspaceId;
+    activeSynthesisRequestIdRef.current = null;
+    dragHistoryKeyRef.current = null;
     trustedReaderPayloadRef.current = null;
     cancelledConnectionRef.current = true;
     completedConnectionRef.current = false;
@@ -576,19 +605,22 @@ function CanvasWorkspaceInner({
       const group = document.nodes.find((node) => node.id === groupId && node.type === "group");
       const groupTitle = group?.type === "group" ? group.data.title : "未命名分组";
       const childCount = document.nodes.filter((node) => node.groupId === groupId).length;
-      onDocumentChange((current) => ({
-        ...current,
-        nodes: current.nodes.map((node) =>
-          node.id === groupId && node.type === "group"
-            ? {
-                ...node,
-                updatedAt: Date.now(),
-                data: { ...node.data, collapsed },
-              }
-            : node,
-        ),
-        updatedAt: Date.now(),
-      }));
+      onDocumentChange(
+        (current) => ({
+          ...current,
+          nodes: current.nodes.map((node) =>
+            node.id === groupId && node.type === "group"
+              ? {
+                  ...node,
+                  updatedAt: Date.now(),
+                  data: { ...node.data, collapsed },
+                }
+              : node,
+          ),
+          updatedAt: Date.now(),
+        }),
+        { history: false },
+      );
       setSelectedNodeIds(new Set([groupId]));
       setSelectedEdgeId(null);
       cancelFlowConnection();
@@ -749,22 +781,28 @@ function CanvasWorkspaceInner({
 
   const updateNode = useCallback(
     (node: CanvasNode) => {
-      onDocumentChange((current) => ({
-        ...current,
-        nodes: current.nodes.map((candidate) => (candidate.id === node.id ? node : candidate)),
-        updatedAt: Date.now(),
-      }));
+      onDocumentChange(
+        (current) => ({
+          ...current,
+          nodes: current.nodes.map((candidate) => (candidate.id === node.id ? node : candidate)),
+          updatedAt: Date.now(),
+        }),
+        { history: { label: "编辑卡片", mergeKey: `edit-node:${node.id}` } },
+      );
     },
     [onDocumentChange],
   );
 
   const updateEdge = useCallback(
     (edge: CanvasEdge) => {
-      onDocumentChange((current) => ({
-        ...current,
-        edges: current.edges.map((candidate) => (candidate.id === edge.id ? edge : candidate)),
-        updatedAt: Date.now(),
-      }));
+      onDocumentChange(
+        (current) => ({
+          ...current,
+          edges: current.edges.map((candidate) => (candidate.id === edge.id ? edge : candidate)),
+          updatedAt: Date.now(),
+        }),
+        { history: { label: "编辑关系", mergeKey: `edit-edge:${edge.id}` } },
+      );
     },
     [onDocumentChange],
   );
@@ -794,14 +832,27 @@ function CanvasWorkspaceInner({
           positions.set(change.id, change.position);
       }
       if (!positions.size) return;
-      onDocumentChange((current) => ({
-        ...current,
-        nodes: current.nodes.map((node) => {
-          const position = positions.get(node.id);
-          return position ? { ...node, position, updatedAt: Date.now() } : node;
-        }),
-        updatedAt: Date.now(),
-      }));
+      const timestamp = Date.now();
+      const mergeKey = dragHistoryKeyRef.current;
+      onDocumentChange(
+        (current) => {
+          let changed = false;
+          const nodes = current.nodes.map((node) => {
+            const position = positions.get(node.id);
+            if (!position || (position.x === node.position.x && position.y === node.position.y)) {
+              return node;
+            }
+            changed = true;
+            return { ...node, position, updatedAt: timestamp };
+          });
+          return changed ? { ...current, nodes, updatedAt: timestamp } : current;
+        },
+        {
+          history: mergeKey
+            ? { label: "移动卡片", mergeKey, mergeWindowMs: Number.POSITIVE_INFINITY }
+            : { label: "移动卡片" },
+        },
+      );
     },
     [onDocumentChange],
   );
@@ -843,11 +894,14 @@ function CanvasWorkspaceInner({
         x: center.x + offset * 24,
         y: center.y + offset * 20,
       });
-      onDocumentChange((current) => ({
-        ...current,
-        nodes: [...current.nodes, node],
-        updatedAt: Date.now(),
-      }));
+      onDocumentChange(
+        (current) => ({
+          ...current,
+          nodes: [...current.nodes, node],
+          updatedAt: Date.now(),
+        }),
+        { history: { label: "加入文献" } },
+      );
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
       showNotice(`已将《${work.title}》加入画布。`);
@@ -863,11 +917,14 @@ function CanvasWorkspaceInner({
       y: (rect?.top || 0) + (rect?.height || 640) * 0.46,
     });
     const node = createIdeaNoteNode(position);
-    onDocumentChange((current) => ({
-      ...current,
-      nodes: [...current.nodes, node],
-      updatedAt: Date.now(),
-    }));
+    onDocumentChange(
+      (current) => ({
+        ...current,
+        nodes: [...current.nodes, node],
+        updatedAt: Date.now(),
+      }),
+      { history: { label: "新建研究笔记" } },
+    );
     setSelectedNodeIds(new Set([node.id]));
     setSelectedEdgeId(null);
     closeReader();
@@ -888,58 +945,64 @@ function CanvasWorkspaceInner({
       { x: left - 34, y: top - 58 },
       { width: right - left + 68, height: bottom - top + 92 },
     );
-    onDocumentChange((current) => ({
-      ...current,
-      nodes: [
-        group,
-        ...current.nodes.map((node) =>
-          selectedNodeIds.has(node.id)
-            ? {
-                ...node,
-                groupId: group.id,
-                position: {
-                  x: node.position.x - group.position.x,
-                  y: node.position.y - group.position.y,
-                },
-                updatedAt: Date.now(),
-              }
-            : node,
-        ),
-      ],
-      updatedAt: Date.now(),
-    }));
+    onDocumentChange(
+      (current) => ({
+        ...current,
+        nodes: [
+          group,
+          ...current.nodes.map((node) =>
+            selectedNodeIds.has(node.id)
+              ? {
+                  ...node,
+                  groupId: group.id,
+                  position: {
+                    x: node.position.x - group.position.x,
+                    y: node.position.y - group.position.y,
+                  },
+                  updatedAt: Date.now(),
+                }
+              : node,
+          ),
+        ],
+        updatedAt: Date.now(),
+      }),
+      { history: { label: "创建分组" } },
+    );
     setSelectedNodeIds(new Set([group.id]));
     showNotice(`已将 ${selected.length} 张卡片编为一组。`);
   }, [document.nodes, onDocumentChange, selectedNodeIds, showNotice]);
 
   const ungroup = useCallback(
     (groupId: string) => {
-      onDocumentChange((current) => {
-        const group = current.nodes.find((node) => node.id === groupId && node.type === "group");
-        if (!group) return current;
-        return {
-          ...current,
-          nodes: current.nodes
-            .filter((node) => node.id !== groupId)
-            .map((node) =>
-              node.groupId === groupId
-                ? {
-                    ...node,
-                    groupId: undefined,
-                    position: {
-                      x: group.position.x + node.position.x,
-                      y: group.position.y + node.position.y,
-                    },
-                    updatedAt: Date.now(),
-                  }
-                : node,
+      onDocumentChange(
+        (current) => {
+          const group = current.nodes.find((node) => node.id === groupId && node.type === "group");
+          if (!group) return current;
+          return {
+            ...current,
+            nodes: current.nodes
+              .filter((node) => node.id !== groupId)
+              .map((node) =>
+                node.groupId === groupId
+                  ? {
+                      ...node,
+                      groupId: undefined,
+                      position: {
+                        x: group.position.x + node.position.x,
+                        y: group.position.y + node.position.y,
+                      },
+                      updatedAt: Date.now(),
+                    }
+                  : node,
+              ),
+            edges: current.edges.filter(
+              (edge) => edge.sourceId !== groupId && edge.targetId !== groupId,
             ),
-          edges: current.edges.filter(
-            (edge) => edge.sourceId !== groupId && edge.targetId !== groupId,
-          ),
-          updatedAt: Date.now(),
-        };
-      });
+            updatedAt: Date.now(),
+          };
+        },
+        { history: { label: "解除分组" } },
+      );
       setSelectedNodeIds(new Set());
       cancelFlowConnection();
       showNotice("已解除分组，组内卡片均已保留。");
@@ -957,12 +1020,17 @@ function CanvasWorkspaceInner({
       if (target && readerTarget && readerTargetsNode(readerTarget, target)) {
         closeReader();
       }
-      onDocumentChange((current) => ({
-        ...current,
-        nodes: current.nodes.filter((node) => node.id !== nodeId),
-        edges: current.edges.filter((edge) => edge.sourceId !== nodeId && edge.targetId !== nodeId),
-        updatedAt: Date.now(),
-      }));
+      onDocumentChange(
+        (current) => ({
+          ...current,
+          nodes: current.nodes.filter((node) => node.id !== nodeId),
+          edges: current.edges.filter(
+            (edge) => edge.sourceId !== nodeId && edge.targetId !== nodeId,
+          ),
+          updatedAt: Date.now(),
+        }),
+        { history: { label: "移除卡片" } },
+      );
       setSelectedNodeIds(new Set());
       cancelFlowConnection();
       showNotice("卡片已从画布移除，原文献与批注未被删除。");
@@ -980,11 +1048,14 @@ function CanvasWorkspaceInner({
 
   const deleteEdge = useCallback(
     (edgeId: string) => {
-      onDocumentChange((current) => ({
-        ...current,
-        edges: current.edges.filter((edge) => edge.id !== edgeId),
-        updatedAt: Date.now(),
-      }));
+      onDocumentChange(
+        (current) => ({
+          ...current,
+          edges: current.edges.filter((edge) => edge.id !== edgeId),
+          updatedAt: Date.now(),
+        }),
+        { history: { label: "删除关系" } },
+      );
       setSelectedEdgeId(null);
       showNotice("关系连线已删除。");
     },
@@ -1000,8 +1071,9 @@ function CanvasWorkspaceInner({
       selectedNodeIds,
       selectedEdgeId,
     );
-    onDocumentChange((current) =>
-      applyCanvasSelectionDeletion(current, selectedNodeIds, selectedEdgeId),
+    onDocumentChange(
+      (current) => applyCanvasSelectionDeletion(current, selectedNodeIds, selectedEdgeId),
+      { history: { label: "移除所选内容" } },
     );
 
     if (
@@ -1060,6 +1132,57 @@ function CanvasWorkspaceInner({
     return () => window.removeEventListener("keydown", handleDeleteShortcut);
   }, [deleteSelection, selectedEdgeId, selectedNodeIds.size]);
 
+  const performHistoryCommand = useCallback(
+    (command: "undo" | "redo") => {
+      const label = command === "undo" ? onUndo() : onRedo();
+      if (!label) return;
+      activeSynthesisRequestIdRef.current = null;
+      setSynthesisBusy(false);
+      cancelFlowConnection();
+      setSelectedNodeIds(new Set());
+      setSelectedEdgeId(null);
+      setNodeMenu(null);
+      setPendingSemanticLink(null);
+      setLinkTargetRequest(null);
+      setSemanticCommitConfirmation(null);
+      setSemanticLinkReturnFocus(null);
+      closeReader();
+      setAutoFocusDetails(false);
+      setToolboxPanel((current) => (current === "details" ? null : current));
+      window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
+      showNotice(`${command === "undo" ? "已撤销" : "已重做"}：${label}`);
+    },
+    [cancelFlowConnection, closeReader, onRedo, onUndo, showNotice],
+  );
+
+  useEffect(() => {
+    const handleHistoryShortcut = (event: KeyboardEvent) => {
+      const wrapper = wrapperRef.current;
+      const target = event.target instanceof Element ? event.target : null;
+      const blockedSurface =
+        Boolean(target?.closest(CANVAS_HISTORY_SHORTCUT_BLOCKING_SELECTOR)) ||
+        (target instanceof HTMLElement && target.isContentEditable) ||
+        Boolean(wrapper?.querySelector("[role='dialog'], [role='menu'], [role='listbox']"));
+      const command = resolveCanvasHistoryShortcut({
+        altKey: event.altKey,
+        blockedSurface,
+        composing: isImeComposing(event),
+        ctrlKey: event.ctrlKey,
+        defaultPrevented: event.defaultPrevented,
+        key: event.key,
+        metaKey: event.metaKey,
+        repeat: event.repeat,
+        shiftKey: event.shiftKey,
+        withinCanvas: Boolean(wrapper && target && wrapper.contains(target)),
+      });
+      if (!command || (command === "undo" ? !canUndo : !canRedo)) return;
+      event.preventDefault();
+      performHistoryCommand(command);
+    };
+    window.addEventListener("keydown", handleHistoryShortcut);
+    return () => window.removeEventListener("keydown", handleHistoryShortcut);
+  }, [canRedo, canUndo, performHistoryCommand]);
+
   const connect = useCallback(
     (connection: Connection) => {
       if (cancelledConnectionRef.current) return;
@@ -1117,6 +1240,7 @@ function CanvasWorkspaceInner({
       onDocumentChange(
         (current) =>
           applySemanticLink(current, pendingSemanticLink, relationType, result.edge).document,
+        { history: { label: "创建语义关系" } },
       );
       setSemanticCommitConfirmation({
         edge: result.edge,
@@ -1330,22 +1454,25 @@ function CanvasWorkspaceInner({
             node.id === target.groupId && node.type === "group" && node.data.collapsed === true,
         );
         if (collapsedParent) {
-          onDocumentChange((current) => {
-            if (current.workspaceId !== request.workspaceId) return current;
-            return {
-              ...current,
-              nodes: current.nodes.map((node) =>
-                node.id === collapsedParent.id && node.type === "group"
-                  ? {
-                      ...node,
-                      data: { ...node.data, collapsed: false },
-                      updatedAt: Date.now(),
-                    }
-                  : node,
-              ),
-              updatedAt: Date.now(),
-            };
-          });
+          onDocumentChange(
+            (current) => {
+              if (current.workspaceId !== request.workspaceId) return current;
+              return {
+                ...current,
+                nodes: current.nodes.map((node) =>
+                  node.id === collapsedParent.id && node.type === "group"
+                    ? {
+                        ...node,
+                        data: { ...node.data, collapsed: false },
+                        updatedAt: Date.now(),
+                      }
+                    : node,
+                ),
+                updatedAt: Date.now(),
+              };
+            },
+            { history: false },
+          );
         }
       }
       linkTargetRequestRef.current = null;
@@ -1396,51 +1523,65 @@ function CanvasWorkspaceInner({
         showNotice(`一次最多合成 ${MAX_CANVAS_SYNTHESIS_SOURCES} 张文献或摘录卡片。`);
         return;
       }
-      const absolute = sources.map((node) => ({
-        node,
-        position: absoluteNodePosition(node, document.nodes),
-      }));
-      const averageX = absolute.reduce((sum, item) => sum + item.position.x, 0) / absolute.length;
-      const bottom = Math.max(
-        ...absolute.map((item) => item.position.y + item.node.dimensions.height),
-      );
       const synthNode = createAISynthNode(
         sources.map((node) => node.id),
         synthType,
-        { x: averageX, y: bottom + 110 },
+        { x: 0, y: 0 },
       );
       const sourceWorkspaceId = document.workspaceId;
+      const requestId = createCanvasId();
+      const sourceSnapshot = sources.map((source) => ({
+        id: source.id,
+        type: source.type,
+        inputFingerprint: canvasSynthesisSourceFingerprint(source),
+      }));
+      const provenanceEdgeIds = sources.map(() => createCanvasId());
+      activeSynthesisRequestIdRef.current = requestId;
       setSynthesisBusy(true);
       showNotice(`正在生成${SYNTHESIS_LABELS[synthType]}…`);
       try {
         const result = await synthesizeCanvasSelection({ sourceNodes: sources, synthType });
+        const completedAt = Date.now();
         const completedNode = {
           ...synthNode,
           data: {
-            sourceNodeIds: result.sourceNodeIds,
+            sourceNodeIds: sourceSnapshot.map((source) => source.id),
             synthType: result.synthType,
             title: result.title,
             contentMarkdown: result.contentMarkdown,
             structuredTable: result.structuredTable,
             modelName: result.modelName,
           },
-          updatedAt: Date.now(),
+          updatedAt: completedAt,
         };
-        const provenanceEdges = sources.map((source) => ({
-          ...createEdge(source.id, completedNode.id, "derived-from"),
-          label: "合成来源",
-        }));
-        onDocumentChange((current) =>
-          current.workspaceId !== sourceWorkspaceId
-            ? current
-            : {
-                ...current,
-                nodes: [...current.nodes, completedNode],
-                edges: [...current.edges, ...provenanceEdges],
-                updatedAt: Date.now(),
-              },
+        const commitOutcome: { status: CanvasSynthesisCommitStatus } = {
+          status: "stale-request",
+        };
+        const applied = onDocumentChange(
+          (current) => {
+            const commit = applyCompletedCanvasSynthesis(current, {
+              requestId,
+              activeRequestId: activeSynthesisRequestIdRef.current,
+              workspaceId: sourceWorkspaceId,
+              sourceSnapshot,
+              completedNode,
+              provenanceEdgeIds,
+            });
+            commitOutcome.status = commit.status;
+            return commit.document;
+          },
+          { history: { label: "生成 AI 合成" } },
         );
-        if (activeWorkspaceIdRef.current !== sourceWorkspaceId) return;
+        if (!applied || commitOutcome.status !== "applied") {
+          if (activeSynthesisRequestIdRef.current === requestId) {
+            showNotice(
+              commitOutcome.status === "source-changed"
+                ? "来源卡片已发生变化，本次 AI 结果未写入。"
+                : "白板或 AI 请求已切换，本次结果未写入。",
+            );
+          }
+          return;
+        }
         setSelectedNodeIds(new Set([completedNode.id]));
         setSelectedEdgeId(null);
         closeReader();
@@ -1448,10 +1589,15 @@ function CanvasWorkspaceInner({
         setToolboxPanel("details");
         showNotice(result.preview ? "已生成未连接 AI 的交互预览。" : "AI 合成已完成。");
       } catch (error) {
-        const message = error instanceof Error ? error.message : "AI 合成暂时不可用";
-        showNotice(message);
+        if (activeSynthesisRequestIdRef.current === requestId) {
+          const message = error instanceof Error ? error.message : "AI 合成暂时不可用";
+          showNotice(message);
+        }
       } finally {
-        setSynthesisBusy(false);
+        if (activeSynthesisRequestIdRef.current === requestId) {
+          activeSynthesisRequestIdRef.current = null;
+          setSynthesisBusy(false);
+        }
       }
     },
     [
@@ -1494,27 +1640,37 @@ function CanvasWorkspaceInner({
         return false;
       }
 
-      onDocumentChange((current) => {
-        try {
-          const next = applyDrop(current).document;
-          if (planned.createdNode || !planned.node.groupId) return next;
-          return {
-            ...next,
-            nodes: next.nodes.map((node) =>
-              node.id === planned.node.groupId && node.type === "group" && node.data.collapsed
-                ? {
-                    ...node,
-                    data: { ...node.data, collapsed: false },
-                    updatedAt: timestamp,
-                  }
-                : node,
-            ),
-            updatedAt: timestamp,
-          };
-        } catch {
-          return current;
-        }
-      });
+      onDocumentChange(
+        (current) => {
+          try {
+            const next = applyDrop(current).document;
+            if (planned.createdNode || !planned.node.groupId) return next;
+            return {
+              ...next,
+              nodes: next.nodes.map((node) =>
+                node.id === planned.node.groupId && node.type === "group" && node.data.collapsed
+                  ? {
+                      ...node,
+                      data: { ...node.data, collapsed: false },
+                      updatedAt: timestamp,
+                    }
+                  : node,
+              ),
+              updatedAt: timestamp,
+            };
+          } catch {
+            return current;
+          }
+        },
+        {
+          history:
+            planned.createdNode || planned.createdEdge
+              ? {
+                  label: planned.createdNode ? "加入文献摘录" : "恢复摘录来源关系",
+                }
+              : false,
+        },
+      );
       setSelectedNodeIds(new Set([planned.node.id]));
       setSelectedEdgeId(null);
       if (!planned.createdNode) {
@@ -1615,16 +1771,19 @@ function CanvasWorkspaceInner({
 
   const onMoveEnd = useCallback(
     (_event: MouseEvent | TouchEvent | null, viewport: { x: number; y: number; zoom: number }) => {
-      onDocumentChange((current) => {
-        if (
-          Math.abs(current.viewport.x - viewport.x) < 0.01 &&
-          Math.abs(current.viewport.y - viewport.y) < 0.01 &&
-          Math.abs(current.viewport.zoom - viewport.zoom) < 0.0001
-        ) {
-          return current;
-        }
-        return { ...current, viewport, updatedAt: Date.now() };
-      });
+      onDocumentChange(
+        (current) => {
+          if (
+            Math.abs(current.viewport.x - viewport.x) < 0.01 &&
+            Math.abs(current.viewport.y - viewport.y) < 0.01 &&
+            Math.abs(current.viewport.zoom - viewport.zoom) < 0.0001
+          ) {
+            return current;
+          }
+          return { ...current, viewport, updatedAt: Date.now() };
+        },
+        { history: false },
+      );
     },
     [onDocumentChange],
   );
@@ -1642,19 +1801,22 @@ function CanvasWorkspaceInner({
           )
         : undefined;
       if (collapsedParent?.type === "group") {
-        onDocumentChange((current) => ({
-          ...current,
-          nodes: current.nodes.map((candidate) =>
-            candidate.id === collapsedParent.id && candidate.type === "group"
-              ? {
-                  ...candidate,
-                  data: { ...candidate.data, collapsed: false },
-                  updatedAt: Date.now(),
-                }
-              : candidate,
-          ),
-          updatedAt: Date.now(),
-        }));
+        onDocumentChange(
+          (current) => ({
+            ...current,
+            nodes: current.nodes.map((candidate) =>
+              candidate.id === collapsedParent.id && candidate.type === "group"
+                ? {
+                    ...candidate,
+                    data: { ...candidate.data, collapsed: false },
+                    updatedAt: Date.now(),
+                  }
+                : candidate,
+            ),
+            updatedAt: Date.now(),
+          }),
+          { history: false },
+        );
         showNotice(`已展开「${collapsedParent.data.title}」并定位文献。`);
       }
       const position = absoluteNodePosition(node, document.nodes);
@@ -1748,7 +1910,11 @@ function CanvasWorkspaceInner({
         showNotice(canvasLayoutFailureMessage(plan.reason));
         return;
       }
-      onDocumentChange((current) => applyCanvasLayout(current, plan));
+      onDocumentChange((current) => applyCanvasLayout(current, plan), {
+        history: {
+          label: mode === "timeline" ? "按时间轴整理卡片" : "按引用树整理卡片",
+        },
+      });
       const focusNodeId = plan.nodePositions[0]?.nodeId;
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
@@ -1982,7 +2148,14 @@ function CanvasWorkspaceInner({
           onClickConnectEnd={finishClickSemanticConnection}
           onMoveEnd={onMoveEnd}
           onMoveStart={() => dismissNodeMenu(false)}
-          onNodeDragStart={() => dismissNodeMenu(false)}
+          onNodeDragStart={() => {
+            dismissNodeMenu(false);
+            dragHistorySequenceRef.current += 1;
+            dragHistoryKeyRef.current = `drag:${document.workspaceId}:${dragHistorySequenceRef.current}`;
+          }}
+          onNodeDragStop={() => {
+            dragHistoryKeyRef.current = null;
+          }}
           onSelectionEnd={() => {
             window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
           }}
@@ -2071,11 +2244,15 @@ function CanvasWorkspaceInner({
 
           <CanvasDock
             activePanel={toolboxPanel}
+            canRedo={canRedo}
+            canUndo={canUndo}
             tool={tool}
             onPanelChange={changeToolboxPanel}
             onToolChange={changeTool}
             onOpenCommand={openCanvasCommand}
             onAddNote={addNote}
+            onRedo={() => performHistoryCommand("redo")}
+            onUndo={() => performHistoryCommand("undo")}
           />
 
           {selectedNodeIds.size >= 2 && (

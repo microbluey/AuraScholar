@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AIProvider, GenerateOptions } from "./provider.js";
-import { generateCanvasSynthesis } from "./canvas-synthesis.js";
+import { generateCanvasSynthesis, normalizeCanvasSynthesisSource } from "./canvas-synthesis.js";
 
 function providerReturning(value: unknown): AIProvider {
   return {
@@ -15,6 +15,20 @@ function providerReturning(value: unknown): AIProvider {
 }
 
 describe("generateCanvasSynthesis", () => {
+  it("exposes the same canonical source normalization used by the prompt", () => {
+    const normalized = normalizeCanvasSynthesisSource({
+      id: " paper-1 ",
+      kind: "paper",
+      title: "  Graph   study ",
+      content: `  Evidence\n\twith   spacing ${"x".repeat(8_100)}`,
+    });
+
+    expect(normalized.id).toBe("paper-1");
+    expect(normalized.title).toBe("Graph   study");
+    expect(normalized.content).toHaveLength(8_000);
+    expect(normalized.content.startsWith("Evidence with spacing ")).toBe(true);
+  });
+
   it("requires at least two traceable sources", async () => {
     const provider = providerReturning({ title: "x", contentMarkdown: "y" });
     await expect(
