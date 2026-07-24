@@ -821,7 +821,7 @@ export function SpatialCanvasPage() {
         <div className="canvas-page-state" role="status">
           <CircleNotch className="canvas-page-state__spinner" size={30} weight="bold" />
           <h1>正在展开研究空间</h1>
-          <p>读取卡片、关系与上次浏览位置。</p>
+          <p>读取卡片、连线与上次浏览位置。</p>
         </div>
       </main>
     );

@@ -3,6 +3,7 @@ import {
   applyCanvasSelectionDeletion,
   clampCanvasMenuPoint,
   isCanvasContextMenuShortcut,
+  isRepeatedCanvasEdgePrimaryClick,
   isCanvasLayoutShortcut,
   isCanvasSelectionDeleteShortcut,
   planCanvasSelectionDeletion,
@@ -16,7 +17,7 @@ describe("canvas node interactions", () => {
   it("routes document-backed nodes to the reader and authored nodes to details", () => {
     expect(primarySurfaceForCanvasNode({ type: "paper" })).toBe("reader");
     expect(primarySurfaceForCanvasNode({ type: "excerpt" })).toBe("reader");
-    expect(primarySurfaceForCanvasNode({ type: "idea-note" })).toBe("details");
+    expect(primarySurfaceForCanvasNode({ type: "idea-note" })).toBe("note-editor");
     expect(primarySurfaceForCanvasNode({ type: "ai-synth" })).toBe("details");
     expect(primarySurfaceForCanvasNode({ type: "group" })).toBe("details");
   });
@@ -27,7 +28,6 @@ describe("canvas node interactions", () => {
       button: 0,
       connectionInProgress: false,
       interactiveTarget: false,
-      pendingSemanticLink: false,
       tool: "select" as const,
     };
     expect(shouldActivateCanvasNode(base)).toBe(true);
@@ -35,8 +35,45 @@ describe("canvas node interactions", () => {
     expect(shouldActivateCanvasNode({ ...base, button: 2 })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, interactiveTarget: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, connectionInProgress: true })).toBe(false);
-    expect(shouldActivateCanvasNode({ ...base, pendingSemanticLink: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, tool: "pan" })).toBe(false);
+  });
+
+  it("recognizes two nearby primary clicks on the same edge", () => {
+    const previous = {
+      clientX: 120,
+      clientY: 240,
+      edgeId: "edge:1",
+      timeStamp: 1_000,
+    };
+
+    expect(
+      isRepeatedCanvasEdgePrimaryClick(previous, {
+        ...previous,
+        clientX: 125,
+        clientY: 244,
+        timeStamp: 1_380,
+      }),
+    ).toBe(true);
+    expect(
+      isRepeatedCanvasEdgePrimaryClick(previous, {
+        ...previous,
+        edgeId: "edge:2",
+        timeStamp: 1_200,
+      }),
+    ).toBe(false);
+    expect(
+      isRepeatedCanvasEdgePrimaryClick(previous, {
+        ...previous,
+        clientX: 140,
+        timeStamp: 1_200,
+      }),
+    ).toBe(false);
+    expect(
+      isRepeatedCanvasEdgePrimaryClick(previous, {
+        ...previous,
+        timeStamp: 1_500,
+      }),
+    ).toBe(false);
   });
 
   it("recognizes native keyboard context-menu shortcuts", () => {

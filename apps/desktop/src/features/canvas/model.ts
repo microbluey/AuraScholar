@@ -48,6 +48,14 @@ export const SYNTHESIS_LABELS: Record<AISynthesisType, string> = {
   tldr: "核心综述",
 };
 
+export function canvasEdgeFreeText(edge: CanvasEdge): string | undefined {
+  const label = edge.label?.trim();
+  if (!label || (edge.relationType !== "custom" && label === RELATION_LABELS[edge.relationType])) {
+    return undefined;
+  }
+  return label;
+}
+
 export function createCanvasId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -89,6 +97,21 @@ export function createIdeaNoteNode(position: CanvasPoint): IdeaNoteNode {
     data: {
       title: "研究想法",
       contentMarkdown: "写下一个假设、证据线索或接下来要验证的问题。",
+      hasEquations: false,
+    },
+  };
+}
+
+export function createBlankIdeaNoteNode(dropPosition: CanvasPoint): IdeaNoteNode {
+  const node = createIdeaNoteNode({
+    x: dropPosition.x - 292 / 2,
+    y: dropPosition.y - 196 / 2,
+  });
+  return {
+    ...node,
+    data: {
+      title: "",
+      contentMarkdown: "",
       hasEquations: false,
     },
   };
@@ -145,7 +168,7 @@ export function createEdge(
     sourceId,
     targetId,
     relationType,
-    label: RELATION_LABELS[relationType],
+    ...(relationType === "custom" ? {} : { label: RELATION_LABELS[relationType] }),
     createdAt: now,
     updatedAt: now,
   };

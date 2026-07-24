@@ -89,7 +89,7 @@ export function CanvasViewportControls({
                 <small>
                   {nodeCount !== undefined ? `${nodeCount} 张卡片` : null}
                   {nodeCount !== undefined && edgeCount !== undefined ? " · " : null}
-                  {edgeCount !== undefined ? `${edgeCount} 条关系` : null}
+                  {edgeCount !== undefined ? `${edgeCount} 条连线` : null}
                 </small>
               )}
             </div>

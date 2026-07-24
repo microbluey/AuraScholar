@@ -151,12 +151,13 @@ interface SmokeRendererResult {
   canvasNodeContextMenuVisible: boolean;
   canvasPersistedNodeCount: number | null;
   canvasPersistedNodeReloaded: boolean;
-  canvasSemanticQuickLinkCandidateVisible: boolean;
-  canvasSemanticQuickLinkCleanupSucceeded: boolean;
-  canvasSemanticQuickLinkDeferred: boolean;
-  canvasSemanticQuickLinkKeyboardDeleteHandled: boolean;
-  canvasSemanticQuickLinkPersisted: boolean;
-  canvasSemanticQuickLinkShortcutHandled: boolean;
+  canvasQuickLinkCleanupSucceeded: boolean;
+  canvasQuickLinkCreatedImmediately: boolean;
+  canvasQuickLinkEdgeTextEditorOpened: boolean;
+  canvasQuickLinkEdgeTextPersisted: boolean;
+  canvasQuickLinkKeyboardDeleteHandled: boolean;
+  canvasQuickLinkLegacyUiAbsent: boolean;
+  canvasQuickLinkUntyped: boolean;
   canvasSplitReaderClosed: boolean;
   canvasSplitReaderCleanupSucceeded: boolean;
   canvasSplitReaderExcerptLinked: boolean;
@@ -1462,12 +1463,13 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let canvasNodeContextMenuVisible = false;
         let canvasPersistedNodeCount = null;
         let canvasPersistedNodeReloaded = false;
-        let canvasSemanticQuickLinkCandidateVisible = false;
-        let canvasSemanticQuickLinkCleanupSucceeded = false;
-        let canvasSemanticQuickLinkDeferred = false;
-        let canvasSemanticQuickLinkKeyboardDeleteHandled = false;
-        let canvasSemanticQuickLinkPersisted = false;
-        let canvasSemanticQuickLinkShortcutHandled = false;
+        let canvasQuickLinkCleanupSucceeded = false;
+        let canvasQuickLinkCreatedImmediately = false;
+        let canvasQuickLinkEdgeTextEditorOpened = false;
+        let canvasQuickLinkEdgeTextPersisted = false;
+        let canvasQuickLinkKeyboardDeleteHandled = false;
+        let canvasQuickLinkLegacyUiAbsent = false;
+        let canvasQuickLinkUntyped = false;
         let canvasSplitReaderClosed = false;
         let canvasSplitReaderCleanupSucceeded = false;
         let canvasSplitReaderExcerptLinked = false;
@@ -6921,37 +6923,19 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             1_000
           );
 
-          const semanticNode = (nodeId) =>
+          const quickLinkNode = (nodeId) =>
             Array.from(document.querySelectorAll(".react-flow__node")).find(
               (node) => node.getAttribute("data-id") === nodeId
             ) ?? null;
-          const semanticSourceHandle = semanticNode(persistedCanvasPaper.id)?.querySelector(
+          const quickLinkSourceHandle = quickLinkNode(
+            persistedCanvasPaper.id
+          )?.querySelector(
             '[data-handleid="link-right"]'
           );
-          const semanticTargetHandle = semanticNode(
+          const quickLinkTargetHandle = quickLinkNode(
             "smoke-app-shell-canvas-stats-race"
           )?.querySelector('[data-handleid="link-left"]');
-          if (
-            semanticSourceHandle instanceof HTMLElement &&
-            semanticTargetHandle instanceof HTMLElement
-          ) {
-            semanticSourceHandle.click();
-            semanticTargetHandle.click();
-          }
-
-          const semanticMenu = await waitFor(() => {
-            const menu = document.querySelector(".canvas-semantic-link-menu");
-            return menu?.getAttribute("data-source-id") === persistedCanvasPaper.id &&
-              menu?.getAttribute("data-target-id") ===
-                "smoke-app-shell-canvas-stats-race" &&
-              menu.querySelectorAll(".canvas-semantic-link-menu__option").length === 4
-              ? menu
-              : null;
-          }, 2_000);
-          canvasSemanticQuickLinkCandidateVisible = Boolean(semanticMenu);
-
-          await wait(650);
-          const semanticRowsBeforeCommit = await window.aura.db.query(
+          const quickLinkRowsBefore = await window.aura.db.query(
             "SELECT id FROM canvas_edges " +
               "WHERE workspace_id = ? AND source_id = ? AND target_id = ?",
             [
@@ -6960,21 +6944,71 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               "smoke-app-shell-canvas-stats-race"
             ]
           );
-          canvasSemanticQuickLinkDeferred =
-            Boolean(semanticMenu?.isConnected) && semanticRowsBeforeCommit.length === 0;
-
-          if (semanticMenu?.isConnected) {
-            const semanticShortcut = new KeyboardEvent("keydown", {
-              key: "2",
-              code: "Digit2",
-              bubbles: true,
-              cancelable: true
-            });
-            window.dispatchEvent(semanticShortcut);
-            canvasSemanticQuickLinkShortcutHandled = semanticShortcut.defaultPrevented;
+          if (
+            quickLinkRowsBefore.length === 0 &&
+            quickLinkSourceHandle instanceof HTMLElement &&
+            quickLinkTargetHandle instanceof HTMLElement
+          ) {
+            const sourceRect = quickLinkSourceHandle.getBoundingClientRect();
+            const targetRect = quickLinkTargetHandle.getBoundingClientRect();
+            const sourcePoint = {
+              x: sourceRect.left + sourceRect.width / 2,
+              y: sourceRect.top + sourceRect.height / 2
+            };
+            const targetPoint = {
+              x: targetRect.left + targetRect.width / 2,
+              y: targetRect.top + targetRect.height / 2
+            };
+            quickLinkSourceHandle.dispatchEvent(
+              new MouseEvent("mousedown", {
+                bubbles: true,
+                cancelable: true,
+                button: 0,
+                buttons: 1,
+                clientX: sourcePoint.x,
+                clientY: sourcePoint.y,
+                view: window
+              })
+            );
+            await wait(16);
+            document.dispatchEvent(
+              new MouseEvent("mousemove", {
+                bubbles: true,
+                cancelable: true,
+                button: 0,
+                buttons: 1,
+                clientX: sourcePoint.x + (targetPoint.x - sourcePoint.x) * 0.6,
+                clientY: sourcePoint.y + (targetPoint.y - sourcePoint.y) * 0.6,
+                view: window
+              })
+            );
+            await wait(16);
+            document.dispatchEvent(
+              new MouseEvent("mousemove", {
+                bubbles: true,
+                cancelable: true,
+                button: 0,
+                buttons: 1,
+                clientX: targetPoint.x,
+                clientY: targetPoint.y,
+                view: window
+              })
+            );
+            await wait(16);
+            document.dispatchEvent(
+              new MouseEvent("mouseup", {
+                bubbles: true,
+                cancelable: true,
+                button: 0,
+                buttons: 0,
+                clientX: targetPoint.x,
+                clientY: targetPoint.y,
+                view: window
+              })
+            );
           }
 
-          const persistedSemanticEdge = await waitFor(async () => {
+          const persistedQuickLinkEdge = await waitFor(async () => {
             const rows = await window.aura.db.query(
               "SELECT id, relation_type, label FROM canvas_edges " +
                 "WHERE workspace_id = ? AND source_id = ? AND target_id = ?",
@@ -6984,35 +7018,103 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 "smoke-app-shell-canvas-stats-race"
               ]
             );
-            const row = rows.find(
-              (candidate) =>
-                candidate.relation_type === "supports" && candidate.label === "支持"
-            );
-            const label = document.querySelector(".canvas-edge-label--supports");
-            return row &&
-              label?.textContent?.trim() === "支持" &&
-              !document.querySelector(".canvas-semantic-link-menu")
-              ? row
-              : null;
+            return rows[0] ?? null;
           }, 5_000);
-          canvasSemanticQuickLinkPersisted = Boolean(persistedSemanticEdge);
+          canvasQuickLinkCreatedImmediately =
+            quickLinkRowsBefore.length === 0 && Boolean(persistedQuickLinkEdge);
+          canvasQuickLinkUntyped =
+            persistedQuickLinkEdge?.relation_type === "custom" &&
+            (persistedQuickLinkEdge.label === null ||
+              persistedQuickLinkEdge.label === "");
+          canvasQuickLinkLegacyUiAbsent =
+            !document.querySelector(".canvas-semantic-link-menu") &&
+            !document.querySelector(".canvas-link-target-picker");
 
-          if (!document.querySelector('[data-canvas-toolbox-panel="details"]')) {
-            document.querySelector('[data-canvas-toolbox-trigger="details"]')?.click();
-          }
-          const semanticDetails = await waitFor(() => {
-            if (!persistedSemanticEdge?.id) return null;
-            const details = document.querySelector(
-              '[data-canvas-toolbox-panel="details"] ' +
-                '[data-canvas-details-for="' +
-                CSS.escape(persistedSemanticEdge.id) +
+          const quickLinkEdgeElement = await waitFor(() => {
+            if (!persistedQuickLinkEdge?.id) return null;
+            return document.querySelector(
+              '.react-flow__edge[data-id="' +
+                CSS.escape(persistedQuickLinkEdge.id) +
                 '"]'
             );
-            if (!details?.textContent?.includes("关系连线编辑")) return null;
-            return details;
           }, 2_000);
+          if (quickLinkEdgeElement instanceof SVGElement) {
+            const edgeRect = quickLinkEdgeElement.getBoundingClientRect();
+            const clickOptions = {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              clientX: edgeRect.left + edgeRect.width / 2,
+              clientY: edgeRect.top + edgeRect.height / 2,
+              view: window
+            };
+            quickLinkEdgeElement.dispatchEvent(
+              new MouseEvent("click", {
+                ...clickOptions,
+                detail: 1
+              })
+            );
+            await new Promise((resolve) =>
+              window.requestAnimationFrame(() => resolve(undefined))
+            );
+            const refreshedQuickLinkEdge = document.querySelector(
+              '.react-flow__edge[data-id="' +
+                CSS.escape(persistedQuickLinkEdge.id) +
+                '"]'
+            );
+            refreshedQuickLinkEdge?.dispatchEvent(
+              new MouseEvent("click", {
+                ...clickOptions,
+                detail: 2
+              })
+            );
+          }
+          const quickLinkEdgeTextInput = await waitFor(() => {
+            const input = document.querySelector(
+              '.canvas-edge-label-editor input[aria-label="连线文字"]'
+            );
+            return input instanceof HTMLInputElement ? input : null;
+          }, 2_000);
+          canvasQuickLinkEdgeTextEditorOpened =
+            quickLinkEdgeTextInput instanceof HTMLInputElement;
+          if (quickLinkEdgeTextInput instanceof HTMLInputElement) {
+            setInputValue(quickLinkEdgeTextInput, "Smoke free-form edge text");
+            quickLinkEdgeTextInput.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: "Enter",
+                code: "Enter",
+                bubbles: true,
+                cancelable: true
+              })
+            );
+          }
+          canvasQuickLinkEdgeTextPersisted = Boolean(
+            await waitFor(async () => {
+              if (!persistedQuickLinkEdge?.id) return false;
+              const rows = await window.aura.db.query(
+                "SELECT label FROM canvas_edges WHERE workspace_id = ? AND id = ?",
+                ["canvas:default", persistedQuickLinkEdge.id]
+              );
+              const visibleLabel = Array.from(
+                document.querySelectorAll(".canvas-edge-label")
+              ).find(
+                (label) =>
+                  label.textContent?.trim() === "Smoke free-form edge text"
+              );
+              return (
+                rows[0]?.label === "Smoke free-form edge text" &&
+                Boolean(visibleLabel) &&
+                !document.querySelector(".canvas-edge-label-editor")
+              );
+            }, 5_000)
+          );
+
           const canvasWorkspace = document.querySelector(".canvas-workspace");
-          if (semanticDetails && canvasWorkspace instanceof HTMLElement) {
+          if (
+            persistedQuickLinkEdge?.id &&
+            canvasQuickLinkEdgeTextPersisted &&
+            canvasWorkspace instanceof HTMLElement
+          ) {
             canvasWorkspace.focus();
             await waitFor(() => document.activeElement === canvasWorkspace, 1_000);
             const edgeDeleteShortcut = new KeyboardEvent("keydown", {
@@ -7022,9 +7124,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               cancelable: true
             });
             canvasWorkspace.dispatchEvent(edgeDeleteShortcut);
-            canvasSemanticQuickLinkKeyboardDeleteHandled =
-              edgeDeleteShortcut.defaultPrevented;
-            canvasSemanticQuickLinkCleanupSucceeded = Boolean(
+            canvasQuickLinkKeyboardDeleteHandled = edgeDeleteShortcut.defaultPrevented;
+            canvasQuickLinkCleanupSucceeded = Boolean(
               await waitFor(async () => {
                 const rows = await window.aura.db.query(
                   "SELECT id FROM canvas_edges " +
@@ -7037,11 +7138,16 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 );
                 return (
                   rows.length === 0 &&
-                  !document.querySelector(".canvas-edge-label--supports") &&
                   !document.querySelector(
                     '.react-flow__edge[data-testid="' +
-                      CSS.escape("rf__edge-" + persistedSemanticEdge.id) +
+                      CSS.escape("rf__edge-" + persistedQuickLinkEdge.id) +
                       '"]'
+                  ) &&
+                  !Array.from(
+                    document.querySelectorAll(".canvas-edge-label")
+                  ).some(
+                    (label) =>
+                      label.textContent?.trim() === "Smoke free-form edge text"
                   )
                 );
               }, 5_000)
@@ -13834,12 +13940,13 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ? canvasPersistedNodeCount
               : Number(canvasPersistedNodeCount),
           canvasPersistedNodeReloaded,
-          canvasSemanticQuickLinkCandidateVisible,
-          canvasSemanticQuickLinkCleanupSucceeded,
-          canvasSemanticQuickLinkDeferred,
-          canvasSemanticQuickLinkKeyboardDeleteHandled,
-          canvasSemanticQuickLinkPersisted,
-          canvasSemanticQuickLinkShortcutHandled,
+          canvasQuickLinkCleanupSucceeded,
+          canvasQuickLinkCreatedImmediately,
+          canvasQuickLinkEdgeTextEditorOpened,
+          canvasQuickLinkEdgeTextPersisted,
+          canvasQuickLinkKeyboardDeleteHandled,
+          canvasQuickLinkLegacyUiAbsent,
+          canvasQuickLinkUntyped,
           canvasSplitReaderClosed,
           canvasSplitReaderCleanupSucceeded,
           canvasSplitReaderExcerptLinked,
@@ -14989,15 +15096,16 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               detail: `menu=${renderer.canvasNodeContextMenuVisible}; edit=${renderer.canvasToolboxDetailsEditPersisted}; keyboardHandled=${renderer.canvasNodeKeyboardDeleteHandled}; delete=${renderer.canvasSplitReaderCleanupSucceeded}`,
             },
             {
-              name: "canvas-semantic-quick-link-workflow",
+              name: "canvas-quick-link-free-text-workflow",
               pass:
-                renderer.canvasSemanticQuickLinkCandidateVisible &&
-                renderer.canvasSemanticQuickLinkDeferred &&
-                renderer.canvasSemanticQuickLinkShortcutHandled &&
-                renderer.canvasSemanticQuickLinkPersisted &&
-                renderer.canvasSemanticQuickLinkKeyboardDeleteHandled &&
-                renderer.canvasSemanticQuickLinkCleanupSucceeded,
-              detail: `candidate=${renderer.canvasSemanticQuickLinkCandidateVisible}; deferred=${renderer.canvasSemanticQuickLinkDeferred}; shortcut=${renderer.canvasSemanticQuickLinkShortcutHandled}; persisted=${renderer.canvasSemanticQuickLinkPersisted}; keyboardHandled=${renderer.canvasSemanticQuickLinkKeyboardDeleteHandled}; cleanup=${renderer.canvasSemanticQuickLinkCleanupSucceeded}`,
+                renderer.canvasQuickLinkCreatedImmediately &&
+                renderer.canvasQuickLinkUntyped &&
+                renderer.canvasQuickLinkLegacyUiAbsent &&
+                renderer.canvasQuickLinkEdgeTextEditorOpened &&
+                renderer.canvasQuickLinkEdgeTextPersisted &&
+                renderer.canvasQuickLinkKeyboardDeleteHandled &&
+                renderer.canvasQuickLinkCleanupSucceeded,
+              detail: `created=${renderer.canvasQuickLinkCreatedImmediately}; untyped=${renderer.canvasQuickLinkUntyped}; legacyUiAbsent=${renderer.canvasQuickLinkLegacyUiAbsent}; editor=${renderer.canvasQuickLinkEdgeTextEditorOpened}; text=${renderer.canvasQuickLinkEdgeTextPersisted}; keyboardHandled=${renderer.canvasQuickLinkKeyboardDeleteHandled}; cleanup=${renderer.canvasQuickLinkCleanupSucceeded}`,
             },
             {
               name: "snippets-note-shortcut-ime-guard",
