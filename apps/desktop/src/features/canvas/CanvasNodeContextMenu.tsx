@@ -169,7 +169,11 @@ export function CanvasNodeContextMenu({
           icon={<NotePencil size={17} weight="duotone" />}
           onSelect={() => run(() => onOpenDetails(node.id))}
         >
-          {node.type === "group" ? "编辑分组" : "打开编辑页"}
+          {node.type === "group"
+            ? "编辑分组"
+            : node.type === "idea-note"
+              ? "专注编辑 Markdown"
+              : "打开编辑页"}
         </MenuAction>
       )}
 

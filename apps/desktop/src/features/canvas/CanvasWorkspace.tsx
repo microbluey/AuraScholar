@@ -27,7 +27,16 @@ import {
   useReactFlow,
   useStoreApi,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from "react";
 import { isImeComposing } from "../../keyboard";
 import { canvasNodeTypes, type CanvasFlowNode, type CanvasNodeMenuAnchor } from "./CanvasCards";
 import { CanvasCommandPalette } from "./CanvasCommandPalette";
@@ -53,11 +62,13 @@ import {
   clampCanvasMenuPoint,
   isCanvasLayoutShortcut,
   isCanvasSelectionDeleteShortcut,
+  isRepeatedCanvasEdgePrimaryClick,
   planCanvasSelectionDeletion,
   primarySurfaceForCanvasNode,
   resolveCanvasHistoryShortcut,
   shouldActivateCanvasNode,
   type CanvasMenuPoint,
+  type CanvasEdgePrimaryClick,
   type CanvasToolboxPanel,
 } from "./canvas-interactions";
 import type { CanvasDocumentChangeOptions } from "./canvas-history";
@@ -101,6 +112,14 @@ import type {
   CanvasWorkspaceOption,
   CreateCanvasWorkspace,
 } from "./workspace-controls";
+import { applyIdeaNotePatch, type IdeaNotePatch } from "./idea-note-edit";
+import type { CanvasNoteEditorValue } from "./CanvasNoteEditorDialog";
+
+const LazyCanvasNoteEditorDialog = lazy(() =>
+  import("./CanvasNoteEditorDialog").then((module) => ({
+    default: module.CanvasNoteEditorDialog,
+  })),
+);
 
 interface CanvasWorkspaceProps {
   canRedo: boolean;
@@ -152,6 +171,11 @@ interface CanvasEdgeLabelEditorState {
   initialValue: string;
   position: CanvasMenuPoint;
   returnFocusElement: HTMLElement | SVGElement | null;
+  workspaceId: string;
+}
+
+interface CanvasNoteEditorState extends CanvasNoteEditorValue {
+  nodeId: string;
   workspaceId: string;
 }
 
@@ -259,11 +283,18 @@ function CanvasWorkspaceInner({
   const [readerTarget, setReaderTarget] = useState<CanvasReaderTarget | null>(null);
   const [connectionInProgress, setConnectionInProgress] = useState(false);
   const [edgeLabelEditor, setEdgeLabelEditor] = useState<CanvasEdgeLabelEditorState | null>(null);
+  const [noteEditor, setNoteEditor] = useState<CanvasNoteEditorState | null>(null);
   const activeEdgeLabelEditor =
     edgeLabelEditor &&
     edgeLabelEditor.workspaceId === document.workspaceId &&
     document.edges.some((edge) => edge.id === edgeLabelEditor.edgeId)
       ? edgeLabelEditor
+      : null;
+  const activeNoteEditor =
+    noteEditor &&
+    noteEditor.workspaceId === document.workspaceId &&
+    document.nodes.some((node) => node.id === noteEditor.nodeId && node.type === "idea-note")
+      ? noteEditor
       : null;
   const cancelledConnectionRef = useRef(false);
   const completedConnectionRef = useRef(false);
@@ -280,6 +311,7 @@ function CanvasWorkspaceInner({
   const activeSynthesisRequestIdRef = useRef<string | null>(null);
   const dragHistoryKeyRef = useRef<string | null>(null);
   const dragHistorySequenceRef = useRef(0);
+  const lastEdgePrimaryClickRef = useRef<CanvasEdgePrimaryClick | null>(null);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
 
@@ -315,6 +347,36 @@ function CanvasWorkspaceInner({
     });
   }, []);
 
+  const openIdeaNoteEditor = useCallback(
+    (
+      nodeId: string,
+      draft?: {
+        contentMarkdown: string;
+        title: string;
+      },
+    ) => {
+      const node = document.nodes.find(
+        (candidate) => candidate.id === nodeId && candidate.type === "idea-note",
+      );
+      if (!node || node.type !== "idea-note") return;
+      cancelFlowConnection();
+      dismissNodeMenu(false);
+      closeReader();
+      setEdgeLabelEditor(null);
+      setSelectedNodeIds(new Set([node.id]));
+      setSelectedEdgeId(null);
+      setToolboxPanel(null);
+      setAutoFocusDetails(false);
+      setNoteEditor({
+        workspaceId: document.workspaceId,
+        nodeId: node.id,
+        title: draft?.title ?? node.data.title ?? "",
+        contentMarkdown: draft?.contentMarkdown ?? node.data.contentMarkdown,
+      });
+    },
+    [cancelFlowConnection, closeReader, dismissNodeMenu, document.nodes, document.workspaceId],
+  );
+
   const openCanvasCommand = useCallback(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
@@ -335,6 +397,7 @@ function CanvasWorkspaceInner({
     cancelFlowConnection();
     dismissNodeMenu(false);
     setEdgeLabelEditor(null);
+    setNoteEditor(null);
     setCommandOpen(true);
   }, [cancelFlowConnection, dismissNodeMenu, flow]);
 
@@ -357,6 +420,7 @@ function CanvasWorkspaceInner({
       cancelFlowConnection();
       setNodeMenu(null);
       setEdgeLabelEditor(null);
+      setNoteEditor(null);
       setToolboxPanel(null);
       setAutoFocusDetails(false);
       if (node.type === "paper") {
@@ -387,36 +451,50 @@ function CanvasWorkspaceInner({
 
   const activateNode = useCallback(
     (node: CanvasNode) => {
-      if (primarySurfaceForCanvasNode(node) === "reader") {
+      const surface = primarySurfaceForCanvasNode(node);
+      if (surface === "reader") {
         openNodeInReader(node);
+        return;
+      }
+      if (surface === "note-editor" && node.type === "idea-note") {
+        openIdeaNoteEditor(node.id);
         return;
       }
       trustedReaderPayloadRef.current = null;
       cancelFlowConnection();
       setNodeMenu(null);
       setEdgeLabelEditor(null);
+      setNoteEditor(null);
       closeReader();
       setAutoFocusDetails(false);
       setToolboxPanel("details");
     },
-    [cancelFlowConnection, closeReader, openNodeInReader],
+    [cancelFlowConnection, closeReader, openIdeaNoteEditor, openNodeInReader],
   );
 
   const activateNodeById = useCallback(
     (nodeId: string) => {
       const node = document.nodes.find((candidate) => candidate.id === nodeId);
       if (!node) return;
+      if (node.type === "idea-note") {
+        openIdeaNoteEditor(node.id);
+        return;
+      }
       setSelectedNodeIds(new Set([node.id]));
       setSelectedEdgeId(null);
       activateNode(node);
     },
-    [activateNode, document.nodes],
+    [activateNode, document.nodes, openIdeaNoteEditor],
   );
 
   const openNodeDetails = useCallback(
     (nodeId: string) => {
       const node = document.nodes.find((candidate) => candidate.id === nodeId);
       if (!node) return;
+      if (node.type === "idea-note") {
+        openIdeaNoteEditor(node.id);
+        return;
+      }
       trustedReaderPayloadRef.current = null;
       closeReader();
       setEdgeLabelEditor(null);
@@ -425,13 +503,14 @@ function CanvasWorkspaceInner({
       setAutoFocusDetails(true);
       setToolboxPanel("details");
     },
-    [closeReader, document.nodes],
+    [closeReader, document.nodes, openIdeaNoteEditor],
   );
 
   const changeToolboxPanel = useCallback(
     (panel: CanvasToolboxPanel | null) => {
       dismissNodeMenu(false);
       setEdgeLabelEditor(null);
+      setNoteEditor(null);
       setAutoFocusDetails(false);
       if (panel === "details") closeReader();
       setToolboxPanel(panel);
@@ -489,12 +568,14 @@ function CanvasWorkspaceInner({
     setNodeMenu(null);
     setConnectionInProgress(false);
     setEdgeLabelEditor(null);
+    setNoteEditor(null);
     setReaderTarget(null);
     setToolboxPanel(null);
     setAutoFocusDetails(false);
     setCommandOpen(false);
     commandAnchorRef.current = null;
     lastCanvasPointerRef.current = null;
+    lastEdgePrimaryClickRef.current = null;
   }, [document.workspaceId, flowStore]);
 
   useEffect(() => {
@@ -586,6 +667,64 @@ function CanvasWorkspaceInner({
     [cancelFlowConnection, document.nodes, onDocumentChange, showNotice],
   );
 
+  const commitIdeaNote = useCallback(
+    (nodeId: string, patch: IdeaNotePatch, field: "content" | "title") => {
+      const workspaceId = document.workspaceId;
+      const outcome: {
+        status: ReturnType<typeof applyIdeaNotePatch>["status"];
+      } = { status: "missing-node" };
+      const applied = onDocumentChange(
+        (current) => {
+          const result = applyIdeaNotePatch(current, workspaceId, nodeId, patch);
+          outcome.status = result.status;
+          return result.document;
+        },
+        {
+          history: {
+            label: field === "title" ? "编辑笔记标题" : "编辑笔记正文",
+            mergeKey: `idea-note:${nodeId}:${field}`,
+          },
+        },
+      );
+      if (!applied && outcome.status !== "unchanged") {
+        showNotice("笔记已发生变化，本次编辑未写入。");
+      }
+    },
+    [document.workspaceId, onDocumentChange, showNotice],
+  );
+
+  const closeIdeaNoteEditor = useCallback(() => {
+    setNoteEditor(null);
+  }, []);
+
+  const saveIdeaNoteEditor = useCallback(
+    (value: CanvasNoteEditorValue) => {
+      const editor = noteEditor;
+      if (!editor) return;
+      const outcome: {
+        status: ReturnType<typeof applyIdeaNotePatch>["status"];
+      } = { status: "missing-node" };
+      const applied = onDocumentChange(
+        (current) => {
+          const result = applyIdeaNotePatch(current, editor.workspaceId, editor.nodeId, {
+            title: value.title,
+            contentMarkdown: value.contentMarkdown,
+          });
+          outcome.status = result.status;
+          return result.document;
+        },
+        { history: { label: "编辑研究笔记" } },
+      );
+      setNoteEditor(null);
+      if (applied && outcome.status === "applied") {
+        showNotice("研究笔记已保存。");
+      } else if (outcome.status !== "unchanged") {
+        showNotice("笔记或白板已发生变化，本次编辑未写入。");
+      }
+    },
+    [noteEditor, onDocumentChange, showNotice],
+  );
+
   /* eslint-disable react-hooks/refs -- React Flow stores these callbacks as event handlers; it does not invoke them during render. */
   const flowNodes = useMemo<CanvasFlowNode[]>(() => {
     const excerptCounts = new Map<string, number>();
@@ -636,7 +775,9 @@ function CanvasWorkspaceInner({
           canvasNode: node,
           groupChildCount: groupChildCounts.get(node.id) ?? 0,
           menuOpen: nodeMenu?.nodeId === node.id,
+          onCommitIdeaNote: commitIdeaNote,
           onActivateNode: activateNodeById,
+          onOpenIdeaNoteEditor: openIdeaNoteEditor,
           onOpenPaper: () => openNodeInReader(node),
           onOpenExcerpt: () => openNodeInReader(node),
           onRequestContextMenu: requestNodeContextMenu,
@@ -646,10 +787,12 @@ function CanvasWorkspaceInner({
     });
   }, [
     activateNodeById,
+    commitIdeaNote,
     document.nodes,
     hiddenNodeIds,
     nodeMenu?.nodeId,
     openNodeInReader,
+    openIdeaNoteEditor,
     requestNodeContextMenu,
     selectedNodeIds,
     setGroupCollapsed,
@@ -679,7 +822,7 @@ function CanvasWorkspaceInner({
         `.canvas-edge-label[data-edge-id="${CSS.escape(editor.edgeId)}"], .react-flow__edge[data-id="${CSS.escape(editor.edgeId)}"]`,
       );
       const target = editor.returnFocusElement?.isConnected ? editor.returnFocusElement : fallback;
-      (target ?? wrapper).focus({ preventScroll: true });
+      (target instanceof HTMLElement ? target : wrapper).focus({ preventScroll: true });
     });
   }, []);
 
@@ -692,6 +835,7 @@ function CanvasWorkspaceInner({
       const wrapper = wrapperRef.current;
       const edge = document.edges.find((candidate) => candidate.id === edgeId);
       if (!wrapper || !edge) return;
+      lastEdgePrimaryClickRef.current = null;
       const wrapperRect = wrapper.getBoundingClientRect();
       const edgeRect = wrapper
         .querySelector<SVGGraphicsElement>(
@@ -837,9 +981,29 @@ function CanvasWorkspaceInner({
       closeReader();
       setAutoFocusDetails(false);
       setToolboxPanel(null);
-      (returnFocusElement ?? wrapperRef.current)?.focus({ preventScroll: true });
+      (returnFocusElement instanceof HTMLElement ? returnFocusElement : wrapperRef.current)?.focus({
+        preventScroll: true,
+      });
     },
     [closeReader, connectionInProgress, tool],
+  );
+
+  const handleEdgePrimaryClick = useCallback(
+    (click: CanvasEdgePrimaryClick, returnFocusElement?: HTMLElement | SVGElement | null) => {
+      if (tool !== "select" || connectionInProgress) return;
+      const repeated = isRepeatedCanvasEdgePrimaryClick(lastEdgePrimaryClickRef.current, click);
+      lastEdgePrimaryClickRef.current = repeated ? null : click;
+      if (repeated) {
+        openEdgeLabelEditor(
+          click.edgeId,
+          { x: click.clientX, y: click.clientY },
+          returnFocusElement,
+        );
+        return;
+      }
+      selectEdge(click.edgeId, returnFocusElement);
+    },
+    [connectionInProgress, openEdgeLabelEditor, selectEdge, tool],
   );
 
   const flowEdges = useMemo<RelationFlowEdge[]>(
@@ -862,19 +1026,22 @@ function CanvasWorkspaceInner({
             target,
             ariaLabel:
               sourceNode && targetNode
-                ? `${canvasNodeLabel(sourceNode)} 到 ${canvasNodeLabel(targetNode)}${freeTextLabel ? `，连线文字：${freeTextLabel}` : "，无连线文字"}，按 F2 编辑`
+                ? `${canvasNodeLabel(sourceNode)} 到 ${canvasNodeLabel(targetNode)}${freeTextLabel ? `，连线文字：${freeTextLabel}` : "，无连线文字"}，双击或按 F2 编辑`
                 : undefined,
             sourceHandle: handles.sourceHandle,
             targetHandle: handles.targetHandle,
             type: "relation",
+            interactionWidth: 36,
             data: {
               label: freeTextLabel,
               reciprocal: hasReciprocalCanvasLink(document.edges, edge),
-              onSelect: (returnFocusElement: HTMLButtonElement) =>
-                selectEdge(edge.id, returnFocusElement),
+              onPrimaryClick: (
+                click: CanvasEdgePrimaryClick,
+                returnFocusElement: HTMLElement | SVGElement,
+              ) => handleEdgePrimaryClick(click, returnFocusElement),
               onEditLabel: (
                 clientPosition: CanvasMenuPoint,
-                returnFocusElement: HTMLButtonElement,
+                returnFocusElement: HTMLElement | SVGElement,
               ) => openEdgeLabelEditor(edge.id, clientPosition, returnFocusElement),
             },
             markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
@@ -890,9 +1057,9 @@ function CanvasWorkspaceInner({
       document.edges,
       document.nodes,
       hiddenNodeProxyIds,
+      handleEdgePrimaryClick,
       openEdgeLabelEditor,
       selectedEdgeId,
-      selectEdge,
     ],
   );
 
@@ -1017,9 +1184,15 @@ function CanvasWorkspaceInner({
     setSelectedNodeIds(new Set([node.id]));
     setSelectedEdgeId(null);
     closeReader();
-    setAutoFocusDetails(true);
-    setToolboxPanel("details");
-  }, [closeReader, flow, onDocumentChange]);
+    setAutoFocusDetails(false);
+    setToolboxPanel(null);
+    setNoteEditor({
+      workspaceId: document.workspaceId,
+      nodeId: node.id,
+      title: node.data.title || "",
+      contentMarkdown: node.data.contentMarkdown,
+    });
+  }, [closeReader, document.workspaceId, flow, onDocumentChange]);
 
   const groupSelected = useCallback(() => {
     const selected = document.nodes.filter(
@@ -1302,6 +1475,7 @@ function CanvasWorkspaceInner({
   const startCanvasConnection = useCallback(
     (event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
       if (!params.nodeId) return;
+      lastEdgePrimaryClickRef.current = null;
       const touch = "touches" in event ? event.touches[0] : null;
       const clientX = touch?.clientX ?? ("clientX" in event ? event.clientX : null);
       const clientY = touch?.clientY ?? ("clientY" in event ? event.clientY : null);
@@ -1936,6 +2110,7 @@ function CanvasWorkspaceInner({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={(event, node) => {
+            lastEdgePrimaryClickRef.current = null;
             const additive = event.shiftKey || event.metaKey || event.ctrlKey;
             const interactiveTarget =
               event.target instanceof Element &&
@@ -1992,15 +2167,15 @@ function CanvasWorkspaceInner({
             if (tool !== "select" || connectionInProgress || event.button !== 0) {
               return;
             }
-            selectEdge(edge.id);
-          }}
-          onEdgeDoubleClick={(event, edge) => {
-            if (tool !== "select" || connectionInProgress || event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
-            openEdgeLabelEditor(
-              edge.id,
-              { x: event.clientX, y: event.clientY },
+            handleEdgePrimaryClick(
+              {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                edgeId: edge.id,
+                timeStamp: event.timeStamp,
+              },
               event.target instanceof Element
                 ? event.target.closest<SVGElement>(".react-flow__edge")
                 : null,
@@ -2023,6 +2198,7 @@ function CanvasWorkspaceInner({
             window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
           }}
           onPaneClick={() => {
+            lastEdgePrimaryClickRef.current = null;
             cancelFlowConnection();
             dismissNodeMenu(false);
             setEdgeLabelEditor(null);
@@ -2176,6 +2352,25 @@ function CanvasWorkspaceInner({
             }}
             onCommit={commitEdgeLabel}
           />
+        )}
+        {activeNoteEditor && (
+          <Suspense
+            fallback={
+              <div className="canvas-note-editor-overlay" role="status">
+                <div className="canvas-note-editor-loading">正在打开 Markdown 编辑器…</div>
+              </div>
+            }
+          >
+            <LazyCanvasNoteEditorDialog
+              key={`${activeNoteEditor.workspaceId}:${activeNoteEditor.nodeId}`}
+              initialValue={{
+                title: activeNoteEditor.title,
+                contentMarkdown: activeNoteEditor.contentMarkdown,
+              }}
+              onCancel={closeIdeaNoteEditor}
+              onSave={saveIdeaNoteEditor}
+            />
+          </Suspense>
         )}
         {nodeMenu && nodeMenuTarget && (
           <CanvasNodeContextMenu

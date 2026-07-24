@@ -5,14 +5,18 @@ import {
   type Edge,
   type EdgeProps,
 } from "@xyflow/react";
+import type { CanvasEdgePrimaryClick } from "./canvas-interactions";
 
 export interface RelationFlowEdgeData extends Record<string, unknown> {
   label?: string;
   onEditLabel?: (
     clientPosition: { x: number; y: number },
-    returnFocusElement: HTMLButtonElement,
+    returnFocusElement: HTMLElement | SVGElement,
   ) => void;
-  onSelect?: (returnFocusElement: HTMLButtonElement) => void;
+  onPrimaryClick?: (
+    click: CanvasEdgePrimaryClick,
+    returnFocusElement: HTMLElement | SVGElement,
+  ) => void;
   reciprocal?: boolean;
 }
 
@@ -21,6 +25,7 @@ export type RelationFlowEdge = Edge<RelationFlowEdgeData, "relation">;
 export function RelationEdge({
   data,
   id,
+  interactionWidth,
   markerEnd,
   selected,
   sourcePosition,
@@ -59,6 +64,7 @@ export function RelationEdge({
         path={edgePath}
         markerEnd={markerEnd}
         style={style}
+        interactionWidth={Math.max(interactionWidth ?? 0, 36)}
         className={`canvas-relation-edge${selected ? " canvas-relation-edge--selected" : ""}`}
       />
       {label && (
@@ -72,13 +78,17 @@ export function RelationEdge({
             aria-label={`连线文字：${label}。双击或按 F2 编辑`}
             title={label}
             onClick={(event) => {
-              event.stopPropagation();
-              data?.onSelect?.(event.currentTarget);
-            }}
-            onDoubleClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              data?.onEditLabel?.({ x: event.clientX, y: event.clientY }, event.currentTarget);
+              data?.onPrimaryClick?.(
+                {
+                  clientX: event.clientX,
+                  clientY: event.clientY,
+                  edgeId: id,
+                  timeStamp: event.timeStamp,
+                },
+                event.currentTarget,
+              );
             }}
             onKeyDown={(event) => {
               if (event.key !== "F2") return;

@@ -7040,14 +7040,32 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           }, 2_000);
           if (quickLinkEdgeElement instanceof SVGElement) {
             const edgeRect = quickLinkEdgeElement.getBoundingClientRect();
+            const clickOptions = {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              clientX: edgeRect.left + edgeRect.width / 2,
+              clientY: edgeRect.top + edgeRect.height / 2,
+              view: window
+            };
             quickLinkEdgeElement.dispatchEvent(
-              new MouseEvent("dblclick", {
-                bubbles: true,
-                cancelable: true,
-                button: 0,
-                clientX: edgeRect.left + edgeRect.width / 2,
-                clientY: edgeRect.top + edgeRect.height / 2,
-                view: window
+              new MouseEvent("click", {
+                ...clickOptions,
+                detail: 1
+              })
+            );
+            await new Promise((resolve) =>
+              window.requestAnimationFrame(() => resolve(undefined))
+            );
+            const refreshedQuickLinkEdge = document.querySelector(
+              '.react-flow__edge[data-id="' +
+                CSS.escape(persistedQuickLinkEdge.id) +
+                '"]'
+            );
+            refreshedQuickLinkEdge?.dispatchEvent(
+              new MouseEvent("click", {
+                ...clickOptions,
+                detail: 2
               })
             );
           }

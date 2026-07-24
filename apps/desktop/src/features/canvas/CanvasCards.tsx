@@ -2,6 +2,7 @@ import type { CanvasNode, CanvasNodeType } from "@aurascholar/core";
 import {
   Article,
   ArrowSquareOut,
+  ArrowsOutSimple,
   BoundingBox,
   CaretDown,
   CaretRight,
@@ -11,12 +12,11 @@ import {
   Sparkle,
 } from "@phosphor-icons/react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import type { ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeKatex from "rehype-katex";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { isImeComposing } from "../../keyboard";
+import { CanvasMarkdown } from "./CanvasMarkdown";
 import { isCanvasContextMenuShortcut } from "./canvas-interactions";
+import type { IdeaNotePatch } from "./idea-note-edit";
 
 export interface CanvasNodeMenuAnchor {
   clientX: number;
@@ -28,7 +28,12 @@ export interface CanvasFlowNodeData extends Record<string, unknown> {
   canvasNode: CanvasNode;
   groupChildCount: number;
   menuOpen: boolean;
+  onCommitIdeaNote: (nodeId: string, patch: IdeaNotePatch, field: "content" | "title") => void;
   onActivateNode: (nodeId: string) => void;
+  onOpenIdeaNoteEditor: (
+    nodeId: string,
+    draft?: { contentMarkdown: string; title: string },
+  ) => void;
   onOpenPaper: (workId: string) => void;
   onOpenExcerpt: (
     workId: string,
@@ -136,6 +141,7 @@ function CardShell({
 }
 
 function CardHeader({
+  actions,
   icon,
   label,
   menuLabel,
@@ -143,6 +149,7 @@ function CardHeader({
   nodeId,
   onRequestContextMenu,
 }: {
+  actions?: ReactNode;
   icon: ReactNode;
   label: string;
   menuLabel: string;
@@ -156,26 +163,29 @@ function CardHeader({
         {icon}
         {label}
       </span>
-      <button
-        type="button"
-        className="canvas-card__menu-button nodrag nopan"
-        data-canvas-interactive
-        aria-label={menuLabel}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation();
-          const rect = event.currentTarget.getBoundingClientRect();
-          onRequestContextMenu(nodeId, {
-            clientX: rect.right,
-            clientY: rect.bottom + 4,
-            returnFocusElement: event.currentTarget,
-          });
-        }}
-      >
-        <DotsThree aria-hidden="true" size={19} weight="bold" />
-      </button>
+      <div className="canvas-card__header-actions">
+        {actions}
+        <button
+          type="button"
+          className="canvas-card__menu-button nodrag nopan"
+          data-canvas-interactive
+          aria-label={menuLabel}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            onRequestContextMenu(nodeId, {
+              clientX: rect.right,
+              clientY: rect.bottom + 4,
+              returnFocusElement: event.currentTarget,
+            });
+          }}
+        >
+          <DotsThree aria-hidden="true" size={19} weight="bold" />
+        </button>
+      </div>
     </header>
   );
 }
@@ -282,27 +292,6 @@ export function ExcerptCard({ data, isConnectable, selected }: NodeProps<CanvasF
   );
 }
 
-function MarkdownPreview({ markdown }: { markdown: string }) {
-  return (
-    <div className="canvas-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
-        skipHtml
-        components={{
-          a: ({ children, ...props }) => (
-            <a {...props} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {markdown}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
 export function AISynthCard({ data, isConnectable, selected }: NodeProps<CanvasFlowNode>) {
   const node = data.canvasNode;
   if (node.type !== "ai-synth") return null;
@@ -334,7 +323,7 @@ export function AISynthCard({ data, isConnectable, selected }: NodeProps<CanvasF
       )}
       {node.data.structuredTable ? (
         <>
-          <MarkdownPreview markdown={node.data.contentMarkdown} />
+          <CanvasMarkdown markdown={node.data.contentMarkdown} />
           <div className="canvas-synth-table">
             <table aria-label={node.data.title}>
               <thead>
@@ -359,7 +348,7 @@ export function AISynthCard({ data, isConnectable, selected }: NodeProps<CanvasF
           </div>
         </>
       ) : (
-        <MarkdownPreview markdown={node.data.contentMarkdown} />
+        <CanvasMarkdown markdown={node.data.contentMarkdown} />
       )}
       <footer className="canvas-card__footer">
         <span>{node.data.sourceNodeIds.length} 个来源</span>
@@ -373,6 +362,142 @@ export function IdeaNoteCard({ data, isConnectable, selected }: NodeProps<Canvas
   const node = data.canvasNode;
   if (node.type !== "idea-note") return null;
   return (
+    <IdeaNoteCardContent
+      data={data}
+      isConnectable={isConnectable}
+      node={node}
+      selected={selected}
+    />
+  );
+}
+
+function IdeaNoteCardContent({
+  data,
+  isConnectable,
+  node,
+  selected,
+}: {
+  data: CanvasFlowNodeData;
+  isConnectable: boolean;
+  node: Extract<CanvasNode, { type: "idea-note" }>;
+  selected: boolean;
+}) {
+  const [editingField, setEditingField] = useState<"content" | "title" | null>(null);
+  const [titleDraft, setTitleDraft] = useState(node.data.title || "");
+  const [contentDraft, setContentDraft] = useState(node.data.contentMarkdown);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const contentInputRef = useRef<HTMLTextAreaElement>(null);
+  const titleTriggerRef = useRef<HTMLButtonElement>(null);
+  const contentTriggerRef = useRef<HTMLDivElement>(null);
+  const editingSessionRef = useRef<"content" | "title" | null>(null);
+  const composingRef = useRef(false);
+  const pendingCompositionCommitRef = useRef<{
+    field: "content" | "title";
+    restoreFocus: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!editingField) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (editingField === "title") {
+        titleInputRef.current?.focus({ preventScroll: true });
+        titleInputRef.current?.select();
+        return;
+      }
+      const textarea = contentInputRef.current;
+      textarea?.focus({ preventScroll: true });
+      textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [editingField]);
+
+  const restoreTriggerFocus = (field: "content" | "title") => {
+    window.requestAnimationFrame(() => {
+      const trigger = field === "title" ? titleTriggerRef.current : contentTriggerRef.current;
+      trigger?.focus({ preventScroll: true });
+    });
+  };
+
+  const beginEditing = (field: "content" | "title") => {
+    if (field === "title") setTitleDraft(node.data.title || "");
+    else setContentDraft(node.data.contentMarkdown);
+    editingSessionRef.current = field;
+    composingRef.current = false;
+    pendingCompositionCommitRef.current = null;
+    setEditingField(field);
+  };
+
+  const commit = (field: "content" | "title", restoreFocus = false) => {
+    if (editingSessionRef.current !== field) return;
+    if (composingRef.current) {
+      pendingCompositionCommitRef.current = { field, restoreFocus };
+      return;
+    }
+    editingSessionRef.current = null;
+    pendingCompositionCommitRef.current = null;
+    if (field === "title") {
+      const value = titleInputRef.current?.value ?? titleDraft;
+      if (value.trim() !== (node.data.title || "")) {
+        data.onCommitIdeaNote(node.id, { title: value }, "title");
+      }
+    } else {
+      const value = contentInputRef.current?.value ?? contentDraft;
+      if (value !== node.data.contentMarkdown) {
+        data.onCommitIdeaNote(node.id, { contentMarkdown: value }, "content");
+      }
+    }
+    setEditingField(null);
+    if (restoreFocus) restoreTriggerFocus(field);
+  };
+
+  const cancel = (field: "content" | "title", restoreFocus = false) => {
+    if (editingSessionRef.current !== field) return;
+    editingSessionRef.current = null;
+    composingRef.current = false;
+    pendingCompositionCommitRef.current = null;
+    if (field === "title") setTitleDraft(node.data.title || "");
+    else setContentDraft(node.data.contentMarkdown);
+    setEditingField(null);
+    if (restoreFocus) restoreTriggerFocus(field);
+  };
+
+  const handleCompositionEnd = (field: "content" | "title") => {
+    composingRef.current = false;
+    const pending = pendingCompositionCommitRef.current;
+    if (!pending || pending.field !== field) return;
+    pendingCompositionCommitRef.current = null;
+    window.requestAnimationFrame(() => commit(field, pending.restoreFocus));
+  };
+
+  const handleInlineKeyDown = (
+    event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+    field: "content" | "title",
+  ) => {
+    if (isImeComposing(event)) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      cancel(field, true);
+      return;
+    }
+    const shouldCommit =
+      field === "title"
+        ? event.key === "Enter"
+        : event.key === "Enter" && (event.metaKey || event.ctrlKey);
+    if (!shouldCommit) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commit(field, true);
+  };
+
+  const openExpandedEditor = () => {
+    data.onOpenIdeaNoteEditor(node.id, {
+      title: editingField === "title" ? titleDraft : node.data.title || "",
+      contentMarkdown: editingField === "content" ? contentDraft : node.data.contentMarkdown,
+    });
+  };
+
+  return (
     <CardShell
       className="canvas-card--idea"
       isConnectable={isConnectable}
@@ -383,6 +508,22 @@ export function IdeaNoteCard({ data, isConnectable, selected }: NodeProps<Canvas
       selected={selected}
     >
       <CardHeader
+        actions={
+          <button
+            type="button"
+            className="canvas-card__expand-button nodrag nopan"
+            data-canvas-interactive
+            aria-label={`在专注 Markdown 编辑器中编辑“${node.data.title || "未命名笔记"}”`}
+            title="展开 Markdown 编辑器"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              openExpandedEditor();
+            }}
+          >
+            <ArrowsOutSimple size={17} weight="bold" />
+          </button>
+        }
         icon={<Lightbulb size={17} weight="duotone" />}
         label="研究想法"
         menuLabel={`打开“${node.data.title || "未命名笔记"}”的操作菜单`}
@@ -390,8 +531,93 @@ export function IdeaNoteCard({ data, isConnectable, selected }: NodeProps<Canvas
         nodeId={node.id}
         onRequestContextMenu={data.onRequestContextMenu}
       />
-      <h2 className="canvas-card__title">{node.data.title || "未命名笔记"}</h2>
-      <MarkdownPreview markdown={node.data.contentMarkdown} />
+      {editingField === "title" ? (
+        <input
+          ref={titleInputRef}
+          className="canvas-note-card__title-input nodrag nopan"
+          data-canvas-interactive
+          data-canvas-native-history="true"
+          aria-label="编辑笔记标题"
+          value={titleDraft}
+          maxLength={180}
+          onBlur={() => commit("title")}
+          onChange={(event) => setTitleDraft(event.target.value)}
+          onCompositionStart={() => {
+            composingRef.current = true;
+          }}
+          onCompositionEnd={() => handleCompositionEnd("title")}
+          onKeyDown={(event) => handleInlineKeyDown(event, "title")}
+          onPointerDown={(event) => event.stopPropagation()}
+          placeholder="未命名笔记"
+        />
+      ) : (
+        <h2 className="canvas-card__title canvas-note-card__title">
+          <button
+            ref={titleTriggerRef}
+            type="button"
+            className="canvas-note-card__edit-trigger nodrag nopan"
+            data-canvas-interactive
+            aria-label={`编辑笔记标题：${node.data.title || "未命名笔记"}`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              beginEditing("title");
+            }}
+          >
+            {node.data.title || "未命名笔记"}
+          </button>
+        </h2>
+      )}
+      {editingField === "content" ? (
+        <div className="canvas-note-card__content-editor">
+          <textarea
+            ref={contentInputRef}
+            className="canvas-note-card__content-input nodrag nopan nowheel"
+            data-canvas-interactive
+            data-canvas-native-history="true"
+            aria-label="编辑笔记 Markdown 正文"
+            value={contentDraft}
+            onBlur={() => commit("content")}
+            onChange={(event) => setContentDraft(event.target.value)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => handleCompositionEnd("content")}
+            onKeyDown={(event) => handleInlineKeyDown(event, "content")}
+            onPointerDown={(event) => event.stopPropagation()}
+            placeholder="写下假设、证据线索或下一步问题……"
+            spellCheck
+          />
+          <small>⌘/Ctrl + Enter 保存 · Esc 取消</small>
+        </div>
+      ) : (
+        <div
+          ref={contentTriggerRef}
+          className="canvas-note-card__content-trigger nodrag nopan nowheel"
+          data-canvas-interactive
+          role="button"
+          tabIndex={0}
+          aria-label="编辑笔记 Markdown 正文"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (event.target instanceof Element && event.target.closest("a")) return;
+            beginEditing("content");
+          }}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            beginEditing("content");
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <CanvasMarkdown
+            markdown={node.data.contentMarkdown}
+            emptyLabel="点击写下假设、证据或下一步问题……"
+          />
+        </div>
+      )}
       {node.data.hasEquations && <span className="canvas-card__equation-label">包含公式</span>}
     </CardShell>
   );

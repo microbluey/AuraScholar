@@ -3,7 +3,7 @@ import { isApplePlatform } from "../../shortcut-labels";
 import type { CanvasTool } from "./CanvasDock";
 
 export type CanvasToolboxPanel = "library" | "details";
-export type CanvasNodePrimarySurface = "details" | "reader";
+export type CanvasNodePrimarySurface = "details" | "note-editor" | "reader";
 
 export const CANVAS_INTERACTIVE_TARGET_SELECTOR =
   "button, a, input, textarea, select, [contenteditable='true'], .react-flow__handle, [data-canvas-interactive]";
@@ -15,7 +15,8 @@ export const CANVAS_HISTORY_SHORTCUT_BLOCKING_SELECTOR =
 export function primarySurfaceForCanvasNode(
   node: Pick<CanvasNode, "type">,
 ): CanvasNodePrimarySurface {
-  return node.type === "paper" || node.type === "excerpt" ? "reader" : "details";
+  if (node.type === "paper" || node.type === "excerpt") return "reader";
+  return node.type === "idea-note" ? "note-editor" : "details";
 }
 
 export interface CanvasNodeActivationIntent {
@@ -24,6 +25,28 @@ export interface CanvasNodeActivationIntent {
   connectionInProgress: boolean;
   interactiveTarget: boolean;
   tool: CanvasTool;
+}
+
+export interface CanvasEdgePrimaryClick {
+  clientX: number;
+  clientY: number;
+  edgeId: string;
+  timeStamp: number;
+}
+
+export function isRepeatedCanvasEdgePrimaryClick(
+  previous: CanvasEdgePrimaryClick | null,
+  current: CanvasEdgePrimaryClick,
+  maxDelayMs = 450,
+  maxDistancePx = 8,
+): boolean {
+  if (!previous || previous.edgeId !== current.edgeId) return false;
+  const delay = current.timeStamp - previous.timeStamp;
+  if (delay < 0 || delay > maxDelayMs) return false;
+  return (
+    Math.hypot(current.clientX - previous.clientX, current.clientY - previous.clientY) <=
+    maxDistancePx
+  );
 }
 
 export function shouldActivateCanvasNode(intent: CanvasNodeActivationIntent): boolean {
