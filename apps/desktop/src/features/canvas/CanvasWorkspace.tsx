@@ -2,8 +2,10 @@ import {
   applyCanvasLayout,
   planCanvasLayout,
   type AISynthesisType,
+  type CanvasCitationRelation,
   type CanvasLayoutFailure,
   type CanvasLayoutMode,
+  type CanvasLayoutSuccessPlan,
   type CanvasNode,
   type CanvasPoint,
   type CanvasWorkspaceDocument,
@@ -32,12 +34,14 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type DragEvent,
 } from "react";
 import { isImeComposing } from "../../keyboard";
+import { describeSafeError } from "../../services/sensitive-text";
 import { canvasNodeTypes, type CanvasFlowNode, type CanvasNodeMenuAnchor } from "./CanvasCards";
 import { CanvasCommandPalette } from "./CanvasCommandPalette";
 import { CanvasEdgeLabelEditor } from "./CanvasEdgeLabelEditor";
@@ -114,6 +118,12 @@ import type {
 } from "./workspace-controls";
 import { applyIdeaNotePatch, type IdeaNotePatch } from "./idea-note-edit";
 import type { CanvasNoteEditorCommitResult, CanvasNoteEditorValue } from "./CanvasNoteEditorDialog";
+import {
+  canvasCitationLayoutRequestMatches,
+  canvasCitationSelectionFingerprint,
+  type CanvasCitationPaperIdentity,
+} from "./canvas-citation";
+import type { CanvasCitationResolution } from "./canvas-citation-resolver";
 
 const LazyCanvasNoteEditorDialog = lazy(() =>
   import("./CanvasNoteEditorDialog").then((module) => ({
@@ -153,6 +163,11 @@ interface CanvasWorkspaceProps {
   onSelectWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
   onUndo: () => string | null;
   persistenceLabel: string;
+  citationLookupAvailable: boolean;
+  resolveCitationRelations: (
+    selectedPapers: readonly CanvasCitationPaperIdentity[],
+    signal: AbortSignal,
+  ) => Promise<CanvasCitationResolution>;
   searchWorks: (query: string) => Promise<CanvasLibraryWork[]>;
   works: CanvasLibraryWork[];
   workspaces: readonly CanvasWorkspaceOption[];
@@ -187,6 +202,11 @@ interface CanvasNoteEditorState extends CanvasNoteEditorValue {
   nodeId: string;
   openingBaseValue: CanvasNoteEditorValue;
   workspaceId: string;
+}
+
+interface CanvasCitationLayoutCache {
+  fingerprint: string;
+  relations: readonly CanvasCitationRelation[];
 }
 
 function readerTargetsNode(target: CanvasReaderTarget, node: CanvasNode): boolean {
@@ -242,6 +262,23 @@ function canvasNodeLabel(node: CanvasNode): string {
   }
 }
 
+function selectedCitationPaperIdentities(
+  document: CanvasWorkspaceDocument,
+  selectedNodeIds: ReadonlySet<string>,
+): CanvasCitationPaperIdentity[] {
+  return document.nodes.flatMap((node) =>
+    node.type === "paper" && selectedNodeIds.has(node.id)
+      ? [
+          {
+            nodeId: node.id,
+            workId: node.data.workId,
+            doi: node.data.doi,
+          },
+        ]
+      : [],
+  );
+}
+
 function canvasLayoutFailureMessage(reason: CanvasLayoutFailure): string {
   switch (reason) {
     case "selection-too-small":
@@ -277,11 +314,14 @@ function CanvasWorkspaceInner({
   onSelectWorkspace,
   onUndo,
   persistenceLabel,
+  citationLookupAvailable,
+  resolveCitationRelations,
   searchWorks,
   works,
   workspaces,
 }: CanvasWorkspaceProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const documentRef = useRef(document);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(() => new Set());
   const selectedNodeIdsRef = useRef(selectedNodeIds);
@@ -290,6 +330,10 @@ function CanvasWorkspaceInner({
   const [autoFocusDetails, setAutoFocusDetails] = useState(false);
   const [nodeMenu, setNodeMenu] = useState<CanvasNodeMenuState | null>(null);
   const [synthesisBusy, setSynthesisBusy] = useState(false);
+  const [citationLayoutBusy, setCitationLayoutBusy] = useState(false);
+  const [citationLayoutCache, setCitationLayoutCache] = useState<CanvasCitationLayoutCache | null>(
+    null,
+  );
   const [commandOpen, setCommandOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [readerTarget, setReaderTarget] = useState<CanvasReaderTarget | null>(null);
@@ -321,6 +365,11 @@ function CanvasWorkspaceInner({
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
   const activeWorkspaceIdRef = useRef(document.workspaceId);
   const activeSynthesisRequestIdRef = useRef<string | null>(null);
+  const activeCitationLayoutRequestRef = useRef<{
+    controller: AbortController;
+    document: CanvasWorkspaceDocument;
+    fingerprint: string;
+  } | null>(null);
   const dragHistoryKeyRef = useRef<string | null>(null);
   const dragHistorySequenceRef = useRef(0);
   const lastEdgePrimaryClickRef = useRef<CanvasEdgePrimaryClick | null>(null);
@@ -332,10 +381,17 @@ function CanvasWorkspaceInner({
     activeSynthesisRequestIdRef.current = null;
     setSynthesisBusy(false);
   }, []);
+  const cancelActiveCitationLayout = useCallback(() => {
+    activeCitationLayoutRequestRef.current?.controller.abort();
+    activeCitationLayoutRequestRef.current = null;
+    setCitationLayoutBusy(false);
+  }, []);
 
   useEffect(
     () => () => {
       activeSynthesisRequestIdRef.current = null;
+      activeCitationLayoutRequestRef.current?.controller.abort();
+      activeCitationLayoutRequestRef.current = null;
     },
     [],
   );
@@ -555,6 +611,7 @@ function CanvasWorkspaceInner({
       cancelFlowConnection();
       setEdgeLabelEditor(null);
       if (!selectedNodeIdsRef.current.has(nodeId)) {
+        cancelActiveCitationLayout();
         setSelectedNodeIds(new Set([nodeId]));
       }
       setSelectedEdgeId(null);
@@ -575,10 +632,14 @@ function CanvasWorkspaceInner({
         returnFocusElement: anchor.returnFocusElement,
       });
     },
-    [cancelFlowConnection],
+    [cancelActiveCitationLayout, cancelFlowConnection],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    documentRef.current = document;
+  }, [document]);
+
+  useLayoutEffect(() => {
     selectedNodeIdsRef.current = selectedNodeIds;
   }, [selectedNodeIds]);
 
@@ -586,6 +647,8 @@ function CanvasWorkspaceInner({
     if (activeWorkspaceIdRef.current === document.workspaceId) return;
     activeWorkspaceIdRef.current = document.workspaceId;
     activeSynthesisRequestIdRef.current = null;
+    activeCitationLayoutRequestRef.current?.controller.abort();
+    activeCitationLayoutRequestRef.current = null;
     dragHistoryKeyRef.current = null;
     trustedReaderPayloadRef.current = null;
     cancelledConnectionRef.current = true;
@@ -595,6 +658,8 @@ function CanvasWorkspaceInner({
     flowStore.setState({ connectionClickStartHandle: null });
     setSelectedNodeIds(new Set());
     setSelectedEdgeId(null);
+    setCitationLayoutBusy(false);
+    setCitationLayoutCache(null);
     setNodeMenu(null);
     setConnectionInProgress(false);
     setEdgeLabelEditor(null);
@@ -1165,6 +1230,7 @@ function CanvasWorkspaceInner({
           change.type === "select",
       );
       if (selectionChanges.length) {
+        cancelActiveCitationLayout();
         setSelectedNodeIds((current) => {
           const next = new Set(current);
           for (const change of selectionChanges) {
@@ -1205,25 +1271,29 @@ function CanvasWorkspaceInner({
         },
       );
     },
-    [onDocumentChange],
+    [cancelActiveCitationLayout, onDocumentChange],
   );
 
-  const onEdgesChange = useCallback((changes: EdgeChange<RelationFlowEdge>[]) => {
-    const selectionChanges = changes.filter(
-      (change): change is Extract<EdgeChange<RelationFlowEdge>, { type: "select" }> =>
-        change.type === "select",
-    );
-    if (!selectionChanges.length) return;
-    const selected = selectionChanges.find((change) => change.selected);
-    if (selected) {
-      setSelectedNodeIds(new Set());
-      setSelectedEdgeId(selected.id);
-      return;
-    }
-    setSelectedEdgeId((current) =>
-      selectionChanges.some((change) => change.id === current) ? null : current,
-    );
-  }, []);
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<RelationFlowEdge>[]) => {
+      const selectionChanges = changes.filter(
+        (change): change is Extract<EdgeChange<RelationFlowEdge>, { type: "select" }> =>
+          change.type === "select",
+      );
+      if (!selectionChanges.length) return;
+      cancelActiveCitationLayout();
+      const selected = selectionChanges.find((change) => change.selected);
+      if (selected) {
+        setSelectedNodeIds(new Set());
+        setSelectedEdgeId(selected.id);
+        return;
+      }
+      setSelectedEdgeId((current) =>
+        selectionChanges.some((change) => change.id === current) ? null : current,
+      );
+    },
+    [cancelActiveCitationLayout],
+  );
 
   const addPaper = useCallback(
     (work: CanvasLibraryWork, position?: CanvasPoint) => {
@@ -1485,6 +1555,7 @@ function CanvasWorkspaceInner({
 
   const performHistoryCommand = useCallback(
     (command: "undo" | "redo") => {
+      cancelActiveCitationLayout();
       const label = command === "undo" ? onUndo() : onRedo();
       if (!label) return;
       activeSynthesisRequestIdRef.current = null;
@@ -1500,7 +1571,7 @@ function CanvasWorkspaceInner({
       window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
       showNotice(`${command === "undo" ? "已撤销" : "已重做"}：${label}`);
     },
-    [cancelFlowConnection, closeReader, onRedo, onUndo, showNotice],
+    [cancelActiveCitationLayout, cancelFlowConnection, closeReader, onRedo, onUndo, showNotice],
   );
 
   useEffect(() => {
@@ -2062,43 +2133,249 @@ function CanvasWorkspaceInner({
     () => planCanvasLayout(document, selectedNodeIds, "timeline"),
     [document, selectedNodeIds],
   );
-  const citationLayoutPlan = useMemo(
-    () => planCanvasLayout(document, selectedNodeIds, "citation-tree"),
+  const selectedCitationPapers = useMemo(
+    () => selectedCitationPaperIdentities(document, selectedNodeIds),
     [document, selectedNodeIds],
   );
+  const citationSelectionFingerprint = useMemo(
+    () => canvasCitationSelectionFingerprint(document.workspaceId, selectedCitationPapers),
+    [document.workspaceId, selectedCitationPapers],
+  );
+  const cachedCitationRelations = useMemo(
+    () =>
+      citationLayoutCache?.fingerprint === citationSelectionFingerprint
+        ? citationLayoutCache.relations
+        : [],
+    [citationLayoutCache, citationSelectionFingerprint],
+  );
+  const citationLayoutPlan = useMemo(
+    () => planCanvasLayout(document, selectedNodeIds, "citation-tree", cachedCitationRelations),
+    [cachedCitationRelations, document, selectedNodeIds],
+  );
   const canLayout = timelineLayoutPlan.status === "success";
-  const canCitationLayout = citationLayoutPlan.status === "success";
+  const canCitationLayout = canLayout;
+  const citationLayoutHint =
+    citationLayoutPlan.status === "success"
+      ? "被引在左，衍生在右"
+      : citationLookupAvailable
+        ? "从文献库与 OpenAlex 读取引文关系"
+        : "浏览器预览仅使用画布内已有连线";
+
+  useEffect(() => {
+    const activeRequest = activeCitationLayoutRequestRef.current;
+    if (
+      activeRequest &&
+      !canvasCitationLayoutRequestMatches(
+        { document: activeRequest.document, fingerprint: activeRequest.fingerprint },
+        document,
+        citationSelectionFingerprint,
+      )
+    ) {
+      activeRequest.controller.abort();
+      activeCitationLayoutRequestRef.current = null;
+      void Promise.resolve().then(() => {
+        if (!activeCitationLayoutRequestRef.current) setCitationLayoutBusy(false);
+      });
+    }
+  }, [citationSelectionFingerprint, document]);
+
+  const focusLayoutResult = useCallback((plan: CanvasLayoutSuccessPlan) => {
+    const focusNodeId = plan.nodePositions[0]?.nodeId;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const nodeElement = focusNodeId
+          ? wrapperRef.current?.querySelector<HTMLElement>(
+              `[data-canvas-node-id="${CSS.escape(focusNodeId)}"]`,
+            )
+          : null;
+        (nodeElement ?? wrapperRef.current)?.focus({ preventScroll: true });
+      });
+    });
+  }, []);
+
+  const commitLayoutPlan = useCallback(
+    (plan: CanvasLayoutSuccessPlan, label: string): boolean => {
+      const applied = onDocumentChange((current) => applyCanvasLayout(current, plan), {
+        history: { label },
+      });
+      if (applied) focusLayoutResult(plan);
+      return applied;
+    },
+    [focusLayoutResult, onDocumentChange],
+  );
 
   const applySelectedLayout = useCallback(
     (mode: CanvasLayoutMode) => {
-      const plan = planCanvasLayout(document, selectedNodeIds, mode);
-      if (plan.status === "error") {
-        showNotice(canvasLayoutFailureMessage(plan.reason));
+      if (mode === "timeline") {
+        cancelActiveCitationLayout();
+        const plan = planCanvasLayout(document, selectedNodeIds, mode);
+        if (plan.status === "error") {
+          showNotice(canvasLayoutFailureMessage(plan.reason));
+          return;
+        }
+        commitLayoutPlan(plan, "按时间轴整理卡片");
+        showNotice(`已按发表年份整理 ${plan.nodePositions.length} 张文献。`);
         return;
       }
-      onDocumentChange((current) => applyCanvasLayout(current, plan), {
-        history: {
-          label: mode === "timeline" ? "按时间轴整理卡片" : "按引用树整理卡片",
-        },
-      });
-      const focusNodeId = plan.nodePositions[0]?.nodeId;
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          const nodeElement = focusNodeId
-            ? wrapperRef.current?.querySelector<HTMLElement>(
-                `[data-canvas-node-id="${CSS.escape(focusNodeId)}"]`,
-              )
-            : null;
-          (nodeElement ?? wrapperRef.current)?.focus({ preventScroll: true });
-        });
-      });
-      showNotice(
-        mode === "timeline"
-          ? `已按发表年份整理 ${plan.nodePositions.length} 张文献。`
-          : `已按引文树整理 ${plan.nodePositions.length} 张文献。`,
+
+      if (citationLayoutBusy) return;
+      const immediatePlan = planCanvasLayout(
+        document,
+        selectedNodeIds,
+        "citation-tree",
+        cachedCitationRelations,
       );
+      if (immediatePlan.status === "success") {
+        commitLayoutPlan(immediatePlan, "按引用树整理卡片");
+        showNotice(`已按引文树整理 ${immediatePlan.nodePositions.length} 张文献。`);
+        return;
+      }
+      if (immediatePlan.reason !== "no-citation-edges") {
+        showNotice(canvasLayoutFailureMessage(immediatePlan.reason));
+        return;
+      }
+      if (!citationLookupAvailable) {
+        showNotice("浏览器预览不会查询外部引文关系；请在桌面版读取文献库与 OpenAlex。");
+        return;
+      }
+
+      cancelActiveCitationLayout();
+      const requestFingerprint = citationSelectionFingerprint;
+      const requestDocument = document;
+      const controller = new AbortController();
+      activeCitationLayoutRequestRef.current = {
+        controller,
+        document: requestDocument,
+        fingerprint: requestFingerprint,
+      };
+      setCitationLayoutBusy(true);
+      showNotice("正在读取所选文献之间的引文关系…");
+
+      void resolveCitationRelations(selectedCitationPapers, controller.signal)
+        .then((resolution) => {
+          const activeRequest = activeCitationLayoutRequestRef.current;
+          if (
+            controller.signal.aborted ||
+            activeRequest?.controller !== controller ||
+            activeRequest.fingerprint !== requestFingerprint
+          ) {
+            return;
+          }
+          const latestDocument = documentRef.current;
+          const latestSelection = selectedNodeIdsRef.current;
+          const latestPapers = selectedCitationPaperIdentities(latestDocument, latestSelection);
+          const latestFingerprint = canvasCitationSelectionFingerprint(
+            latestDocument.workspaceId,
+            latestPapers,
+          );
+          if (
+            !canvasCitationLayoutRequestMatches(
+              { document: requestDocument, fingerprint: requestFingerprint },
+              latestDocument,
+              latestFingerprint,
+            )
+          ) {
+            return;
+          }
+          if (resolution.relations.length === 0) {
+            showNotice(
+              resolution.truncated
+                ? "已检查部分所选文献，但尚未找到它们之间的引文关系。"
+                : "文献库与 OpenAlex 中尚未找到所选文献之间的引文关系。",
+            );
+            return;
+          }
+
+          setCitationLayoutCache({
+            fingerprint: requestFingerprint,
+            relations: resolution.relations,
+          });
+          const layoutOutcome: {
+            failure: CanvasLayoutFailure | null;
+            plan: CanvasLayoutSuccessPlan | null;
+          } = { failure: null, plan: null };
+          const applied = onDocumentChange(
+            (current) => {
+              const currentSelection = selectedNodeIdsRef.current;
+              const currentPapers = selectedCitationPaperIdentities(current, currentSelection);
+              const currentFingerprint = canvasCitationSelectionFingerprint(
+                current.workspaceId,
+                currentPapers,
+              );
+              if (
+                !canvasCitationLayoutRequestMatches(
+                  { document: requestDocument, fingerprint: requestFingerprint },
+                  current,
+                  currentFingerprint,
+                )
+              ) {
+                return current;
+              }
+              const plan = planCanvasLayout(
+                current,
+                currentSelection,
+                "citation-tree",
+                resolution.relations,
+              );
+              if (plan.status === "error") {
+                layoutOutcome.failure = plan.reason;
+                return current;
+              }
+              layoutOutcome.plan = plan;
+              return applyCanvasLayout(current, plan);
+            },
+            { history: { label: "按引用树整理卡片" } },
+          );
+          if (!layoutOutcome.plan) {
+            showNotice(
+              layoutOutcome.failure
+                ? canvasLayoutFailureMessage(layoutOutcome.failure)
+                : "选区或白板已发生变化，本次引用树未应用。",
+            );
+            return;
+          }
+          if (!applied) {
+            showNotice("卡片已经位于当前引用树位置。");
+          } else {
+            focusLayoutResult(layoutOutcome.plan);
+            const sourceLabel =
+              resolution.source === "library"
+                ? "文献库引文"
+                : resolution.source === "mixed"
+                  ? "文献库与 OpenAlex 引文"
+                  : "OpenAlex 引文图";
+            showNotice(
+              `已依据${sourceLabel}整理 ${layoutOutcome.plan.nodePositions.length} 张文献。`,
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          const activeRequest = activeCitationLayoutRequestRef.current;
+          if (activeRequest?.controller !== controller) return;
+          showNotice(`无法读取引文关系：${describeSafeError(error)}`);
+        })
+        .finally(() => {
+          if (activeCitationLayoutRequestRef.current?.controller !== controller) return;
+          activeCitationLayoutRequestRef.current = null;
+          setCitationLayoutBusy(false);
+        });
     },
-    [document, onDocumentChange, selectedNodeIds, showNotice],
+    [
+      cachedCitationRelations,
+      cancelActiveCitationLayout,
+      citationLayoutBusy,
+      citationLookupAvailable,
+      citationSelectionFingerprint,
+      commitLayoutPlan,
+      document,
+      focusLayoutResult,
+      onDocumentChange,
+      resolveCitationRelations,
+      selectedCitationPapers,
+      selectedNodeIds,
+      showNotice,
+    ],
   );
 
   const openSelectionLayoutMenu = useCallback(() => {
@@ -2238,6 +2515,7 @@ function CanvasWorkspaceInner({
             const next = additive ? new Set(selectedNodeIdsRef.current) : new Set<string>();
             if (additive && next.has(node.id)) next.delete(node.id);
             else next.add(node.id);
+            cancelActiveCitationLayout();
             setSelectedNodeIds(next);
             setSelectedEdgeId(null);
             setNodeMenu(null);
@@ -2288,6 +2566,7 @@ function CanvasWorkspaceInner({
           onMoveEnd={onMoveEnd}
           onMoveStart={() => dismissNodeMenu(false)}
           onNodeDragStart={() => {
+            cancelActiveCitationLayout();
             dismissNodeMenu(false);
             dragHistorySequenceRef.current += 1;
             dragHistoryKeyRef.current = `drag:${document.workspaceId}:${dragHistorySequenceRef.current}`;
@@ -2300,6 +2579,7 @@ function CanvasWorkspaceInner({
           }}
           onPaneClick={() => {
             lastEdgePrimaryClickRef.current = null;
+            cancelActiveCitationLayout();
             cancelFlowConnection();
             dismissNodeMenu(false);
             setEdgeLabelEditor(null);
@@ -2394,6 +2674,8 @@ function CanvasWorkspaceInner({
                 canGroup={canGroup}
                 canLayout={canLayout}
                 canCitationLayout={canCitationLayout}
+                citationLayoutBusy={citationLayoutBusy}
+                citationLayoutHint={citationLayoutHint}
                 canSynthesize={canSynthesize}
                 synthesisHint={synthesisHint}
                 onGroup={groupSelected}

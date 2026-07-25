@@ -60,12 +60,14 @@ export async function openalexByDoi(
 export async function openalexById(
   ctx: ConnectorContext,
   id: string,
+  opts?: ConnectorRequestOptions,
 ): Promise<OpenAlexWork | null> {
   const short = id.replace(/^https:\/\/openalex\.org\//, "");
   try {
     return await getJson<OpenAlexWork>(
       ctx,
       `${BASE}/works/${short}?mailto=${encodeURIComponent(ctx.mailto)}`,
+      opts,
     );
   } catch (e) {
     if ((e as { status?: number }).status === 404) return null;
@@ -85,11 +87,14 @@ export async function openalexSearchByTitle(
   // OpenAlex filter is a single comma-joined list; ":" and "," are literal so
   // only the values are encoded.
   const filterParts = [`title.search:${encodeURIComponent(title)}`];
-  if (filters?.author) filterParts.push(`raw_author_name.search:${encodeURIComponent(filters.author)}`);
+  if (filters?.author)
+    filterParts.push(`raw_author_name.search:${encodeURIComponent(filters.author)}`);
   if (filters?.yearFrom) filterParts.push(`from_publication_date:${filters.yearFrom}-01-01`);
   if (filters?.yearTo) filterParts.push(`to_publication_date:${filters.yearTo}-12-31`);
   if (filters?.venue)
-    filterParts.push(`primary_location.source.display_name.search:${encodeURIComponent(filters.venue)}`);
+    filterParts.push(
+      `primary_location.source.display_name.search:${encodeURIComponent(filters.venue)}`,
+    );
 
   let url =
     `${BASE}/works?filter=${filterParts.join(",")}` +
@@ -108,11 +113,13 @@ export async function openalexCitedBy(
   ctx: ConnectorContext,
   openalexId: string,
   perPage = 50,
+  opts?: ConnectorRequestOptions,
 ): Promise<OpenAlexWork[]> {
   const short = openalexId.replace(/^https:\/\/openalex\.org\//, "");
   const data = await getJson<{ results: OpenAlexWork[] }>(
     ctx,
     `${BASE}/works?filter=cites:${short}&per-page=${perPage}&sort=cited_by_count:desc&mailto=${encodeURIComponent(ctx.mailto)}`,
+    opts,
   );
   return data.results ?? [];
 }

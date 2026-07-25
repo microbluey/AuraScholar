@@ -11,20 +11,17 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import {
-  buildCitationGraph,
   layoutTimeline,
   type CitationGraph,
   type GraphLayout,
   type PositionedNode,
 } from "@aurascholar/core";
-import type { ConnectorContext } from "@aurascholar/connectors";
 import { Badge, Button } from "@aurascholar/ui";
 import { InlineNotice, type InlineNoticeTone } from "./InlineNotice";
 import { getDb } from "../services/aura-db";
-import { auraHttp, isDesktopRuntime } from "../services/aura-platform";
+import { isDesktopRuntime } from "../services/aura-platform";
+import { loadCitationGraphByDoi } from "../services/citation-graph";
 import { describeSafeError } from "../services/sensitive-text";
-
-const ctx: ConnectorContext = { http: auraHttp, mailto: "contact@aurascholar.app" };
 
 const RELATION_COLOR: Record<string, string> = {
   center: "var(--color-accent)",
@@ -32,7 +29,6 @@ const RELATION_COLOR: Record<string, string> = {
   citer: "var(--color-warning)",
 };
 
-const GRAPH_CACHE_TTL = 7 * 86_400_000;
 const MIN_GRAPH_IMPORT_BUSY_MS = 250;
 const MIN_GRAPH_ZOOM = 0.55;
 const MAX_GRAPH_ZOOM = 2.4;
@@ -159,66 +155,6 @@ async function smokeBuildCitationGraph(input: {
   return (window as CitationGraphSmokeWindow).__AURASCHOLAR_SMOKE_BUILD_CITATION_GRAPH__?.(input);
 }
 
-function safeParseCachedGraph(payload: string): CitationGraph | null {
-  try {
-    const parsed: unknown = JSON.parse(payload);
-    return isCitationGraph(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function isCitationGraph(value: unknown): value is CitationGraph {
-  if (!isRecord(value)) return false;
-  if (
-    typeof value.centerId !== "string" ||
-    !Array.isArray(value.nodes) ||
-    !Array.isArray(value.edges)
-  ) {
-    return false;
-  }
-  if (typeof value.truncated !== "boolean") return false;
-  return (
-    value.nodes.every(isGraphNode) &&
-    value.nodes.some((node) => isRecord(node) && node.id === value.centerId) &&
-    value.edges.every(isGraphEdge)
-  );
-}
-
-function isGraphNode(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (typeof value.id !== "string" || typeof value.title !== "string") return false;
-  if (value.relation !== "center" && value.relation !== "reference" && value.relation !== "citer") {
-    return false;
-  }
-  if (!isOptionalFiniteNumber(value.year)) return false;
-  if (!isFiniteNumber(value.citedByCount)) return false;
-  if (!isOptionalString(value.doi)) return false;
-  if (!isOptionalString(value.venue)) return false;
-  if (!isOptionalString(value.firstAuthor)) return false;
-  return true;
-}
-
-function isGraphEdge(value: unknown): boolean {
-  return isRecord(value) && typeof value.source === "string" && typeof value.target === "string";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOptionalFiniteNumber(value: unknown): boolean {
-  return value === undefined || (typeof value === "number" && Number.isFinite(value));
-}
-
-function isFiniteNumber(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isOptionalString(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
-}
-
 function relationLabel(relation: PositionedNode["relation"]): string {
   if (relation === "center") return "中心论文";
   if (relation === "reference") return "参考文献";
@@ -268,8 +204,9 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     const seq = ++loadSeqRef.current;
-    const isCurrent = () => !cancelled && loadSeqRef.current === seq;
+    const isCurrent = () => !cancelled && !controller.signal.aborted && loadSeqRef.current === seq;
 
     async function loadGraph() {
       const requestedDoi = centerDoi.trim();
@@ -308,31 +245,11 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
       setInLibrary(new Set());
       try {
         const db = await getDb();
-        const cached = await db.query<{ payload_json: string; fetched_at: number }>(
-          `SELECT payload_json, fetched_at FROM graph_cache WHERE work_id = ?`,
-          [requestedDoi],
-        );
-        let graph: CitationGraph | null = null;
-        if (cached[0] && Date.now() - cached[0].fetched_at < GRAPH_CACHE_TTL) {
-          graph = safeParseCachedGraph(cached[0].payload_json);
-          if (!graph) {
-            await db.run(`DELETE FROM graph_cache WHERE work_id = ?`, [requestedDoi]);
-          }
-        }
-        if (!graph) {
-          const smokeGraph = await smokeBuildCitationGraph({ doi: requestedDoi });
-          const builtGraph =
-            smokeGraph !== undefined
-              ? smokeGraph
-              : await buildCitationGraph(ctx, { doi: requestedDoi });
-          graph = isCitationGraph(builtGraph) ? builtGraph : null;
-          if (graph) {
-            await db.run(
-              `INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
-              [requestedDoi, JSON.stringify(graph), Date.now()],
-            );
-          }
-        }
+        const graph = await loadCitationGraphByDoi(requestedDoi, {
+          buildGraph: (doi) => smokeBuildCitationGraph({ doi }),
+          db,
+          signal: controller.signal,
+        });
         if (!isCurrent()) return;
         if (!graph) {
           setError("OpenAlex 中找不到这篇论文");
@@ -364,6 +281,7 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
     void loadGraph();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [centerDoi, desktopRuntime, reloadNonce]);
 
@@ -722,8 +640,12 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
                 x2={target.x}
                 y2={target.y}
                 stroke="var(--color-border-strong)"
-                strokeWidth={source.relation === "center" || target.relation === "center" ? 1.2 : 0.5}
-                opacity={hovered && hovered.id !== source.id && hovered.id !== target.id ? 0.15 : 0.6}
+                strokeWidth={
+                  source.relation === "center" || target.relation === "center" ? 1.2 : 0.5
+                }
+                opacity={
+                  hovered && hovered.id !== source.id && hovered.id !== target.id ? 0.15 : 0.6
+                }
               />
             ))}
             {layout.nodes

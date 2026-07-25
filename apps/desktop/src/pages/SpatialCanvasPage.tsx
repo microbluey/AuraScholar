@@ -15,6 +15,11 @@ import "@xyflow/react/dist/style.css";
 import "katex/dist/katex.min.css";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { CanvasWorkspace } from "../features/canvas/CanvasWorkspace";
+import type { CanvasCitationPaperIdentity } from "../features/canvas/canvas-citation";
+import {
+  resolveCanvasCitationRelations,
+  type CanvasCitationResolution,
+} from "../features/canvas/canvas-citation-resolver";
 import {
   beginCanvasHistoryTransaction,
   canvasHistoryContentChanged,
@@ -437,6 +442,24 @@ export function SpatialCanvasPage() {
           .toLocaleLowerCase();
         return tokens.every((token) => haystack.includes(token));
       }).slice(0, 40);
+    },
+    [desktopRuntime],
+  );
+
+  const resolveCanvasCitations = useCallback(
+    (
+      selectedPapers: readonly CanvasCitationPaperIdentity[],
+      signal: AbortSignal,
+    ): Promise<CanvasCitationResolution> => {
+      if (!desktopRuntime) {
+        return Promise.resolve({
+          graphCount: 0,
+          relations: [],
+          source: "none",
+          truncated: false,
+        });
+      }
+      return resolveCanvasCitationRelations(selectedPapers, { signal });
     },
     [desktopRuntime],
   );
@@ -978,6 +1001,8 @@ export function SpatialCanvasPage() {
           onUndo={() => runHistoryCommand("undo")}
           works={works}
           searchWorks={searchCanvasWorks}
+          citationLookupAvailable={desktopRuntime}
+          resolveCitationRelations={resolveCanvasCitations}
           workspaces={workspaces}
           libraryLoading={libraryLoading}
           persistenceLabel={persistenceLabel}

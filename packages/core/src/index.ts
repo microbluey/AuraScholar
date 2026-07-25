@@ -80,6 +80,7 @@ export type {
   PaperNodeData,
 } from "./canvas/types.js";
 export type {
+  CanvasCitationRelation,
   CanvasLayoutErrorPlan,
   CanvasLayoutFailure,
   CanvasLayoutGroupResize,

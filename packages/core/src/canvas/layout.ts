@@ -8,6 +8,16 @@ import type {
 
 export type CanvasLayoutMode = "timeline" | "citation-tree";
 
+/**
+ * A transient Library citation used only to plan a citation-tree layout.
+ * These relations are keyed by Library work ids and are never persisted as
+ * visible Canvas edges.
+ */
+export interface CanvasCitationRelation {
+  citingWorkId: string;
+  citedWorkId: string;
+}
+
 export type CanvasLayoutFailure =
   | "collapsed-parent-group"
   | "missing-node"
@@ -141,24 +151,45 @@ function stronglyConnectedComponents(
 function citationTreePositions(
   document: CanvasWorkspaceDocument,
   papers: readonly PaperNode[],
+  citationRelations: readonly CanvasCitationRelation[],
 ): CanvasLayoutNodePosition[] | null {
   const paperById = new Map(papers.map((node) => [node.id, node] as const));
   const paperIds = new Set(paperById.keys());
-  const citationEdges = document.edges.filter(
-    (edge) =>
-      edge.relationType === "cites" &&
-      edge.sourceId !== edge.targetId &&
-      paperIds.has(edge.sourceId) &&
-      paperIds.has(edge.targetId),
-  );
-  if (!citationEdges.length) return null;
 
   // A cites B is stored as A -> B. The layout graph is deliberately reversed
   // so the cited paper B appears to the left of the citing paper A.
   const adjacencySets = new Map(papers.map((node) => [node.id, new Set<string>()] as const));
-  for (const edge of citationEdges) {
-    adjacencySets.get(edge.targetId)!.add(edge.sourceId);
+  let citationCount = 0;
+  const addCitation = (citingNodeId: string, citedNodeId: string) => {
+    if (citingNodeId === citedNodeId || !paperIds.has(citingNodeId) || !paperIds.has(citedNodeId)) {
+      return;
+    }
+    const citingNodes = adjacencySets.get(citedNodeId)!;
+    const previousSize = citingNodes.size;
+    citingNodes.add(citingNodeId);
+    if (citingNodes.size > previousSize) citationCount += 1;
+  };
+
+  for (const edge of document.edges) {
+    if (edge.relationType === "cites") addCitation(edge.sourceId, edge.targetId);
   }
+
+  const papersByWorkId = new Map<string, PaperNode[]>();
+  for (const paper of papers) {
+    const placements = papersByWorkId.get(paper.data.workId) ?? [];
+    placements.push(paper);
+    papersByWorkId.set(paper.data.workId, placements);
+  }
+  for (const relation of citationRelations) {
+    if (relation.citingWorkId === relation.citedWorkId) continue;
+    const citingPapers = papersByWorkId.get(relation.citingWorkId) ?? [];
+    const citedPapers = papersByWorkId.get(relation.citedWorkId) ?? [];
+    for (const citingPaper of citingPapers) {
+      for (const citedPaper of citedPapers) addCitation(citingPaper.id, citedPaper.id);
+    }
+  }
+  if (citationCount === 0) return null;
+
   const adjacency = new Map(
     [...adjacencySets].map(([nodeId, targets]) => [
       nodeId,
@@ -285,6 +316,7 @@ export function planCanvasLayout(
   document: CanvasWorkspaceDocument,
   selectedNodeIds: ReadonlySet<string>,
   mode: CanvasLayoutMode,
+  citationRelations: readonly CanvasCitationRelation[] = [],
 ): CanvasLayoutPlan {
   if (selectedNodeIds.size < 2) return errorPlan(mode, "selection-too-small");
   const nodeById = new Map(document.nodes.map((node) => [node.id, node] as const));
@@ -308,7 +340,9 @@ export function planCanvasLayout(
   }
 
   const nodePositions =
-    mode === "timeline" ? timelinePositions(papers) : citationTreePositions(document, papers);
+    mode === "timeline"
+      ? timelinePositions(papers)
+      : citationTreePositions(document, papers, citationRelations);
   if (!nodePositions) return errorPlan(mode, "no-citation-edges");
   return {
     status: "success",

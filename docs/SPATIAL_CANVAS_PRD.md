@@ -30,7 +30,7 @@
 
 画布内按 `Cmd` / `Ctrl` + `K` 会打开专用指令面板，可按题名、作者、期刊、年份或标签检索完整文献库，并在最近一次画布指针位置创建 `PaperNode`。如果文献已经位于当前白板，执行后会定位已有节点；节点处于折叠分组时会先自动展开分组，不会创建重复卡片。输入 `/ai` 只提供方法论对比、分歧分析、研究空白和简明综述四种现有合成操作，不提供自由 AI 对话。
 
-选择同一层级的至少两张 `PaperNode` 后，可从选区浮条、多选右键菜单或 `Cmd` / `Ctrl` + `Shift` + `L` 打开自动整理菜单：时间轴按发表年份排列；只有所选文献在当前白板文档中已带有系统/历史 `cites` 数据时才显示引用树，手工连线不会被分类为引文数据。存在循环引用时会作为同一强连通分量保留在同一列，避免循环导致布局失败。根节点与分组内节点不会混合排布。
+选择同一层级的至少两张 `PaperNode` 后，可从选区浮条、多选右键菜单或 `Cmd` / `Ctrl` + `Shift` + `L` 打开自动整理菜单：时间轴按发表年份排列；引用树优先读取 Library `citations` 中所选文献之间的关系，也兼容白板文档内既有的系统/历史 `cites` 数据。若仍有尚未参与任何本地关系的所选文献，桌面端会复用引文脉络缓存，或按其 DOI 从 OpenAlex 补充图谱；解析结果只作为本次布局的临时输入，不会创建可见连线或改变手工连线的 `custom` 类型。存在循环引用时会作为同一强连通分量保留在同一列，避免循环导致布局失败。根节点与分组内节点不会混合排布。
 
 主要流程如下：
 
@@ -48,7 +48,7 @@
 12. 新建 Idea Note，在画布中记录 Markdown 与 LaTeX 研究笔记。
 13. 画布聚焦且不在输入、弹窗/菜单或阅读器上下文时，可用 `Delete` / `Backspace` 删除选中的节点或连线。删除分组只移除外壳并保留子卡片；删除其他画布卡片也只删除当前白板中的摆放及其连线，不会删除原文献、原批注或 PDF。
 14. 按 `Cmd` / `Ctrl` + `K` 检索完整文献库并在最近指针位置放入文献；选择已经加入当前白板的结果会展开其折叠分组并定位已有节点。输入 `/ai` 可直接选择四种现有合成操作。
-15. 选择同一层级的至少两张文献卡，通过选区浮条、多选右键菜单或 `Cmd` / `Ctrl` + `Shift` + `L` 按年份时间轴整理；当前白板文档已带有系统/历史 `cites` 数据时还可选择引用树，循环引用节点排列在同一列。
+15. 选择同一层级的至少两张文献卡，通过选区浮条、多选右键菜单或 `Cmd` / `Ctrl` + `Shift` + `L` 按年份时间轴或引用树整理；引用树会从 Library、引文脉络缓存或 OpenAlex 解析所选文献之间的关系，循环引用节点排列在同一列。
 16. 用 `Cmd` / `Ctrl` + `Z` 撤销当前白板的节点、连线、分组、整理及内容编辑，用平台对应的重做快捷键恢复；切到另一张白板时只会操作该白板自己的历史。卡片内输入与专注编辑器保留原生文本撤销，提交后才作为一次白板内容变更进入历史。白板刷新或离开页面后会话历史清空，已保存的画布内容不受影响。
 
 ## 3. 节点与连线模型
@@ -73,7 +73,7 @@
 
 底层仍保留 `cites`、`supports`、`contradicts`、`extends`、`derived-from` 和 `custom` 枚举，以便无损读取旧白板，并让摘录/AI 来源边和引用树布局继续工作。这些值是兼容与系统 provenance 字段，不是手工连线 UI 中的可选类型；编辑连线文字也不会改变内部 provenance。
 
-连线可带自由文字标签及颜色/动画样式，并与节点一起持久化。连接已有节点时松手即提交；空白落点会把新节点和连线作为同一次原子变更提交。端点失效、越界松手或期间切换白板都不会产生持久化连线。
+Library/OpenAlex 引文关系与 Canvas 连线是两个独立概念。引用树会把 `citingWorkId → citedWorkId` 临时映射到当前所选 `PaperNode`，但不会把关系写进 `CanvasWorkspaceDocument`；因此自动整理不会增加画布连线、改变自由文字或重新暴露关系类型 UI。连线可带自由文字标签及颜色/动画样式，并与节点一起持久化。连接已有节点时松手即提交；空白落点会把新节点和连线作为同一次原子变更提交。端点失效、越界松手或期间切换白板都不会产生持久化连线。
 
 ### 3.3 扩展边界
 
@@ -148,6 +148,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - 同屏阅读器只在 Desktop 读取本地 PDF、加载批注并保存新高亮。浏览器预览会展示明确的不可用状态，不会尝试访问本机 PDF；因此浏览器只能验证分屏外壳、响应式布局和错误状态，不能验证真实 PDF 选区与拖放。
 - 每次打开文献、切换来源或更换白板都会取消上一轮未完成的阅读器加载；加载结果还会按请求序号、`workspaceId`、`workId`、来源节点和附件身份复核。已经成功写入数据库的高亮仍是有效的文献库批注，但旧视图的完成回调不能把它加入后来切换到的白板。
 - 高亮拖放 payload 带有版本、`workspaceId`、`workId`、来源 `PaperNode`、附件和批注锚点。画布只接受当前阅读会话登记且与当前工作区完全匹配的 payload，并从来源 `PaperNode` 读取可信题名；创建摘录和来源连线作为同一次画布文档变更提交，不能跨白板落点。
+- 引用树整理先查询两端均为未删除文献的本地 `citations`；若仍有尚未参与任何本地关系的所选文献，桌面端最多按 12 个相关 DOI 复用七天内的 `graph_cache` 或调用 OpenAlex，并把命中的关系通过未删除文献校验后写回 `citations` 供后续复用。请求携带 `AbortSignal`，结果提交前还会复核 `workspaceId + nodeId + workId + DOI` 的顺序无关指纹，以及发起请求时的 `nodes` / `edges` 布局内容身份；切换白板、换选区、拖动/编辑节点或执行撤销重做后，旧结果既不会移动卡片，也不会生成 Canvas 连线，纯平移与缩放则不会中断加载。浏览器预览不会联网拉取图谱，菜单会明确提示只使用画布既有引文；无数据时保留原布局。
 - 路由层使用 `/canvas/:workspaceId` 标识具体白板；无参数的 `/canvas` 只负责定位最近使用的工作区。
 
 ## 6. JSON 备份与迁移
@@ -185,7 +186,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - JSON 备份不携带 PDF 二进制；恢复后附件需要重新挂载。
 - 同屏阅读器的本地 PDF 加载与高亮摘录只在桌面应用中可用；浏览器预览不读取本机 PDF。
 - 画布指令面板中的 `/ai` 只调用四种已有合成模式，不提供自由对话或任意 Prompt 执行。
-- 自动整理只作用于同一层级的至少两张文献卡；引用树仅在当前白板文档已经包含所选节点间的系统/历史 `cites` 数据时可用，当前版本不会把普通手工连线或 Library 引文图自动转换为该数据。
+- 自动整理只作用于同一层级的至少两张文献卡；引用树依赖 Library/引文脉络/OpenAlex 中可识别的 DOI 或本地 `cites` 数据。无 DOI 且 Library 尚无关系的文献只能使用时间轴整理；普通手工连线不会被当作学术引文。
 
 ## 9. 关键实现位置
 
@@ -200,6 +201,8 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - 节点上下文菜单与交互判定：`apps/desktop/src/features/canvas/CanvasNodeContextMenu.tsx`、`apps/desktop/src/features/canvas/canvas-interactions.ts`
 - 画布指令面板与全库检索：`apps/desktop/src/features/canvas/CanvasCommandPalette.tsx`、`apps/desktop/src/features/canvas/canvas-command.ts`、`packages/db/src/work-list.ts`
 - 时间轴与引用树整理：`packages/core/src/canvas/layout.ts`
+- Library 引文查询与图谱映射：`packages/db/src/work-list.ts`、`apps/desktop/src/features/canvas/canvas-citation.ts`、`apps/desktop/src/features/canvas/canvas-citation-resolver.ts`
+- 引文脉络缓存与可取消加载：`apps/desktop/src/services/citation-graph.ts`
 - 磁吸连线、空白落点建笔记与原子校验：`apps/desktop/src/features/canvas/canvas-link.ts`
 - 连线文字渲染与双击编辑：`apps/desktop/src/features/canvas/RelationEdge.tsx`、`apps/desktop/src/features/canvas/CanvasEdgeLabelEditor.tsx`
 - 研究笔记内联与专注编辑：`apps/desktop/src/features/canvas/CanvasCards.tsx`、`apps/desktop/src/features/canvas/CanvasNoteEditorDialog.tsx`、`apps/desktop/src/features/canvas/idea-note-edit.ts`

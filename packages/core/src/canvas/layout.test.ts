@@ -168,6 +168,80 @@ describe("canvas automatic layout", () => {
     expect(result.get("a")!.y).not.toBe(result.get("d")!.y);
   });
 
+  it("maps transient work citations in the citing-to-cited direction without adding edges", () => {
+    const citing = paper("citing", 2024, 500, 100);
+    const cited = paper("cited", 2020, 100, 200);
+    const document = workspace([citing, cited]);
+    const originalNodes = document.nodes;
+    const originalEdges = document.edges;
+
+    const plan = planCanvasLayout(document, new Set(["citing", "cited"]), "citation-tree", [
+      { citingWorkId: citing.data.workId, citedWorkId: cited.data.workId },
+    ]);
+    const result = positions(plan);
+
+    expect(result.get("cited")!.x).toBeLessThan(result.get("citing")!.x);
+    expect(document.nodes).toBe(originalNodes);
+    expect(document.edges).toBe(originalEdges);
+    expect(document.edges).toHaveLength(0);
+  });
+
+  it("merges and deduplicates persisted and transient citation relations", () => {
+    const a = paper("a", 2024, 600, 100);
+    const b = paper("b", 2022, 350, 200);
+    const c = paper("c", 2020, 100, 300);
+    const document = workspace([a, b, c], [edge("a-cites-b", "a", "b")]);
+    const uniquePlan = planCanvasLayout(document, new Set(["a", "b", "c"]), "citation-tree", [
+      { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+    ]);
+    const duplicatePlan = planCanvasLayout(document, new Set(["a", "b", "c"]), "citation-tree", [
+      { citingWorkId: a.data.workId, citedWorkId: b.data.workId },
+      { citingWorkId: a.data.workId, citedWorkId: b.data.workId },
+      { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+      { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+    ]);
+
+    expect(duplicatePlan).toEqual(uniquePlan);
+    const result = positions(duplicatePlan);
+    expect(result.get("c")!.x).toBeLessThan(result.get("b")!.x);
+    expect(result.get("b")!.x).toBeLessThan(result.get("a")!.x);
+  });
+
+  it("condenses cycles supplied through transient work citations", () => {
+    const a = paper("a", 2024, 700, 300);
+    const b = paper("b", 2023, 600, 100);
+    const c = paper("c", 2020, 100, 200);
+    const document = workspace([a, b, c]);
+
+    const result = positions(
+      planCanvasLayout(document, new Set(["a", "b", "c"]), "citation-tree", [
+        { citingWorkId: a.data.workId, citedWorkId: b.data.workId },
+        { citingWorkId: b.data.workId, citedWorkId: a.data.workId },
+        { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+      ]),
+    );
+
+    expect(result.get("c")!.x).toBeLessThan(result.get("a")!.x);
+    expect(result.get("a")!.x).toBe(result.get("b")!.x);
+    expect(Math.abs(result.get("a")!.y - result.get("b")!.y)).toBeGreaterThanOrEqual(
+      a.dimensions.height,
+    );
+  });
+
+  it("ignores unmatched and self-referential transient work citations", () => {
+    const a = paper("a", 2024, 500, 100);
+    const b = paper("b", 2020, 100, 200);
+    const document = workspace([a, b]);
+
+    expect(
+      planCanvasLayout(document, new Set(["a", "b"]), "citation-tree", [
+        { citingWorkId: a.data.workId, citedWorkId: a.data.workId },
+        { citingWorkId: a.data.workId, citedWorkId: "work-not-selected" },
+        { citingWorkId: "work-missing", citedWorkId: b.data.workId },
+      ]),
+    ).toMatchObject({ status: "error", reason: "no-citation-edges" });
+  });
+
   it("condenses citation cycles into one stable column without overlapping cards", () => {
     const a = paper("a", 2024, 700, 300);
     const b = paper("b", 2023, 600, 100);

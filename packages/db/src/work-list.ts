@@ -13,6 +13,16 @@ export interface WorkCitationCounts {
   citedBy: number;
 }
 
+export interface WorkCitationRelation {
+  citingWorkId: string;
+  citedWorkId: string;
+}
+
+function compareWorkIds(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 export interface WorkWithAuthorsAndTags extends WorkWithAuthors {
   tagNames: string[];
 }
@@ -246,6 +256,54 @@ export async function citationCountsForWorks(
     if (count) count.citedBy = Number(row.count);
   }
   return counts;
+}
+
+export async function citationRelationsForWorks(
+  db: Database,
+  workIds: string[],
+): Promise<WorkCitationRelation[]> {
+  const ids = [...new Set(workIds)];
+  if (ids.length === 0) return [];
+
+  const requestedIds = new Set(ids);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await db.query<WorkCitationRelation>(
+    `SELECT DISTINCT
+       c.citing_work_id AS citingWorkId,
+       c.cited_work_id AS citedWorkId
+     FROM citations c
+     JOIN works source ON source.id = c.citing_work_id AND source.deleted_at IS NULL
+     JOIN works target ON target.id = c.cited_work_id AND target.deleted_at IS NULL
+     WHERE c.citing_work_id IN (${placeholders})
+       AND c.cited_work_id IN (${placeholders})
+       AND c.citing_work_id <> c.cited_work_id
+     ORDER BY c.citing_work_id, c.cited_work_id`,
+    [...ids, ...ids],
+  );
+
+  const citedByCiting = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (
+      row.citingWorkId === row.citedWorkId ||
+      !requestedIds.has(row.citingWorkId) ||
+      !requestedIds.has(row.citedWorkId)
+    ) {
+      continue;
+    }
+    const citedIds = citedByCiting.get(row.citingWorkId) ?? new Set<string>();
+    citedIds.add(row.citedWorkId);
+    citedByCiting.set(row.citingWorkId, citedIds);
+  }
+
+  return [...citedByCiting]
+    .flatMap(([citingWorkId, citedIds]) =>
+      [...citedIds].map((citedWorkId) => ({ citingWorkId, citedWorkId })),
+    )
+    .sort(
+      (left, right) =>
+        compareWorkIds(left.citingWorkId, right.citingWorkId) ||
+        compareWorkIds(left.citedWorkId, right.citedWorkId),
+    );
 }
 
 export async function listDeletedWorks(

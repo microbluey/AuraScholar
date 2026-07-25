@@ -2,6 +2,7 @@ import type { AISynthesisType, CanvasLayoutMode } from "@aurascholar/core";
 import {
   BoundingBox,
   CalendarDots,
+  CircleNotch,
   DotsThree,
   Sparkle,
   TreeStructure,
@@ -29,6 +30,8 @@ export interface CanvasSelectionMoreAction {
 
 export interface CanvasSelectionToolbarProps {
   canCitationLayout: boolean;
+  citationLayoutBusy: boolean;
+  citationLayoutHint: string;
   canGroup: boolean;
   canLayout: boolean;
   canSynthesize: boolean;
@@ -48,6 +51,8 @@ function joinClassNames(...classNames: Array<string | false | null | undefined>)
 
 export function CanvasSelectionToolbar({
   canCitationLayout,
+  citationLayoutBusy,
+  citationLayoutHint,
   canGroup,
   canLayout,
   canSynthesize,
@@ -176,12 +181,22 @@ export function CanvasSelectionToolbar({
                 <button
                   type="button"
                   role="menuitem"
+                  aria-busy={citationLayoutBusy || undefined}
+                  disabled={citationLayoutBusy}
                   onClick={() => runAction(() => onLayout("citation-tree"))}
                 >
-                  <TreeStructure size={17} weight="duotone" />
+                  {citationLayoutBusy ? (
+                    <CircleNotch
+                      className="canvas-selection-toolbar__spinner"
+                      size={17}
+                      weight="bold"
+                    />
+                  ) : (
+                    <TreeStructure size={17} weight="duotone" />
+                  )}
                   <span>
-                    <strong>按引用树排列</strong>
-                    <small>被引在左，衍生在右</small>
+                    <strong>{citationLayoutBusy ? "正在读取引文关系…" : "按引用树排列"}</strong>
+                    <small>{citationLayoutHint}</small>
                   </span>
                 </button>
               )}

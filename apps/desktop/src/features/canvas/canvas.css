@@ -2064,6 +2064,15 @@
   color: var(--color-accent-strong);
 }
 
+.canvas-selection-toolbar__menu button:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.canvas-selection-toolbar__spinner {
+  animation: canvas-spin 900ms linear infinite;
+}
+
 .canvas-selection-toolbar__menu button > svg {
   flex: 0 0 auto;
 }
