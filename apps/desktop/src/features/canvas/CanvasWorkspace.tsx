@@ -2154,6 +2154,10 @@ function CanvasWorkspaceInner({
   );
   const canLayout = timelineLayoutPlan.status === "success";
   const canCitationLayout = canLayout;
+  const layoutHint =
+    timelineLayoutPlan.status === "success"
+      ? "可按发表年份或引用树整理"
+      : canvasLayoutFailureMessage(timelineLayoutPlan.reason);
   const citationLayoutHint =
     citationLayoutPlan.status === "success"
       ? "被引在左，衍生在右"
@@ -2673,6 +2677,7 @@ function CanvasWorkspaceInner({
                 selectedCount={selectedNodeIds.size}
                 canGroup={canGroup}
                 canLayout={canLayout}
+                layoutHint={layoutHint}
                 canCitationLayout={canCitationLayout}
                 citationLayoutBusy={citationLayoutBusy}
                 citationLayoutHint={citationLayoutHint}
@@ -2760,10 +2765,12 @@ function CanvasWorkspaceInner({
         )}
         {nodeMenu && nodeMenuTarget && (
           <CanvasNodeContextMenu
+            arrangeSelectionHint={layoutHint}
             node={nodeMenuTarget}
             position={nodeMenu.position}
             canArrangeSelection={canLayout}
             canGroupSelection={canGroup}
+            hasMultipleSelection={selectedNodeIds.size >= 2}
             onClose={dismissNodeMenu}
             onActivate={activateNode}
             onOpenDetails={openNodeDetails}
