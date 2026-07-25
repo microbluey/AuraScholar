@@ -12,12 +12,14 @@ describe("CanvasSelectionToolbar", () => {
         citationLayoutHint=""
         canGroup={false}
         canLayout={false}
+        canTimelineLayout={false}
         canSynthesize={false}
         layoutHint={layoutHint}
         onGroup={vi.fn()}
         onLayout={vi.fn()}
         onSynthesize={vi.fn()}
         selectedCount={2}
+        timelineLayoutHint="仅支持文献卡片"
       />,
     );
 
@@ -34,12 +36,14 @@ describe("CanvasSelectionToolbar", () => {
         citationLayoutHint=""
         canGroup={false}
         canLayout={false}
+        canTimelineLayout={false}
         canSynthesize={false}
         layoutHint=""
         onGroup={vi.fn()}
         onLayout={vi.fn()}
         onSynthesize={vi.fn()}
         selectedCount={1}
+        timelineLayoutHint=""
       />,
     );
 

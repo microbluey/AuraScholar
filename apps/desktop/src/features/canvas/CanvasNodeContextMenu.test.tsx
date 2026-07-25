@@ -47,6 +47,6 @@ describe("CanvasNodeContextMenu", () => {
     expect(markup).toContain('data-canvas-node-action="arrange"');
     expect(markup).toContain("disabled");
     expect(markup).toContain(`title="${arrangeSelectionHint}"`);
-    expect(markup).toContain("整理所选文献…");
+    expect(markup).toContain("整理所选卡片…");
   });
 });

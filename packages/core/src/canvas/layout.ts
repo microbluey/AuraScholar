@@ -1,12 +1,13 @@
 import type {
   CanvasDimensions,
   CanvasNode,
+  CanvasNodeType,
   CanvasPoint,
   CanvasWorkspaceDocument,
   PaperNode,
 } from "./types.js";
 
-export type CanvasLayoutMode = "timeline" | "citation-tree";
+export type CanvasLayoutMode = "compact-grid" | "timeline" | "citation-tree";
 
 /**
  * A transient Library citation used only to plan a citation-tree layout.
@@ -28,12 +29,19 @@ export type CanvasLayoutFailure =
   | "selection-too-small";
 
 export interface CanvasLayoutNodePosition {
+  expectedDimensions: CanvasDimensions;
+  expectedNodeType: CanvasNodeType;
+  expectedParentGroupId: string | null;
+  expectedPosition: CanvasPoint;
+  expectedUpdatedAt: number;
   nodeId: string;
   position: CanvasPoint;
 }
 
 export interface CanvasLayoutGroupResize {
   dimensions: CanvasDimensions;
+  expectedDimensions: CanvasDimensions;
+  expectedUpdatedAt: number;
   groupId: string;
 }
 
@@ -57,6 +65,8 @@ export type CanvasLayoutPlan = CanvasLayoutSuccessPlan | CanvasLayoutErrorPlan;
 export const CANVAS_TIMELINE_HORIZONTAL_GAP = 56;
 export const CANVAS_TREE_HORIZONTAL_GAP = 88;
 export const CANVAS_TREE_VERTICAL_GAP = 40;
+export const CANVAS_COMPACT_GRID_HORIZONTAL_GAP = 48;
+export const CANVAS_COMPACT_GRID_VERTICAL_GAP = 36;
 export const CANVAS_GROUP_LAYOUT_PADDING = 34;
 
 function errorPlan(mode: CanvasLayoutMode, reason: CanvasLayoutFailure): CanvasLayoutErrorPlan {
@@ -82,6 +92,113 @@ function comparePapers(left: PaperNode, right: PaperNode): number {
   return titleDifference || compareText(left.id, right.id);
 }
 
+function layoutPosition(node: CanvasNode, position: CanvasPoint): CanvasLayoutNodePosition {
+  return {
+    nodeId: node.id,
+    expectedDimensions: { ...node.dimensions },
+    expectedNodeType: node.type,
+    expectedParentGroupId: node.groupId ?? null,
+    expectedPosition: { ...node.position },
+    expectedUpdatedAt: node.updatedAt,
+    position,
+  };
+}
+
+function compareCanvasX(left: CanvasNode, right: CanvasNode): number {
+  const xDifference = left.position.x - right.position.x;
+  if (xDifference !== 0) return xDifference;
+  const yDifference = left.position.y - right.position.y;
+  if (yDifference !== 0) return yDifference;
+  return compareText(left.id, right.id);
+}
+
+function sharesVisualRow(anchor: CanvasNode, candidate: CanvasNode): boolean {
+  const anchorCenter = anchor.position.y + anchor.dimensions.height / 2;
+  const candidateCenter = candidate.position.y + candidate.dimensions.height / 2;
+  const shorterHeight = Math.min(anchor.dimensions.height, candidate.dimensions.height);
+  const centerTolerance = Math.max(24, shorterHeight * 0.5);
+  const overlap =
+    Math.min(
+      anchor.position.y + anchor.dimensions.height,
+      candidate.position.y + candidate.dimensions.height,
+    ) - Math.max(anchor.position.y, candidate.position.y);
+  return overlap > 0 && Math.abs(anchorCenter - candidateCenter) <= centerTolerance;
+}
+
+function canvasReadingOrder(nodes: readonly CanvasNode[]): CanvasNode[] {
+  const candidates = [...nodes].sort((left, right) => {
+    const yDifference = left.position.y - right.position.y;
+    return yDifference || compareCanvasX(left, right);
+  });
+  const rows: Array<{ anchor: CanvasNode; nodes: CanvasNode[] }> = [];
+
+  for (const node of candidates) {
+    const row = rows
+      .filter((candidate) => sharesVisualRow(candidate.anchor, node))
+      .sort((left, right) => {
+        const leftDistance = Math.abs(
+          left.anchor.position.y +
+            left.anchor.dimensions.height / 2 -
+            (node.position.y + node.dimensions.height / 2),
+        );
+        const rightDistance = Math.abs(
+          right.anchor.position.y +
+            right.anchor.dimensions.height / 2 -
+            (node.position.y + node.dimensions.height / 2),
+        );
+        return leftDistance - rightDistance;
+      })[0];
+    if (row) row.nodes.push(node);
+    else rows.push({ anchor: node, nodes: [node] });
+  }
+
+  return rows
+    .sort((left, right) => {
+      const yDifference = left.anchor.position.y - right.anchor.position.y;
+      return yDifference || compareCanvasX(left.anchor, right.anchor);
+    })
+    .flatMap((row) => row.nodes.sort(compareCanvasX));
+}
+
+function compactGridPositions(nodes: readonly CanvasNode[]): CanvasLayoutNodePosition[] {
+  const ordered = canvasReadingOrder(nodes);
+  const columnCount = Math.ceil(Math.sqrt(ordered.length));
+  const rowCount = Math.ceil(ordered.length / columnCount);
+  const columnWidths = Array.from({ length: columnCount }, () => 0);
+  const rowHeights = Array.from({ length: rowCount }, () => 0);
+
+  ordered.forEach((node, index) => {
+    const column = index % columnCount;
+    const row = Math.floor(index / columnCount);
+    columnWidths[column] = Math.max(columnWidths[column]!, node.dimensions.width);
+    rowHeights[row] = Math.max(rowHeights[row]!, node.dimensions.height);
+  });
+
+  const anchorX = Math.min(...nodes.map((node) => node.position.x));
+  const anchorY = Math.min(...nodes.map((node) => node.position.y));
+  const columnX = columnWidths.map((_width, column) => {
+    let x = anchorX;
+    for (let index = 0; index < column; index += 1) {
+      x += columnWidths[index]! + CANVAS_COMPACT_GRID_HORIZONTAL_GAP;
+    }
+    return x;
+  });
+  const rowY = rowHeights.map((_height, row) => {
+    let y = anchorY;
+    for (let index = 0; index < row; index += 1) {
+      y += rowHeights[index]! + CANVAS_COMPACT_GRID_VERTICAL_GAP;
+    }
+    return y;
+  });
+
+  return ordered.map((node, index) =>
+    layoutPosition(node, {
+      x: columnX[index % columnCount]!,
+      y: rowY[Math.floor(index / columnCount)]!,
+    }),
+  );
+}
+
 function compareTreePapers(left: PaperNode, right: PaperNode): number {
   const yDifference = left.position.y - right.position.y;
   if (yDifference !== 0) return yDifference;
@@ -94,7 +211,7 @@ function timelinePositions(papers: readonly PaperNode[]): CanvasLayoutNodePositi
   const anchorY = Math.min(...papers.map((node) => node.position.y));
   let cursorX = anchorX;
   return ordered.map((node) => {
-    const update = { nodeId: node.id, position: { x: cursorX, y: anchorY } };
+    const update = layoutPosition(node, { x: cursorX, y: anchorY });
     cursorX += node.dimensions.width + CANVAS_TIMELINE_HORIZONTAL_GAP;
     return update;
   });
@@ -265,7 +382,7 @@ function citationTreePositions(
     let cursorY = anchorY;
     let columnWidth = 0;
     for (const node of column) {
-      updates.push({ nodeId: node.id, position: { x: cursorX, y: cursorY } });
+      updates.push(layoutPosition(node, { x: cursorX, y: cursorY }));
       cursorY += node.dimensions.height + CANVAS_TREE_VERTICAL_GAP;
       columnWidth = Math.max(columnWidth, node.dimensions.width);
     }
@@ -309,7 +426,29 @@ function groupResizeForPositions(
   return dimensions.width === group.dimensions.width &&
     dimensions.height === group.dimensions.height
     ? undefined
-    : { groupId: group.id, dimensions };
+    : {
+        groupId: group.id,
+        dimensions,
+        expectedDimensions: { ...group.dimensions },
+        expectedUpdatedAt: group.updatedAt,
+      };
+}
+
+function hasSelectedGroupAncestor(
+  node: CanvasNode,
+  selectedNodeIds: ReadonlySet<string>,
+  nodeById: ReadonlyMap<string, CanvasNode>,
+): boolean {
+  let parentId = node.groupId;
+  const visited = new Set<string>();
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = nodeById.get(parentId);
+    if (!parent || parent.type !== "group") return false;
+    if (selectedNodeIds.has(parent.id)) return true;
+    parentId = parent.groupId;
+  }
+  return false;
 }
 
 export function planCanvasLayout(
@@ -320,17 +459,22 @@ export function planCanvasLayout(
 ): CanvasLayoutPlan {
   if (selectedNodeIds.size < 2) return errorPlan(mode, "selection-too-small");
   const nodeById = new Map(document.nodes.map((node) => [node.id, node] as const));
-  const selectedNodes: CanvasNode[] = [];
+  let selectedNodes: CanvasNode[] = [];
   for (const nodeId of selectedNodeIds) {
     const node = nodeById.get(nodeId);
     if (!node) return errorPlan(mode, "missing-node");
     selectedNodes.push(node);
   }
-  if (selectedNodes.some((node) => node.type !== "paper")) {
+  if (mode === "compact-grid") {
+    selectedNodes = selectedNodes.filter(
+      (node) => !hasSelectedGroupAncestor(node, selectedNodeIds, nodeById),
+    );
+  }
+  if (selectedNodes.length < 2) return errorPlan(mode, "selection-too-small");
+  if (mode !== "compact-grid" && selectedNodes.some((node) => node.type !== "paper")) {
     return errorPlan(mode, "mixed-node-types");
   }
-  const papers = selectedNodes as PaperNode[];
-  const parentGroupIds = new Set(papers.map((node) => node.groupId ?? null));
+  const parentGroupIds = new Set(selectedNodes.map((node) => node.groupId ?? null));
   if (parentGroupIds.size !== 1) return errorPlan(mode, "mixed-parent");
   const parentGroupId = parentGroupIds.values().next().value ?? null;
   if (parentGroupId) {
@@ -339,10 +483,13 @@ export function planCanvasLayout(
     if (parent.data.collapsed === true) return errorPlan(mode, "collapsed-parent-group");
   }
 
+  const papers = selectedNodes as PaperNode[];
   const nodePositions =
-    mode === "timeline"
-      ? timelinePositions(papers)
-      : citationTreePositions(document, papers, citationRelations);
+    mode === "compact-grid"
+      ? compactGridPositions(selectedNodes)
+      : mode === "timeline"
+        ? timelinePositions(papers)
+        : citationTreePositions(document, papers, citationRelations);
   if (!nodePositions) return errorPlan(mode, "no-citation-edges");
   return {
     status: "success",
@@ -363,13 +510,36 @@ export function applyCanvasLayout(
   const nodeById = new Map(document.nodes.map((node) => [node.id, node] as const));
   for (const update of plan.nodePositions) {
     const node = nodeById.get(update.nodeId);
-    if (!node || node.type !== "paper" || (node.groupId ?? null) !== plan.parentGroupId) {
+    if (
+      !node ||
+      node.dimensions.width !== update.expectedDimensions.width ||
+      node.dimensions.height !== update.expectedDimensions.height ||
+      node.type !== update.expectedNodeType ||
+      (node.groupId ?? null) !== update.expectedParentGroupId ||
+      node.position.x !== update.expectedPosition.x ||
+      node.position.y !== update.expectedPosition.y ||
+      node.updatedAt !== update.expectedUpdatedAt ||
+      update.expectedParentGroupId !== plan.parentGroupId ||
+      (plan.mode !== "compact-grid" && node.type !== "paper")
+    ) {
       return document;
     }
   }
   if (plan.parentGroupId) {
     const parent = nodeById.get(plan.parentGroupId);
     if (!parent || parent.type !== "group" || parent.data.collapsed === true) return document;
+  }
+  if (plan.groupResize) {
+    const group = nodeById.get(plan.groupResize.groupId);
+    if (
+      !group ||
+      group.type !== "group" ||
+      group.dimensions.width !== plan.groupResize.expectedDimensions.width ||
+      group.dimensions.height !== plan.groupResize.expectedDimensions.height ||
+      group.updatedAt !== plan.groupResize.expectedUpdatedAt
+    ) {
+      return document;
+    }
   }
 
   const positionByNode = new Map(

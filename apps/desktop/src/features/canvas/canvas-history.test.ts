@@ -1,4 +1,8 @@
-import { type CanvasWorkspaceDocument } from "@aurascholar/core";
+import {
+  applyCanvasLayout,
+  planCanvasLayout,
+  type CanvasWorkspaceDocument,
+} from "@aurascholar/core";
 import { describe, expect, it } from "vitest";
 import {
   CANVAS_HISTORY_LIMIT,
@@ -38,6 +42,37 @@ function reverseObjectKeyOrder<T extends object>(value: T): T {
 }
 
 describe("canvas workspace history", () => {
+  it("undoes and redoes mixed-card layout positions and group growth in one step", () => {
+    const original = createPreviewWorkspace();
+    const group = original.nodes.find((node) => node.type === "group");
+    if (!group || group.type !== "group") throw new Error("Expected a preview group");
+    const childIds = original.nodes
+      .filter((node) => node.groupId === group.id)
+      .map((node) => node.id);
+    const plan = planCanvasLayout(original, new Set(childIds), "compact-grid");
+    expect(plan.status).toBe("success");
+    if (plan.status !== "success") return;
+
+    const arranged = applyCanvasLayout(original, plan, 100);
+    expect(arranged).not.toBe(original);
+    const arrangedGroup = arranged.nodes.find((node) => node.id === group.id);
+    expect(arrangedGroup?.dimensions.width).toBeGreaterThan(group.dimensions.width);
+    const history = recordCanvasHistory(
+      createCanvasHistoryState(original),
+      original,
+      arranged,
+      { label: "整齐排列卡片" },
+      100,
+    );
+
+    const undone = undoCanvasHistory(history, arranged, 200);
+    expect(undone?.label).toBe("整齐排列卡片");
+    expect(undone?.document.nodes).toEqual(original.nodes);
+    const redone = redoCanvasHistory(undone!.history, undone!.document, 300);
+    expect(redone?.label).toBe("整齐排列卡片");
+    expect(redone?.document.nodes).toEqual(arranged.nodes);
+  });
+
   it("undoes and redoes content while preserving the current viewport and metadata", () => {
     const original = createPreviewWorkspace();
     const edited = addNote(original, "history-note", 100);

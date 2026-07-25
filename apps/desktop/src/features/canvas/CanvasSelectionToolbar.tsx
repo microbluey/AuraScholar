@@ -4,6 +4,7 @@ import {
   CalendarDots,
   CircleNotch,
   DotsThree,
+  GridFour,
   Sparkle,
   TreeStructure,
 } from "@phosphor-icons/react";
@@ -34,6 +35,7 @@ export interface CanvasSelectionToolbarProps {
   citationLayoutHint: string;
   canGroup: boolean;
   canLayout: boolean;
+  canTimelineLayout: boolean;
   canSynthesize: boolean;
   className?: string;
   layoutHint: string;
@@ -44,6 +46,7 @@ export interface CanvasSelectionToolbarProps {
   selectedCount: number;
   style?: CSSProperties;
   synthesisHint?: string;
+  timelineLayoutHint: string;
 }
 
 function joinClassNames(...classNames: Array<string | false | null | undefined>): string {
@@ -56,6 +59,7 @@ export function CanvasSelectionToolbar({
   citationLayoutHint,
   canGroup,
   canLayout,
+  canTimelineLayout,
   canSynthesize,
   className,
   layoutHint,
@@ -66,6 +70,7 @@ export function CanvasSelectionToolbar({
   selectedCount,
   style,
   synthesisHint = "使用所选来源生成 AI 合成卡片",
+  timelineLayoutHint,
 }: CanvasSelectionToolbarProps) {
   const [openMenu, setOpenMenu] = useState<SelectionMenu | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -155,7 +160,7 @@ export function CanvasSelectionToolbar({
           aria-expanded={openMenu === "layout"}
           aria-controls={`${menuIdPrefix}-layout`}
           onClick={(event) => toggleMenu("layout", event.currentTarget)}
-          title={canLayout ? "整理所选文献" : layoutHint}
+          title={canLayout ? "整理所选卡片" : layoutHint}
         >
           <TreeStructure size={18} weight="duotone" />
           <span>整理</span>
@@ -172,12 +177,27 @@ export function CanvasSelectionToolbar({
               type="button"
               role="menuitem"
               disabled={!canLayout}
+              onClick={() => runAction(() => onLayout("compact-grid"))}
+            >
+              <GridFour size={17} weight="duotone" />
+              <span>
+                <strong>整齐排列</strong>
+                <small>{canLayout ? "按当前阅读顺序收紧为网格" : layoutHint}</small>
+              </span>
+            </button>
+            <div className="canvas-selection-toolbar__menu-section-label" aria-hidden="true">
+              文献专用
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canTimelineLayout}
               onClick={() => runAction(() => onLayout("timeline"))}
             >
               <CalendarDots size={17} weight="duotone" />
               <span>
                 <strong>按发表年份排列</strong>
-                <small>{canLayout ? "从早到晚生成时间轴" : layoutHint}</small>
+                <small>{timelineLayoutHint}</small>
               </span>
             </button>
             <button
@@ -198,7 +218,7 @@ export function CanvasSelectionToolbar({
               )}
               <span>
                 <strong>{citationLayoutBusy ? "正在读取引文关系…" : "按引用树排列"}</strong>
-                <small>{canCitationLayout ? citationLayoutHint : layoutHint}</small>
+                <small>{canCitationLayout ? citationLayoutHint : timelineLayoutHint}</small>
               </span>
             </button>
           </div>

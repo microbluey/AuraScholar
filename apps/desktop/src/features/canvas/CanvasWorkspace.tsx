@@ -282,13 +282,13 @@ function selectedCitationPaperIdentities(
 function canvasLayoutFailureMessage(reason: CanvasLayoutFailure): string {
   switch (reason) {
     case "selection-too-small":
-      return "请选择至少两张文献卡片后再整理。";
+      return "请选择至少两张可独立移动的卡片后再整理。";
     case "mixed-node-types":
-      return "自动整理目前仅支持文献卡片。";
+      return "时间轴与引用树仅支持全部为文献卡片的选择。";
     case "mixed-parent":
-      return "请只选择画布根层级，或同一分组内的文献。";
+      return "所选卡片位于不同层级，请按分组分别整理。";
     case "collapsed-parent-group":
-      return "请先展开分组，再整理其中的文献。";
+      return "请先展开分组，再整理其中的卡片。";
     case "no-citation-edges":
       return "所选文献之间还没有可用于整理的引文数据。";
     default:
@@ -2133,6 +2133,10 @@ function CanvasWorkspaceInner({
     () => planCanvasLayout(document, selectedNodeIds, "timeline"),
     [document, selectedNodeIds],
   );
+  const compactGridLayoutPlan = useMemo(
+    () => planCanvasLayout(document, selectedNodeIds, "compact-grid"),
+    [document, selectedNodeIds],
+  );
   const selectedCitationPapers = useMemo(
     () => selectedCitationPaperIdentities(document, selectedNodeIds),
     [document, selectedNodeIds],
@@ -2152,11 +2156,16 @@ function CanvasWorkspaceInner({
     () => planCanvasLayout(document, selectedNodeIds, "citation-tree", cachedCitationRelations),
     [cachedCitationRelations, document, selectedNodeIds],
   );
-  const canLayout = timelineLayoutPlan.status === "success";
-  const canCitationLayout = canLayout;
+  const canLayout = compactGridLayoutPlan.status === "success";
+  const canTimelineLayout = timelineLayoutPlan.status === "success";
+  const canCitationLayout = canTimelineLayout;
   const layoutHint =
+    compactGridLayoutPlan.status === "success"
+      ? "按当前阅读顺序整齐排列所选卡片"
+      : canvasLayoutFailureMessage(compactGridLayoutPlan.reason);
+  const timelineLayoutHint =
     timelineLayoutPlan.status === "success"
-      ? "可按发表年份或引用树整理"
+      ? "从早到晚生成时间轴"
       : canvasLayoutFailureMessage(timelineLayoutPlan.reason);
   const citationLayoutHint =
     citationLayoutPlan.status === "success"
@@ -2210,6 +2219,21 @@ function CanvasWorkspaceInner({
 
   const applySelectedLayout = useCallback(
     (mode: CanvasLayoutMode) => {
+      if (mode === "compact-grid") {
+        cancelActiveCitationLayout();
+        const plan = planCanvasLayout(document, selectedNodeIds, mode);
+        if (plan.status === "error") {
+          showNotice(canvasLayoutFailureMessage(plan.reason));
+          return;
+        }
+        if (commitLayoutPlan(plan, "整齐排列卡片")) {
+          showNotice(`已整齐排列 ${plan.nodePositions.length} 张卡片。`);
+        } else {
+          showNotice("卡片已经整齐排列，或选区已发生变化。");
+        }
+        return;
+      }
+
       if (mode === "timeline") {
         cancelActiveCitationLayout();
         const plan = planCanvasLayout(document, selectedNodeIds, mode);
@@ -2217,8 +2241,11 @@ function CanvasWorkspaceInner({
           showNotice(canvasLayoutFailureMessage(plan.reason));
           return;
         }
-        commitLayoutPlan(plan, "按时间轴整理卡片");
-        showNotice(`已按发表年份整理 ${plan.nodePositions.length} 张文献。`);
+        if (commitLayoutPlan(plan, "按时间轴整理卡片")) {
+          showNotice(`已按发表年份整理 ${plan.nodePositions.length} 张文献。`);
+        } else {
+          showNotice("卡片已经位于当前时间轴位置，或选区已发生变化。");
+        }
         return;
       }
 
@@ -2230,8 +2257,11 @@ function CanvasWorkspaceInner({
         cachedCitationRelations,
       );
       if (immediatePlan.status === "success") {
-        commitLayoutPlan(immediatePlan, "按引用树整理卡片");
-        showNotice(`已按引文树整理 ${immediatePlan.nodePositions.length} 张文献。`);
+        if (commitLayoutPlan(immediatePlan, "按引用树整理卡片")) {
+          showNotice(`已按引文树整理 ${immediatePlan.nodePositions.length} 张文献。`);
+        } else {
+          showNotice("卡片已经位于当前引用树位置，或选区已发生变化。");
+        }
         return;
       }
       if (immediatePlan.reason !== "no-citation-edges") {
@@ -2392,7 +2422,7 @@ function CanvasWorkspaceInner({
         trigger.click();
         return;
       }
-      showNotice("请选择同一层级中的至少两张文献卡片。");
+      showNotice("请选择至少两张卡片后再整理。");
     });
   }, [dismissNodeMenu, showNotice]);
 
@@ -2417,15 +2447,15 @@ function CanvasWorkspaceInner({
         return;
       }
       event.preventDefault();
-      if (timelineLayoutPlan.status === "error") {
-        showNotice(canvasLayoutFailureMessage(timelineLayoutPlan.reason));
+      if (compactGridLayoutPlan.status === "error") {
+        showNotice(canvasLayoutFailureMessage(compactGridLayoutPlan.reason));
         return;
       }
       openSelectionLayoutMenu();
     };
     window.addEventListener("keydown", handleLayoutShortcut);
     return () => window.removeEventListener("keydown", handleLayoutShortcut);
-  }, [openSelectionLayoutMenu, showNotice, timelineLayoutPlan]);
+  }, [compactGridLayoutPlan, openSelectionLayoutMenu, showNotice]);
 
   const addCommandWork = useCallback(
     (work: CanvasLibraryWork) => {
@@ -2678,6 +2708,8 @@ function CanvasWorkspaceInner({
                 canGroup={canGroup}
                 canLayout={canLayout}
                 layoutHint={layoutHint}
+                canTimelineLayout={canTimelineLayout}
+                timelineLayoutHint={timelineLayoutHint}
                 canCitationLayout={canCitationLayout}
                 citationLayoutBusy={citationLayoutBusy}
                 citationLayoutHint={citationLayoutHint}

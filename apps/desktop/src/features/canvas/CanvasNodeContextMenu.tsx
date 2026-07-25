@@ -203,9 +203,9 @@ export function CanvasNodeContextMenu({
           disabled={!canArrangeSelection}
           icon={<TreeStructure size={17} weight="duotone" />}
           onSelect={() => run(onOpenLayoutMenu)}
-          title={canArrangeSelection ? "整理所选文献" : arrangeSelectionHint}
+          title={canArrangeSelection ? "整理所选卡片" : arrangeSelectionHint}
         >
-          整理所选文献…
+          整理所选卡片…
         </MenuAction>
       )}
 
