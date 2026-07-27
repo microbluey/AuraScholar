@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { isImeComposing } from "../../keyboard";
-import { registerExitBarrier } from "../../services/exit-barriers";
+import { registerCanvasEditorPreparer } from "./canvas-route-preparation";
 
 interface CanvasEdgeLabelEditorProps {
   initialValue: string;
@@ -56,14 +56,11 @@ export function CanvasEdgeLabelEditor({
 
   useEffect(
     () =>
-      registerExitBarrier(
-        () => {
-          if (composingRef.current) return "cancel";
-          settle("commit");
-          return "ready";
-        },
-        { priority: 0 },
-      ),
+      registerCanvasEditorPreparer(() => {
+        if (composingRef.current) return "cancel";
+        settle("commit");
+        return "ready";
+      }),
     [settle],
   );
 

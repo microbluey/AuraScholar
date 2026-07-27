@@ -3,7 +3,6 @@ import { CANVAS_SCHEMA_VERSION, type CanvasWorkspaceDocument } from "@auraschola
 import {
   flushCanvasWorkspaceCollection,
   flushLatestCanvasWorkspace,
-  navigateAfterCanvasWorkspaceFlush,
   persistCurrentCanvasWorkspaceSnapshot,
   waitForCanvasWorkspaceLoad,
 } from "./workspace-load";
@@ -192,72 +191,6 @@ describe("flushCanvasWorkspaceCollection", () => {
       errors: [first, second],
       message: "2 个白板保存失败",
     });
-  });
-});
-
-describe("navigateAfterCanvasWorkspaceFlush", () => {
-  it("does not navigate until the active workspace is durable", async () => {
-    const pending = deferred();
-    const calls: string[] = [];
-    const navigation = navigateAfterCanvasWorkspaceFlush({
-      workspaceId: "workspace-a",
-      flushWorkspace: async (workspaceId) => {
-        calls.push(`flush:${workspaceId}`);
-        await pending.promise;
-      },
-      navigate: () => calls.push("navigate"),
-    });
-
-    await Promise.resolve();
-    expect(calls).toEqual(["flush:workspace-a"]);
-    pending.resolve();
-    await navigation;
-    expect(calls).toEqual(["flush:workspace-a", "navigate"]);
-  });
-
-  it("keeps the current route when saving fails and supports a later retry", async () => {
-    let attempts = 0;
-    let navigations = 0;
-    const request = () =>
-      navigateAfterCanvasWorkspaceFlush({
-        workspaceId: "workspace-a",
-        flushWorkspace: async () => {
-          attempts += 1;
-          if (attempts === 1) throw new Error("disk unavailable");
-        },
-        navigate: () => {
-          navigations += 1;
-        },
-      });
-
-    await expect(request()).rejects.toThrow("disk unavailable");
-    expect(navigations).toBe(0);
-    await expect(request()).resolves.toBeUndefined();
-    expect(navigations).toBe(1);
-  });
-
-  it("lets the latest navigation intent win while a shared flush is pending", async () => {
-    const pending = deferred();
-    const destinations: string[] = [];
-    let sequence = 0;
-    const request = (destination: string) => {
-      sequence += 1;
-      const requestSequence = sequence;
-      return navigateAfterCanvasWorkspaceFlush({
-        workspaceId: "workspace-a",
-        flushWorkspace: () => pending.promise,
-        navigate: () => {
-          if (requestSequence === sequence) destinations.push(destination);
-        },
-      });
-    };
-
-    const first = request("/canvas/workspace-b");
-    const latest = request("/library");
-    pending.resolve();
-    await Promise.all([first, latest]);
-
-    expect(destinations).toEqual(["/library"]);
   });
 });
 

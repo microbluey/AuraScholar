@@ -4,7 +4,14 @@ import type { CanvasWorkspaceSummary } from "@aurascholar/db/repos/canvas";
 import { WorksRepo } from "@aurascholar/db/repos/works";
 import { CircleNotch, Warning } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  useBlocker,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+  type BlockerFunction,
+} from "react-router-dom";
 import "@xyflow/react/dist/style.css";
 import "katex/dist/katex.min.css";
 import { useConfirmDialog } from "../components/ConfirmDialog";
@@ -30,6 +37,12 @@ import {
 } from "../features/canvas/canvas-history";
 import { clearCanvasNoteDraftsForWorkspace } from "../features/canvas/canvas-note-draft";
 import {
+  hasCanvasEditorPreparers,
+  prepareCanvasEditors,
+  prepareStableCanvasNavigation,
+  settleLatestCanvasBlockedNavigation,
+} from "../features/canvas/canvas-route-preparation";
+import {
   applyCanvasAnnotationIngress,
   nextCanvasIngressPosition,
 } from "../features/canvas/canvas-annotation-ingress";
@@ -53,7 +66,6 @@ import { setCanvasSynthesisService } from "../features/canvas/synthesis";
 import {
   flushCanvasWorkspaceCollection,
   flushLatestCanvasWorkspace,
-  navigateAfterCanvasWorkspaceFlush,
   persistCurrentCanvasWorkspaceSnapshot,
   waitForCanvasWorkspaceLoad,
 } from "../features/canvas/workspace-load";
@@ -175,7 +187,8 @@ export function SpatialCanvasPage() {
   const flushRequestsRef = useRef(new Map<string, Promise<void>>());
   const retiredWorkspaceIdsRef = useRef(new Set<string>());
   const exitPreparationRequestIdRef = useRef<string | null>(null);
-  const navigationRequestSequenceRef = useRef(0);
+  const navigationPreparationRef = useRef<Promise<"cancel" | "ready"> | null>(null);
+  const blockedNavigationRequestRef = useRef(0);
   const loadRequestRef = useRef(0);
   const focusRequestSequenceRef = useRef(0);
   const inFlightIngressRef = useRef(new Set<string>());
@@ -500,6 +513,78 @@ export function SpatialCanvasPage() {
     });
   }, [flushWorkspace]);
 
+  const hasPendingCanvasPersistence = useCallback((): boolean => {
+    for (const [workspaceId, latest] of latestDocumentsRef.current) {
+      if (retiredWorkspaceIdsRef.current.has(workspaceId)) continue;
+      if (JSON.stringify(latest) !== lastPersistedRef.current.get(workspaceId)) return true;
+      if (
+        pendingSaveRef.current.has(workspaceId) ||
+        saveChainsRef.current.has(workspaceId) ||
+        flushRequestsRef.current.has(workspaceId)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
+  const prepareForCanvasNavigation = useCallback((): Promise<"cancel" | "ready"> => {
+    const existing = navigationPreparationRef.current;
+    if (existing) return existing;
+    const run = prepareStableCanvasNavigation({ flush: flushAllWorkspaces });
+    navigationPreparationRef.current = run;
+    void run
+      .finally(() => {
+        if (navigationPreparationRef.current === run) {
+          navigationPreparationRef.current = null;
+        }
+      })
+      .catch(() => undefined);
+    return run;
+  }, [flushAllWorkspaces]);
+
+  const shouldBlockCanvasNavigation = useCallback<BlockerFunction>(
+    ({ currentLocation, nextLocation }) => {
+      const routeChanged =
+        currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search ||
+        currentLocation.hash !== nextLocation.hash;
+      return routeChanged && (hasCanvasEditorPreparers() || hasPendingCanvasPersistence());
+    },
+    [hasPendingCanvasPersistence],
+  );
+  // React Router supports one active blocker per router. Canvas editors join
+  // the preparation registry above instead of installing child blockers.
+  const navigationBlocker = useBlocker(shouldBlockCanvasNavigation);
+  const latestBlockedNavigationRef = useRef<typeof navigationBlocker | null>(null);
+
+  useEffect(() => {
+    if (navigationBlocker.state !== "blocked") {
+      if (navigationBlocker.state === "unblocked") {
+        latestBlockedNavigationRef.current = null;
+      }
+      return;
+    }
+    latestBlockedNavigationRef.current = navigationBlocker;
+    blockedNavigationRequestRef.current += 1;
+    const requestId = blockedNavigationRequestRef.current;
+    void settleLatestCanvasBlockedNavigation({
+      getLatest: () => {
+        if (blockedNavigationRequestRef.current !== requestId) return null;
+        const latest = latestBlockedNavigationRef.current;
+        return latest?.state === "blocked" ? latest : null;
+      },
+      onCancel: () => {
+        setPersistenceLabel("导航已取消 · 草稿仍在编辑");
+      },
+      onError: (error) => {
+        const detail = error instanceof Error ? error.message : "请稍后重试";
+        setPersistenceLabel(`保存失败：${detail}`);
+      },
+      prepare: prepareForCanvasNavigation,
+    }).catch(() => undefined);
+  }, [navigationBlocker, prepareForCanvasNavigation]);
+
   useEffect(() => {
     if (!desktopRuntime) {
       setCanvasSynthesisService(null);
@@ -625,6 +710,10 @@ export function SpatialCanvasPage() {
   }, [flushAllWorkspaces]);
 
   useEffect(() => {
+    return registerExitBarrier(() => prepareCanvasEditors({ reason: "app-exit" }), { priority: 0 });
+  }, []);
+
+  useEffect(() => {
     const unregisterBarrier = registerExitBarrier(
       async (request) => {
         exitPreparationRequestIdRef.current = request.requestId;
@@ -682,21 +771,11 @@ export function SpatialCanvasPage() {
 
   const workspaceId = document?.workspaceId ?? "";
 
-  const requestNavigationAfterFlush = useCallback(
-    (to: string, options?: { replace?: boolean }): Promise<void> => {
-      navigationRequestSequenceRef.current += 1;
-      const requestSequence = navigationRequestSequenceRef.current;
-      return navigateAfterCanvasWorkspaceFlush({
-        workspaceId: activeDocumentRef.current?.workspaceId,
-        flushWorkspace,
-        navigate: () => {
-          if (navigationRequestSequenceRef.current === requestSequence) {
-            navigate(to, options);
-          }
-        },
-      });
+  const requestCanvasNavigation = useCallback(
+    (to: string, options?: { replace?: boolean }): void => {
+      navigate(to, options);
     },
-    [flushWorkspace, navigate],
+    [navigate],
   );
 
   const handleFocusRequestHandled = useCallback((requestId: string) => {
@@ -704,11 +783,11 @@ export function SpatialCanvasPage() {
   }, []);
 
   const handleSelectWorkspace = useCallback(
-    async (nextWorkspaceId: string) => {
+    (nextWorkspaceId: string) => {
       if (!nextWorkspaceId || nextWorkspaceId === activeDocumentRef.current?.workspaceId) return;
-      await requestNavigationAfterFlush(canvasWorkspacePath(nextWorkspaceId));
+      requestCanvasNavigation(canvasWorkspacePath(nextWorkspaceId));
     },
-    [requestNavigationAfterFlush],
+    [requestCanvasNavigation],
   );
 
   const handleCreateWorkspace = useCallback(
@@ -1085,12 +1164,10 @@ export function SpatialCanvasPage() {
           onSelectWorkspace={handleSelectWorkspace}
           onRenameWorkspace={handleRenameWorkspace}
           onExit={() => {
-            void requestNavigationAfterFlush("/library").catch(() => undefined);
+            requestCanvasNavigation("/library");
           }}
           onOpenPaper={(workId) => {
-            void requestNavigationAfterFlush(`/reader?work=${encodeURIComponent(workId)}`).catch(
-              () => undefined,
-            );
+            requestCanvasNavigation(`/reader?work=${encodeURIComponent(workId)}`);
           }}
           onOpenExcerpt={(workId, annotationId, pageIndex, attachmentId) => {
             const annotationSuffix = annotationId
@@ -1100,9 +1177,9 @@ export function SpatialCanvasPage() {
             const attachmentSuffix = attachmentId
               ? `&attachment=${encodeURIComponent(attachmentId)}`
               : "";
-            void requestNavigationAfterFlush(
+            requestCanvasNavigation(
               `/reader?work=${encodeURIComponent(workId)}&tab=annotations${annotationSuffix}${pageSuffix}${attachmentSuffix}`,
-            ).catch(() => undefined);
+            );
           }}
         />
       </main>

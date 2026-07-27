@@ -21,8 +21,8 @@ import {
   type ReactNode,
 } from "react";
 import { isImeComposing } from "../../keyboard";
-import { registerExitBarrier } from "../../services/exit-barriers";
 import { CanvasMarkdown } from "./CanvasMarkdown";
+import { registerCanvasEditorPreparer } from "./canvas-route-preparation";
 import { isCanvasContextMenuShortcut } from "./canvas-interactions";
 import type { IdeaNotePatch } from "./idea-note-edit";
 
@@ -471,14 +471,11 @@ function IdeaNoteCardContent({
 
   useEffect(() => {
     if (!editingField) return;
-    return registerExitBarrier(
-      () => {
-        if (composingRef.current) return "cancel";
-        commit(editingField);
-        return "ready";
-      },
-      { priority: 0 },
-    );
+    return registerCanvasEditorPreparer(() => {
+      if (composingRef.current) return "cancel";
+      commit(editingField);
+      return "ready";
+    });
   }, [commit, editingField]);
 
   const cancel = (field: "content" | "title", restoreFocus = false) => {
