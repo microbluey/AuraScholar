@@ -51,7 +51,9 @@ import {
 import { canvasWorkspacePath, canvasWorkspaceRedirectPath } from "../features/canvas/routes";
 import { setCanvasSynthesisService } from "../features/canvas/synthesis";
 import {
+  flushCanvasWorkspaceCollection,
   flushLatestCanvasWorkspace,
+  navigateAfterCanvasWorkspaceFlush,
   persistCurrentCanvasWorkspaceSnapshot,
   waitForCanvasWorkspaceLoad,
 } from "../features/canvas/workspace-load";
@@ -61,6 +63,7 @@ import {
 } from "../features/canvas/workspace-controls";
 import { libraryReaderRowToAnnotation } from "../features/reader/library-reader-session";
 import { getDb } from "../services/aura-db";
+import { registerExitBarrier } from "../services/exit-barriers";
 import { synthesizeCanvasSelection as desktopSynthesizeCanvasSelection } from "../services/canvas-ai";
 import { isDesktopRuntime } from "../services/aura-platform";
 import {
@@ -169,7 +172,10 @@ export function SpatialCanvasPage() {
   const lastPersistedRef = useRef(new Map<string, string>());
   const pendingSaveRef = useRef(new Map<string, number>());
   const saveChainsRef = useRef(new Map<string, Promise<void>>());
+  const flushRequestsRef = useRef(new Map<string, Promise<void>>());
   const retiredWorkspaceIdsRef = useRef(new Set<string>());
+  const exitPreparationRequestIdRef = useRef<string | null>(null);
+  const navigationRequestSequenceRef = useRef(0);
   const loadRequestRef = useRef(0);
   const focusRequestSequenceRef = useRef(0);
   const inFlightIngressRef = useRef(new Set<string>());
@@ -203,6 +209,7 @@ export function SpatialCanvasPage() {
       updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
       options: CanvasDocumentChangeOptions = {},
     ): boolean => {
+      if (exitPreparationRequestIdRef.current !== null) return false;
       if (retiredWorkspaceIdsRef.current.has(sourceWorkspaceId)) return false;
       if (activeDocumentTransactionRef.current?.afterDocument.workspaceId === sourceWorkspaceId) {
         return false;
@@ -234,6 +241,7 @@ export function SpatialCanvasPage() {
 
   const runHistoryCommand = useCallback(
     (command: "undo" | "redo"): string | null => {
+      if (exitPreparationRequestIdRef.current !== null) return null;
       const current = activeDocumentRef.current;
       if (!current || retiredWorkspaceIdsRef.current.has(current.workspaceId)) return null;
       if (activeDocumentTransactionRef.current?.afterDocument.workspaceId === current.workspaceId) {
@@ -268,6 +276,7 @@ export function SpatialCanvasPage() {
       updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
       mutation: CanvasHistoryMutation,
     ) => {
+      if (exitPreparationRequestIdRef.current !== null) return null;
       if (retiredWorkspaceIdsRef.current.has(sourceWorkspaceId)) return null;
       if (activeDocumentTransactionRef.current !== null) return null;
       const current = activeDocumentRef.current;
@@ -449,8 +458,10 @@ export function SpatialCanvasPage() {
   );
 
   const flushWorkspace = useCallback(
-    async (workspaceId: string): Promise<void> => {
-      await flushLatestCanvasWorkspace({
+    (workspaceId: string): Promise<void> => {
+      const existing = flushRequestsRef.current.get(workspaceId);
+      if (existing) return existing;
+      const run = flushLatestCanvasWorkspace({
         cancelPendingSave: () => {
           const pending = pendingSaveRef.current.get(workspaceId);
           if (pending === undefined) return;
@@ -463,9 +474,31 @@ export function SpatialCanvasPage() {
         isRetired: () => retiredWorkspaceIdsRef.current.has(workspaceId),
         persistDocument,
       });
+      flushRequestsRef.current.set(workspaceId, run);
+      void run
+        .finally(() => {
+          if (flushRequestsRef.current.get(workspaceId) === run) {
+            flushRequestsRef.current.delete(workspaceId);
+          }
+        })
+        .catch(() => undefined);
+      return run;
     },
     [persistDocument],
   );
+
+  const flushAllWorkspaces = useCallback(async (): Promise<void> => {
+    for (const [workspaceId, timer] of pendingSaveRef.current) {
+      window.clearTimeout(timer);
+      pendingSaveRef.current.delete(workspaceId);
+    }
+    await flushCanvasWorkspaceCollection({
+      workspaceIds: [...latestDocumentsRef.current.keys()].filter(
+        (workspaceId) => !retiredWorkspaceIdsRef.current.has(workspaceId),
+      ),
+      flushWorkspace,
+    });
+  }, [flushWorkspace]);
 
   useEffect(() => {
     if (!desktopRuntime) {
@@ -581,35 +614,101 @@ export function SpatialCanvasPage() {
   }, [document, flushWorkspace]);
 
   useEffect(() => {
-    const flushAll = () => {
-      for (const [workspaceId, timer] of pendingSaveRef.current) {
-        window.clearTimeout(timer);
-        pendingSaveRef.current.delete(workspaceId);
-      }
-      for (const workspaceId of latestDocumentsRef.current.keys()) {
-        if (retiredWorkspaceIdsRef.current.has(workspaceId)) continue;
-        void flushWorkspace(workspaceId).catch(() => undefined);
-      }
+    const flushBestEffort = () => {
+      void flushAllWorkspaces().catch(() => undefined);
     };
-    window.addEventListener("pagehide", flushAll);
+    window.addEventListener("pagehide", flushBestEffort);
     return () => {
-      window.removeEventListener("pagehide", flushAll);
-      flushAll();
+      window.removeEventListener("pagehide", flushBestEffort);
+      flushBestEffort();
     };
-  }, [flushWorkspace]);
+  }, [flushAllWorkspaces]);
+
+  useEffect(() => {
+    const unregisterBarrier = registerExitBarrier(
+      async (request) => {
+        exitPreparationRequestIdRef.current = request.requestId;
+        setPersistenceLabel("正在保存并退出…");
+        try {
+          await flushAllWorkspaces();
+          return exitPreparationRequestIdRef.current === request.requestId ? "ready" : "cancel";
+        } catch (error) {
+          if (exitPreparationRequestIdRef.current !== request.requestId) return "cancel";
+          const detail = error instanceof Error ? error.message : "请稍后重试";
+          setPersistenceLabel(`保存失败：${detail}`);
+          const promptHeld = desktopRuntime
+            ? await window.aura.lifecycle.holdClose(request.requestId).catch(() => false)
+            : true;
+          if (!promptHeld || exitPreparationRequestIdRef.current !== request.requestId) {
+            return "cancel";
+          }
+          const force = await confirm({
+            cancelLabel: "留在白板",
+            confirmLabel: "仍然退出",
+            description: "最后一次白板修改尚未保存。现在退出可能丢失这些修改。",
+            details: [`保存错误：${detail}`, "留在白板后，再次关闭应用即可重试保存。"],
+            eyebrow: "保存失败",
+            title: "仍然退出 AuraScholar？",
+            tone: "danger",
+          });
+          if (exitPreparationRequestIdRef.current !== request.requestId) return "cancel";
+          if (!force) exitPreparationRequestIdRef.current = null;
+          return force ? "force" : "cancel";
+        }
+      },
+      { priority: 100 },
+    );
+    const unregisterCancellation = desktopRuntime
+      ? window.aura.lifecycle.onCloseCancelled((request) => {
+          if (exitPreparationRequestIdRef.current !== request.requestId) return;
+          exitPreparationRequestIdRef.current = null;
+          const active = activeDocumentRef.current;
+          if (!active) return;
+          const latest = latestDocumentsRef.current.get(active.workspaceId);
+          const saved = lastPersistedRef.current.get(active.workspaceId);
+          setPersistenceLabel(
+            latest && JSON.stringify(latest) === saved
+              ? "退出已取消 · 修改已保存"
+              : "退出已取消 · 等待保存",
+          );
+        })
+      : undefined;
+    return () => {
+      unregisterCancellation?.();
+      unregisterBarrier();
+      exitPreparationRequestIdRef.current = null;
+    };
+  }, [confirm, desktopRuntime, flushAllWorkspaces]);
 
   const workspaceId = document?.workspaceId ?? "";
+
+  const requestNavigationAfterFlush = useCallback(
+    (to: string, options?: { replace?: boolean }): Promise<void> => {
+      navigationRequestSequenceRef.current += 1;
+      const requestSequence = navigationRequestSequenceRef.current;
+      return navigateAfterCanvasWorkspaceFlush({
+        workspaceId: activeDocumentRef.current?.workspaceId,
+        flushWorkspace,
+        navigate: () => {
+          if (navigationRequestSequenceRef.current === requestSequence) {
+            navigate(to, options);
+          }
+        },
+      });
+    },
+    [flushWorkspace, navigate],
+  );
 
   const handleFocusRequestHandled = useCallback((requestId: string) => {
     setFocusRequest((current) => (current?.requestId === requestId ? null : current));
   }, []);
 
   const handleSelectWorkspace = useCallback(
-    (nextWorkspaceId: string) => {
+    async (nextWorkspaceId: string) => {
       if (!nextWorkspaceId || nextWorkspaceId === activeDocumentRef.current?.workspaceId) return;
-      navigate(canvasWorkspacePath(nextWorkspaceId));
+      await requestNavigationAfterFlush(canvasWorkspacePath(nextWorkspaceId));
     },
-    [navigate],
+    [requestNavigationAfterFlush],
   );
 
   const handleCreateWorkspace = useCallback(
@@ -685,7 +784,10 @@ export function SpatialCanvasPage() {
 
       let deleted = false;
       try {
-        await saveChainsRef.current.get(targetWorkspaceId)?.catch(() => undefined);
+        await Promise.all([
+          saveChainsRef.current.get(targetWorkspaceId)?.catch(() => undefined),
+          flushRequestsRef.current.get(targetWorkspaceId)?.catch(() => undefined),
+        ]);
         deleted = await deleteCanvasWorkspace(targetWorkspaceId);
         if (!deleted) throw new Error("白板不存在或已被删除");
         clearCanvasNoteDraftsForWorkspace(targetWorkspaceId);
@@ -693,6 +795,7 @@ export function SpatialCanvasPage() {
         latestDocumentsRef.current.delete(targetWorkspaceId);
         lastPersistedRef.current.delete(targetWorkspaceId);
         saveChainsRef.current.delete(targetWorkspaceId);
+        flushRequestsRef.current.delete(targetWorkspaceId);
         historyByWorkspaceRef.current.delete(targetWorkspaceId);
         for (const ingressKey of inFlightIngressRef.current) {
           if (ingressKey.startsWith(`${targetWorkspaceId}:`)) {
@@ -981,8 +1084,14 @@ export function SpatialCanvasPage() {
           onDeleteWorkspace={handleDeleteWorkspace}
           onSelectWorkspace={handleSelectWorkspace}
           onRenameWorkspace={handleRenameWorkspace}
-          onExit={() => navigate("/library")}
-          onOpenPaper={(workId) => navigate(`/reader?work=${encodeURIComponent(workId)}`)}
+          onExit={() => {
+            void requestNavigationAfterFlush("/library").catch(() => undefined);
+          }}
+          onOpenPaper={(workId) => {
+            void requestNavigationAfterFlush(`/reader?work=${encodeURIComponent(workId)}`).catch(
+              () => undefined,
+            );
+          }}
           onOpenExcerpt={(workId, annotationId, pageIndex, attachmentId) => {
             const annotationSuffix = annotationId
               ? `&annotation=${encodeURIComponent(annotationId)}`
@@ -991,9 +1100,9 @@ export function SpatialCanvasPage() {
             const attachmentSuffix = attachmentId
               ? `&attachment=${encodeURIComponent(attachmentId)}`
               : "";
-            navigate(
+            void requestNavigationAfterFlush(
               `/reader?work=${encodeURIComponent(workId)}&tab=annotations${annotationSuffix}${pageSuffix}${attachmentSuffix}`,
-            );
+            ).catch(() => undefined);
           }}
         />
       </main>

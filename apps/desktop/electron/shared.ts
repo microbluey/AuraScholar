@@ -24,6 +24,9 @@ export const CH = {
   dbExec: "db:exec",
   dbScalar: "db:scalar",
 
+  appCloseHold: "app:close:hold",
+  appCloseRespond: "app:close:respond",
+
   researchOpen: "research:open",
   researchSetProxy: "research:setProxy",
   researchActivate: "research:activate",
@@ -44,11 +47,26 @@ export const CH = {
 
 // Events emitted main → renderer (via webContents.send).
 export const EV = {
+  lifecycleCloseRequested: "lifecycle://close-requested",
+  lifecycleCloseCancelled: "lifecycle://close-cancelled",
   researchDownloadStarted: "research://download-started",
   researchDownloadFinished: "research://download-finished",
   researchLoaded: "research://loaded",
   researchTabsChanged: "research://tabs-changed",
 } as const;
+
+export type AppCloseIntent = "window" | "quit";
+export type AppCloseDecision = "ready" | "cancel" | "force";
+
+export interface AppCloseRequest {
+  requestId: string;
+  intent: AppCloseIntent;
+}
+
+export interface AppCloseResponse {
+  requestId: string;
+  decision: AppCloseDecision;
+}
 
 export interface HttpRequestDTO {
   requestId?: string;

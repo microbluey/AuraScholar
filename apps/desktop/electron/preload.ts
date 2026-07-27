@@ -3,6 +3,7 @@ import { describeSafeError } from "@aurascholar/platform";
 import {
   CH,
   EV,
+  type AppCloseRequest,
   type Bounds,
   type CaptureResult,
   type DownloadFinishedPayload,
@@ -10,6 +11,34 @@ import {
   type HttpResultDTO,
   type ResearchTab,
 } from "./shared";
+import {
+  AppCloseRequestCoordinator,
+  type AppCloseRequestCallback,
+} from "./preload/close-lifecycle";
+
+const appCloseRequestCoordinator = new AppCloseRequestCoordinator((response) =>
+  ipcRenderer.invoke(CH.appCloseRespond, response),
+);
+const appCloseCancelledCallbacks = new Set<(request: AppCloseRequest) => void>();
+
+ipcRenderer.on(EV.lifecycleCloseRequested, (_event, value: unknown) => {
+  const request = parseAppCloseRequest(value);
+  if (!request) return;
+  appCloseRequestCoordinator.receive(request);
+});
+
+ipcRenderer.on(EV.lifecycleCloseCancelled, (_event, value: unknown) => {
+  const request = parseAppCloseRequest(value);
+  if (!request) return;
+  appCloseRequestCoordinator.cancel(request.requestId);
+  for (const callback of appCloseCancelledCallbacks) {
+    try {
+      callback(request);
+    } catch {
+      // A lifecycle observer must not keep later observers from unlocking.
+    }
+  }
+});
 
 // The single, whitelisted surface the renderer may touch. No nodeIntegration;
 // everything funnels through these typed calls.
@@ -68,6 +97,20 @@ const api = {
   },
   deviceId(): Promise<string> {
     return ipcRenderer.invoke(CH.deviceId);
+  },
+  lifecycle: {
+    holdClose(requestId: string): Promise<boolean> {
+      return ipcRenderer.invoke(CH.appCloseHold, requestId);
+    },
+    onCloseRequested(callback: AppCloseRequestCallback): () => void {
+      return appCloseRequestCoordinator.subscribe(callback);
+    },
+    onCloseCancelled(callback: (request: AppCloseRequest) => void): () => void {
+      appCloseCancelledCallbacks.add(callback);
+      return () => {
+        appCloseCancelledCallbacks.delete(callback);
+      };
+    },
   },
   db: {
     query<T>(sql: string, params: unknown[]): Promise<T[]> {
@@ -158,3 +201,16 @@ const api = {
 contextBridge.exposeInMainWorld("aura", api);
 
 export type AuraApi = typeof api;
+
+function parseAppCloseRequest(value: unknown): AppCloseRequest | null {
+  if (!isRecord(value)) return null;
+  const requestId = value.requestId;
+  const intent = value.intent;
+  if (typeof requestId !== "string" || requestId.trim() === "") return null;
+  if (intent !== "window" && intent !== "quit") return null;
+  return { intent, requestId };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
