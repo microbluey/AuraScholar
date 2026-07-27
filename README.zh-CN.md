@@ -108,6 +108,8 @@ packages/
 
 桌面壳采用 Electron。共享且平台无关的领域逻辑位于 `packages/`,Electron 专属编排与 UI 位于 `apps/desktop/`。Electron 主进程提供 SQLite / 无 CORS HTTP / 文件系统 / 通知 / 内置浏览器,经 preload 的 `window.aura` 桥接给渲染进程。架构详见 [apps/desktop/README.md](./apps/desktop/README.md)。
 
+本地优先研究语料、混合检索、可信 RAG 与写作联动的拟议架构独立记录在[研究知识层 RFC](./docs/KNOWLEDGE_LAYER_RFC.md)中。这些能力仍处于规划阶段,尚不属于上文列出的已实现功能。
+
 ## 开发
 
 ```bash
