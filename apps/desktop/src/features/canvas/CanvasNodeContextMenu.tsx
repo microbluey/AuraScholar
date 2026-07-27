@@ -13,8 +13,10 @@ import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { CanvasMenuPoint } from "./canvas-interactions";
 
 interface CanvasNodeContextMenuProps {
+  arrangeSelectionHint: string;
   canArrangeSelection: boolean;
   canGroupSelection: boolean;
+  hasMultipleSelection: boolean;
   node: CanvasNode;
   onActivate: (node: CanvasNode) => void;
   onClose: (restoreFocus: boolean) => void;
@@ -33,14 +35,18 @@ function MenuAction({
   action,
   children,
   danger = false,
+  disabled = false,
   icon,
   onSelect,
+  title,
 }: {
   action: string;
   children: ReactNode;
   danger?: boolean;
+  disabled?: boolean;
   icon: ReactNode;
   onSelect: () => void;
+  title?: string;
 }) {
   return (
     <button
@@ -48,7 +54,9 @@ function MenuAction({
       role="menuitem"
       className={danger ? "canvas-node-menu__danger" : undefined}
       data-canvas-node-action={action}
+      disabled={disabled}
       onClick={onSelect}
+      title={title}
     >
       {icon}
       <span>{children}</span>
@@ -57,8 +65,10 @@ function MenuAction({
 }
 
 export function CanvasNodeContextMenu({
+  arrangeSelectionHint,
   canArrangeSelection,
   canGroupSelection,
+  hasMultipleSelection,
   node,
   onActivate,
   onClose,
@@ -187,13 +197,15 @@ export function CanvasNodeContextMenu({
         </MenuAction>
       )}
 
-      {canArrangeSelection && (
+      {hasMultipleSelection && (
         <MenuAction
           action="arrange"
+          disabled={!canArrangeSelection}
           icon={<TreeStructure size={17} weight="duotone" />}
           onSelect={() => run(onOpenLayoutMenu)}
+          title={canArrangeSelection ? "整理所选卡片" : arrangeSelectionHint}
         >
-          整理所选文献…
+          整理所选卡片…
         </MenuAction>
       )}
 

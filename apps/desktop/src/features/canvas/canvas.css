@@ -2057,11 +2057,39 @@
   transform: none;
 }
 
+.canvas-selection-toolbar__menu--layout {
+  width: 266px;
+}
+
+.canvas-selection-toolbar__menu-section-label {
+  margin: 3px 9px 0;
+  padding: 7px 1px 3px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-faint);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .canvas-selection-toolbar__menu button:hover,
 .canvas-selection-toolbar__menu button:focus-visible {
   outline: none;
   background: var(--color-accent-subtle);
   color: var(--color-accent-strong);
+}
+
+.canvas-selection-toolbar__menu button:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.canvas-selection-toolbar__menu button[aria-busy="true"]:disabled {
+  cursor: wait;
+}
+
+.canvas-selection-toolbar__spinner {
+  animation: canvas-spin 900ms linear infinite;
 }
 
 .canvas-selection-toolbar__menu button > svg {
@@ -2476,15 +2504,20 @@
   color: var(--color-text-muted);
 }
 
-.canvas-node-menu button:hover,
+.canvas-node-menu button:hover:not(:disabled),
 .canvas-node-menu button:focus-visible {
   background: var(--color-accent-subtle);
   color: var(--color-accent-strong);
 }
 
-.canvas-node-menu button:hover svg,
+.canvas-node-menu button:hover:not(:disabled) svg,
 .canvas-node-menu button:focus-visible svg {
   color: currentColor;
+}
+
+.canvas-node-menu button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .canvas-node-menu .canvas-node-menu__danger {

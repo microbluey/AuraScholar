@@ -2,7 +2,9 @@ import type { AISynthesisType, CanvasLayoutMode } from "@aurascholar/core";
 import {
   BoundingBox,
   CalendarDots,
+  CircleNotch,
   DotsThree,
+  GridFour,
   Sparkle,
   TreeStructure,
 } from "@phosphor-icons/react";
@@ -29,10 +31,14 @@ export interface CanvasSelectionMoreAction {
 
 export interface CanvasSelectionToolbarProps {
   canCitationLayout: boolean;
+  citationLayoutBusy: boolean;
+  citationLayoutHint: string;
   canGroup: boolean;
   canLayout: boolean;
+  canTimelineLayout: boolean;
   canSynthesize: boolean;
   className?: string;
+  layoutHint: string;
   moreActions?: readonly CanvasSelectionMoreAction[];
   onGroup: () => void;
   onLayout: (mode: CanvasLayoutMode) => void;
@@ -40,6 +46,7 @@ export interface CanvasSelectionToolbarProps {
   selectedCount: number;
   style?: CSSProperties;
   synthesisHint?: string;
+  timelineLayoutHint: string;
 }
 
 function joinClassNames(...classNames: Array<string | false | null | undefined>): string {
@@ -48,10 +55,14 @@ function joinClassNames(...classNames: Array<string | false | null | undefined>)
 
 export function CanvasSelectionToolbar({
   canCitationLayout,
+  citationLayoutBusy,
+  citationLayoutHint,
   canGroup,
   canLayout,
+  canTimelineLayout,
   canSynthesize,
   className,
+  layoutHint,
   moreActions = [],
   onGroup,
   onLayout,
@@ -59,13 +70,13 @@ export function CanvasSelectionToolbar({
   selectedCount,
   style,
   synthesisHint = "使用所选来源生成 AI 合成卡片",
+  timelineLayoutHint,
 }: CanvasSelectionToolbarProps) {
   const [openMenu, setOpenMenu] = useState<SelectionMenu | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const menuIdPrefix = useId();
   const hasMoreActions = moreActions.length > 0;
-  const hasContextualAction = canGroup || canLayout || canSynthesize || hasMoreActions;
 
   useEffect(() => {
     if (!openMenu) return;
@@ -99,7 +110,7 @@ export function CanvasSelectionToolbar({
     };
   }, [openMenu]);
 
-  if (selectedCount < 2 || !hasContextualAction) return null;
+  if (selectedCount < 2) return null;
 
   const toggleMenu = (menu: SelectionMenu, trigger: HTMLButtonElement) => {
     menuTriggerRef.current = trigger;
@@ -118,6 +129,8 @@ export function CanvasSelectionToolbar({
       role="toolbar"
       aria-label={`已选择 ${selectedCount} 张卡片的操作`}
       style={style}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
     >
       <output className="canvas-selection-toolbar__count" aria-live="polite">
         已选 {selectedCount}
@@ -135,60 +148,82 @@ export function CanvasSelectionToolbar({
         </button>
       )}
 
-      {canLayout && (
-        <div className="canvas-selection-toolbar__action">
-          <button
-            className={joinClassNames(
-              "canvas-selection-toolbar__button",
-              openMenu === "layout" && "canvas-selection-toolbar__button--active",
-            )}
-            type="button"
-            data-canvas-selection-layout-trigger="true"
-            aria-haspopup="menu"
-            aria-expanded={openMenu === "layout"}
-            aria-controls={`${menuIdPrefix}-layout`}
-            onClick={(event) => toggleMenu("layout", event.currentTarget)}
-            title="整理所选文献"
-          >
-            <TreeStructure size={18} weight="duotone" />
-            <span>整理</span>
-          </button>
-          {openMenu === "layout" && (
-            <div
-              id={`${menuIdPrefix}-layout`}
-              className="canvas-selection-toolbar__menu canvas-selection-toolbar__menu--layout"
-              data-selection-menu="layout"
-              role="menu"
-              aria-label="选择整理方式"
-            >
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => runAction(() => onLayout("timeline"))}
-              >
-                <CalendarDots size={17} weight="duotone" />
-                <span>
-                  <strong>按发表年份排列</strong>
-                  <small>从早到晚生成时间轴</small>
-                </span>
-              </button>
-              {canCitationLayout && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => runAction(() => onLayout("citation-tree"))}
-                >
-                  <TreeStructure size={17} weight="duotone" />
-                  <span>
-                    <strong>按引用树排列</strong>
-                    <small>被引在左，衍生在右</small>
-                  </span>
-                </button>
-              )}
-            </div>
+      <div className="canvas-selection-toolbar__action">
+        <button
+          className={joinClassNames(
+            "canvas-selection-toolbar__button",
+            openMenu === "layout" && "canvas-selection-toolbar__button--active",
           )}
-        </div>
-      )}
+          type="button"
+          data-canvas-selection-layout-trigger="true"
+          aria-haspopup="menu"
+          aria-expanded={openMenu === "layout"}
+          aria-controls={`${menuIdPrefix}-layout`}
+          onClick={(event) => toggleMenu("layout", event.currentTarget)}
+          title={canLayout ? "整理所选卡片" : layoutHint}
+        >
+          <TreeStructure size={18} weight="duotone" />
+          <span>整理</span>
+        </button>
+        {openMenu === "layout" && (
+          <div
+            id={`${menuIdPrefix}-layout`}
+            className="canvas-selection-toolbar__menu canvas-selection-toolbar__menu--layout"
+            data-selection-menu="layout"
+            role="menu"
+            aria-label="选择整理方式"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canLayout}
+              onClick={() => runAction(() => onLayout("compact-grid"))}
+            >
+              <GridFour size={17} weight="duotone" />
+              <span>
+                <strong>整齐排列</strong>
+                <small>{canLayout ? "按当前阅读顺序收紧为网格" : layoutHint}</small>
+              </span>
+            </button>
+            <div className="canvas-selection-toolbar__menu-section-label" aria-hidden="true">
+              文献专用
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!canTimelineLayout}
+              onClick={() => runAction(() => onLayout("timeline"))}
+            >
+              <CalendarDots size={17} weight="duotone" />
+              <span>
+                <strong>按发表年份排列</strong>
+                <small>{timelineLayoutHint}</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              aria-busy={citationLayoutBusy || undefined}
+              disabled={!canCitationLayout || citationLayoutBusy}
+              onClick={() => runAction(() => onLayout("citation-tree"))}
+            >
+              {citationLayoutBusy ? (
+                <CircleNotch
+                  className="canvas-selection-toolbar__spinner"
+                  size={17}
+                  weight="bold"
+                />
+              ) : (
+                <TreeStructure size={17} weight="duotone" />
+              )}
+              <span>
+                <strong>{citationLayoutBusy ? "正在读取引文关系…" : "按引用树排列"}</strong>
+                <small>{canCitationLayout ? citationLayoutHint : timelineLayoutHint}</small>
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {canSynthesize && (
         <div className="canvas-selection-toolbar__action">

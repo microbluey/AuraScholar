@@ -1,8 +1,10 @@
 import {
   CANVAS_SCHEMA_VERSION,
+  type AISynthNode,
   type CanvasEdge,
   type CanvasNode,
   type CanvasWorkspaceDocument,
+  type ExcerptNode,
   type GroupNode,
   type IdeaNoteNode,
   type PaperNode,
@@ -10,6 +12,8 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   applyCanvasLayout,
+  CANVAS_COMPACT_GRID_HORIZONTAL_GAP,
+  CANVAS_COMPACT_GRID_VERTICAL_GAP,
   CANVAS_GROUP_LAYOUT_PADDING,
   CANVAS_TIMELINE_HORIZONTAL_GAP,
   planCanvasLayout,
@@ -55,16 +59,66 @@ function group(id: string, collapsed = false, overrides: Partial<GroupNode> = {}
   };
 }
 
-function note(id: string): IdeaNoteNode {
+function note(id: string, x = 0, y = 0, overrides: Partial<IdeaNoteNode> = {}): IdeaNoteNode {
   return {
     id,
     type: "idea-note",
-    position: { x: 0, y: 0 },
+    position: { x, y },
     dimensions: { width: 180, height: 100 },
     tags: [],
     createdAt: 1,
     updatedAt: 1,
     data: { title: id, contentMarkdown: "", hasEquations: false },
+    ...overrides,
+  };
+}
+
+function excerpt(
+  id: string,
+  x: number,
+  y: number,
+  overrides: Partial<ExcerptNode> = {},
+): ExcerptNode {
+  return {
+    id,
+    type: "excerpt",
+    position: { x, y },
+    dimensions: { width: 260, height: 110 },
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
+    data: {
+      workId: `work-${id}`,
+      paperTitle: id,
+      highlightText: id,
+      highlightColor: "yellow",
+      pageIndex: 0,
+    },
+    ...overrides,
+  };
+}
+
+function synthesis(
+  id: string,
+  x: number,
+  y: number,
+  overrides: Partial<AISynthNode> = {},
+): AISynthNode {
+  return {
+    id,
+    type: "ai-synth",
+    position: { x, y },
+    dimensions: { width: 300, height: 180 },
+    tags: [],
+    createdAt: 1,
+    updatedAt: 1,
+    data: {
+      sourceNodeIds: [],
+      synthType: "tldr",
+      title: id,
+      contentMarkdown: "",
+    },
+    ...overrides,
   };
 }
 
@@ -106,6 +160,146 @@ function positions(
 }
 
 describe("canvas automatic layout", () => {
+  it("packs mixed cards into a deterministic variable-size grid without overlap", () => {
+    const idea = note("idea", 400, 100, { dimensions: { width: 180, height: 140 } });
+    const quote = excerpt("quote", 700, 100);
+    const source = paper("source", 2024, 100, 400, {
+      dimensions: { width: 220, height: 120 },
+    });
+    const summary = synthesis("summary", 500, 450);
+    const document = workspace(
+      [summary, source, quote, idea],
+      [edge("preserved", source.id, quote.id, "custom")],
+    );
+
+    const plan = planCanvasLayout(
+      document,
+      new Set([summary.id, source.id, quote.id, idea.id]),
+      "compact-grid",
+    );
+    const result = positions(plan);
+    expect(result.get(idea.id)).toEqual({ x: 100, y: 100 });
+    expect(result.get(quote.id)).toEqual({
+      x: 100 + source.dimensions.width + CANVAS_COMPACT_GRID_HORIZONTAL_GAP,
+      y: 100,
+    });
+    expect(result.get(source.id)).toEqual({
+      x: 100,
+      y: 100 + idea.dimensions.height + CANVAS_COMPACT_GRID_VERTICAL_GAP,
+    });
+    expect(result.get(summary.id)).toEqual({
+      x: 100 + source.dimensions.width + CANVAS_COMPACT_GRID_HORIZONTAL_GAP,
+      y: 100 + idea.dimensions.height + CANVAS_COMPACT_GRID_VERTICAL_GAP,
+    });
+
+    if (plan.status !== "success") return;
+    const applied = applyCanvasLayout(document, plan, 500);
+    expect(applied.edges).toBe(document.edges);
+    expect(applied.viewport).toBe(document.viewport);
+    expect(applied.nodes.map((node) => node.type)).toEqual(document.nodes.map((node) => node.type));
+  });
+
+  it("keeps left-to-right reading order when cards in one visual row differ by a pixel", () => {
+    const right = note("right", 400, 100);
+    const left = paper("left", 2024, 100, 101);
+    const document = workspace([right, left]);
+
+    const result = positions(
+      planCanvasLayout(document, new Set([right.id, left.id]), "compact-grid"),
+    );
+    expect(result.get(left.id)).toEqual({ x: 100, y: 100 });
+    expect(result.get(right.id)).toEqual({
+      x: 100 + left.dimensions.width + CANVAS_COMPACT_GRID_HORIZONTAL_GAP,
+      y: 100,
+    });
+  });
+
+  it("arranges mixed cards inside an expanded group and grows the group only as needed", () => {
+    const parent = group("mixed-group", false, {
+      dimensions: { width: 300, height: 200 },
+    });
+    const idea = note("grouped-idea", 40, 20, { groupId: parent.id });
+    const quote = excerpt("grouped-quote", 100, 100, { groupId: parent.id });
+    const source = paper("grouped-source", 2024, 80, 240, { groupId: parent.id });
+    const document = workspace([parent, idea, quote, source]);
+
+    const plan = planCanvasLayout(
+      document,
+      new Set([idea.id, quote.id, source.id]),
+      "compact-grid",
+    );
+    expect(plan.status).toBe("success");
+    if (plan.status !== "success") return;
+    expect(plan.parentGroupId).toBe(parent.id);
+    expect(plan.groupResize?.dimensions.width).toBe(
+      40 +
+        Math.max(idea.dimensions.width, source.dimensions.width) +
+        CANVAS_COMPACT_GRID_HORIZONTAL_GAP +
+        quote.dimensions.width +
+        CANVAS_GROUP_LAYOUT_PADDING,
+    );
+    expect(plan.groupResize?.dimensions.height).toBe(
+      20 +
+        Math.max(idea.dimensions.height, quote.dimensions.height) +
+        CANVAS_COMPACT_GRID_VERTICAL_GAP +
+        source.dimensions.height +
+        CANVAS_GROUP_LAYOUT_PADDING,
+    );
+
+    const resizedParent = {
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === parent.id
+          ? {
+              ...node,
+              dimensions: { width: node.dimensions.width + 20, height: node.dimensions.height },
+            }
+          : node,
+      ),
+    };
+    expect(applyCanvasLayout(resizedParent, plan, 600)).toBe(resizedParent);
+
+    const applied = applyCanvasLayout(document, plan, 600);
+    expect(applied.nodes.find((node) => node.id === idea.id)?.groupId).toBe(parent.id);
+    expect(applied.nodes.find((node) => node.id === quote.id)?.groupId).toBe(parent.id);
+    expect(applied.nodes.find((node) => node.id === source.id)?.groupId).toBe(parent.id);
+    expect(applied.nodes.find((node) => node.id === source.id)?.position.y).toBe(
+      20 +
+        Math.max(idea.dimensions.height, quote.dimensions.height) +
+        CANVAS_COMPACT_GRID_VERTICAL_GAP,
+    );
+    expect(applied.nodes.find((node) => node.id === parent.id)?.dimensions).toEqual(
+      plan.groupResize?.dimensions,
+    );
+  });
+
+  it("treats a selected group as one card and does not move its selected descendants twice", () => {
+    const parent = group("atomic-group", false, {
+      position: { x: 500, y: 300 },
+      dimensions: { width: 360, height: 260 },
+    });
+    const child = note("selected-child", 30, 40, { groupId: parent.id });
+    const root = paper("root-card", 2024, 100, 100);
+    const document = workspace([parent, child, root]);
+
+    const plan = planCanvasLayout(
+      document,
+      new Set([parent.id, child.id, root.id]),
+      "compact-grid",
+    );
+    expect(plan.status).toBe("success");
+    if (plan.status !== "success") return;
+    expect(plan.nodePositions.map((position) => position.nodeId).sort()).toEqual(
+      [parent.id, root.id].sort(),
+    );
+
+    const applied = applyCanvasLayout(document, plan, 700);
+    expect(applied.nodes.find((node) => node.id === child.id)).toBe(child);
+    expect(applied.nodes.find((node) => node.id === parent.id)?.position).not.toEqual(
+      parent.position,
+    );
+  });
+
   it("orders a timeline by year with unknown years last and preserves the selection anchor", () => {
     const oldest = paper("oldest", 2020, 500, 300, {
       dimensions: { width: 250, height: 120 },
@@ -166,6 +360,80 @@ describe("canvas automatic layout", () => {
     expect(result.get("b")!.x).toBeLessThan(result.get("d")!.x);
     expect(result.get("a")!.x).toBe(result.get("d")!.x);
     expect(result.get("a")!.y).not.toBe(result.get("d")!.y);
+  });
+
+  it("maps transient work citations in the citing-to-cited direction without adding edges", () => {
+    const citing = paper("citing", 2024, 500, 100);
+    const cited = paper("cited", 2020, 100, 200);
+    const document = workspace([citing, cited]);
+    const originalNodes = document.nodes;
+    const originalEdges = document.edges;
+
+    const plan = planCanvasLayout(document, new Set(["citing", "cited"]), "citation-tree", [
+      { citingWorkId: citing.data.workId, citedWorkId: cited.data.workId },
+    ]);
+    const result = positions(plan);
+
+    expect(result.get("cited")!.x).toBeLessThan(result.get("citing")!.x);
+    expect(document.nodes).toBe(originalNodes);
+    expect(document.edges).toBe(originalEdges);
+    expect(document.edges).toHaveLength(0);
+  });
+
+  it("merges and deduplicates persisted and transient citation relations", () => {
+    const a = paper("a", 2024, 600, 100);
+    const b = paper("b", 2022, 350, 200);
+    const c = paper("c", 2020, 100, 300);
+    const document = workspace([a, b, c], [edge("a-cites-b", "a", "b")]);
+    const uniquePlan = planCanvasLayout(document, new Set(["a", "b", "c"]), "citation-tree", [
+      { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+    ]);
+    const duplicatePlan = planCanvasLayout(document, new Set(["a", "b", "c"]), "citation-tree", [
+      { citingWorkId: a.data.workId, citedWorkId: b.data.workId },
+      { citingWorkId: a.data.workId, citedWorkId: b.data.workId },
+      { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+      { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+    ]);
+
+    expect(duplicatePlan).toEqual(uniquePlan);
+    const result = positions(duplicatePlan);
+    expect(result.get("c")!.x).toBeLessThan(result.get("b")!.x);
+    expect(result.get("b")!.x).toBeLessThan(result.get("a")!.x);
+  });
+
+  it("condenses cycles supplied through transient work citations", () => {
+    const a = paper("a", 2024, 700, 300);
+    const b = paper("b", 2023, 600, 100);
+    const c = paper("c", 2020, 100, 200);
+    const document = workspace([a, b, c]);
+
+    const result = positions(
+      planCanvasLayout(document, new Set(["a", "b", "c"]), "citation-tree", [
+        { citingWorkId: a.data.workId, citedWorkId: b.data.workId },
+        { citingWorkId: b.data.workId, citedWorkId: a.data.workId },
+        { citingWorkId: b.data.workId, citedWorkId: c.data.workId },
+      ]),
+    );
+
+    expect(result.get("c")!.x).toBeLessThan(result.get("a")!.x);
+    expect(result.get("a")!.x).toBe(result.get("b")!.x);
+    expect(Math.abs(result.get("a")!.y - result.get("b")!.y)).toBeGreaterThanOrEqual(
+      a.dimensions.height,
+    );
+  });
+
+  it("ignores unmatched and self-referential transient work citations", () => {
+    const a = paper("a", 2024, 500, 100);
+    const b = paper("b", 2020, 100, 200);
+    const document = workspace([a, b]);
+
+    expect(
+      planCanvasLayout(document, new Set(["a", "b"]), "citation-tree", [
+        { citingWorkId: a.data.workId, citedWorkId: a.data.workId },
+        { citingWorkId: a.data.workId, citedWorkId: "work-not-selected" },
+        { citingWorkId: "work-missing", citedWorkId: b.data.workId },
+      ]),
+    ).toMatchObject({ status: "error", reason: "no-citation-edges" });
   });
 
   it("condenses citation cycles into one stable column without overlapping cards", () => {
@@ -253,6 +521,10 @@ describe("canvas automatic layout", () => {
       status: "error",
       reason: "mixed-parent",
     });
+    expect(planCanvasLayout(document, new Set(["root", "grouped"]), "compact-grid")).toMatchObject({
+      status: "error",
+      reason: "mixed-parent",
+    });
     expect(
       planCanvasLayout(
         document,
@@ -293,5 +565,55 @@ describe("canvas automatic layout", () => {
     const target = { ...source, workspaceId: "workspace-other" };
 
     expect(applyCanvasLayout(target, plan, 900)).toBe(target);
+  });
+
+  it("rejects a compact-grid plan when a selected card changes type before apply", () => {
+    const source = workspace([paper("paper", 2024, 300, 0), note("note", 0, 0)]);
+    const plan = planCanvasLayout(source, new Set(["paper", "note"]), "compact-grid");
+    expect(plan.status).toBe("success");
+    if (plan.status !== "success") return;
+    const changed = workspace([source.nodes[0]!, paper("note", 2023, 0, 0)]);
+
+    expect(applyCanvasLayout(changed, plan, 900)).toBe(changed);
+  });
+
+  it("rejects a compact-grid plan when selected card geometry changes before apply", () => {
+    const source = workspace([paper("paper", 2024, 300, 0), note("note", 0, 0)]);
+    const plan = planCanvasLayout(source, new Set(["paper", "note"]), "compact-grid");
+    expect(plan.status).toBe("success");
+    if (plan.status !== "success") return;
+
+    const moved = {
+      ...source,
+      nodes: source.nodes.map((node) =>
+        node.id === "note" ? { ...node, position: { x: 40, y: 20 } } : node,
+      ),
+    };
+    expect(applyCanvasLayout(moved, plan, 900)).toBe(moved);
+
+    const resized = {
+      ...source,
+      nodes: source.nodes.map((node) =>
+        node.id === "note"
+          ? { ...node, dimensions: { width: node.dimensions.width + 20, height: 100 } }
+          : node,
+      ),
+    };
+    expect(applyCanvasLayout(resized, plan, 900)).toBe(resized);
+  });
+
+  it("rejects a compact-grid plan when selected card content changes before apply", () => {
+    const source = workspace([paper("paper", 2024, 300, 0), note("note", 0, 0)]);
+    const plan = planCanvasLayout(source, new Set(["paper", "note"]), "compact-grid");
+    expect(plan.status).toBe("success");
+    if (plan.status !== "success") return;
+    const edited = {
+      ...source,
+      nodes: source.nodes.map((node) =>
+        node.id === "note" ? { ...node, updatedAt: node.updatedAt + 1 } : node,
+      ),
+    };
+
+    expect(applyCanvasLayout(edited, plan, 900)).toBe(edited);
   });
 });

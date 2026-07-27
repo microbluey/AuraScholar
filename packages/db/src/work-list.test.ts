@@ -6,6 +6,7 @@ import { TagsRepo } from "./repos/tags";
 import { WorksRepo } from "./repos/works";
 import {
   citationCountsForWorks,
+  citationRelationsForWorks,
   listDeletedWorks,
   listWorks,
   parseWorkMetadataSearch,
@@ -193,6 +194,101 @@ describe("work-list lightweight queries", () => {
     expect(counts.get(activeReference.id)).toEqual({ references: 0, citedBy: 1 });
     expect(counts.get(activeCiter.id)).toEqual({ references: 1, citedBy: 0 });
     expect(counts.get(removed.id)).toEqual({ references: 0, citedBy: 0 });
+  });
+
+  it("lists only selected active citation endpoints while preserving citing to cited direction", async () => {
+    const first = await works.upsert({ title: "First Selected Paper", year: 2022 });
+    const second = await works.upsert({ title: "Second Selected Paper", year: 2023 });
+    const third = await works.upsert({ title: "Third Selected Paper", year: 2024 });
+    const removed = await works.upsert({ title: "Removed Selected Paper", year: 2021 });
+    const outside = await works.upsert({ title: "Outside Paper", year: 2020 });
+
+    for (const [citingWorkId, citedWorkId] of [
+      [first.id, second.id],
+      [second.id, first.id],
+      [third.id, first.id],
+      [first.id, removed.id],
+      [removed.id, second.id],
+      [first.id, outside.id],
+      [outside.id, first.id],
+      [second.id, second.id],
+    ]) {
+      await db.run(
+        `INSERT INTO citations (citing_work_id, cited_work_id, source)
+         VALUES (?, ?, 'openalex')`,
+        [citingWorkId, citedWorkId],
+      );
+    }
+    await works.softDelete(removed.id);
+
+    const relations = await citationRelationsForWorks(db, [
+      third.id,
+      second.id,
+      removed.id,
+      first.id,
+    ]);
+    const expected = [
+      { citingWorkId: first.id, citedWorkId: second.id },
+      { citingWorkId: second.id, citedWorkId: first.id },
+      { citingWorkId: third.id, citedWorkId: first.id },
+    ].sort(
+      (left, right) =>
+        (left.citingWorkId === right.citingWorkId
+          ? 0
+          : left.citingWorkId < right.citingWorkId
+            ? -1
+            : 1) ||
+        (left.citedWorkId === right.citedWorkId
+          ? 0
+          : left.citedWorkId < right.citedWorkId
+            ? -1
+            : 1),
+    );
+
+    expect(relations).toEqual(expected);
+  });
+
+  it("deduplicates repeated work ids and relation rows with deterministic ordering", async () => {
+    let queryParams: unknown[] | undefined;
+    const duplicateRowsDb: Database = {
+      exec: db.exec.bind(db),
+      queryScalar: db.queryScalar.bind(db),
+      run: db.run.bind(db),
+      async query<T>(_sql: string, params?: unknown[]): Promise<T[]> {
+        queryParams = params;
+        return [
+          { citingWorkId: "work-b", citedWorkId: "work-a" },
+          { citingWorkId: "work-a", citedWorkId: "work-b" },
+          { citingWorkId: "work-b", citedWorkId: "work-a" },
+          { citingWorkId: "work-a", citedWorkId: "work-a" },
+          { citingWorkId: "outside", citedWorkId: "work-a" },
+        ] as T[];
+      },
+    };
+
+    await expect(
+      citationRelationsForWorks(duplicateRowsDb, ["work-b", "work-a", "work-b"]),
+    ).resolves.toEqual([
+      { citingWorkId: "work-a", citedWorkId: "work-b" },
+      { citingWorkId: "work-b", citedWorkId: "work-a" },
+    ]);
+    expect(queryParams).toEqual(["work-b", "work-a", "work-b", "work-a"]);
+  });
+
+  it("returns an empty citation relation list without querying for an empty work set", async () => {
+    let queried = false;
+    const guardedDb: Database = {
+      exec: db.exec.bind(db),
+      queryScalar: db.queryScalar.bind(db),
+      run: db.run.bind(db),
+      async query<T>(): Promise<T[]> {
+        queried = true;
+        return [];
+      },
+    };
+
+    await expect(citationRelationsForWorks(guardedDb, [])).resolves.toEqual([]);
+    expect(queried).toBe(false);
   });
 
   it("keeps active and deleted lists separate", async () => {

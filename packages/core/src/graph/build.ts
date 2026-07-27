@@ -6,6 +6,7 @@ import {
   openalexById,
   openalexCitedBy,
   type ConnectorContext,
+  type ConnectorRequestOptions,
   type OpenAlexWork,
 } from "@aurascholar/connectors";
 
@@ -64,12 +65,13 @@ function toNode(w: OpenAlexWork, relation: GraphRelation): GraphNode {
  */
 export async function buildCitationGraph(
   ctx: ConnectorContext,
-  opts: { doi?: string; openalexId?: string },
+  input: { doi?: string; openalexId?: string },
+  opts?: ConnectorRequestOptions,
 ): Promise<CitationGraph | null> {
-  const center = opts.openalexId
-    ? await openalexById(ctx, opts.openalexId)
-    : opts.doi
-      ? await openalexByDoi(ctx, opts.doi)
+  const center = input.openalexId
+    ? await openalexById(ctx, input.openalexId, opts)
+    : input.doi
+      ? await openalexByDoi(ctx, input.doi, opts)
       : null;
   if (!center) return null;
 
@@ -81,7 +83,7 @@ export async function buildCitationGraph(
   // --- References (center cites them) ---
   const refIds = (center.referenced_works ?? []).map(shortId);
   const keptRefs = refIds.slice(0, MAX_REFERENCES);
-  const refs = await fetchWorksBatch(ctx, keptRefs);
+  const refs = await fetchWorksBatch(ctx, keptRefs, opts);
   for (const r of refs) {
     const id = shortId(r.id);
     if (!nodes.has(id)) nodes.set(id, toNode(r, "reference"));
@@ -89,7 +91,7 @@ export async function buildCitationGraph(
   }
 
   // --- Citers (they cite center) ---
-  const citers = await openalexCitedBy(ctx, centerId, MAX_CITERS);
+  const citers = await openalexCitedBy(ctx, centerId, MAX_CITERS, opts);
   for (const c of citers) {
     const id = shortId(c.id);
     if (!nodes.has(id)) nodes.set(id, toNode(c, "citer"));
@@ -128,7 +130,11 @@ export async function buildCitationGraph(
 }
 
 /** Batch-fetch works by id via the filter API (50 per request max). */
-async function fetchWorksBatch(ctx: ConnectorContext, ids: string[]): Promise<OpenAlexWork[]> {
+async function fetchWorksBatch(
+  ctx: ConnectorContext,
+  ids: string[],
+  opts?: ConnectorRequestOptions,
+): Promise<OpenAlexWork[]> {
   if (ids.length === 0) return [];
   const { getJson } = await import("@aurascholar/connectors");
   const out: OpenAlexWork[] = [];
@@ -137,6 +143,7 @@ async function fetchWorksBatch(ctx: ConnectorContext, ids: string[]): Promise<Op
     const data = await getJson<{ results: OpenAlexWork[] }>(
       ctx,
       `https://api.openalex.org/works?filter=openalex_id:${batch.join("|")}&per-page=50&mailto=${encodeURIComponent(ctx.mailto)}`,
+      opts,
     );
     out.push(...(data.results ?? []));
   }
