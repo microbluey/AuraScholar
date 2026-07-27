@@ -26,6 +26,7 @@ import { createPortal } from "react-dom";
 import { useBlocker } from "react-router-dom";
 import { useModalFocusTrap } from "../../components/useModalFocusTrap";
 import { isImeComposing } from "../../keyboard";
+import { registerExitBarrier } from "../../services/exit-barriers";
 import { CanvasMarkdown } from "./CanvasMarkdown";
 import {
   canvasNoteDraftSourceToken,
@@ -155,6 +156,7 @@ export function CanvasNoteEditorDialog({
   );
   const unresolvedConflictRef = useRef(initialDraftRead.status === "conflict");
   const savingRef = useRef(false);
+  const composingRef = useRef(false);
   const titleId = useId();
   const descriptionId = useId();
   const dirty =
@@ -326,14 +328,14 @@ export function CanvasNoteEditorDialog({
     if (blocker.state === "blocked") blocker.reset();
   };
 
-  const finishClose = () => {
+  const finishClose = useCallback(() => {
     if (blocker.state === "blocked") {
       blocker.proceed();
       onClose();
       return;
     }
     onClose();
-  };
+  }, [blocker, onClose]);
 
   const discardAndClose = () => {
     if (savingRef.current || unresolvedConflictRef.current) return;
@@ -353,8 +355,8 @@ export function CanvasNoteEditorDialog({
     finishClose();
   };
 
-  const save = async () => {
-    if (savingRef.current || unresolvedConflictRef.current) return;
+  const save = useCallback(async (): Promise<CanvasNoteEditorCommitResult> => {
+    if (savingRef.current || unresolvedConflictRef.current) return "rejected";
     flushCurrentDraft();
     const submittedValue = { ...currentValueRef.current };
     const submittedRevision = editRevisionRef.current;
@@ -385,16 +387,38 @@ export function CanvasNoteEditorDialog({
         setCommitError("保存期间检测到新的编辑；已保存上一版，并保留当前内容供你继续确认。");
         setClosePromptOpen(false);
         if (blocker.state === "blocked") blocker.reset();
-        return;
+        return "rejected";
       }
       setClosePromptOpen(false);
       finishClose();
-      return;
+      return result;
     }
     setCommitError("写入白板存储未完成或内容已变化，本地草稿仍保留；请核对后重试。");
     setClosePromptOpen(false);
     if (blocker.state === "blocked") blocker.reset();
-  };
+    return "rejected";
+  }, [blocker, finishClose, flushCurrentDraft, onCommit, resolveDraftTokens, writeDraftNow]);
+
+  useEffect(
+    () =>
+      registerExitBarrier(
+        async () => {
+          if (composingRef.current) {
+            flushCurrentDraft(false);
+            return "cancel";
+          }
+          if (!dirtyRef.current) return "ready";
+          if (savingRef.current || unresolvedConflictRef.current) {
+            flushCurrentDraft(false);
+            return "cancel";
+          }
+          const result = await save();
+          return result === "saved" || result === "unchanged" ? "ready" : "cancel";
+        },
+        { priority: 0 },
+      ),
+    [flushCurrentDraft, save],
+  );
 
   const formatSelection = (action: MarkdownFormatAction) => {
     if (savingRef.current || unresolvedConflictRef.current) return;
@@ -562,6 +586,12 @@ export function CanvasNoteEditorDialog({
                     contentMarkdown: currentValueRef.current.contentMarkdown,
                   })
                 }
+                onCompositionStart={() => {
+                  composingRef.current = true;
+                }}
+                onCompositionEnd={() => {
+                  composingRef.current = false;
+                }}
                 placeholder="给这条研究想法一个清晰标题"
                 readOnly={saving || conflictLocked}
               />
@@ -657,6 +687,12 @@ export function CanvasNoteEditorDialog({
                       contentMarkdown: event.target.value,
                     })
                   }
+                  onCompositionStart={() => {
+                    composingRef.current = true;
+                  }}
+                  onCompositionEnd={() => {
+                    composingRef.current = false;
+                  }}
                   placeholder="写下假设、证据、推理过程或下一步实验……"
                   readOnly={saving || conflictLocked}
                   spellCheck

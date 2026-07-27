@@ -1,11 +1,19 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { isImeComposing } from "../../keyboard";
+import { registerExitBarrier } from "../../services/exit-barriers";
 
 interface CanvasEdgeLabelEditorProps {
   initialValue: string;
   onCancel: () => void;
   onCommit: (value: string) => void;
   position: { x: number; y: number };
+}
+
+export function resolveCanvasEdgeLabelDraft(
+  inputValue: string | undefined,
+  fallbackValue: string,
+): string {
+  return (inputValue ?? fallbackValue).trim();
 }
 
 export function CanvasEdgeLabelEditor({
@@ -29,19 +37,35 @@ export function CanvasEdgeLabelEditor({
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
-  const settle = (action: "cancel" | "commit") => {
-    if (settledRef.current) return;
-    if (action === "commit" && composingRef.current) {
-      commitAfterCompositionRef.current = true;
-      return;
-    }
-    settledRef.current = true;
-    if (action === "cancel") {
-      onCancel();
-      return;
-    }
-    onCommit(value.trim());
-  };
+  const settle = useCallback(
+    (action: "cancel" | "commit") => {
+      if (settledRef.current) return;
+      if (action === "commit" && composingRef.current) {
+        commitAfterCompositionRef.current = true;
+        return;
+      }
+      settledRef.current = true;
+      if (action === "cancel") {
+        onCancel();
+        return;
+      }
+      onCommit(resolveCanvasEdgeLabelDraft(inputRef.current?.value, value));
+    },
+    [onCancel, onCommit, value],
+  );
+
+  useEffect(
+    () =>
+      registerExitBarrier(
+        () => {
+          if (composingRef.current) return "cancel";
+          settle("commit");
+          return "ready";
+        },
+        { priority: 0 },
+      ),
+    [settle],
+  );
 
   return (
     <form

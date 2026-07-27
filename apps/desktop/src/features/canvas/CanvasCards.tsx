@@ -12,8 +12,16 @@ import {
   Sparkle,
 } from "@phosphor-icons/react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { isImeComposing } from "../../keyboard";
+import { registerExitBarrier } from "../../services/exit-barriers";
 import { CanvasMarkdown } from "./CanvasMarkdown";
 import { isCanvasContextMenuShortcut } from "./canvas-interactions";
 import type { IdeaNotePatch } from "./idea-note-edit";
@@ -411,12 +419,12 @@ function IdeaNoteCardContent({
     return () => window.cancelAnimationFrame(frame);
   }, [editingField]);
 
-  const restoreTriggerFocus = (field: "content" | "title") => {
+  const restoreTriggerFocus = useCallback((field: "content" | "title") => {
     window.requestAnimationFrame(() => {
       const trigger = field === "title" ? titleTriggerRef.current : contentTriggerRef.current;
       trigger?.focus({ preventScroll: true });
     });
-  };
+  }, []);
 
   const beginEditing = (field: "content" | "title") => {
     if (field === "title") setTitleDraft(node.data.title || "");
@@ -427,28 +435,51 @@ function IdeaNoteCardContent({
     setEditingField(field);
   };
 
-  const commit = (field: "content" | "title", restoreFocus = false) => {
-    if (editingSessionRef.current !== field) return;
-    if (composingRef.current) {
-      pendingCompositionCommitRef.current = { field, restoreFocus };
-      return;
-    }
-    editingSessionRef.current = null;
-    pendingCompositionCommitRef.current = null;
-    if (field === "title") {
-      const value = titleInputRef.current?.value ?? titleDraft;
-      if (value.trim() !== (node.data.title || "")) {
-        data.onCommitIdeaNote(node.id, { title: value }, "title");
+  const commit = useCallback(
+    (field: "content" | "title", restoreFocus = false) => {
+      if (editingSessionRef.current !== field) return;
+      if (composingRef.current) {
+        pendingCompositionCommitRef.current = { field, restoreFocus };
+        return;
       }
-    } else {
-      const value = contentInputRef.current?.value ?? contentDraft;
-      if (value !== node.data.contentMarkdown) {
-        data.onCommitIdeaNote(node.id, { contentMarkdown: value }, "content");
+      editingSessionRef.current = null;
+      pendingCompositionCommitRef.current = null;
+      if (field === "title") {
+        const value = titleInputRef.current?.value ?? titleDraft;
+        if (value.trim() !== (node.data.title || "")) {
+          data.onCommitIdeaNote(node.id, { title: value }, "title");
+        }
+      } else {
+        const value = contentInputRef.current?.value ?? contentDraft;
+        if (value !== node.data.contentMarkdown) {
+          data.onCommitIdeaNote(node.id, { contentMarkdown: value }, "content");
+        }
       }
-    }
-    setEditingField(null);
-    if (restoreFocus) restoreTriggerFocus(field);
-  };
+      setEditingField(null);
+      if (restoreFocus) restoreTriggerFocus(field);
+    },
+    [
+      contentDraft,
+      data,
+      node.data.contentMarkdown,
+      node.data.title,
+      node.id,
+      restoreTriggerFocus,
+      titleDraft,
+    ],
+  );
+
+  useEffect(() => {
+    if (!editingField) return;
+    return registerExitBarrier(
+      () => {
+        if (composingRef.current) return "cancel";
+        commit(editingField);
+        return "ready";
+      },
+      { priority: 0 },
+    );
+  }, [commit, editingField]);
 
   const cancel = (field: "content" | "title", restoreFocus = false) => {
     if (editingSessionRef.current !== field) return;

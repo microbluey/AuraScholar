@@ -7,6 +7,17 @@ export interface CanvasWorkspaceLoadBarrier {
   targetWorkspaceId: string;
 }
 
+export interface CanvasWorkspaceCollectionBarrier {
+  flushWorkspace: (workspaceId: string) => Promise<void>;
+  workspaceIds: Iterable<string>;
+}
+
+export interface CanvasWorkspaceNavigationBarrier {
+  flushWorkspace: (workspaceId: string) => Promise<void>;
+  navigate: () => void;
+  workspaceId?: string;
+}
+
 export interface CanvasWorkspaceWriteBarrier {
   cancelPendingSave: () => void;
   getInFlightSave: () => Promise<void> | undefined;
@@ -67,6 +78,36 @@ export async function flushLatestCanvasWorkspace({
     if (!latest || getLastPersisted() === JSON.stringify(latest)) return;
     await persistDocument(latest);
   }
+}
+
+/**
+ * Flushes every live workspace without allowing one rejected write to leave
+ * another workspace running unnoticed in the background.
+ */
+export async function flushCanvasWorkspaceCollection({
+  flushWorkspace,
+  workspaceIds,
+}: CanvasWorkspaceCollectionBarrier): Promise<void> {
+  const uniqueWorkspaceIds = [...new Set(workspaceIds)].filter(Boolean);
+  const results = await Promise.allSettled(
+    uniqueWorkspaceIds.map((workspaceId) => flushWorkspace(workspaceId)),
+  );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length === 0) return;
+  if (failures.length === 1) throw failures[0];
+  throw new AggregateError(failures, `${failures.length} 个白板保存失败`);
+}
+
+/** Keeps an explicit Canvas route change behind the active workspace write. */
+export async function navigateAfterCanvasWorkspaceFlush({
+  flushWorkspace,
+  navigate,
+  workspaceId,
+}: CanvasWorkspaceNavigationBarrier): Promise<void> {
+  if (workspaceId) await flushWorkspace(workspaceId);
+  navigate();
 }
 
 /**

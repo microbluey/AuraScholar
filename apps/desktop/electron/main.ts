@@ -3,12 +3,10 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow } from "electron";
 import { CH } from "./shared";
 import { handle, setTrustedSender } from "./main/ipc";
+import { attachCloseLifecycle, registerCloseLifecycleHandlers } from "./main/close-lifecycle";
 import { openExternalUrl, registerPlatformHandlers } from "./main/platform";
 import { registerDbHandlers } from "./main/db";
-import {
-  initResearchBrowser,
-  registerResearchHandlers,
-} from "./main/research-browser";
+import { initResearchBrowser, registerResearchHandlers } from "./main/research-browser";
 import { startCitationBridge, citationBridgePort } from "./main/citation-bridge";
 
 // electron-vite injects these env vars during dev; they're undefined in prod.
@@ -54,6 +52,7 @@ async function createWindow(): Promise<void> {
   });
 
   setTrustedSender(win.webContents);
+  attachCloseLifecycle(win);
 
   if (SMOKE_MODE) {
     // Lazy chunk: the ~6k-line harness never loads in a normal launch.
@@ -74,6 +73,7 @@ app.whenReady().then(() => {
   registerPlatformHandlers();
   registerDbHandlers();
   registerResearchHandlers();
+  registerCloseLifecycleHandlers();
   handle(CH.citationBridgePort, () => citationBridgePort());
   startCitationBridge();
 

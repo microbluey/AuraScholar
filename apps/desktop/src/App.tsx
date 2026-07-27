@@ -18,6 +18,7 @@ import { isImeComposing } from "./keyboard";
 import { isPlatformShortcut, shortcutLabel } from "./shortcut-labels";
 import { readLocalStorageJson } from "./storage";
 import { isDesktopRuntime } from "./services/aura-platform";
+import { cancelExitBarriers, runExitBarriers } from "./services/exit-barriers";
 import { describeSafeError } from "./services/sensitive-text";
 
 // 阅读器不在导航中 — 它是文献库里点击一篇文献后进入的页面。
@@ -380,6 +381,18 @@ export function App() {
     [navigate],
   );
   const openAiSettings = useCallback(() => openSettingsSection("ai"), [openSettingsSection]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    const unregisterRequest = window.aura.lifecycle.onCloseRequested(runExitBarriers);
+    const unregisterCancellation = window.aura.lifecycle.onCloseCancelled((request) => {
+      cancelExitBarriers(request.requestId);
+    });
+    return () => {
+      unregisterCancellation();
+      unregisterRequest();
+    };
+  }, []);
 
   const rememberCommandReturnFocus = useCallback((target?: HTMLElement | null) => {
     const candidate = target ?? document.activeElement;
