@@ -85,6 +85,7 @@ import {
   serializeCanvasExcerptDragPayload,
   type CanvasExcerptDragPayload,
 } from "./canvas-excerpt-dnd";
+import { commitCanvasExcerptDrop } from "./canvas-excerpt-commit";
 import {
   createAISynthNode,
   createCanvasId,
@@ -131,10 +132,18 @@ const LazyCanvasNoteEditorDialog = lazy(() =>
   })),
 );
 
+export interface CanvasNodeFocusRequest {
+  message: string;
+  nodeId: string;
+  requestId: string;
+  workspaceId: string;
+}
+
 interface CanvasWorkspaceProps {
   canRedo: boolean;
   canUndo: boolean;
   document: CanvasWorkspaceDocument;
+  focusRequest: CanvasNodeFocusRequest | null;
   libraryLoading: boolean;
   onCreateWorkspace: CreateCanvasWorkspace;
   onDeleteWorkspace: (workspaceId: string) => CanvasWorkspaceActionResult;
@@ -150,6 +159,7 @@ interface CanvasWorkspaceProps {
     rollback: (updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument) => boolean;
   } | null;
   onExit: () => void;
+  onFocusRequestHandled: (requestId: string) => void;
   onFlushDocument: (workspaceId: string) => Promise<void>;
   onOpenExcerpt: (
     workId: string,
@@ -300,12 +310,14 @@ function CanvasWorkspaceInner({
   canRedo,
   canUndo,
   document,
+  focusRequest,
   libraryLoading,
   onCreateWorkspace,
   onDeleteWorkspace,
   onDocumentChange,
   onDocumentTransaction,
   onExit,
+  onFocusRequestHandled,
   onFlushDocument,
   onOpenExcerpt,
   onOpenPaper,
@@ -1869,79 +1881,76 @@ function CanvasWorkspaceInner({
           x: (rect?.left || 0) + (rect?.width || 900) * 0.52,
           y: (rect?.top || 0) + (rect?.height || 640) * 0.48,
         });
-      const generatedIds = [createCanvasId(), createCanvasId()];
       const timestamp = Date.now();
-      const applyDrop = (current: CanvasWorkspaceDocument) => {
-        let idIndex = 0;
-        return applyCanvasExcerptDrop(current, payload, dropPosition, {
-          createId: () => generatedIds[idIndex++]!,
-          now: () => timestamp,
-        });
-      };
+      const committed = commitCanvasExcerptDrop(
+        (updater) =>
+          onDocumentChange(updater, {
+            history: { label: "加入文献摘录" },
+          }),
+        (current) =>
+          applyCanvasExcerptDrop(current, payload, dropPosition, {
+            createId: createCanvasId,
+            now: () => timestamp,
+          }),
+        (result) => {
+          const next = result.document;
+          if (result.createdNode || !result.node.groupId) return next;
+          const collapsedParent = next.nodes.find(
+            (node) =>
+              node.id === result.node.groupId && node.type === "group" && node.data.collapsed,
+          );
+          if (!collapsedParent) return next;
+          return {
+            ...next,
+            nodes: next.nodes.map((node) =>
+              node.id === result.node.groupId && node.type === "group" && node.data.collapsed
+                ? {
+                    ...node,
+                    data: { ...node.data, collapsed: false },
+                    updatedAt: timestamp,
+                  }
+                : node,
+            ),
+            updatedAt: timestamp,
+          };
+        },
+      );
 
-      let planned: ReturnType<typeof applyCanvasExcerptDrop>;
-      try {
-        planned = applyDrop(document);
-      } catch (error) {
+      if (committed.status === "failed") {
+        const error = committed.error;
         showNotice(
           error instanceof CanvasExcerptDropError ? error.message : "无法把这条高亮加入当前白板。",
         );
         return false;
       }
+      if (committed.status === "rejected") {
+        showNotice("白板状态已经变化，本次加入已取消，请重试。");
+        return false;
+      }
 
-      onDocumentChange(
-        (current) => {
-          try {
-            const next = applyDrop(current).document;
-            if (planned.createdNode || !planned.node.groupId) return next;
-            return {
-              ...next,
-              nodes: next.nodes.map((node) =>
-                node.id === planned.node.groupId && node.type === "group" && node.data.collapsed
-                  ? {
-                      ...node,
-                      data: { ...node.data, collapsed: false },
-                      updatedAt: timestamp,
-                    }
-                  : node,
-              ),
-              updatedAt: timestamp,
-            };
-          } catch {
-            return current;
-          }
-        },
-        {
-          history:
-            planned.createdNode || planned.createdEdge
-              ? {
-                  label: planned.createdNode ? "加入文献摘录" : "恢复摘录来源关系",
-                }
-              : false,
-        },
-      );
-      setSelectedNodeIds(new Set([planned.node.id]));
+      const result = committed.result;
+      setSelectedNodeIds(new Set([result.node.id]));
       setSelectedEdgeId(null);
-      if (!planned.createdNode) {
-        const absolute = absoluteNodePosition(planned.node, planned.document.nodes);
+      if (!result.createdNode) {
+        const absolute = absoluteNodePosition(result.node, committed.document.nodes);
         window.requestAnimationFrame(() => {
           void flow.setCenter(
-            absolute.x + planned.node.dimensions.width / 2,
-            absolute.y + planned.node.dimensions.height / 2,
-            { duration: 240, zoom: Math.max(document.viewport.zoom, 0.8) },
+            absolute.x + result.node.dimensions.width / 2,
+            absolute.y + result.node.dimensions.height / 2,
+            { duration: 240, zoom: Math.max(committed.document.viewport.zoom, 0.8) },
           );
         });
       }
       showNotice(
-        planned.createdNode
+        result.createdNode
           ? "已创建摘录卡，并自动连接到来源文献。"
-          : planned.createdEdge
+          : result.createdEdge
             ? "摘录卡已存在，已补回来源连线。"
             : "这条高亮已在白板中，已为你定位。",
       );
       return true;
     },
-    [document, flow, onDocumentChange, showNotice],
+    [flow, onDocumentChange, showNotice],
   );
 
   const rememberReaderAnnotation = useCallback(
@@ -2086,6 +2095,16 @@ function CanvasWorkspaceInner({
     },
     [document.nodes, document.viewport.zoom, flow, onDocumentChange, showNotice],
   );
+
+  useEffect(() => {
+    if (!focusRequest || focusRequest.workspaceId !== document.workspaceId) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      focusNode(focusRequest.nodeId);
+      showNotice(focusRequest.message);
+      onFocusRequestHandled(focusRequest.requestId);
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [document.workspaceId, focusNode, focusRequest, onFocusRequestHandled, showNotice]);
 
   const openNodeInFullReader = useCallback(
     (node: CanvasNode) => {

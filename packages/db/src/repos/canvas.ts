@@ -171,6 +171,38 @@ function stringifyJson(value: unknown, label: string): string {
   }
 }
 
+/**
+ * Nested groups were never a supported Canvas interaction, but early storage
+ * accepted them. Read those snapshots compatibly by moving every nested Group
+ * into the root coordinate space; its ordinary child cards stay relative to
+ * that Group and therefore keep their visual positions.
+ */
+function flattenLegacyCanvasGroups(nodes: StoredCanvasNode[]): StoredCanvasNode[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  return nodes.map((node) => {
+    if (node.type !== "group" || node.groupId === undefined) return node;
+    let x = node.position.x;
+    let y = node.position.y;
+    let parentId: string | undefined = node.groupId;
+    const visited = new Set([node.id]);
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = nodeById.get(parentId);
+      if (!parent || parent.type !== "group") break;
+      x += parent.position.x;
+      y += parent.position.y;
+      assertFiniteNumber(x, `Canvas group ${node.id} flattened position.x`);
+      assertFiniteNumber(y, `Canvas group ${node.id} flattened position.y`);
+      parentId = parent.groupId;
+    }
+    return {
+      ...node,
+      position: { x, y },
+      groupId: undefined,
+    };
+  });
+}
+
 function parseViewport(value: string, workspaceId: string): StoredCanvasViewport {
   const parsed = parseJson(value, `Canvas workspace ${workspaceId} viewport`);
   if (!isRecord(parsed)) throw new Error(`Canvas workspace ${workspaceId} viewport is invalid`);
@@ -281,6 +313,9 @@ function validateDocument(document: StoredCanvasWorkspaceDocument): void {
     if (node.groupId !== undefined) {
       assertNonEmptyString(node.groupId, `Canvas node ${node.id} groupId`);
       if (node.groupId === node.id) throw new Error(`Canvas node ${node.id} cannot group itself`);
+      if (node.type === "group") {
+        throw new Error(`Canvas group ${node.id} cannot belong to another group`);
+      }
     }
     if (!Array.isArray(node.tags) || !node.tags.every((tag) => typeof tag === "string")) {
       throw new Error(`Canvas node ${node.id} tags must be strings`);
@@ -476,21 +511,23 @@ export class CanvasRepo {
       ),
     ]);
 
-    const nodes = nodeRows.map<StoredCanvasNode>((row) => {
-      if (!canvasNodeTypeSet.has(row.type))
-        throw new Error(`Unsupported canvas node type ${row.type}`);
-      return {
-        id: row.id,
-        type: row.type as StoredCanvasNodeType,
-        position: { x: row.pos_x, y: row.pos_y },
-        dimensions: { width: row.width, height: row.height },
-        ...(row.group_id === null ? {} : { groupId: row.group_id }),
-        tags: parseTags(row.tags_json, row.id),
-        data: parseJson(row.data_json, `Canvas node ${row.id} data`),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
-    });
+    const nodes = flattenLegacyCanvasGroups(
+      nodeRows.map<StoredCanvasNode>((row) => {
+        if (!canvasNodeTypeSet.has(row.type))
+          throw new Error(`Unsupported canvas node type ${row.type}`);
+        return {
+          id: row.id,
+          type: row.type as StoredCanvasNodeType,
+          position: { x: row.pos_x, y: row.pos_y },
+          dimensions: { width: row.width, height: row.height },
+          ...(row.group_id === null ? {} : { groupId: row.group_id }),
+          tags: parseTags(row.tags_json, row.id),
+          data: parseJson(row.data_json, `Canvas node ${row.id} data`),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      }),
+    );
 
     const edges = edgeRows.map<StoredCanvasEdge>((row) => {
       if (!canvasEdgeRelationSet.has(row.relation_type)) {
