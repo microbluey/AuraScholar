@@ -44,6 +44,135 @@ export function assertSpatialCanvasBackupOrder(tables: readonly string[]): void 
   }
 }
 
+interface SpatialCanvasBackupNodeIndex {
+  groups: Map<string, Record<string, unknown>>;
+  workspaces: Map<string, string>;
+}
+
+function indexSpatialCanvasBackupNodes(
+  rows: readonly Record<string, unknown>[],
+): SpatialCanvasBackupNodeIndex {
+  const nodeIds = new Set<string>();
+  const groups = new Map<string, Record<string, unknown>>();
+  const workspaces = new Map<string, string>();
+  for (const row of rows) {
+    const id = typeof row.id === "string" ? row.id : "";
+    const workspaceId = typeof row.workspace_id === "string" ? row.workspace_id : "";
+    if (!id.trim() || !workspaceId.trim()) {
+      throw new Error("Spatial Canvas backup node is missing id or workspace_id");
+    }
+    if (nodeIds.has(id)) {
+      throw new Error(`Spatial Canvas backup contains duplicate node id ${id}`);
+    }
+    nodeIds.add(id);
+    workspaces.set(id, workspaceId);
+    if (row.type === "group") groups.set(id, row);
+  }
+  return { groups, workspaces };
+}
+
+function finiteBackupCoordinate(value: unknown, groupId: string, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Spatial Canvas backup group ${groupId} has invalid ${field}`);
+  }
+  return value;
+}
+
+function addBackupCoordinates(
+  current: number,
+  parent: number,
+  groupId: string,
+  field: "pos_x" | "pos_y",
+): number {
+  const sum = current + parent;
+  if (!Number.isFinite(sum)) {
+    throw new Error(`Spatial Canvas backup group ${groupId} overflows ${field}`);
+  }
+  return sum;
+}
+
+/**
+ * Makes unsupported legacy group nesting readable without moving ordinary
+ * child cards: nested Group positions are converted to root coordinates, then
+ * only the Group's own parent reference is cleared.
+ */
+export function flattenSpatialCanvasBackupNodeGroups(
+  rows: readonly Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const { groups, workspaces } = indexSpatialCanvasBackupNodes(rows);
+  const normalized = rows.map((row) => {
+    if (row.type !== "group" || row.group_id === null || row.group_id === undefined) {
+      return row;
+    }
+    if (typeof row.group_id !== "string" || !row.group_id.trim()) {
+      throw new Error("Spatial Canvas backup group has invalid group_id");
+    }
+    const id = row.id as string;
+    const workspaceId = row.workspace_id as string;
+    let x = finiteBackupCoordinate(row.pos_x, id, "pos_x");
+    let y = finiteBackupCoordinate(row.pos_y, id, "pos_y");
+    let parentId: string | undefined = row.group_id;
+    const visited = new Set([id]);
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = groups.get(parentId);
+      if (!parent || workspaces.get(parentId) !== workspaceId) {
+        throw new Error(
+          `Spatial Canvas backup group ${id} references a missing or cross-workspace group`,
+        );
+      }
+      x = addBackupCoordinates(
+        x,
+        finiteBackupCoordinate(parent.pos_x, parentId, "pos_x"),
+        id,
+        "pos_x",
+      );
+      y = addBackupCoordinates(
+        y,
+        finiteBackupCoordinate(parent.pos_y, parentId, "pos_y"),
+        id,
+        "pos_y",
+      );
+      parentId = typeof parent.group_id === "string" ? parent.group_id : undefined;
+    }
+    return { ...row, pos_x: x, pos_y: y, group_id: null };
+  });
+  assertSpatialCanvasBackupNodeGroups(normalized);
+  return normalized;
+}
+
+/**
+ * Keeps imported Canvas data within the currently supported flat grouping
+ * model. The Desktop renderer only resolves one parent coordinate space, so
+ * accepting nested groups here would persist a document CanvasRepo rejects.
+ */
+export function assertSpatialCanvasBackupNodeGroups(
+  rows: readonly Record<string, unknown>[],
+): void {
+  const { groups, workspaces } = indexSpatialCanvasBackupNodes(rows);
+  for (const row of rows) {
+    if (row.type !== "group") continue;
+    const id = row.id as string;
+    if (row.group_id !== null && row.group_id !== undefined) {
+      throw new Error(`Spatial Canvas backup group ${id} cannot belong to another group`);
+    }
+  }
+
+  for (const row of rows) {
+    if (row.group_id === null || row.group_id === undefined) continue;
+    if (typeof row.group_id !== "string" || !row.group_id.trim()) {
+      throw new Error("Spatial Canvas backup node has invalid group_id");
+    }
+    const nodeId = row.id as string;
+    const parent = groups.get(row.group_id);
+    if (!parent || workspaces.get(row.group_id) !== workspaces.get(nodeId)) {
+      throw new Error(
+        `Spatial Canvas backup node ${nodeId} references a missing or cross-workspace group`,
+      );
+    }
+  }
+}
+
 /**
  * Remaps a Canvas backup row after merging it into an existing library. The
  * four id namespaces remain deliberately separate: a node's work_id uses the

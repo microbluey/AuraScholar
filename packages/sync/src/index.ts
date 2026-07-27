@@ -20,6 +20,8 @@ export {
   DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID,
   SPATIAL_CANVAS_BACKUP_TABLES,
   assertSpatialCanvasBackupOrder,
+  assertSpatialCanvasBackupNodeGroups,
+  flattenSpatialCanvasBackupNodeGroups,
   remapSpatialCanvasBackupRow,
 } from "./canvas-backup.js";
 export type {

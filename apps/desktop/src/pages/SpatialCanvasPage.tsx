@@ -1,20 +1,14 @@
-import {
-  CANVAS_SCHEMA_VERSION,
-  type CanvasJsonValue,
-  type CanvasWorkspaceDocument,
-  type ExcerptHighlightColor,
-  type ExcerptNode,
-} from "@aurascholar/core";
+import { type CanvasWorkspaceDocument } from "@aurascholar/core";
+import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
 import type { CanvasWorkspaceSummary } from "@aurascholar/db/repos/canvas";
 import { WorksRepo } from "@aurascholar/db/repos/works";
 import { CircleNotch, Warning } from "@phosphor-icons/react";
-import { parseAnnotationAnchorJson } from "@aurascholar/reader";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import "@xyflow/react/dist/style.css";
 import "katex/dist/katex.min.css";
 import { useConfirmDialog } from "../components/ConfirmDialog";
-import { CanvasWorkspace } from "../features/canvas/CanvasWorkspace";
+import { CanvasWorkspace, type CanvasNodeFocusRequest } from "../features/canvas/CanvasWorkspace";
 import type { CanvasCitationPaperIdentity } from "../features/canvas/canvas-citation";
 import {
   resolveCanvasCitationRelations,
@@ -36,8 +30,11 @@ import {
 } from "../features/canvas/canvas-history";
 import { clearCanvasNoteDraftsForWorkspace } from "../features/canvas/canvas-note-draft";
 import {
+  applyCanvasAnnotationIngress,
+  nextCanvasIngressPosition,
+} from "../features/canvas/canvas-annotation-ingress";
+import {
   PREVIEW_LIBRARY_WORKS,
-  createCanvasId,
   createPaperNode,
   type CanvasLibraryWork,
 } from "../features/canvas/model";
@@ -62,6 +59,7 @@ import {
   mergeRenamedCanvasWorkspace,
   planCanvasWorkspaceDeletion,
 } from "../features/canvas/workspace-controls";
+import { libraryReaderRowToAnnotation } from "../features/reader/library-reader-session";
 import { getDb } from "../services/aura-db";
 import { synthesizeCanvasSelection as desktopSynthesizeCanvasSelection } from "../services/canvas-ai";
 import { isDesktopRuntime } from "../services/aura-platform";
@@ -71,36 +69,6 @@ import {
   searchWorksByMetadata,
 } from "../services/library-list";
 import "../features/canvas/canvas.css";
-
-interface AnnotationCanvasRow {
-  anchor_json: string | null;
-  attachment_id: string;
-  color: string | null;
-  content_md: string | null;
-  id: string;
-  page_index: number;
-  work_id: string;
-  work_title: string;
-}
-
-const HIGHLIGHT_COLOR_MAP: Record<string, ExcerptHighlightColor> = {
-  yellow: "yellow",
-  "#ffd866": "yellow",
-  green: "green",
-  "#a9dc76": "green",
-  blue: "blue",
-  "#78dce8": "blue",
-  pink: "pink",
-  "#ff6188": "pink",
-  purple: "purple",
-  "#ab9df2": "purple",
-  orange: "orange",
-  "#fc9867": "orange",
-};
-
-function annotationColor(value: string | null): ExcerptHighlightColor {
-  return HIGHLIGHT_COLOR_MAP[value?.trim().toLocaleLowerCase() || ""] || "yellow";
-}
 
 function canvasLibraryWork(
   row: Awaited<ReturnType<typeof listWorks>>[number] & { tagNames?: string[] },
@@ -115,41 +83,6 @@ function canvasLibraryWork(
     doi: row.doi,
     readingStatus: row.reading_status,
     tags: row.tagNames ?? [],
-  };
-}
-
-function nextIngressPosition(document: CanvasWorkspaceDocument): { x: number; y: number } {
-  const count = document.nodes.filter((node) => !node.groupId).length;
-  return {
-    x: 340 + (count % 4) * 356,
-    y: 140 + Math.floor(count / 4) * 314,
-  };
-}
-
-function annotationNode(row: AnnotationCanvasRow, document: CanvasWorkspaceDocument): ExcerptNode {
-  const now = Date.now();
-  const parsed = parseAnnotationAnchorJson(row.anchor_json, row.page_index).anchor;
-  const exact = parsed.quote?.exact?.trim();
-  const note = row.content_md?.trim();
-  return {
-    id: createCanvasId(),
-    type: "excerpt",
-    position: nextIngressPosition(document),
-    dimensions: { width: 300, height: 216 },
-    tags: [],
-    createdAt: now,
-    updatedAt: now,
-    data: {
-      workId: row.work_id,
-      paperTitle: row.work_title,
-      highlightText: exact || note || `第 ${row.page_index + 1} 页批注`,
-      highlightColor: annotationColor(row.color),
-      pageIndex: row.page_index,
-      annotationId: row.id,
-      attachmentId: row.attachment_id,
-      anchor: JSON.parse(JSON.stringify(parsed)) as CanvasJsonValue,
-      marginNote: exact && note ? note : undefined,
-    },
   };
 }
 
@@ -229,6 +162,7 @@ export function SpatialCanvasPage() {
   const [reloadNonce, setReloadNonce] = useState(0);
   const [documentTransactionEpoch, setDocumentTransactionEpoch] = useState(0);
   const [persistenceLabel, setPersistenceLabel] = useState("正在载入…");
+  const [focusRequest, setFocusRequest] = useState<CanvasNodeFocusRequest | null>(null);
   const { confirm, confirmDialog } = useConfirmDialog();
   const activeDocumentRef = useRef<CanvasWorkspaceDocument | null>(null);
   const latestDocumentsRef = useRef(new Map<string, CanvasWorkspaceDocument>());
@@ -237,7 +171,8 @@ export function SpatialCanvasPage() {
   const saveChainsRef = useRef(new Map<string, Promise<void>>());
   const retiredWorkspaceIdsRef = useRef(new Set<string>());
   const loadRequestRef = useRef(0);
-  const handledIngressRef = useRef(new Set<string>());
+  const focusRequestSequenceRef = useRef(0);
+  const inFlightIngressRef = useRef(new Set<string>());
   const historyByWorkspaceRef = useRef(new Map<string, CanvasHistoryState>());
   const activeDocumentTransactionRef = useRef<CanvasHistoryTransaction | null>(null);
   const [historyStatus, setHistoryStatus] = useState({
@@ -665,6 +600,10 @@ export function SpatialCanvasPage() {
 
   const workspaceId = document?.workspaceId ?? "";
 
+  const handleFocusRequestHandled = useCallback((requestId: string) => {
+    setFocusRequest((current) => (current?.requestId === requestId ? null : current));
+  }, []);
+
   const handleSelectWorkspace = useCallback(
     (nextWorkspaceId: string) => {
       if (!nextWorkspaceId || nextWorkspaceId === activeDocumentRef.current?.workspaceId) return;
@@ -755,9 +694,9 @@ export function SpatialCanvasPage() {
         lastPersistedRef.current.delete(targetWorkspaceId);
         saveChainsRef.current.delete(targetWorkspaceId);
         historyByWorkspaceRef.current.delete(targetWorkspaceId);
-        for (const ingressKey of handledIngressRef.current) {
+        for (const ingressKey of inFlightIngressRef.current) {
           if (ingressKey.startsWith(`${targetWorkspaceId}:`)) {
-            handledIngressRef.current.delete(ingressKey);
+            inFlightIngressRef.current.delete(ingressKey);
           }
         }
 
@@ -800,74 +739,105 @@ export function SpatialCanvasPage() {
 
   useEffect(() => {
     if (!workspaceId || !requestedAnnotationId) return;
-    const ingressKey = `${workspaceId}:annotation:${requestedAnnotationId}`;
-    const handledIngress = handledIngressRef.current;
-    if (handledIngress.has(ingressKey)) return;
-    handledIngress.add(ingressKey);
+    if (!requestedWorkId) {
+      const noticeId = window.setTimeout(
+        () => setPersistenceLabel("添加摘录失败：缺少来源文献"),
+        0,
+      );
+      return () => window.clearTimeout(noticeId);
+    }
+    const ingressKey = `${workspaceId}:annotation:${requestedAnnotationId}:${requestedWorkId}`;
+    const inFlightIngress = inFlightIngressRef.current;
+    if (inFlightIngress.has(ingressKey)) return;
+    inFlightIngress.add(ingressKey);
 
     if (!desktopRuntime) {
       const noticeId = window.setTimeout(
         () => setPersistenceLabel("浏览器预览无法读取桌面批注"),
         0,
       );
-      return () => window.clearTimeout(noticeId);
+      return () => {
+        window.clearTimeout(noticeId);
+        inFlightIngress.delete(ingressKey);
+      };
     }
 
     let cancelled = false;
-    let settled = false;
     void getDb()
-      .then((db) =>
-        db.query<AnnotationCanvasRow>(
-          `SELECT an.id, an.attachment_id, an.work_id, an.color, an.page_index,
-                  an.anchor_json, an.content_md, w.title AS work_title
+      .then(async (db) => {
+        const rows = await db.query<AnnotationRow>(
+          `SELECT an.*
            FROM annotations an
            JOIN works w ON w.id = an.work_id AND w.deleted_at IS NULL
-           JOIN attachments at ON at.id = an.attachment_id AND at.deleted_at IS NULL
-           WHERE an.id = ? AND an.deleted_at IS NULL LIMIT 1`,
-          [requestedAnnotationId],
-        ),
-      )
-      .then((rows) => {
-        if (cancelled) return;
+           JOIN attachments at
+             ON at.id = an.attachment_id
+            AND at.work_id = an.work_id
+            AND at.deleted_at IS NULL
+           WHERE an.id = ? AND an.work_id = ? AND an.deleted_at IS NULL LIMIT 1`,
+          [requestedAnnotationId, requestedWorkId],
+        );
         const row = rows[0];
-        if (!row) throw new Error("没有找到这条批注，可能已被移除");
-        let alreadyPresent = false;
+        if (!row) throw new Error("没有找到属于这篇文献的批注，可能已被移除");
+        if (requestedWorkId !== row.work_id) throw new Error("这条批注不属于请求加入的文献");
+        const sourceWork = await new WorksRepo(db).get(row.work_id);
+        if (!sourceWork || sourceWork.deleted_at !== null) {
+          throw new Error("批注的来源文献已不存在或位于回收站");
+        }
+        return { row, work: canvasLibraryWork(sourceWork) };
+      })
+      .then(({ row, work }) => {
+        if (cancelled) return;
+        let updaterRan = false;
+        let changed = false;
+        let ingressResult: ReturnType<typeof applyCanvasAnnotationIngress> | undefined;
         const applied = applyActiveDocumentUpdate(
           workspaceId,
           (current) => {
-            if (
-              current.nodes.some(
-                (node) => node.type === "excerpt" && node.data.annotationId === row.id,
-              )
-            ) {
-              alreadyPresent = true;
-              return current;
-            }
-            const node = annotationNode(row, current);
-            return {
-              ...current,
-              schemaVersion: CANVAS_SCHEMA_VERSION,
-              nodes: [...current.nodes, node],
-              updatedAt: Date.now(),
-            };
+            updaterRan = true;
+            ingressResult = applyCanvasAnnotationIngress(current, {
+              annotation: libraryReaderRowToAnnotation(row),
+              attachmentId: row.attachment_id,
+              expectedWorkId: requestedWorkId || undefined,
+              workId: row.work_id,
+              work,
+              workspaceId,
+            });
+            changed = ingressResult.document !== current;
+            return ingressResult.document;
           },
           { history: { label: "加入文献摘录" } },
         );
-        if (!applied && !alreadyPresent) {
-          handledIngress.delete(ingressKey);
+        if (!updaterRan || !ingressResult || (changed && !applied)) {
+          inFlightIngress.delete(ingressKey);
           return;
         }
-        settled = true;
+        const message = ingressResult.createdPaper
+          ? ingressResult.createdNode
+            ? "已创建来源文献卡和摘录卡，并建立来源连线。"
+            : "已恢复来源文献卡和来源连线，并定位已有摘录。"
+          : ingressResult.createdNode
+            ? "已创建摘录卡，并建立来源连线。"
+            : ingressResult.createdEdge
+              ? "摘录卡已存在，已补回来源连线。"
+              : "这条批注已在白板中，已为你定位。";
+        focusRequestSequenceRef.current += 1;
+        setFocusRequest({
+          message,
+          nodeId: ingressResult.node.id,
+          requestId: `${ingressKey}:${focusRequestSequenceRef.current}`,
+          workspaceId,
+        });
+        inFlightIngress.delete(ingressKey);
         navigate(canvasWorkspacePath(workspaceId), { replace: true });
       })
       .catch((error) => {
         if (cancelled) return;
-        handledIngress.delete(ingressKey);
+        inFlightIngress.delete(ingressKey);
         setPersistenceLabel(`添加摘录失败：${error instanceof Error ? error.message : "未知错误"}`);
       });
     return () => {
       cancelled = true;
-      if (!settled) handledIngress.delete(ingressKey);
+      inFlightIngress.delete(ingressKey);
     };
   }, [
     applyActiveDocumentUpdate,
@@ -875,6 +845,7 @@ export function SpatialCanvasPage() {
     documentTransactionEpoch,
     navigate,
     requestedAnnotationId,
+    requestedWorkId,
     workspaceId,
   ]);
 
@@ -883,12 +854,11 @@ export function SpatialCanvasPage() {
       return;
     }
     const ingressKey = `${workspaceId}:work:${requestedWorkId}`;
-    const handledIngress = handledIngressRef.current;
-    if (handledIngress.has(ingressKey)) return;
-    handledIngress.add(ingressKey);
+    const inFlightIngress = inFlightIngressRef.current;
+    if (inFlightIngress.has(ingressKey)) return;
+    inFlightIngress.add(ingressKey);
 
     let cancelled = false;
-    let settled = false;
     const listed = works.find((candidate) => candidate.id === requestedWorkId);
     const resolveWork = listed
       ? Promise.resolve(listed)
@@ -913,27 +883,26 @@ export function SpatialCanvasPage() {
               alreadyPresent = true;
               return current;
             }
-            const node = createPaperNode(work, nextIngressPosition(current));
+            const node = createPaperNode(work, nextCanvasIngressPosition(current));
             return { ...current, nodes: [...current.nodes, node], updatedAt: Date.now() };
           },
           { history: { label: "加入文献" } },
         );
         if (!applied && !alreadyPresent) {
-          handledIngress.delete(ingressKey);
+          inFlightIngress.delete(ingressKey);
           return;
         }
-        settled = true;
         navigate(canvasWorkspacePath(workspaceId), { replace: true });
       })
       .catch((error) => {
         if (cancelled) return;
-        handledIngress.delete(ingressKey);
+        inFlightIngress.delete(ingressKey);
         setPersistenceLabel(error instanceof Error ? error.message : "添加文献失败");
       });
 
     return () => {
       cancelled = true;
-      if (!settled) handledIngress.delete(ingressKey);
+      inFlightIngress.delete(ingressKey);
     };
   }, [
     desktopRuntime,
@@ -990,6 +959,7 @@ export function SpatialCanvasPage() {
           canRedo={historyStatus.workspaceId === document.workspaceId && historyStatus.canRedo}
           canUndo={historyStatus.workspaceId === document.workspaceId && historyStatus.canUndo}
           document={document}
+          focusRequest={focusRequest}
           onDocumentChange={(updater, options) =>
             applyActiveDocumentUpdate(document.workspaceId, updater, options)
           }
@@ -997,6 +967,7 @@ export function SpatialCanvasPage() {
             applyActiveDocumentTransaction(document.workspaceId, updater, mutation)
           }
           onFlushDocument={flushWorkspace}
+          onFocusRequestHandled={handleFocusRequestHandled}
           onRedo={() => runHistoryCommand("redo")}
           onUndo={() => runHistoryCommand("undo")}
           works={works}

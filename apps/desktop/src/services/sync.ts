@@ -10,8 +10,10 @@ import {
   WebDavProvider,
   HlcClock,
   SPATIAL_CANVAS_BACKUP_TABLES,
+  assertSpatialCanvasBackupNodeGroups,
   assertSpatialCanvasBackupOrder,
   columnsForSyncedTable,
+  flattenSpatialCanvasBackupNodeGroups,
   remapSpatialCanvasBackupRow,
   safeSnapshotWatermark,
   type MarkPushedOptions,
@@ -762,6 +764,26 @@ export async function importLibraryBackupJson(text: string): Promise<LibraryBack
   const backup = parseLibraryBackupJson(text);
   const db = await getDb();
   const { libraryId } = await getSyncIdentity();
+  return importParsedLibraryBackup(db, backup, libraryId);
+}
+
+/**
+ * Deterministic database boundary used by the desktop import flow and its
+ * transaction-level regression tests.
+ */
+export async function importLibraryBackupJsonIntoDatabase(
+  text: string,
+  db: Database,
+  libraryId: string,
+): Promise<LibraryBackupImportSummary> {
+  return importParsedLibraryBackup(db, parseLibraryBackupJson(text), libraryId);
+}
+
+async function importParsedLibraryBackup(
+  db: Database,
+  backup: LibraryBackupFile,
+  libraryId: string,
+): Promise<LibraryBackupImportSummary> {
   const tableColumns = new Map<UserBackupTable, string[]>();
   const summaryTables: LibraryBackupTableImportSummary[] = [];
   const idMaps = await buildBackupImportIdMaps(db, backup, libraryId);
@@ -798,8 +820,11 @@ export async function importLibraryBackupJson(text: string): Promise<LibraryBack
           continue;
         }
         const placeholders = insertColumns.map(() => "?").join(", ");
+        const insertMode = SPATIAL_CANVAS_BACKUP_TABLE_SET.has(table)
+          ? "INSERT"
+          : "INSERT OR IGNORE";
         const changes = await db.run(
-          `INSERT OR IGNORE INTO ${quoteIdentifier(table)} (${insertColumns
+          `${insertMode} INTO ${quoteIdentifier(table)} (${insertColumns
             .map(quoteIdentifier)
             .join(", ")}) VALUES (${placeholders})`,
           insertColumns.map((column) => importRow[column] ?? null),
@@ -1200,6 +1225,10 @@ function parseLibraryBackupJson(text: string): LibraryBackupFile {
     }
     tables[name as UserBackupTable] = value.filter(isRecord);
   }
+  if (tables.canvas_nodes) {
+    tables.canvas_nodes = flattenSpatialCanvasBackupNodeGroups(tables.canvas_nodes);
+  }
+  assertSpatialCanvasBackupNodeGroups(tables.canvas_nodes ?? []);
   return {
     exportedAt: typeof parsed.exportedAt === "string" ? parsed.exportedAt : null,
     ignoredTables,

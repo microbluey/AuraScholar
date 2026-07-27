@@ -314,6 +314,112 @@ describe("CanvasRepo", () => {
     ]);
   });
 
+  it("rejects nested groups before replacing the stored workspace snapshot", async () => {
+    const sourceWorkId = await createSourceWork();
+    const seed = await canvas.ensureDefault();
+    const original = makeDocument(sourceWorkId, seed);
+    await canvas.save(original);
+    const nestedGroup: StoredCanvasWorkspaceDocument = {
+      ...original,
+      name: "Must not replace the valid snapshot",
+      updatedAt: original.updatedAt + 100,
+      nodes: original.nodes.map((node) =>
+        node.id === "node-group" ? { ...node, groupId: "node-parent-group" } : node,
+      ),
+    };
+    nestedGroup.nodes.unshift({
+      id: "node-parent-group",
+      type: "group",
+      position: { x: 0, y: 0 },
+      dimensions: { width: 1_000, height: 700 },
+      tags: [],
+      createdAt: original.createdAt,
+      updatedAt: original.updatedAt,
+      data: { title: "Parent", colorTheme: "accent" },
+    });
+
+    await expect(canvas.save(nestedGroup)).rejects.toThrow(
+      "Canvas group node-group cannot belong to another group",
+    );
+    expect(await canvas.load(original.workspaceId)).toEqual(original);
+  });
+
+  it("loads legacy nested groups by flattening them without moving their child cards", async () => {
+    const sourceWorkId = await createSourceWork();
+    const seed = await canvas.ensureDefault();
+    const original = makeDocument(sourceWorkId, seed);
+    const parentGroup: StoredCanvasWorkspaceDocument["nodes"][number] = {
+      id: "node-parent-group",
+      type: "group",
+      position: { x: 100, y: 200 },
+      dimensions: { width: 1_100, height: 800 },
+      tags: [],
+      createdAt: original.createdAt,
+      updatedAt: original.updatedAt,
+      data: { title: "Legacy parent", colorTheme: "accent" },
+    };
+    await canvas.save({ ...original, nodes: [parentGroup, ...original.nodes] });
+    await db.run(`UPDATE canvas_nodes SET group_id = ? WHERE workspace_id = ? AND id = ?`, [
+      parentGroup.id,
+      original.workspaceId,
+      "node-group",
+    ]);
+
+    const compatible = await canvas.load(original.workspaceId);
+    const flattenedGroup = compatible?.nodes.find((node) => node.id === "node-group");
+    const childPaper = compatible?.nodes.find((node) => node.id === "node-paper");
+    expect(flattenedGroup).toMatchObject({
+      position: { x: 120, y: 230 },
+      groupId: undefined,
+    });
+    expect(childPaper).toMatchObject({
+      position: { x: 80, y: 110 },
+      groupId: "node-group",
+    });
+
+    await canvas.save(compatible!);
+    expect(
+      await db.query<{ group_id: string | null }>(
+        `SELECT group_id FROM canvas_nodes WHERE workspace_id = ? AND id = ?`,
+        [original.workspaceId, "node-group"],
+      ),
+    ).toEqual([{ group_id: null }]);
+  });
+
+  it("rejects legacy nested group coordinates that overflow while flattening", async () => {
+    const sourceWorkId = await createSourceWork();
+    const seed = await canvas.ensureDefault();
+    const original = makeDocument(sourceWorkId, seed);
+    const parentGroup: StoredCanvasWorkspaceDocument["nodes"][number] = {
+      id: "node-parent-group",
+      type: "group",
+      position: { x: 1e308, y: 0 },
+      dimensions: { width: 1_100, height: 800 },
+      tags: [],
+      createdAt: original.createdAt,
+      updatedAt: original.updatedAt,
+      data: { title: "Legacy parent", colorTheme: "accent" },
+    };
+    await canvas.save({
+      ...original,
+      nodes: [
+        parentGroup,
+        ...original.nodes.map((node) =>
+          node.id === "node-group" ? { ...node, position: { x: 1e308, y: 0 } } : node,
+        ),
+      ],
+    });
+    await db.run(`UPDATE canvas_nodes SET group_id = ? WHERE workspace_id = ? AND id = ?`, [
+      parentGroup.id,
+      original.workspaceId,
+      "node-group",
+    ]);
+
+    await expect(canvas.load(original.workspaceId)).rejects.toThrow(
+      "Canvas group node-group flattened position.x must be a finite number",
+    );
+  });
+
   it("deletes only a canvas node and its incident edges, never the source work", async () => {
     const sourceWorkId = await createSourceWork();
     const seed = await canvas.ensureDefault();

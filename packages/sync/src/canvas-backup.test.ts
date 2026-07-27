@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SPATIAL_CANVAS_WORKSPACE_ID,
   SPATIAL_CANVAS_BACKUP_TABLES,
+  assertSpatialCanvasBackupNodeGroups,
   assertSpatialCanvasBackupOrder,
+  flattenSpatialCanvasBackupNodeGroups,
   remapSpatialCanvasBackupRow,
   type SpatialCanvasBackupIdMaps,
 } from "./canvas-backup";
@@ -36,6 +38,160 @@ describe("Spatial Canvas backup guards", () => {
     expect(() => assertSpatialCanvasBackupOrder(["works"])).toThrow(
       "missing table canvas_workspaces",
     );
+  });
+
+  it("accepts flat groups and rejects nested or cross-workspace group references", () => {
+    expect(() =>
+      assertSpatialCanvasBackupNodeGroups([
+        {
+          id: "group-1",
+          workspace_id: "workspace-1",
+          group_id: null,
+          type: "group",
+        },
+        {
+          id: "note-1",
+          workspace_id: "workspace-1",
+          group_id: "group-1",
+          type: "idea-note",
+        },
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertSpatialCanvasBackupNodeGroups([
+        {
+          id: "group-parent",
+          workspace_id: "workspace-1",
+          group_id: null,
+          type: "group",
+        },
+        {
+          id: "group-child",
+          workspace_id: "workspace-1",
+          group_id: "group-parent",
+          type: "group",
+        },
+      ]),
+    ).toThrow("group group-child cannot belong to another group");
+
+    expect(() =>
+      assertSpatialCanvasBackupNodeGroups([
+        {
+          id: "group-1",
+          workspace_id: "workspace-1",
+          group_id: null,
+          type: "group",
+        },
+        {
+          id: "note-2",
+          workspace_id: "workspace-2",
+          group_id: "group-1",
+          type: "idea-note",
+        },
+      ]),
+    ).toThrow("missing or cross-workspace group");
+  });
+
+  it("flattens legacy nested groups into root coordinates", () => {
+    const normalized = flattenSpatialCanvasBackupNodeGroups([
+      {
+        id: "group-parent",
+        workspace_id: "workspace-1",
+        group_id: null,
+        type: "group",
+        pos_x: 100,
+        pos_y: 200,
+      },
+      {
+        id: "group-child",
+        workspace_id: "workspace-1",
+        group_id: "group-parent",
+        type: "group",
+        pos_x: 20,
+        pos_y: 30,
+      },
+      {
+        id: "note-1",
+        workspace_id: "workspace-1",
+        group_id: "group-child",
+        type: "idea-note",
+        pos_x: 5,
+        pos_y: 6,
+      },
+    ]);
+
+    expect(normalized[1]).toMatchObject({
+      id: "group-child",
+      group_id: null,
+      pos_x: 120,
+      pos_y: 230,
+    });
+    expect(normalized[2]).toMatchObject({
+      id: "note-1",
+      group_id: "group-child",
+      pos_x: 5,
+      pos_y: 6,
+    });
+  });
+
+  it("rejects legacy group coordinates that overflow while flattening", () => {
+    expect(() =>
+      flattenSpatialCanvasBackupNodeGroups([
+        {
+          id: "group-parent",
+          workspace_id: "workspace-1",
+          group_id: null,
+          type: "group",
+          pos_x: 1e308,
+          pos_y: 0,
+        },
+        {
+          id: "group-child",
+          workspace_id: "workspace-1",
+          group_id: "group-parent",
+          type: "group",
+          pos_x: 1e308,
+          pos_y: 0,
+        },
+      ]),
+    ).toThrow("overflows pos_x");
+  });
+
+  it("rejects identity normalization mismatches and duplicate node ids", () => {
+    expect(() =>
+      assertSpatialCanvasBackupNodeGroups([
+        {
+          id: " group-1 ",
+          workspace_id: "workspace-1",
+          group_id: null,
+          type: "group",
+        },
+        {
+          id: "note-1",
+          workspace_id: "workspace-1",
+          group_id: "group-1",
+          type: "idea-note",
+        },
+      ]),
+    ).toThrow("missing or cross-workspace group");
+
+    expect(() =>
+      assertSpatialCanvasBackupNodeGroups([
+        {
+          id: "group-1",
+          workspace_id: "workspace-1",
+          group_id: null,
+          type: "group",
+        },
+        {
+          id: "group-1",
+          workspace_id: "workspace-2",
+          group_id: null,
+          type: "group",
+        },
+      ]),
+    ).toThrow("duplicate node id group-1");
   });
 
   it("remaps a colliding legacy default workspace as one isolated imported workspace", () => {
