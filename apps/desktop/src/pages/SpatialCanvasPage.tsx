@@ -16,15 +16,20 @@ import "katex/dist/katex.min.css";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { CanvasWorkspace } from "../features/canvas/CanvasWorkspace";
 import {
+  beginCanvasHistoryTransaction,
   canvasHistoryContentChanged,
   reconcileCanvasHistory,
   recordCanvasHistory,
   redoCanvasHistory,
+  rollbackCanvasHistoryTransaction,
   sealCanvasHistory,
   undoCanvasHistory,
   type CanvasDocumentChangeOptions,
+  type CanvasHistoryMutation,
   type CanvasHistoryState,
+  type CanvasHistoryTransaction,
 } from "../features/canvas/canvas-history";
+import { clearCanvasNoteDraftsForWorkspace } from "../features/canvas/canvas-note-draft";
 import {
   PREVIEW_LIBRARY_WORKS,
   createCanvasId,
@@ -45,6 +50,7 @@ import { canvasWorkspacePath, canvasWorkspaceRedirectPath } from "../features/ca
 import { setCanvasSynthesisService } from "../features/canvas/synthesis";
 import {
   flushLatestCanvasWorkspace,
+  persistCurrentCanvasWorkspaceSnapshot,
   waitForCanvasWorkspaceLoad,
 } from "../features/canvas/workspace-load";
 import {
@@ -216,6 +222,7 @@ export function SpatialCanvasPage() {
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [documentTransactionEpoch, setDocumentTransactionEpoch] = useState(0);
   const [persistenceLabel, setPersistenceLabel] = useState("正在载入…");
   const { confirm, confirmDialog } = useConfirmDialog();
   const activeDocumentRef = useRef<CanvasWorkspaceDocument | null>(null);
@@ -227,6 +234,7 @@ export function SpatialCanvasPage() {
   const loadRequestRef = useRef(0);
   const handledIngressRef = useRef(new Set<string>());
   const historyByWorkspaceRef = useRef(new Map<string, CanvasHistoryState>());
+  const activeDocumentTransactionRef = useRef<CanvasHistoryTransaction | null>(null);
   const [historyStatus, setHistoryStatus] = useState({
     workspaceId: "",
     canUndo: false,
@@ -256,6 +264,9 @@ export function SpatialCanvasPage() {
       options: CanvasDocumentChangeOptions = {},
     ): boolean => {
       if (retiredWorkspaceIdsRef.current.has(sourceWorkspaceId)) return false;
+      if (activeDocumentTransactionRef.current?.afterDocument.workspaceId === sourceWorkspaceId) {
+        return false;
+      }
       const current = activeDocumentRef.current;
       if (!current || current.workspaceId !== sourceWorkspaceId) return false;
       const next = updater(current);
@@ -285,6 +296,9 @@ export function SpatialCanvasPage() {
     (command: "undo" | "redo"): string | null => {
       const current = activeDocumentRef.current;
       if (!current || retiredWorkspaceIdsRef.current.has(current.workspaceId)) return null;
+      if (activeDocumentTransactionRef.current?.afterDocument.workspaceId === current.workspaceId) {
+        return null;
+      }
       const history = reconcileCanvasHistory(
         historyByWorkspaceRef.current.get(current.workspaceId),
         current,
@@ -304,6 +318,99 @@ export function SpatialCanvasPage() {
       setDocument(result.document);
       refreshHistoryStatus(current.workspaceId);
       return result.label;
+    },
+    [refreshHistoryStatus],
+  );
+
+  const applyActiveDocumentTransaction = useCallback(
+    (
+      sourceWorkspaceId: string,
+      updater: (current: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
+      mutation: CanvasHistoryMutation,
+    ) => {
+      if (retiredWorkspaceIdsRef.current.has(sourceWorkspaceId)) return null;
+      if (activeDocumentTransactionRef.current !== null) return null;
+      const current = activeDocumentRef.current;
+      if (!current || current.workspaceId !== sourceWorkspaceId) return null;
+      const next = updater(current);
+      if (
+        next === current ||
+        next.workspaceId !== sourceWorkspaceId ||
+        !canvasHistoryContentChanged(current, next)
+      ) {
+        return null;
+      }
+      const transaction = beginCanvasHistoryTransaction(
+        historyByWorkspaceRef.current.get(sourceWorkspaceId),
+        current,
+        next,
+        mutation,
+      );
+      if (!transaction) return null;
+
+      activeDocumentTransactionRef.current = transaction;
+      historyByWorkspaceRef.current.set(sourceWorkspaceId, transaction.afterHistory);
+      activeDocumentRef.current = next;
+      latestDocumentsRef.current.set(sourceWorkspaceId, next);
+      setDocument(next);
+      refreshHistoryStatus(sourceWorkspaceId);
+
+      return {
+        commit: (): boolean => {
+          if (activeDocumentTransactionRef.current !== transaction) return false;
+          activeDocumentTransactionRef.current = null;
+          setDocumentTransactionEpoch((value) => value + 1);
+          return (
+            activeDocumentRef.current?.workspaceId === sourceWorkspaceId &&
+            historyByWorkspaceRef.current.get(sourceWorkspaceId) === transaction.afterHistory
+          );
+        },
+        rollback: (
+          rollbackUpdater: (currentDocument: CanvasWorkspaceDocument) => CanvasWorkspaceDocument,
+        ): boolean => {
+          if (
+            retiredWorkspaceIdsRef.current.has(sourceWorkspaceId) ||
+            activeDocumentTransactionRef.current !== transaction
+          ) {
+            if (activeDocumentTransactionRef.current === transaction) {
+              activeDocumentTransactionRef.current = null;
+              setDocumentTransactionEpoch((value) => value + 1);
+            }
+            return false;
+          }
+          const liveDocument = activeDocumentRef.current;
+          if (!liveDocument || liveDocument.workspaceId !== sourceWorkspaceId) {
+            activeDocumentTransactionRef.current = null;
+            setDocumentTransactionEpoch((value) => value + 1);
+            return false;
+          }
+          const restoredDocument = rollbackUpdater(liveDocument);
+          if (restoredDocument === liveDocument) {
+            activeDocumentTransactionRef.current = null;
+            setDocumentTransactionEpoch((value) => value + 1);
+            return false;
+          }
+          const rollback = rollbackCanvasHistoryTransaction(
+            transaction,
+            historyByWorkspaceRef.current.get(sourceWorkspaceId),
+            liveDocument,
+            restoredDocument,
+          );
+          if (!rollback) {
+            activeDocumentTransactionRef.current = null;
+            setDocumentTransactionEpoch((value) => value + 1);
+            return false;
+          }
+          activeDocumentTransactionRef.current = null;
+          setDocumentTransactionEpoch((value) => value + 1);
+          historyByWorkspaceRef.current.set(sourceWorkspaceId, rollback.history);
+          activeDocumentRef.current = rollback.document;
+          latestDocumentsRef.current.set(sourceWorkspaceId, rollback.document);
+          setDocument(rollback.document);
+          refreshHistoryStatus(sourceWorkspaceId);
+          return true;
+        },
+      };
     },
     [refreshHistoryStatus],
   );
@@ -341,9 +448,16 @@ export function SpatialCanvasPage() {
       const serialized = JSON.stringify(snapshot);
       const previous = saveChainsRef.current.get(workspaceId) ?? Promise.resolve();
       const run = previous
-        .catch(() => undefined)
-        .then(() => saveCanvasWorkspace(snapshot))
-        .then(() => {
+        .then(() =>
+          persistCurrentCanvasWorkspaceSnapshot({
+            snapshot,
+            getLatestDocument: () => latestDocumentsRef.current.get(workspaceId),
+            isRetired: () => retiredWorkspaceIdsRef.current.has(workspaceId),
+            persist: saveCanvasWorkspace,
+          }),
+        )
+        .then((status) => {
+          if (status === "superseded") return;
           lastPersistedRef.current.set(workspaceId, serialized);
           const active = activeDocumentRef.current;
           const latest = latestDocumentsRef.current.get(workspaceId);
@@ -503,12 +617,10 @@ export function SpatialCanvasPage() {
     const timer = window.setTimeout(() => {
       pendingSaveRef.current.delete(workspaceId);
       if (retiredWorkspaceIdsRef.current.has(workspaceId)) return;
-      const latest = latestDocumentsRef.current.get(workspaceId);
-      if (!latest) return;
-      void persistDocument(latest).catch(() => undefined);
+      void flushWorkspace(workspaceId).catch(() => undefined);
     }, 420);
     pendingSaveRef.current.set(workspaceId, timer);
-  }, [document, persistDocument]);
+  }, [document, flushWorkspace]);
 
   useEffect(() => {
     const flushAll = () => {
@@ -516,10 +628,9 @@ export function SpatialCanvasPage() {
         window.clearTimeout(timer);
         pendingSaveRef.current.delete(workspaceId);
       }
-      for (const latest of latestDocumentsRef.current.values()) {
-        if (retiredWorkspaceIdsRef.current.has(latest.workspaceId)) continue;
-        if (JSON.stringify(latest) === lastPersistedRef.current.get(latest.workspaceId)) continue;
-        void persistDocument(latest).catch(() => undefined);
+      for (const workspaceId of latestDocumentsRef.current.keys()) {
+        if (retiredWorkspaceIdsRef.current.has(workspaceId)) continue;
+        void flushWorkspace(workspaceId).catch(() => undefined);
       }
     };
     window.addEventListener("pagehide", flushAll);
@@ -527,7 +638,7 @@ export function SpatialCanvasPage() {
       window.removeEventListener("pagehide", flushAll);
       flushAll();
     };
-  }, [persistDocument]);
+  }, [flushWorkspace]);
 
   const workspaceId = document?.workspaceId ?? "";
 
@@ -615,6 +726,7 @@ export function SpatialCanvasPage() {
         await saveChainsRef.current.get(targetWorkspaceId)?.catch(() => undefined);
         deleted = await deleteCanvasWorkspace(targetWorkspaceId);
         if (!deleted) throw new Error("白板不存在或已被删除");
+        clearCanvasNoteDraftsForWorkspace(targetWorkspaceId);
 
         latestDocumentsRef.current.delete(targetWorkspaceId);
         lastPersistedRef.current.delete(targetWorkspaceId);
@@ -654,13 +766,13 @@ export function SpatialCanvasPage() {
             latest &&
             JSON.stringify(latest) !== lastPersistedRef.current.get(targetWorkspaceId)
           ) {
-            void persistDocument(latest).catch(() => undefined);
+            void flushWorkspace(targetWorkspaceId).catch(() => undefined);
           }
         }
         throw error;
       }
     },
-    [confirm, navigate, persistDocument, routeWorkspaceId, workspaces],
+    [confirm, flushWorkspace, navigate, routeWorkspaceId, workspaces],
   );
 
   useEffect(() => {
@@ -696,7 +808,8 @@ export function SpatialCanvasPage() {
         if (cancelled) return;
         const row = rows[0];
         if (!row) throw new Error("没有找到这条批注，可能已被移除");
-        applyActiveDocumentUpdate(
+        let alreadyPresent = false;
+        const applied = applyActiveDocumentUpdate(
           workspaceId,
           (current) => {
             if (
@@ -704,6 +817,7 @@ export function SpatialCanvasPage() {
                 (node) => node.type === "excerpt" && node.data.annotationId === row.id,
               )
             ) {
+              alreadyPresent = true;
               return current;
             }
             const node = annotationNode(row, current);
@@ -716,6 +830,10 @@ export function SpatialCanvasPage() {
           },
           { history: { label: "加入文献摘录" } },
         );
+        if (!applied && !alreadyPresent) {
+          handledIngress.delete(ingressKey);
+          return;
+        }
         settled = true;
         navigate(canvasWorkspacePath(workspaceId), { replace: true });
       })
@@ -728,7 +846,14 @@ export function SpatialCanvasPage() {
       cancelled = true;
       if (!settled) handledIngress.delete(ingressKey);
     };
-  }, [applyActiveDocumentUpdate, desktopRuntime, navigate, requestedAnnotationId, workspaceId]);
+  }, [
+    applyActiveDocumentUpdate,
+    desktopRuntime,
+    documentTransactionEpoch,
+    navigate,
+    requestedAnnotationId,
+    workspaceId,
+  ]);
 
   useEffect(() => {
     if (!workspaceId || libraryLoading || !requestedWorkId || requestedAnnotationId) {
@@ -755,12 +880,14 @@ export function SpatialCanvasPage() {
       .then((work) => {
         if (cancelled) return;
         if (!work) throw new Error("未在文献库中找到请求添加的文献");
-        applyActiveDocumentUpdate(
+        let alreadyPresent = false;
+        const applied = applyActiveDocumentUpdate(
           workspaceId,
           (current) => {
             if (
               current.nodes.some((node) => node.type === "paper" && node.data.workId === work.id)
             ) {
+              alreadyPresent = true;
               return current;
             }
             const node = createPaperNode(work, nextIngressPosition(current));
@@ -768,6 +895,10 @@ export function SpatialCanvasPage() {
           },
           { history: { label: "加入文献" } },
         );
+        if (!applied && !alreadyPresent) {
+          handledIngress.delete(ingressKey);
+          return;
+        }
         settled = true;
         navigate(canvasWorkspacePath(workspaceId), { replace: true });
       })
@@ -784,6 +915,7 @@ export function SpatialCanvasPage() {
   }, [
     desktopRuntime,
     applyActiveDocumentUpdate,
+    documentTransactionEpoch,
     libraryLoading,
     navigate,
     requestedAnnotationId,
@@ -838,6 +970,10 @@ export function SpatialCanvasPage() {
           onDocumentChange={(updater, options) =>
             applyActiveDocumentUpdate(document.workspaceId, updater, options)
           }
+          onDocumentTransaction={(updater, mutation) =>
+            applyActiveDocumentTransaction(document.workspaceId, updater, mutation)
+          }
+          onFlushDocument={flushWorkspace}
           onRedo={() => runHistoryCommand("redo")}
           onUndo={() => runHistoryCommand("undo")}
           works={works}

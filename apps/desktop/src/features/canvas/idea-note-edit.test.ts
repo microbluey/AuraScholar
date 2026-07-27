@@ -81,6 +81,84 @@ describe("idea note editing", () => {
     expect(result.document).toBe(document);
   });
 
+  it("rejects a focused-editor save when the persisted note content changed", () => {
+    const { document, node } = previewIdeaNote();
+    expect(node.type).toBe("idea-note");
+    if (node.type !== "idea-note") return;
+
+    const result = applyIdeaNotePatch(
+      document,
+      document.workspaceId,
+      node.id,
+      { title: "草稿标题", contentMarkdown: "草稿正文" },
+      {
+        expectedValue: {
+          title: "已经变化的标题",
+          contentMarkdown: node.data.contentMarkdown,
+        },
+      },
+    );
+
+    expect(result).toEqual({ document, status: "content-mismatch" });
+  });
+
+  it("treats an already-applied retry as unchanged even when its edit base is stale", () => {
+    const { document, node } = previewIdeaNote();
+    expect(node.type).toBe("idea-note");
+    if (node.type !== "idea-note") return;
+
+    const result = applyIdeaNotePatch(
+      document,
+      document.workspaceId,
+      node.id,
+      {
+        title: node.data.title,
+        contentMarkdown: node.data.contentMarkdown,
+      },
+      {
+        expectedValue: {
+          title: "保存前的标题",
+          contentMarkdown: "保存前的正文",
+        },
+      },
+    );
+
+    expect(result).toEqual({ document, status: "unchanged" });
+  });
+
+  it("can safely roll an unpersisted save back only while its draft is still current", () => {
+    const { document, node } = previewIdeaNote();
+    expect(node.type).toBe("idea-note");
+    if (node.type !== "idea-note") return;
+    const openingValue = {
+      title: node.data.title ?? "",
+      contentMarkdown: node.data.contentMarkdown,
+    };
+    const draftValue = {
+      title: "待持久化标题",
+      contentMarkdown: "待持久化正文",
+    };
+
+    const savedInMemory = applyIdeaNotePatch(document, document.workspaceId, node.id, draftValue, {
+      expectedValue: openingValue,
+    });
+    expect(savedInMemory.status).toBe("applied");
+
+    const rolledBack = applyIdeaNotePatch(
+      savedInMemory.document,
+      document.workspaceId,
+      node.id,
+      openingValue,
+      { expectedValue: draftValue },
+    );
+    expect(rolledBack.status).toBe("applied");
+    const restoredNode = rolledBack.document.nodes.find((candidate) => candidate.id === node.id);
+    expect(restoredNode?.type).toBe("idea-note");
+    if (restoredNode?.type !== "idea-note") return;
+    expect(restoredNode.data.title).toBe(openingValue.title);
+    expect(restoredNode.data.contentMarkdown).toBe(openingValue.contentMarkdown);
+  });
+
   it("recognizes inline, display, and LaTeX-delimited equations", () => {
     expect(markdownHasEquations("No equation here")).toBe(false);
     expect(markdownHasEquations("Energy is $E = mc^2$.")).toBe(true);

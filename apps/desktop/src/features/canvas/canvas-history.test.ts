@@ -2,10 +2,12 @@ import { type CanvasWorkspaceDocument } from "@aurascholar/core";
 import { describe, expect, it } from "vitest";
 import {
   CANVAS_HISTORY_LIMIT,
+  beginCanvasHistoryTransaction,
   createCanvasHistoryState,
   reconcileCanvasHistory,
   recordCanvasHistory,
   redoCanvasHistory,
+  rollbackCanvasHistoryTransaction,
   sealCanvasHistory,
   undoCanvasHistory,
 } from "./canvas-history";
@@ -310,5 +312,94 @@ describe("canvas workspace history", () => {
 
     expect(undoCanvasHistory(history, otherWorkspace, 200)).toBeNull();
     expect(reconcileCanvasHistory(history, otherWorkspace).past).toEqual([]);
+  });
+
+  it("rolls back a failed transaction without changing the existing undo or redo branches", () => {
+    const original = createPreviewWorkspace();
+    const first = addNote(original, "first", 100);
+    const second = addNote(first, "second", 200);
+    const firstHistory = recordCanvasHistory(
+      createCanvasHistoryState(original),
+      original,
+      first,
+      { label: "第一步" },
+      100,
+    );
+    const secondHistory = recordCanvasHistory(
+      firstHistory,
+      first,
+      second,
+      { label: "第二步" },
+      200,
+    );
+    const checkpoint = undoCanvasHistory(secondHistory, second, 300);
+    expect(checkpoint).not.toBeNull();
+    const draft = addNote(checkpoint!.document, "unpersisted-draft", 400);
+    const transaction = beginCanvasHistoryTransaction(
+      checkpoint!.history,
+      checkpoint!.document,
+      draft,
+      { label: "编辑研究笔记" },
+      400,
+    );
+    expect(transaction).not.toBeNull();
+
+    const currentWithNewViewport = {
+      ...transaction!.afterDocument,
+      viewport: { x: 90, y: -40, zoom: 1.3 },
+      updatedAt: 450,
+    };
+    const restoredDocument = {
+      ...checkpoint!.document,
+      nodes: checkpoint!.document.nodes.map((node) => ({ ...node, updatedAt: node.updatedAt + 1 })),
+      viewport: currentWithNewViewport.viewport,
+      updatedAt: 500,
+    };
+    const rolledBack = rollbackCanvasHistoryTransaction(
+      transaction!,
+      transaction!.afterHistory,
+      currentWithNewViewport,
+      restoredDocument,
+    );
+
+    expect(rolledBack).not.toBeNull();
+    expect(rolledBack!.history.past).toEqual(checkpoint!.history.past);
+    expect(rolledBack!.history.future).toEqual(checkpoint!.history.future);
+    expect(rolledBack!.document.viewport).toEqual(currentWithNewViewport.viewport);
+    expect(undoCanvasHistory(rolledBack!.history, rolledBack!.document, 600)?.label).toBe("第一步");
+    expect(redoCanvasHistory(rolledBack!.history, rolledBack!.document, 600)?.label).toBe("第二步");
+  });
+
+  it("rejects a transaction rollback after another history mutation or to different content", () => {
+    const original = createPreviewWorkspace();
+    const draft = addNote(original, "unpersisted-draft", 100);
+    const transaction = beginCanvasHistoryTransaction(
+      createCanvasHistoryState(original),
+      original,
+      draft,
+      { label: "编辑研究笔记" },
+      100,
+    );
+    expect(transaction).not.toBeNull();
+    const concurrent = addNote(draft, "concurrent", 200);
+    const concurrentHistory = recordCanvasHistory(
+      transaction!.afterHistory,
+      draft,
+      concurrent,
+      { label: "并发编辑" },
+      200,
+    );
+
+    expect(
+      rollbackCanvasHistoryTransaction(transaction!, concurrentHistory, concurrent, original),
+    ).toBeNull();
+    expect(
+      rollbackCanvasHistoryTransaction(
+        transaction!,
+        transaction!.afterHistory,
+        transaction!.afterDocument,
+        addNote(original, "wrong-rollback", 300),
+      ),
+    ).toBeNull();
   });
 });

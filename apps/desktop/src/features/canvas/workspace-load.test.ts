@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CANVAS_SCHEMA_VERSION, type CanvasWorkspaceDocument } from "@aurascholar/core";
-import { flushLatestCanvasWorkspace, waitForCanvasWorkspaceLoad } from "./workspace-load";
+import {
+  flushLatestCanvasWorkspace,
+  persistCurrentCanvasWorkspaceSnapshot,
+  waitForCanvasWorkspaceLoad,
+} from "./workspace-load";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -61,6 +65,44 @@ describe("flushLatestCanvasWorkspace", () => {
 
     expect(persisted).toEqual([latest]);
     expect(lastPersisted).toBe(JSON.stringify(latest));
+  });
+});
+
+describe("persistCurrentCanvasWorkspaceSnapshot", () => {
+  it("skips a queued snapshot that was superseded before its write begins", async () => {
+    const stale = workspace(1);
+    const latest = workspace(2);
+    const writes: CanvasWorkspaceDocument[] = [];
+
+    await expect(
+      persistCurrentCanvasWorkspaceSnapshot({
+        snapshot: stale,
+        getLatestDocument: () => latest,
+        isRetired: () => false,
+        persist: async (document) => {
+          writes.push(document);
+        },
+      }),
+    ).resolves.toBe("superseded");
+    expect(writes).toEqual([]);
+  });
+
+  it("does not report an in-flight snapshot as persisted after it is invalidated", async () => {
+    const candidate = workspace(1);
+    const rollback = workspace(2);
+    const pendingWrite = deferred();
+    let latest = candidate;
+
+    const result = persistCurrentCanvasWorkspaceSnapshot({
+      snapshot: candidate,
+      getLatestDocument: () => latest,
+      isRetired: () => false,
+      persist: () => pendingWrite.promise,
+    });
+    latest = rollback;
+    pendingWrite.resolve();
+
+    await expect(result).resolves.toBe("superseded");
   });
 });
 
