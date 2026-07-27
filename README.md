@@ -110,6 +110,8 @@ packages/
 
 The desktop shell is Electron. Shared, platform-agnostic domain logic lives in `packages/`; Electron-specific orchestration and UI live in `apps/desktop/`. The Electron main process provides SQLite / CORS-free HTTP / file system / notifications / the built-in browser, bridged to the renderer through the preload `window.aura` API. See [apps/desktop/README.md](./apps/desktop/README.md) for the architecture.
 
+The proposed local-first research corpus, hybrid retrieval, evidence-grounded RAG, and writing integration are specified separately in the [Research Knowledge Layer RFC](./docs/KNOWLEDGE_LAYER_RFC.md). These capabilities are planned and are not yet part of the implemented feature set above.
+
 ## Development
 
 ```bash
