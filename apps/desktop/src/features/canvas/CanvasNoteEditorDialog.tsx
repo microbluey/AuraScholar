@@ -17,17 +17,21 @@ import {
   useDeferredValue,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { useBlocker } from "react-router-dom";
 import { useModalFocusTrap } from "../../components/useModalFocusTrap";
 import { isImeComposing } from "../../keyboard";
-import { registerExitBarrier } from "../../services/exit-barriers";
 import { CanvasMarkdown } from "./CanvasMarkdown";
+import {
+  planCanvasEditorPreparation,
+  registerCanvasEditorPreparer,
+  type CanvasEditorPreparationDecision,
+} from "./canvas-route-preparation";
 import {
   canvasNoteDraftSourceToken,
   getCanvasNoteDraftOwnerId,
@@ -157,14 +161,19 @@ export function CanvasNoteEditorDialog({
   const unresolvedConflictRef = useRef(initialDraftRead.status === "conflict");
   const savingRef = useRef(false);
   const composingRef = useRef(false);
+  const routePreparationRef = useRef<{
+    promise: Promise<CanvasEditorPreparationDecision>;
+    resolve: (decision: CanvasEditorPreparationDecision) => void;
+  } | null>(null);
+  const preparationSaveRef = useRef<(() => Promise<CanvasNoteEditorCommitResult>) | null>(null);
+  const preparationFlushDraftRef = useRef<((updateUi?: boolean) => void) | null>(null);
   const titleId = useId();
   const descriptionId = useId();
   const dirty =
     title !== persistedBaseValue.title || contentMarkdown !== persistedBaseValue.contentMarkdown;
   const conflictLocked = draftNotice?.kind === "conflict";
   const lineCount = contentMarkdown ? contentMarkdown.split("\n").length : 0;
-  const blocker = useBlocker(dirty);
-  const exitDialogOpen = closePromptOpen || blocker.state === "blocked";
+  const exitDialogOpen = closePromptOpen;
 
   const resolveDraftTokens = useCallback(
     (tokens: Array<CanvasNoteDraftToken | null>, updateUi = true) => {
@@ -321,21 +330,20 @@ export function CanvasNoteEditorDialog({
     onEscape: requestClose,
   });
 
+  const settleRoutePreparation = useCallback((decision: CanvasEditorPreparationDecision) => {
+    const pending = routePreparationRef.current;
+    routePreparationRef.current = null;
+    pending?.resolve(decision);
+  }, []);
+
   const continueEditing = () => {
     if (savingRef.current) return;
     setExitError("");
     setClosePromptOpen(false);
-    if (blocker.state === "blocked") blocker.reset();
+    settleRoutePreparation("cancel");
   };
 
-  const finishClose = useCallback(() => {
-    if (blocker.state === "blocked") {
-      blocker.proceed();
-      onClose();
-      return;
-    }
-    onClose();
-  }, [blocker, onClose]);
+  const finishClose = useCallback(() => onClose(), [onClose]);
 
   const discardAndClose = () => {
     if (savingRef.current || unresolvedConflictRef.current) return;
@@ -352,6 +360,7 @@ export function CanvasNoteEditorDialog({
     dirtyRef.current = false;
     setExitError("");
     setClosePromptOpen(false);
+    settleRoutePreparation("ready");
     finishClose();
   };
 
@@ -386,39 +395,71 @@ export function CanvasNoteEditorDialog({
         writeDraftNow(currentValueRef.current);
         setCommitError("保存期间检测到新的编辑；已保存上一版，并保留当前内容供你继续确认。");
         setClosePromptOpen(false);
-        if (blocker.state === "blocked") blocker.reset();
+        settleRoutePreparation("cancel");
         return "rejected";
       }
       setClosePromptOpen(false);
+      settleRoutePreparation("ready");
       finishClose();
       return result;
     }
     setCommitError("写入白板存储未完成或内容已变化，本地草稿仍保留；请核对后重试。");
     setClosePromptOpen(false);
-    if (blocker.state === "blocked") blocker.reset();
+    settleRoutePreparation("cancel");
     return "rejected";
-  }, [blocker, finishClose, flushCurrentDraft, onCommit, resolveDraftTokens, writeDraftNow]);
+  }, [
+    finishClose,
+    flushCurrentDraft,
+    onCommit,
+    resolveDraftTokens,
+    settleRoutePreparation,
+    writeDraftNow,
+  ]);
 
-  useEffect(
-    () =>
-      registerExitBarrier(
-        async () => {
-          if (composingRef.current) {
-            flushCurrentDraft(false);
-            return "cancel";
-          }
-          if (!dirtyRef.current) return "ready";
-          if (savingRef.current || unresolvedConflictRef.current) {
-            flushCurrentDraft(false);
-            return "cancel";
-          }
-          const result = await save();
-          return result === "saved" || result === "unchanged" ? "ready" : "cancel";
-        },
-        { priority: 0 },
-      ),
-    [flushCurrentDraft, save],
-  );
+  useLayoutEffect(() => {
+    preparationSaveRef.current = save;
+    preparationFlushDraftRef.current = flushCurrentDraft;
+  }, [flushCurrentDraft, save]);
+
+  useEffect(() => {
+    const unregister = registerCanvasEditorPreparer(async ({ reason }) => {
+      const plan = planCanvasEditorPreparation({
+        composing: composingRef.current,
+        conflict: unresolvedConflictRef.current,
+        dirty: dirtyRef.current,
+        reason,
+        saving: savingRef.current,
+      });
+      const flushDraft = preparationFlushDraftRef.current;
+      if (plan === "cancel") {
+        if (dirtyRef.current) flushDraft?.(false);
+        return "cancel";
+      }
+      if (plan === "ready") return "ready";
+      if (plan === "save") {
+        const saveCurrent = preparationSaveRef.current;
+        if (!saveCurrent) return "cancel";
+        const result = await saveCurrent();
+        return result === "saved" || result === "unchanged" ? "ready" : "cancel";
+      }
+
+      flushDraft?.();
+      setExitError("");
+      setClosePromptOpen(true);
+      const existing = routePreparationRef.current;
+      if (existing) return existing.promise;
+      let resolvePending: (decision: CanvasEditorPreparationDecision) => void = () => undefined;
+      const promise = new Promise<CanvasEditorPreparationDecision>((resolve) => {
+        resolvePending = resolve;
+      });
+      routePreparationRef.current = { promise, resolve: resolvePending };
+      return promise;
+    });
+    return () => {
+      unregister();
+      settleRoutePreparation("cancel");
+    };
+  }, [settleRoutePreparation]);
 
   const formatSelection = (action: MarkdownFormatAction) => {
     if (savingRef.current || unresolvedConflictRef.current) return;

@@ -12,12 +12,6 @@ export interface CanvasWorkspaceCollectionBarrier {
   workspaceIds: Iterable<string>;
 }
 
-export interface CanvasWorkspaceNavigationBarrier {
-  flushWorkspace: (workspaceId: string) => Promise<void>;
-  navigate: () => void;
-  workspaceId?: string;
-}
-
 export interface CanvasWorkspaceWriteBarrier {
   cancelPendingSave: () => void;
   getInFlightSave: () => Promise<void> | undefined;
@@ -98,16 +92,6 @@ export async function flushCanvasWorkspaceCollection({
   if (failures.length === 0) return;
   if (failures.length === 1) throw failures[0];
   throw new AggregateError(failures, `${failures.length} 个白板保存失败`);
-}
-
-/** Keeps an explicit Canvas route change behind the active workspace write. */
-export async function navigateAfterCanvasWorkspaceFlush({
-  flushWorkspace,
-  navigate,
-  workspaceId,
-}: CanvasWorkspaceNavigationBarrier): Promise<void> {
-  if (workspaceId) await flushWorkspace(workspaceId);
-  navigate();
 }
 
 /**
