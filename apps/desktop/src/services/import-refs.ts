@@ -4,7 +4,7 @@
 // the Zotero/EndNote migration on-ramp.
 import { parseReferences, cslYear, type CslItem, type ImportFormat } from "@aurascholar/cite";
 import { WorksRepo } from "@aurascholar/db/repos/works";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 
 export interface ImportSummary {
   total: number;
@@ -21,8 +21,8 @@ export async function importReferences(
   format?: ImportFormat,
 ): Promise<ImportSummary> {
   const items = parseImportableReferences(text, format);
-  const db = await getDb();
-  const works = new WorksRepo(db);
+  const { db, libraryId } = await getLibraryDb();
+  const works = new WorksRepo(db, libraryId);
   return works.upsertMany(items.map(toWorkInput));
 }
 
@@ -33,11 +33,11 @@ function parseImportableReferences(text: string, format?: ImportFormat): CslItem
 function hasImportableReferenceContent(item: CslItem): boolean {
   return Boolean(
     textValue(item.title) ||
-      cslDoi(item) ||
-      cslPmid(item) ||
-      textValue(item.URL) ||
-      textValue(item.ISBN) ||
-      textValue(item.ISSN),
+    cslDoi(item) ||
+    cslPmid(item) ||
+    textValue(item.URL) ||
+    textValue(item.ISBN) ||
+    textValue(item.ISSN),
   );
 }
 

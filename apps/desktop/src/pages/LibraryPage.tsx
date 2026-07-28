@@ -30,7 +30,7 @@ import type {
   WorkWithAuthors,
 } from "@aurascholar/db";
 import { citationCountsForWorks } from "@aurascholar/db/work-list";
-import { getDb } from "../services/aura-db";
+import { getLibraryDb } from "../services/aura-db";
 import { listDeletedWorks, listWorks } from "../services/library-list";
 import type { IngestDraft, PendingPdf } from "../services/library-types";
 import type { ExportFormat } from "../services/cite";
@@ -234,10 +234,12 @@ function emptyWorkMeta(): WorkTableMeta {
 }
 
 const PREVIEW_TIMESTAMP = Date.UTC(2026, 6, 1);
+const PREVIEW_LIBRARY_ID = "library:preview";
 
 function previewWork(input: PreviewLibraryWorkSeed): WorkWithAuthors {
   return {
     id: input.id,
+    library_id: PREVIEW_LIBRARY_ID,
     doi: input.doi ?? null,
     title: input.title,
     abstract: input.abstract,
@@ -287,6 +289,7 @@ const PREVIEW_LIBRARY_WORKS: WorkWithAuthors[] = PREVIEW_LIBRARY_WORK_SEEDS.map(
 const PREVIEW_LIBRARY_COLLECTIONS: CollectionRow[] = [
   {
     id: "preview-projects",
+    library_id: PREVIEW_LIBRARY_ID,
     name: "研究项目",
     parent_id: null,
     sort_order: 0,
@@ -294,6 +297,7 @@ const PREVIEW_LIBRARY_COLLECTIONS: CollectionRow[] = [
   },
   {
     id: "preview-transformer",
+    library_id: PREVIEW_LIBRARY_ID,
     name: "Transformer 综述",
     parent_id: "preview-projects",
     sort_order: 0,
@@ -301,6 +305,7 @@ const PREVIEW_LIBRARY_COLLECTIONS: CollectionRow[] = [
   },
   {
     id: "preview-life-science",
+    library_id: PREVIEW_LIBRARY_ID,
     name: "生命科学",
     parent_id: null,
     sort_order: 1,
@@ -944,18 +949,27 @@ export function LibraryPage() {
     try {
       const smokeFailure = consumeLibrarySmokeReadFailure();
       if (smokeFailure) throw smokeFailure;
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const [collectionRows, trashRows] = await Promise.all([
         db.query<CollectionRow>(
-          `SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
+          `SELECT c.id, c.library_id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
            FROM collections c
            LEFT JOIN collection_items ci ON ci.collection_id = c.id
-           LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
-           WHERE c.deleted_at IS NULL
-           GROUP BY c.id, c.name, c.parent_id, c.sort_order
+           LEFT JOIN works w
+             ON w.id = ci.work_id
+            AND w.library_id = c.library_id
+            AND w.deleted_at IS NULL
+           WHERE c.library_id = ? AND c.deleted_at IS NULL
+           GROUP BY c.id, c.library_id, c.name, c.parent_id, c.sort_order
            ORDER BY c.sort_order, c.name, c.id`,
+          [libraryId],
         ),
-        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM works
+           WHERE library_id = ? AND deleted_at IS NOT NULL`,
+          [libraryId],
+        ),
       ]);
       const showTrash = activeFilter === "trash";
       const works = showTrash
@@ -985,11 +999,13 @@ export function LibraryPage() {
             `SELECT wt.work_id, t.name
            FROM work_tags wt
            JOIN tags t ON t.id = wt.tag_id
-           WHERE wt.work_id IN (${placeholders}) AND t.deleted_at IS NULL
+           WHERE wt.work_id IN (${placeholders})
+             AND t.library_id = ?
+             AND t.deleted_at IS NULL
           ORDER BY t.name`,
-            ids,
+            [...ids, libraryId],
           ),
-          citationCountsForWorks(db, ids),
+          citationCountsForWorks(db, libraryId, ids),
           db.query<{ work_id: string; count: number }>(
             `SELECT work_id, COUNT(*) AS count
            FROM annotations
@@ -1015,11 +1031,13 @@ export function LibraryPage() {
            JOIN (
              SELECT work_id, MAX(created_at) AS created_at, COUNT(*) AS task_count
              FROM sentinel_tasks
-             WHERE work_id IN (${placeholders}) AND deleted_at IS NULL
+             WHERE work_id IN (${placeholders})
+               AND library_id = ?
+               AND deleted_at IS NULL
              GROUP BY work_id
            ) latest ON latest.work_id = st.work_id AND latest.created_at = st.created_at
-           WHERE st.deleted_at IS NULL`,
-            ids,
+           WHERE st.library_id = ? AND st.deleted_at IS NULL`,
+            [...ids, libraryId, libraryId],
           ),
         ]);
       await waitForLibrarySmokeAfterReadDelay();
@@ -1316,9 +1334,9 @@ export function LibraryPage() {
               await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
               throw smokeFailure;
             }
-            const db = await getDb();
+            const { db, libraryId } = await getLibraryDb();
             const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-            const id = await new CollectionsRepo(db).create(name, parent?.id);
+            const id = await new CollectionsRepo(db, libraryId).create(name, parent?.id);
             await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
             setActiveFilter("all");
             setActiveCollection(id);
@@ -1371,9 +1389,9 @@ export function LibraryPage() {
               await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
               throw smokeFailure;
             }
-            const db = await getDb();
+            const { db, libraryId } = await getLibraryDb();
             const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-            await new CollectionsRepo(db).rename(id, next);
+            await new CollectionsRepo(db, libraryId).rename(id, next);
             await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
             setMessage(`已重命名为「${next}」`);
             setCollectionManagerStatus(`已重命名为「${next}」`);
@@ -1421,9 +1439,9 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-        const repo = new CollectionsRepo(db);
+        const repo = new CollectionsRepo(db, libraryId);
         const workIds = await repo.workIds(id);
         await repo.softDelete(id);
         await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
@@ -1468,9 +1486,9 @@ export function LibraryPage() {
         await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-      await new CollectionsRepo(db).restore(id, workIds);
+      await new CollectionsRepo(db, libraryId).restore(id, workIds);
       await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
       const restoredMessage = `已恢复文件夹「${name}」`;
       setCollectionDeleteUndo(null);
@@ -1505,9 +1523,9 @@ export function LibraryPage() {
         return;
       }
       try {
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-        await new CollectionsRepo(db).move(id, parentId, position);
+        await new CollectionsRepo(db, libraryId).move(id, parentId, position);
         setMessage(`已移动文件夹「${folder.name}」`);
         await refresh();
         window.dispatchEvent(new Event("aurascholar:library-updated"));
@@ -1901,9 +1919,9 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        await new WorksRepo(db).setStarred(work.id, starred);
+        await new WorksRepo(db, libraryId).setStarred(work.id, starred);
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedWorkId(work.id);
@@ -1951,9 +1969,9 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        await new WorksRepo(db).setReadingStatus(selectedWork.id, status);
+        await new WorksRepo(db, libraryId).setReadingStatus(selectedWork.id, status);
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedWorkId(selectedWork.id);
@@ -2011,14 +2029,14 @@ export function LibraryPage() {
     setTrashUndo(null);
     setMessage(`正在将《${title}》移入回收站...`);
     try {
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const { WorksRepo } = await import("@aurascholar/db/repos/works");
       const smokeFailure = consumeLibrarySmokeTrashFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      await new WorksRepo(db).softDelete(workId);
+      await new WorksRepo(db, libraryId).softDelete(workId);
       await refresh();
       await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
       const undoMessage = `已将《${title}》移入回收站`;
@@ -2065,9 +2083,9 @@ export function LibraryPage() {
     setWorkActionBusy("restore");
     setMessage(`正在撤销移入回收站:${count} 篇文献...`);
     try {
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const { WorksRepo } = await import("@aurascholar/db/repos/works");
-      const worksRepo = new WorksRepo(db);
+      const worksRepo = new WorksRepo(db, libraryId);
       const smokeFailure = consumeLibrarySmokeTrashRestoreFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
@@ -2159,28 +2177,38 @@ export function LibraryPage() {
     selectedMetaSeqRef.current = seq;
     let cancelled = false;
     void (async () => {
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const [attachments, notes, sentinelTasks] = await Promise.all([
         db.query<AttachmentRow>(
           `SELECT * FROM attachments
-           WHERE work_id = ? AND deleted_at IS NULL
+           WHERE work_id = ?
+             AND deleted_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM works
+               WHERE id = ? AND library_id = ?
+             )
            ORDER BY created_at DESC`,
-          [selectedWork.id],
+          [selectedWork.id, selectedWork.id, libraryId],
         ),
         db.query<WorkNotePreview>(
           `SELECT id, type, page_index, content_md, updated_at
            FROM annotations
-           WHERE work_id = ? AND deleted_at IS NULL
+           WHERE work_id = ?
+             AND deleted_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM works
+               WHERE id = ? AND library_id = ?
+             )
            ORDER BY updated_at DESC
            LIMIT 3`,
-          [selectedWork.id],
+          [selectedWork.id, selectedWork.id, libraryId],
         ),
         db.query<{ status: string; current_state: string }>(
           `SELECT status, current_state
            FROM sentinel_tasks
-           WHERE work_id = ? AND deleted_at IS NULL
+           WHERE work_id = ? AND library_id = ? AND deleted_at IS NULL
            ORDER BY created_at DESC`,
-          [selectedWork.id],
+          [selectedWork.id, libraryId],
         ),
       ]);
       if (cancelled || selectedMetaSeqRef.current !== seq) return;
@@ -2450,9 +2478,9 @@ export function LibraryPage() {
         const successMessage = `已为 ${workIds.length} 篇文献添加标签「${name}」`;
         let tagCommitted = false;
         try {
-          const db = await getDb();
+          const { db, libraryId } = await getLibraryDb();
           const { TagsRepo } = await import("@aurascholar/db/repos/tags");
-          const tagsRepo = new TagsRepo(db);
+          const tagsRepo = new TagsRepo(db, libraryId);
           const smokeFailureAfterFirst = consumeLibrarySmokeBulkTagAfterFirstFailure();
           await tagsRepo.addToWorks(workIds, name, {
             afterEach: (_workId, index) => {
@@ -2502,9 +2530,9 @@ export function LibraryPage() {
         : `已将 ${workIds.length} 篇文献移出所有文件夹`;
       let moveCommitted = false;
       try {
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-        const colRepo = new CollectionsRepo(db);
+        const colRepo = new CollectionsRepo(db, libraryId);
         const smokeFailureAfterFirst = consumeLibrarySmokeMoveAfterFirstFailure();
         await colRepo.setWorksCollection(workIds, target, {
           afterEach: (_workId, index) => {
@@ -2576,9 +2604,9 @@ export function LibraryPage() {
     const undoMessage = `已将 ${workIds.length} 篇文献移入回收站`;
     let trashCommitted = false;
     try {
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const { WorksRepo } = await import("@aurascholar/db/repos/works");
-      const worksRepo = new WorksRepo(db);
+      const worksRepo = new WorksRepo(db, libraryId);
       const smokeFailureAfterFirst = consumeLibrarySmokeBulkTrashAfterFirstFailure();
       await worksRepo.softDeleteMany(workIds, {
         afterEach: (_workId, index) => {
@@ -2636,9 +2664,9 @@ export function LibraryPage() {
       const successMessage = `已恢复 ${workIds.length} 篇文献`;
       let restoreCommitted = false;
       try {
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        const worksRepo = new WorksRepo(db);
+        const worksRepo = new WorksRepo(db, libraryId);
         const smokeFailureAfterFirst = consumeLibrarySmokeTrashRestoreAfterFirstFailure();
         await worksRepo.restoreMany(workIds, {
           afterEach: (_workId, index) => {
@@ -2689,9 +2717,9 @@ export function LibraryPage() {
       setTrashUndo(null);
       setMessage(`正在永久删除 ${workIds.length} 篇文献...`);
       try {
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        await new WorksRepo(db).purgeDeletedMany(workIds);
+        await new WorksRepo(db, libraryId).purgeDeletedMany(workIds);
         await refresh();
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(`已永久删除 ${workIds.length} 篇文献`);
@@ -2735,9 +2763,9 @@ export function LibraryPage() {
     setWorkActionBusy("merge");
     setMessage(`正在合并 ${duplicates.length} 篇重复文献到《${selectedWork.title}》...`);
     try {
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const { WorksRepo } = await import("@aurascholar/db/repos/works");
-      const result = await new WorksRepo(db).mergeInto(selectedWork.id, duplicates);
+      const result = await new WorksRepo(db, libraryId).mergeInto(selectedWork.id, duplicates);
       await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
       const successMessage = `已合并 ${result.merged} 篇重复文献到《${selectedWork.title}》${
         result.movedAttachments ? `，迁移 ${result.movedAttachments} 个附件` : ""
@@ -4945,9 +4973,9 @@ function TagManager({
       setLoading(false);
       return;
     }
-    const db = await getDb();
+    const { db, libraryId } = await getLibraryDb();
     const { TagsRepo } = await import("@aurascholar/db/repos/tags");
-    const nextTags = await new TagsRepo(db).list();
+    const nextTags = await new TagsRepo(db, libraryId).list();
     if (!isCurrent()) return;
     setTags(nextTags);
     setLoading(false);
@@ -4966,7 +4994,8 @@ function TagManager({
 
   const repo = useCallback(async () => {
     const { TagsRepo } = await import("@aurascholar/db/repos/tags");
-    return new TagsRepo(await getDb());
+    const { db, libraryId } = await getLibraryDb();
+    return new TagsRepo(db, libraryId);
   }, []);
 
   const create = useCallback(() => {

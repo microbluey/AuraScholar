@@ -27,7 +27,11 @@ export interface WorkWithAuthorsAndTags extends WorkWithAuthors {
   tagNames: string[];
 }
 
-async function attachAuthors(db: Database, rows: WorkRow[]): Promise<WorkWithAuthors[]> {
+async function attachAuthors(
+  db: Database,
+  libraryId: string,
+  rows: WorkRow[],
+): Promise<WorkWithAuthors[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
   const placeholders = ids.map(() => "?").join(",");
@@ -38,8 +42,9 @@ async function attachAuthors(db: Database, rows: WorkRow[]): Promise<WorkWithAut
     `SELECT wa.work_id, a.display_name
      FROM work_authors wa JOIN authors a ON a.id = wa.author_id
      WHERE wa.work_id IN (${placeholders})
+       AND a.library_id = ?
      ORDER BY wa.position`,
-    ids,
+    [...ids, libraryId],
   );
   const byWork = new Map<string, string[]>();
   for (const author of authorRows) {
@@ -52,19 +57,23 @@ async function attachAuthors(db: Database, rows: WorkRow[]): Promise<WorkWithAut
 
 async function attachAuthorsAndTags(
   db: Database,
+  libraryId: string,
   rows: WorkRow[],
 ): Promise<WorkWithAuthorsAndTags[]> {
   if (rows.length === 0) return [];
-  const withAuthors = await attachAuthors(db, rows);
+  const withAuthors = await attachAuthors(db, libraryId, rows);
   const ids = rows.map((row) => row.id);
   const placeholders = ids.map(() => "?").join(",");
   const tagRows = await db.query<{ name: string; work_id: string }>(
     `SELECT wt.work_id, t.name
      FROM work_tags wt
-     JOIN tags t ON t.id = wt.tag_id AND t.deleted_at IS NULL
+     JOIN tags t
+       ON t.id = wt.tag_id
+      AND t.library_id = ?
+      AND t.deleted_at IS NULL
      WHERE wt.work_id IN (${placeholders})
      ORDER BY t.name COLLATE NOCASE`,
-    ids,
+    [libraryId, ...ids],
   );
   const tagsByWork = new Map<string, string[]>();
   for (const tag of tagRows) {
@@ -104,6 +113,7 @@ function escapeLikePattern(value: string): string {
 
 export async function searchWorksByMetadata(
   db: Database,
+  libraryId: string,
   search: string,
   limit = 40,
 ): Promise<WorkWithAuthorsAndTags[]> {
@@ -112,12 +122,12 @@ export async function searchWorksByMetadata(
   if (!normalized) {
     const recent = await db.query<WorkRow>(
       `SELECT w.* FROM works w
-       WHERE w.deleted_at IS NULL
+       WHERE w.library_id = ? AND w.deleted_at IS NULL
        ORDER BY w.starred DESC, w.updated_at DESC
        LIMIT ?`,
-      [boundedLimit],
+      [libraryId, boundedLimit],
     );
-    return attachAuthorsAndTags(db, recent);
+    return attachAuthorsAndTags(db, libraryId, recent);
   }
   if (tokens.length === 0) return [];
 
@@ -135,6 +145,7 @@ export async function searchWorksByMetadata(
         FROM work_authors swa
         JOIN authors sa ON sa.id = swa.author_id
         WHERE swa.work_id = w.id
+          AND sa.library_id = w.library_id
           AND LOWER(sa.display_name) LIKE ? ESCAPE '\\'
       )
       OR EXISTS (
@@ -142,6 +153,7 @@ export async function searchWorksByMetadata(
         FROM work_tags swt
         JOIN tags st ON st.id = swt.tag_id AND st.deleted_at IS NULL
         WHERE swt.work_id = w.id
+          AND st.library_id = w.library_id
           AND LOWER(st.name) LIKE ? ESCAPE '\\'
       )
     )`);
@@ -152,7 +164,8 @@ export async function searchWorksByMetadata(
   const prefix = `${phrase}%`;
   const rows = await db.query<WorkRow>(
     `SELECT w.* FROM works w
-     WHERE w.deleted_at IS NULL
+     WHERE w.library_id = ?
+       AND w.deleted_at IS NULL
        AND ${clauses.join(" AND ")}
      ORDER BY
        CASE
@@ -163,6 +176,7 @@ export async function searchWorksByMetadata(
            FROM work_authors owa
            JOIN authors oa ON oa.id = owa.author_id
            WHERE owa.work_id = w.id
+             AND oa.library_id = w.library_id
              AND LOWER(oa.display_name) LIKE ? ESCAPE '\\'
          ) THEN 2
          WHEN EXISTS (
@@ -170,6 +184,7 @@ export async function searchWorksByMetadata(
            FROM work_tags owt
            JOIN tags ot ON ot.id = owt.tag_id AND ot.deleted_at IS NULL
            WHERE owt.work_id = w.id
+             AND ot.library_id = w.library_id
              AND LOWER(ot.name) LIKE ? ESCAPE '\\'
          ) THEN 3
          WHEN LOWER(COALESCE(w.venue_name, '')) LIKE ? ESCAPE '\\' THEN 4
@@ -179,19 +194,23 @@ export async function searchWorksByMetadata(
        w.starred DESC,
        w.updated_at DESC
      LIMIT ?`,
-    [...params, normalized, prefix, prefix, prefix, prefix, prefix, boundedLimit],
+    [libraryId, ...params, normalized, prefix, prefix, prefix, prefix, prefix, boundedLimit],
   );
-  return attachAuthorsAndTags(db, rows);
+  return attachAuthorsAndTags(db, libraryId, rows);
 }
 
 export async function listWorks(
   db: Database,
+  libraryId: string,
   options: WorkListOptions = {},
 ): Promise<WorkWithAuthors[]> {
   const limit = options.limit ?? 200;
   const collectionJoin = options.collectionId
     ? `JOIN collection_items ci ON ci.work_id = w.id AND ci.collection_id = ?
-       JOIN collections c ON c.id = ci.collection_id AND c.deleted_at IS NULL`
+       JOIN collections c
+         ON c.id = ci.collection_id
+        AND c.library_id = w.library_id
+        AND c.deleted_at IS NULL`
     : "";
   const collectionParams = options.collectionId ? [options.collectionId] : [];
   const searchQuery = options.search?.trim() ? buildWorksFtsQuery(options.search) : null;
@@ -201,22 +220,24 @@ export async function listWorks(
           `SELECT w.* FROM works w
            JOIN works_fts f ON f.rowid = w.rowid
            ${collectionJoin}
-           WHERE works_fts MATCH ? AND w.deleted_at IS NULL
+           WHERE works_fts MATCH ? AND w.library_id = ? AND w.deleted_at IS NULL
            ORDER BY rank LIMIT ?`,
-          [...collectionParams, searchQuery, limit],
+          [...collectionParams, searchQuery, libraryId, limit],
         )
       : []
     : await db.query<WorkRow>(
         `SELECT w.* FROM works w
          ${collectionJoin}
-         WHERE w.deleted_at IS NULL ORDER BY w.created_at DESC LIMIT ?`,
-        [...collectionParams, limit],
+         WHERE w.library_id = ? AND w.deleted_at IS NULL
+         ORDER BY w.created_at DESC LIMIT ?`,
+        [...collectionParams, libraryId, limit],
       );
-  return attachAuthors(db, rows);
+  return attachAuthors(db, libraryId, rows);
 }
 
 export async function citationCountsForWorks(
   db: Database,
+  libraryId: string,
   workIds: string[],
 ): Promise<Map<string, WorkCitationCounts>> {
   const ids = [...new Set(workIds)];
@@ -232,18 +253,22 @@ export async function citationCountsForWorks(
        FROM citations c
        JOIN works source ON source.id = c.citing_work_id AND source.deleted_at IS NULL
        JOIN works target ON target.id = c.cited_work_id AND target.deleted_at IS NULL
-       WHERE c.citing_work_id IN (${placeholders})
+       WHERE source.library_id = ?
+         AND target.library_id = ?
+         AND c.citing_work_id IN (${placeholders})
        GROUP BY c.citing_work_id`,
-      ids,
+      [libraryId, libraryId, ...ids],
     ),
     db.query<{ work_id: string; count: number }>(
       `SELECT c.cited_work_id AS work_id, COUNT(*) AS count
        FROM citations c
        JOIN works source ON source.id = c.citing_work_id AND source.deleted_at IS NULL
        JOIN works target ON target.id = c.cited_work_id AND target.deleted_at IS NULL
-       WHERE c.cited_work_id IN (${placeholders})
+       WHERE source.library_id = ?
+         AND target.library_id = ?
+         AND c.cited_work_id IN (${placeholders})
        GROUP BY c.cited_work_id`,
-      ids,
+      [libraryId, libraryId, ...ids],
     ),
   ]);
 
@@ -260,6 +285,7 @@ export async function citationCountsForWorks(
 
 export async function citationRelationsForWorks(
   db: Database,
+  libraryId: string,
   workIds: string[],
 ): Promise<WorkCitationRelation[]> {
   const ids = [...new Set(workIds)];
@@ -274,11 +300,13 @@ export async function citationRelationsForWorks(
      FROM citations c
      JOIN works source ON source.id = c.citing_work_id AND source.deleted_at IS NULL
      JOIN works target ON target.id = c.cited_work_id AND target.deleted_at IS NULL
-     WHERE c.citing_work_id IN (${placeholders})
+     WHERE source.library_id = ?
+       AND target.library_id = ?
+       AND c.citing_work_id IN (${placeholders})
        AND c.cited_work_id IN (${placeholders})
        AND c.citing_work_id <> c.cited_work_id
      ORDER BY c.citing_work_id, c.cited_work_id`,
-    [...ids, ...ids],
+    [libraryId, libraryId, ...ids, ...ids],
   );
 
   const citedByCiting = new Map<string, Set<string>>();
@@ -308,6 +336,7 @@ export async function citationRelationsForWorks(
 
 export async function listDeletedWorks(
   db: Database,
+  libraryId: string,
   options: Pick<WorkListOptions, "search" | "limit"> = {},
 ): Promise<WorkWithAuthors[]> {
   const limit = options.limit ?? 200;
@@ -317,17 +346,18 @@ export async function listDeletedWorks(
       ? await db.query<WorkRow>(
           `SELECT w.* FROM works w
            JOIN works_fts f ON f.rowid = w.rowid
-           WHERE works_fts MATCH ? AND w.deleted_at IS NOT NULL
+           WHERE works_fts MATCH ? AND w.library_id = ? AND w.deleted_at IS NOT NULL
            ORDER BY rank LIMIT ?`,
-          [searchQuery, limit],
+          [searchQuery, libraryId, limit],
         )
       : []
     : await db.query<WorkRow>(
         `SELECT w.* FROM works w
-         WHERE w.deleted_at IS NOT NULL ORDER BY w.deleted_at DESC, w.updated_at DESC LIMIT ?`,
-        [limit],
+         WHERE w.library_id = ? AND w.deleted_at IS NOT NULL
+         ORDER BY w.deleted_at DESC, w.updated_at DESC LIMIT ?`,
+        [libraryId, limit],
       );
-  return attachAuthors(db, rows);
+  return attachAuthors(db, libraryId, rows);
 }
 
 export type { WorkRow, WorkWithAuthors };

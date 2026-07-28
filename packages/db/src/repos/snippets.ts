@@ -22,13 +22,18 @@ export interface SnippetInput {
   tag?: string | null;
 }
 
-/** A snippet joined with its source work's title, for the cross-library view. */
+/** A snippet joined with its source work's title, within one Library. */
 export interface SnippetWithWork extends SnippetRow {
   work_title: string;
 }
 
 export class SnippetsRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private assertChanged(changed: number, message: string): void {
     if (changed === 0) throw new Error(message);
@@ -36,8 +41,10 @@ export class SnippetsRepo {
 
   private async assertActiveWork(workId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [workId],
+      `SELECT id FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [workId, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Work ${workId} is missing or removed`);
   }
@@ -67,8 +74,11 @@ export class SnippetsRepo {
     const changed = await this.db.run(
       `UPDATE snippets SET note_md = ?, updated_at = ?
        WHERE id = ? AND deleted_at IS NULL
-         AND EXISTS (SELECT 1 FROM works WHERE id = snippets.work_id AND deleted_at IS NULL)`,
-      [noteMd, Date.now(), id],
+         AND EXISTS (
+           SELECT 1 FROM works
+           WHERE id = snippets.work_id AND library_id = ? AND deleted_at IS NULL
+         )`,
+      [noteMd, Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Snippet ${id} is missing or removed`);
   }
@@ -77,8 +87,11 @@ export class SnippetsRepo {
     const changed = await this.db.run(
       `UPDATE snippets SET deleted_at = ?, updated_at = ?
        WHERE id = ? AND deleted_at IS NULL
-         AND EXISTS (SELECT 1 FROM works WHERE id = snippets.work_id AND deleted_at IS NULL)`,
-      [Date.now(), Date.now(), id],
+         AND EXISTS (
+           SELECT 1 FROM works
+           WHERE id = snippets.work_id AND library_id = ? AND deleted_at IS NULL
+         )`,
+      [Date.now(), Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Snippet ${id} is missing or already removed`);
   }
@@ -87,8 +100,11 @@ export class SnippetsRepo {
     const changed = await this.db.run(
       `UPDATE snippets SET deleted_at = NULL, updated_at = ?
        WHERE id = ? AND deleted_at IS NOT NULL
-         AND EXISTS (SELECT 1 FROM works WHERE id = snippets.work_id AND deleted_at IS NULL)`,
-      [Date.now(), id],
+         AND EXISTS (
+           SELECT 1 FROM works
+           WHERE id = snippets.work_id AND library_id = ? AND deleted_at IS NULL
+         )`,
+      [Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Snippet ${id} is missing or already active`);
   }
@@ -97,10 +113,13 @@ export class SnippetsRepo {
     return this.db.query<SnippetRow>(
       `SELECT s.id, s.work_id, s.page_index, s.quote, s.note_md, s.tag, s.created_at, s.updated_at
        FROM snippets s
-       JOIN works w ON w.id = s.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = s.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE s.work_id = ? AND s.deleted_at IS NULL
        ORDER BY s.created_at`,
-      [workId],
+      [this.libraryId, workId],
     );
   }
 
@@ -110,9 +129,13 @@ export class SnippetsRepo {
       `SELECT s.id, s.work_id, s.page_index, s.quote, s.note_md, s.tag,
               s.created_at, s.updated_at, w.title AS work_title
        FROM snippets s
-       JOIN works w ON w.id = s.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = s.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE s.deleted_at IS NULL
        ORDER BY s.created_at DESC`,
+      [this.libraryId],
     );
   }
 
@@ -120,8 +143,12 @@ export class SnippetsRepo {
     const rows = await this.db.query<{ n: number }>(
       `SELECT COUNT(*) AS n
        FROM snippets s
-       JOIN works w ON w.id = s.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = s.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE s.deleted_at IS NULL`,
+      [this.libraryId],
     );
     return rows[0]?.n ?? 0;
   }

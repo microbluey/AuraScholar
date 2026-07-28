@@ -29,7 +29,12 @@ export interface AnnotationRow {
 }
 
 export class AnnotationsRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private assertChanged(changed: number, message: string): void {
     if (changed === 0) throw new Error(message);
@@ -39,10 +44,13 @@ export class AnnotationsRepo {
     const rows = await this.db.query<{ id: string }>(
       `SELECT a.id
        FROM attachments a
-       JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = a.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE a.id = ? AND a.work_id = ? AND a.deleted_at IS NULL
        LIMIT 1`,
-      [input.attachmentId, input.workId],
+      [this.libraryId, input.attachmentId, input.workId],
     );
     if (!rows[0]) {
       throw new Error(
@@ -87,10 +95,14 @@ export class AnnotationsRepo {
       `SELECT an.*
        FROM annotations an
        JOIN attachments a ON a.id = an.attachment_id AND a.deleted_at IS NULL
-       JOIN works w ON w.id = an.work_id AND w.id = a.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = an.work_id
+        AND w.id = a.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE an.attachment_id = ? AND an.deleted_at IS NULL
        ORDER BY an.sort_key`,
-      [attachmentId],
+      [this.libraryId, attachmentId],
     );
   }
 
@@ -101,12 +113,15 @@ export class AnnotationsRepo {
          AND EXISTS (
            SELECT 1
            FROM attachments a
-           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           JOIN works w
+             ON w.id = a.work_id
+            AND w.library_id = ?
+            AND w.deleted_at IS NULL
            WHERE a.id = annotations.attachment_id
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [contentMd, Date.now(), id],
+      [contentMd, Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Annotation ${id} is missing or removed`);
   }
@@ -118,12 +133,15 @@ export class AnnotationsRepo {
          AND EXISTS (
            SELECT 1
            FROM attachments a
-           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           JOIN works w
+             ON w.id = a.work_id
+            AND w.library_id = ?
+            AND w.deleted_at IS NULL
            WHERE a.id = annotations.attachment_id
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [orphaned ? 1 : 0, Date.now(), id],
+      [orphaned ? 1 : 0, Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Annotation ${id} is missing or removed`);
   }
@@ -135,12 +153,15 @@ export class AnnotationsRepo {
          AND EXISTS (
            SELECT 1
            FROM attachments a
-           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           JOIN works w
+             ON w.id = a.work_id
+            AND w.library_id = ?
+            AND w.deleted_at IS NULL
            WHERE a.id = annotations.attachment_id
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [Date.now(), Date.now(), id],
+      [Date.now(), Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Annotation ${id} is missing or already removed`);
   }
@@ -152,12 +173,15 @@ export class AnnotationsRepo {
          AND EXISTS (
            SELECT 1
            FROM attachments a
-           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+           JOIN works w
+             ON w.id = a.work_id
+            AND w.library_id = ?
+            AND w.deleted_at IS NULL
            WHERE a.id = annotations.attachment_id
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [Date.now(), id],
+      [Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Annotation ${id} is missing or already active`);
   }

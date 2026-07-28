@@ -12,7 +12,7 @@ import {
   type WorkLike,
 } from "@aurascholar/cite";
 import { downloadBlob } from "../download";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 
 interface CiteRow {
   id: string;
@@ -39,21 +39,29 @@ interface CiteRow {
 /** Loads CSL items for the given work ids, preserving the requested order. */
 export async function cslItemsForWorks(workIds: string[]): Promise<CslItem[]> {
   if (workIds.length === 0) return [];
-  const db = await getDb();
+  const { db, libraryId } = await getLibraryDb();
   const placeholders = workIds.map(() => "?").join(",");
   const rows = await db.query<CiteRow>(
     `SELECT id, title, doi, pmid, year, publication_date, venue_name, type, csl_json,
             volume, issue, pages, publisher, place_published, edition, issn, isbn, language, url
-     FROM works WHERE id IN (${placeholders}) AND deleted_at IS NULL`,
-    workIds,
+     FROM works
+     WHERE library_id = ? AND id IN (${placeholders}) AND deleted_at IS NULL`,
+    [libraryId, ...workIds],
   );
   // Author/editor list with roles — feeds CSL author vs editor split.
   const authorRows = await db.query<{ work_id: string; display_name: string; role: string }>(
     `SELECT wa.work_id, a.display_name, wa.role
-     FROM work_authors wa JOIN authors a ON a.id = wa.author_id
+     FROM work_authors wa
+     JOIN works w
+       ON w.id = wa.work_id
+      AND w.library_id = ?
+      AND w.deleted_at IS NULL
+     JOIN authors a
+       ON a.id = wa.author_id
+      AND a.library_id = w.library_id
      WHERE wa.work_id IN (${placeholders})
      ORDER BY wa.position`,
-    workIds,
+    [libraryId, ...workIds],
   );
   const authorsByWork = new Map<string, Array<{ displayName: string; role?: string }>>();
   for (const r of authorRows) {
@@ -89,7 +97,10 @@ export async function cslItemsForWorks(workIds: string[]): Promise<CslItem[]> {
       cslJson: parseJson(row.csl_json),
     });
   }
-  return workIds.map((id) => byId.get(id)).filter((w): w is WorkLike => !!w).map(toCslItem);
+  return workIds
+    .map((id) => byId.get(id))
+    .filter((w): w is WorkLike => !!w)
+    .map(toCslItem);
 }
 
 export type ExportFormat = "bibtex" | "ris" | "csljson";
@@ -100,8 +111,7 @@ export async function exportWorks(workIds: string[], format: ExportFormat): Prom
   const items = await cslItemsForWorks(workIds);
   const content =
     format === "bibtex" ? toBibTeX(items) : format === "ris" ? toRIS(items) : toCslJson(items);
-  const mime =
-    format === "csljson" ? "application/json" : "text/plain;charset=utf-8";
+  const mime = format === "csljson" ? "application/json" : "text/plain;charset=utf-8";
   const blob = new Blob([content], { type: mime });
   downloadBlob(blob, `aurascholar-references.${EXT[format]}`);
 }

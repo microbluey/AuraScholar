@@ -42,7 +42,12 @@ export interface DueCard extends FlashcardRow {
 }
 
 export class FlashcardsRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private assertChanged(changed: number, message: string): void {
     if (changed === 0) throw new Error(message);
@@ -50,8 +55,10 @@ export class FlashcardsRepo {
 
   private async assertActiveWork(workId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [workId],
+      `SELECT id FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [workId, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Work ${workId} is missing or removed`);
   }
@@ -137,10 +144,13 @@ export class FlashcardsRepo {
       `SELECT f.*, s.due_at, s.state, s.reps
        FROM flashcards f
        JOIN flashcard_srs s ON s.flashcard_id = f.id
-       JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = f.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE f.deleted_at IS NULL AND s.due_at <= ?
        ORDER BY s.due_at LIMIT ?`,
-      [now, limit],
+      [this.libraryId, now, limit],
     );
   }
 
@@ -149,9 +159,12 @@ export class FlashcardsRepo {
       `SELECT COUNT(*) AS n
        FROM flashcards f
        JOIN flashcard_srs s ON s.flashcard_id = f.id
-       JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = f.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE f.deleted_at IS NULL AND s.due_at <= ?`,
-      [now],
+      [this.libraryId, now],
     );
     return rows[0]?.n ?? 0;
   }
@@ -160,10 +173,13 @@ export class FlashcardsRepo {
     return this.db.query<FlashcardRow>(
       `SELECT f.*
        FROM flashcards f
-       JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = f.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE f.work_id = ? AND f.deleted_at IS NULL
        ORDER BY f.created_at`,
-      [workId],
+      [this.libraryId, workId],
     );
   }
 
@@ -181,9 +197,12 @@ export class FlashcardsRepo {
       `SELECT s.*
        FROM flashcards f
        JOIN flashcard_srs s ON s.flashcard_id = f.id
-       JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = f.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE f.id = ? AND f.deleted_at IS NULL`,
-      [flashcardId],
+      [this.libraryId, flashcardId],
     );
     const srs = rows[0];
     if (!srs) throw new Error(`Flashcard ${flashcardId} is missing, removed, or unscheduled`);
@@ -192,9 +211,7 @@ export class FlashcardsRepo {
       due: new Date(srs.due_at),
       stability: srs.stability,
       difficulty: srs.difficulty,
-      elapsed_days: srs.last_review_at
-        ? Math.max(0, (now - srs.last_review_at) / 86_400_000)
-        : 0,
+      elapsed_days: srs.last_review_at ? Math.max(0, (now - srs.last_review_at) / 86_400_000) : 0,
       scheduled_days: 0,
       reps: srs.reps,
       lapses: srs.lapses,
@@ -214,7 +231,10 @@ export class FlashcardsRepo {
            AND EXISTS (
              SELECT 1
              FROM flashcards f
-             JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+             JOIN works w
+               ON w.id = f.work_id
+              AND w.library_id = ?
+              AND w.deleted_at IS NULL
              WHERE f.id = ? AND f.deleted_at IS NULL
            )`,
         [
@@ -226,6 +246,7 @@ export class FlashcardsRepo {
           next.state,
           now,
           flashcardId,
+          this.libraryId,
           flashcardId,
         ],
       );
@@ -244,9 +265,11 @@ export class FlashcardsRepo {
          AND EXISTS (
            SELECT 1
            FROM works w
-           WHERE w.id = flashcards.work_id AND w.deleted_at IS NULL
+           WHERE w.id = flashcards.work_id
+             AND w.library_id = ?
+             AND w.deleted_at IS NULL
          )`,
-      [Date.now(), Date.now(), id],
+      [Date.now(), Date.now(), id, this.libraryId],
     );
     if (changed === 0) throw new Error(`Flashcard ${id} is missing or already removed`);
   }
@@ -258,9 +281,11 @@ export class FlashcardsRepo {
          AND EXISTS (
            SELECT 1
            FROM works w
-           WHERE w.id = flashcards.work_id AND w.deleted_at IS NULL
+           WHERE w.id = flashcards.work_id
+             AND w.library_id = ?
+             AND w.deleted_at IS NULL
          )`,
-      [Date.now(), id],
+      [Date.now(), id, this.libraryId],
     );
     if (changed === 0) throw new Error(`Flashcard ${id} is missing or already active`);
   }

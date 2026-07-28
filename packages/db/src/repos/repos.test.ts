@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
+import { requireLocalLibraryId } from "../local-first";
 import { WorksRepo } from "./works";
 import { AnnotationsRepo } from "./annotations";
 import { AttachmentsRepo } from "./attachments";
 import { CollectionsRepo } from "./collections";
 
 let db: Database;
+let libraryId: string;
 let works: WorksRepo;
 let annotations: AnnotationsRepo;
 let attachments: AttachmentsRepo;
@@ -15,10 +17,11 @@ let collections: CollectionsRepo;
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
-  works = new WorksRepo(db);
-  annotations = new AnnotationsRepo(db);
-  attachments = new AttachmentsRepo(db);
-  collections = new CollectionsRepo(db);
+  libraryId = await requireLocalLibraryId(db);
+  works = new WorksRepo(db, libraryId);
+  annotations = new AnnotationsRepo(db, libraryId);
+  attachments = new AttachmentsRepo(db, libraryId);
+  collections = new CollectionsRepo(db, libraryId);
 });
 
 const ATTENTION = {

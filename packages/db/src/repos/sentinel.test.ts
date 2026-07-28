@@ -1,15 +1,18 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
+import { requireLocalLibraryId } from "../local-first";
 import { SentinelRepo, SentinelTaskInactiveError } from "./sentinel";
 
 let db: Database;
+let libraryId: string;
 let sentinel: SentinelRepo;
 
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
-  sentinel = new SentinelRepo(db);
+  libraryId = await requireLocalLibraryId(db);
+  sentinel = new SentinelRepo(db, libraryId);
 });
 
 describe("SentinelRepo", () => {
@@ -73,9 +76,12 @@ describe("SentinelRepo", () => {
   it("links an existing DOI monitor to a work when the monitor has no work yet", async () => {
     const now = Date.now();
     await db.run(
-      "INSERT INTO works (id, doi, title, type, created_at, updated_at) VALUES (?, ?, ?, 'article', ?, ?)",
+      `INSERT INTO works
+         (id, library_id, doi, title, type, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'article', ?, ?)`,
       [
         "work-sentinel-link",
+        libraryId,
         "10.4242/aurascholar.sentinel-link",
         "Sentinel Link Paper",
         now,
@@ -106,9 +112,12 @@ describe("SentinelRepo", () => {
   it("rejects missing or removed works when creating, restoring, or linking monitors", async () => {
     const now = Date.now();
     await db.run(
-      "INSERT INTO works (id, doi, title, type, created_at, updated_at) VALUES (?, ?, ?, 'article', ?, ?)",
+      `INSERT INTO works
+         (id, library_id, doi, title, type, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'article', ?, ?)`,
       [
         "active-sentinel-work",
+        libraryId,
         "10.4242/aurascholar.sentinel-active-work",
         "Active Sentinel Work",
         now,
@@ -116,9 +125,12 @@ describe("SentinelRepo", () => {
       ],
     );
     await db.run(
-      "INSERT INTO works (id, doi, title, type, created_at, updated_at, deleted_at) VALUES (?, ?, ?, 'article', ?, ?, ?)",
+      `INSERT INTO works
+         (id, library_id, doi, title, type, created_at, updated_at, deleted_at)
+       VALUES (?, ?, ?, ?, 'article', ?, ?, ?)`,
       [
         "removed-sentinel-work",
+        libraryId,
         "10.4242/aurascholar.sentinel-removed-work",
         "Removed Sentinel Work",
         now,

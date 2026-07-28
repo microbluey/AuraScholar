@@ -1,18 +1,21 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
+import { requireLocalLibraryId } from "../local-first";
 import { WorksRepo } from "./works";
 import { TagsRepo } from "./tags";
 
 let db: Database;
+let libraryId: string;
 let works: WorksRepo;
 let tags: TagsRepo;
 
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
-  works = new WorksRepo(db);
-  tags = new TagsRepo(db);
+  libraryId = await requireLocalLibraryId(db);
+  works = new WorksRepo(db, libraryId);
+  tags = new TagsRepo(db, libraryId);
 });
 
 async function makeWork(title: string): Promise<string> {
@@ -71,10 +74,9 @@ describe("TagsRepo", () => {
       await db.exec("DROP TRIGGER IF EXISTS fail_second_tag_assignment");
     }
 
-    const tagRows = await db.query<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM tags WHERE name = ?`,
-      ["atomic"],
-    );
+    const tagRows = await db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM tags WHERE name = ?`, [
+      "atomic",
+    ]);
     const linkRows = await db.query<{ n: number }>(
       `SELECT COUNT(*) AS n
        FROM work_tags wt
@@ -98,10 +100,9 @@ describe("TagsRepo", () => {
       }),
     ).rejects.toThrow("forced tag hook failure");
 
-    const tagRows = await db.query<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM tags WHERE name = ?`,
-      ["hooked"],
-    );
+    const tagRows = await db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM tags WHERE name = ?`, [
+      "hooked",
+    ]);
     const linkRows = await db.query<{ n: number }>(
       `SELECT COUNT(*) AS n
        FROM work_tags wt

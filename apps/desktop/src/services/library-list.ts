@@ -5,28 +5,28 @@ import {
   parseWorkMetadataSearch,
   searchWorksByMetadata as searchDbWorksByMetadata,
 } from "@aurascholar/db/work-list";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 
 export async function listWorks(
   search?: string,
   collectionId?: string,
   limit?: number,
 ): Promise<WorkWithAuthors[]> {
-  const db = await getDb();
-  return listDbWorks(db, { search, collectionId, limit });
+  const { db, libraryId } = await getLibraryDb();
+  return listDbWorks(db, libraryId, { search, collectionId, limit });
 }
 
 export async function listDeletedWorks(
   search?: string,
   limit?: number,
 ): Promise<WorkWithAuthors[]> {
-  const db = await getDb();
-  return listDbDeletedWorks(db, { search, limit });
+  const { db, libraryId } = await getLibraryDb();
+  return listDbDeletedWorks(db, libraryId, { search, limit });
 }
 
 export async function searchWorksByMetadata(search: string, limit = 40) {
-  const db = await getDb();
-  return searchDbWorksByMetadata(db, search, limit);
+  const { db, libraryId } = await getLibraryDb();
+  return searchDbWorksByMetadata(db, libraryId, search, limit);
 }
 
 export { parseWorkMetadataSearch };

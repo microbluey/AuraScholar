@@ -6,6 +6,7 @@ import { newId } from "../ids.js";
 
 export interface TagRow {
   id: string;
+  library_id: string;
   name: string;
   color: string | null;
   count: number;
@@ -21,7 +22,12 @@ export interface AddTagToWorksOptions {
 }
 
 export class TagsRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private async withSavepoint<T>(name: string, fn: () => Promise<T>): Promise<T> {
     await this.db.exec(`SAVEPOINT ${name}`);
@@ -49,16 +55,22 @@ export class TagsRepo {
 
   private async assertActive(id: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM tags WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [id],
+      `SELECT id
+       FROM tags
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [id, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Tag ${id} is missing or removed`);
   }
 
   private async assertActiveWork(workId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [workId],
+      `SELECT id
+       FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [workId, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Work ${workId} is missing or removed`);
   }
@@ -66,13 +78,17 @@ export class TagsRepo {
   /** All tags with how many (non-deleted) works carry each. */
   async list(): Promise<TagRow[]> {
     return this.db.query<TagRow>(
-      `SELECT t.id, t.name, t.color, COUNT(w.id) AS count
+      `SELECT t.id, t.library_id, t.name, t.color, COUNT(w.id) AS count
        FROM tags t
        LEFT JOIN work_tags wt ON wt.tag_id = t.id
-       LEFT JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
-       WHERE t.deleted_at IS NULL
-       GROUP BY t.id, t.name, t.color
+       LEFT JOIN works w
+         ON w.id = wt.work_id
+        AND w.library_id = t.library_id
+        AND w.deleted_at IS NULL
+       WHERE t.library_id = ? AND t.deleted_at IS NULL
+       GROUP BY t.id, t.library_id, t.name, t.color
        ORDER BY count DESC, t.name`,
+      [this.libraryId],
     );
   }
 
@@ -81,16 +97,19 @@ export class TagsRepo {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("标签名称不能为空");
     const existing = await this.db.query<TagIdentityRow>(
-      `SELECT id, deleted_at FROM tags WHERE name = ? LIMIT 1`,
-      [trimmed],
+      `SELECT id, deleted_at
+       FROM tags
+       WHERE library_id = ? AND name = ?
+       LIMIT 1`,
+      [this.libraryId, trimmed],
     );
     if (existing[0]) {
       if (existing[0].deleted_at !== null) {
         const changed = await this.db.run(
           `UPDATE tags
            SET deleted_at = NULL, color = COALESCE(?, color), updated_at = ?
-           WHERE id = ? AND deleted_at IS NOT NULL`,
-          [color ?? null, Date.now(), existing[0].id],
+           WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+          [color ?? null, Date.now(), existing[0].id, this.libraryId],
         );
         this.assertChanged(changed, `Tag ${existing[0].id} is missing or already active`);
       }
@@ -99,8 +118,9 @@ export class TagsRepo {
     const id = newId();
     const now = Date.now();
     await this.db.run(
-      `INSERT INTO tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      [id, trimmed, color ?? null, now, now],
+      `INSERT INTO tags (id, library_id, name, color, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, this.libraryId, trimmed, color ?? null, now, now],
     );
     return id;
   }
@@ -110,8 +130,11 @@ export class TagsRepo {
     if (!trimmed) throw new Error("标签名称不能为空");
     const now = Date.now();
     const conflict = await this.db.query<TagIdentityRow>(
-      `SELECT id, deleted_at FROM tags WHERE name = ? LIMIT 1`,
-      [trimmed],
+      `SELECT id, deleted_at
+       FROM tags
+       WHERE library_id = ? AND name = ?
+       LIMIT 1`,
+      [this.libraryId, trimmed],
     );
     const mergeTarget = conflict[0];
     if (mergeTarget && mergeTarget.id !== id) {
@@ -120,37 +143,55 @@ export class TagsRepo {
         if (mergeTarget.deleted_at !== null) {
           const restored = await this.db.run(
             `UPDATE tags SET deleted_at = NULL, updated_at = ?
-             WHERE id = ? AND deleted_at IS NOT NULL`,
-            [now, mergeTarget.id],
+             WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+            [now, mergeTarget.id, this.libraryId],
           );
           this.assertChanged(restored, `Tag ${mergeTarget.id} is missing or already active`);
         }
         await this.db.run(
           `INSERT OR IGNORE INTO work_tags (work_id, tag_id)
-           SELECT work_id, ? FROM work_tags WHERE tag_id = ?`,
-          [mergeTarget.id, id],
+           SELECT wt.work_id, ?
+           FROM work_tags wt
+           JOIN works w
+             ON w.id = wt.work_id
+            AND w.library_id = ?
+            AND w.deleted_at IS NULL
+           WHERE wt.tag_id = ?`,
+          [mergeTarget.id, this.libraryId, id],
         );
-        await this.db.run(`DELETE FROM work_tags WHERE tag_id = ?`, [id]);
+        await this.db.run(
+          `DELETE FROM work_tags
+           WHERE tag_id = ?
+             AND EXISTS (
+               SELECT 1 FROM tags
+               WHERE id = ? AND library_id = ?
+             )`,
+          [id, id, this.libraryId],
+        );
         const retired = await this.db.run(
           `UPDATE tags SET deleted_at = ?, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL`,
-          [now, now, id],
+           WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+          [now, now, id, this.libraryId],
         );
         this.assertChanged(retired, `Tag ${id} is missing or removed`);
       });
       return;
     }
     const changed = await this.db.run(
-      `UPDATE tags SET name = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [trimmed, now, id],
+      `UPDATE tags
+       SET name = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [trimmed, now, id, this.libraryId],
     );
     this.assertChanged(changed, `Tag ${id} is missing or removed`);
   }
 
   async setColor(id: string, color: string | null): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE tags SET color = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [color, Date.now(), id],
+      `UPDATE tags
+       SET color = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [color, Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Tag ${id} is missing or removed`);
   }
@@ -160,11 +201,19 @@ export class TagsRepo {
     await this.withSavepoint("tags_soft_delete", async () => {
       const changed = await this.db.run(
         `UPDATE tags SET deleted_at = ?, updated_at = ?
-         WHERE id = ? AND deleted_at IS NULL`,
-        [Date.now(), Date.now(), id],
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [Date.now(), Date.now(), id, this.libraryId],
       );
       this.assertChanged(changed, `Tag ${id} is missing or already removed`);
-      await this.db.run(`DELETE FROM work_tags WHERE tag_id = ?`, [id]);
+      await this.db.run(
+        `DELETE FROM work_tags
+         WHERE tag_id = ?
+           AND EXISTS (
+             SELECT 1 FROM tags
+             WHERE id = ? AND library_id = ?
+           )`,
+        [id, id, this.libraryId],
+      );
     });
   }
 
@@ -172,10 +221,14 @@ export class TagsRepo {
     const rows = await this.db.query<{ work_id: string }>(
       `SELECT wt.work_id
        FROM work_tags wt
-       JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
+       JOIN tags t ON t.id = wt.tag_id AND t.library_id = ? AND t.deleted_at IS NULL
+       JOIN works w
+         ON w.id = wt.work_id
+        AND w.library_id = t.library_id
+        AND w.deleted_at IS NULL
        WHERE wt.tag_id = ?
        ORDER BY wt.work_id`,
-      [id],
+      [this.libraryId, id],
     );
     return rows.map((row) => row.work_id);
   }
@@ -184,8 +237,8 @@ export class TagsRepo {
     await this.withSavepoint("tags_restore", async () => {
       const changed = await this.db.run(
         `UPDATE tags SET deleted_at = NULL, updated_at = ?
-         WHERE id = ? AND deleted_at IS NOT NULL`,
-        [Date.now(), id],
+         WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+        [Date.now(), id, this.libraryId],
       );
       this.assertChanged(changed, `Tag ${id} is missing or already active`);
       for (const workId of new Set(workIds)) {
@@ -211,10 +264,10 @@ export class TagsRepo {
       for (let index = 0; index < uniqueWorkIds.length; index += 1) {
         const workId = uniqueWorkIds[index]!;
         await this.assertActiveWork(workId);
-        await this.db.run(
-          `INSERT OR IGNORE INTO work_tags (work_id, tag_id) VALUES (?, ?)`,
-          [workId, tagId],
-        );
+        await this.db.run(`INSERT OR IGNORE INTO work_tags (work_id, tag_id) VALUES (?, ?)`, [
+          workId,
+          tagId,
+        ]);
         await options.afterEach?.(workId, index);
       }
     });

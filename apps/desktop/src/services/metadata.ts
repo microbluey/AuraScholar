@@ -6,7 +6,7 @@ import {
   type WorkPatch,
   type WorkRow,
 } from "@aurascholar/db/repos/works";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 
 export interface WorkMetadata {
   work: WorkRow;
@@ -15,8 +15,8 @@ export interface WorkMetadata {
 }
 
 export async function loadWorkMetadata(workId: string): Promise<WorkMetadata | null> {
-  const db = await getDb();
-  const repo = new WorksRepo(db);
+  const { db, libraryId } = await getLibraryDb();
+  const repo = new WorksRepo(db, libraryId);
   const work = await repo.get(workId);
   if (!work) return null;
   const authors = await repo.authorsOf(workId);
@@ -24,7 +24,8 @@ export async function loadWorkMetadata(workId: string): Promise<WorkMetadata | n
   if (work.keywords_json) {
     try {
       const parsed = JSON.parse(work.keywords_json);
-      if (Array.isArray(parsed)) keywords = parsed.filter((k): k is string => typeof k === "string");
+      if (Array.isArray(parsed))
+        keywords = parsed.filter((k): k is string => typeof k === "string");
     } catch {
       keywords = [];
     }
@@ -33,7 +34,7 @@ export async function loadWorkMetadata(workId: string): Promise<WorkMetadata | n
 }
 
 export async function saveWorkMetadata(workId: string, patch: WorkPatch): Promise<void> {
-  const db = await getDb();
-  await new WorksRepo(db).update(workId, patch);
+  const { db, libraryId } = await getLibraryDb();
+  await new WorksRepo(db, libraryId).update(workId, patch);
   window.dispatchEvent(new Event("aurascholar:library-updated"));
 }

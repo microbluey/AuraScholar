@@ -11,7 +11,7 @@ import {
   type StoredCanvasNode,
   type StoredCanvasWorkspaceDocument,
 } from "@aurascholar/db/repos/canvas";
-import { getDb } from "../../services/aura-db";
+import { getLibraryDb } from "../../services/aura-db";
 import { isDesktopRuntime } from "../../services/aura-platform";
 import {
   CANVAS_LAST_WORKSPACE_ID_KEY,
@@ -274,6 +274,11 @@ function dispatchCanvasUpdated(): void {
   window.dispatchEvent(new Event("aurascholar:canvas-updated"));
 }
 
+async function desktopCanvasRepo(): Promise<CanvasRepo> {
+  const { db, libraryId } = await getLibraryDb();
+  return new CanvasRepo(db, libraryId);
+}
+
 /** Lists every workspace and guarantees at least one workspace exists. */
 export async function listCanvasWorkspaces(): Promise<CanvasWorkspaceSummary[]> {
   if (!isDesktopRuntime()) {
@@ -282,7 +287,7 @@ export async function listCanvasWorkspaces(): Promise<CanvasWorkspaceSummary[]> 
       .map(toWorkspaceSummary);
   }
 
-  const repo = new CanvasRepo(await getDb());
+  const repo = await desktopCanvasRepo();
   const existing = await repo.list();
   if (existing.length > 0) return existing;
   await repo.ensureDefault();
@@ -298,7 +303,7 @@ export async function loadCanvasWorkspace(workspaceId: string): Promise<CanvasWo
     return stored;
   }
 
-  const repo = new CanvasRepo(await getDb());
+  const repo = await desktopCanvasRepo();
   const stored = await repo.load(normalizedId);
   if (!stored) throw new Error("白板不存在或已被删除");
   return narrowDocument(stored);
@@ -317,7 +322,7 @@ export async function createCanvasWorkspace(name: string): Promise<CanvasWorkspa
     return document;
   }
 
-  const repo = new CanvasRepo(await getDb());
+  const repo = await desktopCanvasRepo();
   const document = narrowDocument(await repo.create(normalizedName));
   rememberLastCanvasWorkspaceId(document.workspaceId);
   dispatchCanvasUpdated();
@@ -346,7 +351,7 @@ export async function renameCanvasWorkspace(
     return document;
   }
 
-  const repo = new CanvasRepo(await getDb());
+  const repo = await desktopCanvasRepo();
   const document = narrowDocument(await repo.rename(normalizedId, normalizedName));
   dispatchCanvasUpdated();
   return document;
@@ -384,7 +389,7 @@ export async function deleteCanvasWorkspace(workspaceId: string): Promise<boolea
     return true;
   }
 
-  const repo = new CanvasRepo(await getDb());
+  const repo = await desktopCanvasRepo();
   const deleted = await repo.deleteWorkspace(normalizedId);
   if (!deleted) return false;
   // repo.deleteWorkspace() has committed at this point. Keep every following
@@ -439,7 +444,7 @@ export async function saveCanvasWorkspace(document: CanvasWorkspaceDocument): Pr
     dispatchCanvasUpdated();
     return;
   }
-  const repo = new CanvasRepo(await getDb());
+  const repo = await desktopCanvasRepo();
   await repo.save(document);
   dispatchCanvasUpdated();
 }

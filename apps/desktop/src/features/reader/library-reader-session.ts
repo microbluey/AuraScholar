@@ -2,7 +2,7 @@ import { PdfDocument, parseAnnotationAnchorJson, type ReaderAnnotation } from "@
 import { AnnotationsRepo, type AnnotationRow } from "@aurascholar/db/repos/annotations";
 import { AttachmentsRepo, type AttachmentRow } from "@aurascholar/db/repos/attachments";
 import { WorksRepo, type WorkWithAuthors } from "@aurascholar/db/repos/works";
-import { getDb } from "../../services/aura-db";
+import { getLibraryDb } from "../../services/aura-db";
 import { loadPdfForWork } from "../../services/library-read";
 
 export interface LibraryReaderSession {
@@ -49,8 +49,8 @@ export class LibraryReaderSessionError extends Error {
 
 const defaultDataSource: LibraryReaderSessionDataSource = {
   async createAnnotation(session, annotation) {
-    const db = await getDb();
-    return new AnnotationsRepo(db).create({
+    const { db, libraryId } = await getLibraryDb();
+    return new AnnotationsRepo(db, libraryId).create({
       attachmentId: session.attachment.id,
       workId: session.work.id,
       type: annotation.type,
@@ -61,18 +61,18 @@ const defaultDataSource: LibraryReaderSessionDataSource = {
     });
   },
   async listAnnotations(attachmentId) {
-    const db = await getDb();
-    return new AnnotationsRepo(db).listForAttachment(attachmentId);
+    const { db, libraryId } = await getLibraryDb();
+    return new AnnotationsRepo(db, libraryId).listForAttachment(attachmentId);
   },
   async listAttachments(workId) {
-    const db = await getDb();
-    return new AttachmentsRepo(db).forWork(workId);
+    const { db, libraryId } = await getLibraryDb();
+    return new AttachmentsRepo(db, libraryId).forWork(workId);
   },
   loadDocument: (data) => PdfDocument.load(data),
   loadPdf: loadPdfForWork,
   async loadWork(workId) {
-    const db = await getDb();
-    return new WorksRepo(db).get(workId);
+    const { db, libraryId } = await getLibraryDb();
+    return new WorksRepo(db, libraryId).get(workId);
   },
 };
 

@@ -8,15 +8,20 @@
 export interface SqlExecutor {
   exec(sql: string): void | Promise<void>;
   queryScalar(sql: string): unknown | Promise<unknown>;
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
+  run(sql: string, params?: unknown[]): Promise<number>;
 }
 
 export interface Migration {
   version: number;
   name: string;
   sql: string;
+  apply?: (db: SqlExecutor) => Promise<void>;
+  disableForeignKeys?: boolean;
 }
 
 import { DDL_V1 } from "./ddl.js";
+import { ensureLocalLibraryIdentity } from "./local-first.js";
 
 export const MIGRATIONS: Migration[] = [
   {
@@ -380,7 +385,803 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS canvas_edges_target_idx ON canvas_edges(target_id);
     `,
   },
+  {
+    // Establish Library as the mandatory ownership boundary for canonical
+    // research data and sync metadata. SQLite cannot add a NOT NULL foreign-key
+    // column in place, so this migration uses transactional table rebuilds.
+    version: 17,
+    name: "library_ownership",
+    sql: "",
+    apply: applyLibraryOwnershipV17,
+    disableForeignKeys: true,
+  },
 ];
+
+async function applyLibraryOwnershipV17(db: SqlExecutor): Promise<void> {
+  const libraryId = await ensureLocalLibraryIdentity(db);
+
+  // Before v17 the application exposed only one active local Library and the
+  // canonical roots below had no owner. Any nullable owner already present on
+  // sync/derived metadata therefore cannot establish a second trustworthy
+  // corpus boundary. Re-home the complete legacy graph to the selected local
+  // Library so clocks, blobs, and derived payloads cannot drift away from the
+  // roots they describe.
+  await db.exec(`
+    CREATE TABLE works_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      doi TEXT,
+      title TEXT NOT NULL,
+      abstract TEXT,
+      year INTEGER,
+      publication_date TEXT,
+      venue_name TEXT,
+      venue_type TEXT,
+      type TEXT NOT NULL DEFAULT 'article',
+      arxiv_id TEXT,
+      openalex_id TEXT,
+      s2_id TEXT,
+      pmid TEXT,
+      fingerprint TEXT,
+      csl_json TEXT,
+      volume TEXT,
+      issue TEXT,
+      pages TEXT,
+      number_of_volumes TEXT,
+      edition TEXT,
+      section TEXT,
+      publisher TEXT,
+      place_published TEXT,
+      series_title TEXT,
+      short_title TEXT,
+      original_title TEXT,
+      issn TEXT,
+      isbn TEXT,
+      url TEXT,
+      accessed_date TEXT,
+      language TEXT,
+      call_number TEXT,
+      accession_number TEXT,
+      label TEXT,
+      database_name TEXT,
+      keywords_json TEXT,
+      reading_status TEXT NOT NULL DEFAULT 'unread',
+      starred INTEGER NOT NULL DEFAULT 0,
+      notes_md TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO works_v17 (
+       rowid, id, library_id, doi, title, abstract, year, publication_date,
+       venue_name, venue_type, type, arxiv_id, openalex_id, s2_id, pmid,
+       fingerprint, csl_json, volume, issue, pages, number_of_volumes,
+       edition, section, publisher, place_published, series_title, short_title,
+       original_title, issn, isbn, url, accessed_date, language, call_number,
+       accession_number, label, database_name, keywords_json, reading_status,
+       starred, notes_md, created_at, updated_at, deleted_at
+     )
+     SELECT
+       rowid, id, ?, doi, title, abstract, year, publication_date,
+       venue_name, venue_type, type, arxiv_id, openalex_id, s2_id, pmid,
+       fingerprint, csl_json, volume, issue, pages, number_of_volumes,
+       edition, section, publisher, place_published, series_title, short_title,
+       original_title, issn, isbn, url, accessed_date, language, call_number,
+       accession_number, label, database_name, keywords_json, reading_status,
+       starred, notes_md, created_at, updated_at, deleted_at
+     FROM works`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE works;
+    ALTER TABLE works_v17 RENAME TO works;
+
+    CREATE UNIQUE INDEX works_doi_uq
+      ON works(library_id, doi) WHERE doi IS NOT NULL;
+    CREATE INDEX works_fingerprint_idx ON works(library_id, fingerprint);
+    CREATE INDEX works_arxiv_idx
+      ON works(library_id, arxiv_id) WHERE arxiv_id IS NOT NULL;
+    CREATE INDEX works_openalex_idx
+      ON works(library_id, openalex_id) WHERE openalex_id IS NOT NULL;
+    CREATE INDEX works_s2_idx
+      ON works(library_id, s2_id) WHERE s2_id IS NOT NULL;
+    CREATE INDEX works_pmid_idx
+      ON works(library_id, pmid) WHERE pmid IS NOT NULL;
+    CREATE INDEX works_year_idx ON works(library_id, year);
+  `);
+
+  await db.exec(`
+    CREATE TABLE authors_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      display_name TEXT NOT NULL,
+      orcid TEXT,
+      openalex_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO authors_v17 (
+       id, library_id, display_name, orcid, openalex_id, created_at, updated_at, deleted_at
+     )
+     SELECT id, ?, display_name, orcid, openalex_id, created_at, updated_at, deleted_at
+     FROM authors`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE authors;
+    ALTER TABLE authors_v17 RENAME TO authors;
+    CREATE UNIQUE INDEX authors_orcid_uq
+      ON authors(library_id, orcid) WHERE orcid IS NOT NULL;
+    CREATE INDEX authors_openalex_idx ON authors(library_id, openalex_id);
+  `);
+
+  await db.exec(`
+    CREATE TABLE collections_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      name TEXT NOT NULL,
+      parent_id TEXT REFERENCES collections_v17(id),
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO collections_v17 (
+       id, library_id, name, parent_id, sort_order, created_at, updated_at, deleted_at
+     )
+     SELECT id, ?, name, parent_id, sort_order, created_at, updated_at, deleted_at
+     FROM collections`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE collections;
+    ALTER TABLE collections_v17 RENAME TO collections;
+    CREATE INDEX collections_library_parent_idx
+      ON collections(library_id, parent_id, sort_order);
+  `);
+
+  await db.exec(`
+    CREATE TABLE tags_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      name TEXT NOT NULL,
+      color TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO tags_v17 (
+       id, library_id, name, color, created_at, updated_at, deleted_at
+     )
+     SELECT id, ?, name, color, created_at, updated_at, deleted_at
+     FROM tags`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE tags;
+    ALTER TABLE tags_v17 RENAME TO tags;
+    CREATE UNIQUE INDEX tags_name_uq ON tags(library_id, name);
+  `);
+
+  await db.exec(`
+    CREATE TABLE saved_searches_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      query TEXT NOT NULL,
+      sources_json TEXT,
+      seen_ids_json TEXT NOT NULL DEFAULT '[]',
+      new_count INTEGER NOT NULL DEFAULT 0,
+      last_run_at INTEGER,
+      next_run_at INTEGER,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO saved_searches_v17 (
+       id, library_id, query, sources_json, seen_ids_json, new_count,
+       last_run_at, next_run_at, last_error, created_at, updated_at, deleted_at
+     )
+     SELECT id, ?, query, sources_json, seen_ids_json, new_count,
+       last_run_at, next_run_at, last_error, created_at, updated_at, deleted_at
+     FROM saved_searches`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE saved_searches;
+    ALTER TABLE saved_searches_v17 RENAME TO saved_searches;
+    CREATE INDEX saved_searches_due_idx
+      ON saved_searches(library_id, next_run_at);
+  `);
+
+  await db.exec(`
+    CREATE TABLE canvas_workspaces_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      name TEXT NOT NULL,
+      description TEXT,
+      schema_version INTEGER NOT NULL DEFAULT 1 CHECK (schema_version >= 1),
+      viewport_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  await db.run(
+    `INSERT INTO canvas_workspaces_v17 (
+       id, library_id, name, description, schema_version, viewport_json,
+       created_at, updated_at
+     )
+     SELECT id, ?, name, description, schema_version, viewport_json,
+       created_at, updated_at
+     FROM canvas_workspaces`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE canvas_workspaces;
+    ALTER TABLE canvas_workspaces_v17 RENAME TO canvas_workspaces;
+    CREATE INDEX canvas_workspaces_library_updated_idx
+      ON canvas_workspaces(library_id, updated_at);
+  `);
+
+  await db.exec(`
+    CREATE TABLE sentinel_tasks_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      work_id TEXT REFERENCES works(id),
+      doi TEXT,
+      title TEXT NOT NULL,
+      current_state TEXT NOT NULL DEFAULT 'accepted',
+      target_flags TEXT,
+      poll_interval_s INTEGER NOT NULL DEFAULT 86400,
+      next_poll_at INTEGER NOT NULL,
+      last_polled_at INTEGER,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      hint_venue TEXT,
+      hint_author TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO sentinel_tasks_v17 (
+       id, library_id, work_id, doi, title, current_state, target_flags,
+       poll_interval_s, next_poll_at, last_polled_at, error_count, last_error,
+       status, hint_venue, hint_author, created_at, updated_at, deleted_at
+     )
+     SELECT id, ?, work_id, doi, title, current_state, target_flags,
+       poll_interval_s, next_poll_at, last_polled_at, error_count, last_error,
+       status, hint_venue, hint_author, created_at, updated_at, deleted_at
+     FROM sentinel_tasks`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE sentinel_tasks;
+    ALTER TABLE sentinel_tasks_v17 RENAME TO sentinel_tasks;
+    CREATE INDEX sentinel_next_poll_idx
+      ON sentinel_tasks(library_id, status, next_poll_at);
+  `);
+
+  await db.exec(`
+    CREATE TABLE ai_jobs_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      kind TEXT NOT NULL,
+      work_id TEXT REFERENCES works(id),
+      status TEXT NOT NULL DEFAULT 'pending',
+      model TEXT,
+      prompt_version TEXT,
+      result_json TEXT,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  await db.run(
+    `INSERT INTO ai_jobs_v17 (
+       id, library_id, kind, work_id, status, model, prompt_version,
+       result_json, error, created_at, updated_at
+     )
+     SELECT id, ?, kind, work_id, status, model, prompt_version,
+       result_json, error, created_at, updated_at
+     FROM ai_jobs`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE ai_jobs;
+    ALTER TABLE ai_jobs_v17 RENAME TO ai_jobs;
+    CREATE INDEX ai_jobs_status_idx ON ai_jobs(library_id, status);
+  `);
+
+  await db.exec(`
+    CREATE TABLE sync_log_v17 (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      entity_table TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      op TEXT NOT NULL,
+      values_json TEXT,
+      column_hlcs_json TEXT,
+      hlc TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      created_at INTEGER,
+      synced_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO sync_log_v17 (
+       seq, library_id, entity_table, entity_id, op, values_json,
+       column_hlcs_json, hlc, device_id, created_at, synced_at
+     )
+     SELECT seq, ?, entity_table, entity_id, op, values_json,
+       column_hlcs_json, hlc, device_id, created_at, synced_at
+     FROM sync_log`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE sync_log;
+    ALTER TABLE sync_log_v17 RENAME TO sync_log;
+    CREATE INDEX sync_log_entity_idx
+      ON sync_log(library_id, entity_table, entity_id);
+    CREATE INDEX sync_log_library_seq_idx ON sync_log(library_id, seq);
+  `);
+
+  await db.exec(`
+    CREATE TABLE sync_state_v17 (
+      provider_id TEXT NOT NULL,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      last_pushed_seq INTEGER NOT NULL DEFAULT 0,
+      last_pulled_cursor TEXT,
+      remote_config_json TEXT,
+      PRIMARY KEY (library_id, provider_id)
+    );
+  `);
+  await db.run(
+    `INSERT INTO sync_state_v17 (
+       provider_id, library_id, last_pushed_seq, last_pulled_cursor, remote_config_json
+     )
+     SELECT provider_id, ?, last_pushed_seq,
+       last_pulled_cursor, remote_config_json
+     FROM sync_state`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE sync_state;
+    ALTER TABLE sync_state_v17 RENAME TO sync_state;
+  `);
+
+  await db.exec(`
+    CREATE TABLE sync_row_clocks_v17 (
+      table_name TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      column_hlcs_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (library_id, table_name, row_id)
+    );
+  `);
+  await db.run(
+    `INSERT INTO sync_row_clocks_v17 (
+       table_name, row_id, library_id, column_hlcs_json, updated_at
+     )
+     SELECT table_name, row_id, ?, column_hlcs_json, updated_at
+     FROM sync_row_clocks`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE sync_row_clocks;
+    ALTER TABLE sync_row_clocks_v17 RENAME TO sync_row_clocks;
+    CREATE INDEX sync_row_clocks_library_idx
+      ON sync_row_clocks(library_id, table_name);
+  `);
+
+  await db.exec(`
+    CREATE TABLE blob_sync_state_v17 (
+      sha256 TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      status TEXT NOT NULL DEFAULT 'pending',
+      remote_path TEXT,
+      uploaded_at INTEGER,
+      downloaded_at INTEGER,
+      error TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (library_id, sha256, provider_id)
+    );
+  `);
+  await db.run(
+    `INSERT INTO blob_sync_state_v17 (
+       sha256, provider_id, library_id, status, remote_path, uploaded_at,
+       downloaded_at, error, updated_at
+     )
+     SELECT sha256, provider_id, ?, status, remote_path,
+       uploaded_at, downloaded_at, error, updated_at
+     FROM blob_sync_state`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE blob_sync_state;
+    ALTER TABLE blob_sync_state_v17 RENAME TO blob_sync_state;
+    CREATE INDEX blob_sync_state_library_idx
+      ON blob_sync_state(library_id, status);
+  `);
+
+  await db.exec(`
+    CREATE TABLE derived_artifacts_v17 (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id),
+      source_table TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      model TEXT,
+      prompt_hash TEXT,
+      input_hash TEXT,
+      payload_json TEXT NOT NULL,
+      local_only INTEGER NOT NULL DEFAULT 0,
+      syncable INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      expires_at INTEGER,
+      deleted_at INTEGER
+    );
+  `);
+  await db.run(
+    `INSERT INTO derived_artifacts_v17 (
+       id, library_id, source_table, source_id, kind, model, prompt_hash,
+       input_hash, payload_json, local_only, syncable, created_at, updated_at,
+       expires_at, deleted_at
+     )
+     SELECT id, ?, source_table, source_id, kind, model,
+       prompt_hash, input_hash, payload_json, local_only, syncable, created_at,
+       updated_at, expires_at, deleted_at
+     FROM derived_artifacts`,
+    [libraryId],
+  );
+  await db.exec(`
+    DROP TABLE derived_artifacts;
+    ALTER TABLE derived_artifacts_v17 RENAME TO derived_artifacts;
+    CREATE INDEX derived_artifacts_source_idx
+      ON derived_artifacts(library_id, source_table, source_id, kind);
+    CREATE INDEX derived_artifacts_library_idx
+      ON derived_artifacts(library_id, kind);
+  `);
+  const invalidDerivedWorkSources = await db.query<{ id: string }>(
+    `SELECT d.id
+     FROM derived_artifacts d
+     LEFT JOIN works w
+       ON w.id = d.source_id
+      AND w.library_id = d.library_id
+     WHERE d.source_table = 'works' AND w.id IS NULL
+     LIMIT 1`,
+  );
+  if (invalidDerivedWorkSources[0]) {
+    throw new Error(
+      `Migration v17 found a derived artifact with an invalid Work owner: ${invalidDerivedWorkSources[0].id}`,
+    );
+  }
+
+  // Rebuilding works drops its external-content FTS triggers. Recreate them
+  // and rebuild the index so pre-v17 rows remain searchable.
+  await db.exec(`
+    CREATE TRIGGER works_fts_ai AFTER INSERT ON works BEGIN
+      INSERT INTO works_fts(rowid, title, abstract, notes_md)
+      VALUES (new.rowid, new.title, new.abstract, new.notes_md);
+    END;
+    CREATE TRIGGER works_fts_ad AFTER DELETE ON works BEGIN
+      INSERT INTO works_fts(works_fts, rowid, title, abstract, notes_md)
+      VALUES ('delete', old.rowid, old.title, old.abstract, old.notes_md);
+    END;
+    CREATE TRIGGER works_fts_au AFTER UPDATE ON works BEGIN
+      INSERT INTO works_fts(works_fts, rowid, title, abstract, notes_md)
+      VALUES ('delete', old.rowid, old.title, old.abstract, old.notes_md);
+      INSERT INTO works_fts(rowid, title, abstract, notes_md)
+      VALUES (new.rowid, new.title, new.abstract, new.notes_md);
+    END;
+    INSERT INTO works_fts(works_fts) VALUES('rebuild');
+  `);
+
+  await createLibraryBoundaryTriggers(db);
+}
+
+async function createLibraryBoundaryTriggers(db: SqlExecutor): Promise<void> {
+  await db.exec(`
+    CREATE TRIGGER works_library_immutable
+    BEFORE UPDATE OF library_id ON works
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'work library ownership is immutable');
+    END;
+    CREATE TRIGGER authors_library_immutable
+    BEFORE UPDATE OF library_id ON authors
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'author library ownership is immutable');
+    END;
+    CREATE TRIGGER collections_library_immutable
+    BEFORE UPDATE OF library_id ON collections
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'collection library ownership is immutable');
+    END;
+    CREATE TRIGGER tags_library_immutable
+    BEFORE UPDATE OF library_id ON tags
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'tag library ownership is immutable');
+    END;
+    CREATE TRIGGER saved_searches_library_immutable
+    BEFORE UPDATE OF library_id ON saved_searches
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'saved search library ownership is immutable');
+    END;
+    CREATE TRIGGER canvas_workspaces_library_immutable
+    BEFORE UPDATE OF library_id ON canvas_workspaces
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'canvas workspace library ownership is immutable');
+    END;
+    CREATE TRIGGER sentinel_tasks_library_immutable
+    BEFORE UPDATE OF library_id ON sentinel_tasks
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'sentinel task library ownership is immutable');
+    END;
+    CREATE TRIGGER ai_jobs_library_immutable
+    BEFORE UPDATE OF library_id ON ai_jobs
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'AI job library ownership is immutable');
+    END;
+    CREATE TRIGGER derived_artifacts_library_immutable
+    BEFORE UPDATE OF library_id ON derived_artifacts
+    WHEN OLD.library_id <> NEW.library_id
+    BEGIN
+      SELECT RAISE(ABORT, 'derived artifact library ownership is immutable');
+    END;
+    CREATE TRIGGER derived_artifacts_work_source_insert
+    BEFORE INSERT ON derived_artifacts
+    WHEN NEW.source_table = 'works' AND NOT EXISTS (
+      SELECT 1 FROM works w
+      WHERE w.id = NEW.source_id AND w.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'derived artifact work must stay within its library');
+    END;
+    CREATE TRIGGER derived_artifacts_work_source_update
+    BEFORE UPDATE OF library_id, source_table, source_id ON derived_artifacts
+    WHEN NEW.source_table = 'works' AND NOT EXISTS (
+      SELECT 1 FROM works w
+      WHERE w.id = NEW.source_id AND w.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'derived artifact work must stay within its library');
+    END;
+
+    CREATE TRIGGER work_authors_library_insert
+    BEFORE INSERT ON work_authors
+    WHEN NOT EXISTS (
+      SELECT 1 FROM works w
+      JOIN authors a ON a.id = NEW.author_id
+      WHERE w.id = NEW.work_id AND w.library_id = a.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'work_authors must stay within one library');
+    END;
+    CREATE TRIGGER work_authors_library_update
+    BEFORE UPDATE OF work_id, author_id ON work_authors
+    WHEN NOT EXISTS (
+      SELECT 1 FROM works w
+      JOIN authors a ON a.id = NEW.author_id
+      WHERE w.id = NEW.work_id AND w.library_id = a.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'work_authors must stay within one library');
+    END;
+
+    CREATE TRIGGER collection_items_library_insert
+    BEFORE INSERT ON collection_items
+    WHEN NOT EXISTS (
+      SELECT 1 FROM collections c
+      JOIN works w ON w.id = NEW.work_id
+      WHERE c.id = NEW.collection_id AND c.library_id = w.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'collection_items must stay within one library');
+    END;
+    CREATE TRIGGER collection_items_library_update
+    BEFORE UPDATE OF collection_id, work_id ON collection_items
+    WHEN NOT EXISTS (
+      SELECT 1 FROM collections c
+      JOIN works w ON w.id = NEW.work_id
+      WHERE c.id = NEW.collection_id AND c.library_id = w.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'collection_items must stay within one library');
+    END;
+
+    CREATE TRIGGER work_tags_library_insert
+    BEFORE INSERT ON work_tags
+    WHEN NOT EXISTS (
+      SELECT 1 FROM works w
+      JOIN tags t ON t.id = NEW.tag_id
+      WHERE w.id = NEW.work_id AND w.library_id = t.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'work_tags must stay within one library');
+    END;
+    CREATE TRIGGER work_tags_library_update
+    BEFORE UPDATE OF work_id, tag_id ON work_tags
+    WHEN NOT EXISTS (
+      SELECT 1 FROM works w
+      JOIN tags t ON t.id = NEW.tag_id
+      WHERE w.id = NEW.work_id AND w.library_id = t.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'work_tags must stay within one library');
+    END;
+
+    CREATE TRIGGER citations_library_insert
+    BEFORE INSERT ON citations
+    WHEN NOT EXISTS (
+      SELECT 1 FROM works citing
+      JOIN works cited ON cited.id = NEW.cited_work_id
+      WHERE citing.id = NEW.citing_work_id
+        AND citing.library_id = cited.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'citations must stay within one library');
+    END;
+    CREATE TRIGGER citations_library_update
+    BEFORE UPDATE OF citing_work_id, cited_work_id ON citations
+    WHEN NOT EXISTS (
+      SELECT 1 FROM works citing
+      JOIN works cited ON cited.id = NEW.cited_work_id
+      WHERE citing.id = NEW.citing_work_id
+        AND citing.library_id = cited.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'citations must stay within one library');
+    END;
+
+    CREATE TRIGGER collections_parent_library_insert
+    BEFORE INSERT ON collections
+    WHEN NEW.parent_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM collections parent
+      WHERE parent.id = NEW.parent_id
+        AND parent.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'collection parent must stay within one library');
+    END;
+    CREATE TRIGGER collections_parent_library_update
+    BEFORE UPDATE OF parent_id, library_id ON collections
+    WHEN NEW.parent_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM collections parent
+      WHERE parent.id = NEW.parent_id
+        AND parent.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'collection parent must stay within one library');
+    END;
+
+    CREATE TRIGGER annotations_work_insert
+    BEFORE INSERT ON annotations
+    WHEN NOT EXISTS (
+      SELECT 1 FROM attachments a
+      WHERE a.id = NEW.attachment_id AND a.work_id = NEW.work_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'annotation attachment must belong to its work');
+    END;
+    CREATE TRIGGER annotations_work_update
+    BEFORE UPDATE OF attachment_id, work_id ON annotations
+    WHEN NOT EXISTS (
+      SELECT 1 FROM attachments a
+      WHERE a.id = NEW.attachment_id AND a.work_id = NEW.work_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'annotation attachment must belong to its work');
+    END;
+
+    CREATE TRIGGER canvas_nodes_library_insert
+    BEFORE INSERT ON canvas_nodes
+    WHEN NEW.work_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM canvas_workspaces cw
+      JOIN works w ON w.id = NEW.work_id
+      WHERE cw.id = NEW.workspace_id AND cw.library_id = w.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'canvas node work must stay within its library');
+    END;
+    CREATE TRIGGER canvas_nodes_library_update
+    BEFORE UPDATE OF workspace_id, work_id ON canvas_nodes
+    WHEN NEW.work_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM canvas_workspaces cw
+      JOIN works w ON w.id = NEW.work_id
+      WHERE cw.id = NEW.workspace_id AND cw.library_id = w.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'canvas node work must stay within its library');
+    END;
+
+    CREATE TRIGGER canvas_edges_workspace_insert
+    BEFORE INSERT ON canvas_edges
+    WHEN NOT EXISTS (
+      SELECT 1 FROM canvas_nodes source
+      JOIN canvas_nodes target ON target.id = NEW.target_id
+      WHERE source.id = NEW.source_id
+        AND source.workspace_id = NEW.workspace_id
+        AND target.workspace_id = NEW.workspace_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'canvas edge nodes must belong to its workspace');
+    END;
+    CREATE TRIGGER canvas_edges_workspace_update
+    BEFORE UPDATE OF workspace_id, source_id, target_id ON canvas_edges
+    WHEN NOT EXISTS (
+      SELECT 1 FROM canvas_nodes source
+      JOIN canvas_nodes target ON target.id = NEW.target_id
+      WHERE source.id = NEW.source_id
+        AND source.workspace_id = NEW.workspace_id
+        AND target.workspace_id = NEW.workspace_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'canvas edge nodes must belong to its workspace');
+    END;
+
+    CREATE TRIGGER sentinel_tasks_library_insert
+    BEFORE INSERT ON sentinel_tasks
+    WHEN NEW.work_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM works w
+      WHERE w.id = NEW.work_id AND w.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'sentinel task work must stay within its library');
+    END;
+    CREATE TRIGGER sentinel_tasks_library_update
+    BEFORE UPDATE OF library_id, work_id ON sentinel_tasks
+    WHEN NEW.work_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM works w
+      WHERE w.id = NEW.work_id AND w.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'sentinel task work must stay within its library');
+    END;
+
+    CREATE TRIGGER ai_jobs_library_insert
+    BEFORE INSERT ON ai_jobs
+    WHEN NEW.work_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM works w
+      WHERE w.id = NEW.work_id AND w.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'AI job work must stay within its library');
+    END;
+    CREATE TRIGGER ai_jobs_library_update
+    BEFORE UPDATE OF library_id, work_id ON ai_jobs
+    WHEN NEW.work_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM works w
+      WHERE w.id = NEW.work_id AND w.library_id = NEW.library_id
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'AI job work must stay within its library');
+    END;
+  `);
+}
 
 export async function runMigrations(db: SqlExecutor): Promise<void> {
   await db.exec(
@@ -391,16 +1192,68 @@ export async function runMigrations(db: SqlExecutor): Promise<void> {
   );
   for (const m of MIGRATIONS) {
     if (m.version <= current) continue;
-    await db.exec("BEGIN");
+    let transactionStarted = false;
+    let migrationFailure: { error: unknown } | null = null;
     try {
-      await db.exec(m.sql);
+      if (m.disableForeignKeys) {
+        // SQLite ignores PRAGMA foreign_keys changes inside a transaction.
+        // Table-rebuild migrations must therefore disable it before BEGIN.
+        await db.exec("PRAGMA foreign_keys = OFF");
+        const disabled = Number(await db.queryScalar("PRAGMA foreign_keys"));
+        if (disabled !== 0) {
+          throw new Error(`Migration v${m.version} could not disable SQLite foreign keys`);
+        }
+      }
+
+      await db.exec("BEGIN");
+      transactionStarted = true;
+      if (m.apply) {
+        await m.apply(db);
+      } else {
+        await db.exec(m.sql);
+      }
+
+      if (m.disableForeignKeys) {
+        const violations = await db.query<{
+          table: string;
+          rowid: number | null;
+          parent: string;
+          fkid: number;
+        }>("PRAGMA foreign_key_check");
+        if (violations.length > 0) {
+          const first = violations[0]!;
+          throw new Error(
+            `Migration v${m.version} failed foreign_key_check: ${first.table} row ${String(first.rowid)} -> ${first.parent}`,
+          );
+        }
+      }
+
       await db.exec(
         `INSERT INTO _migrations (version, name, applied_at) VALUES (${m.version}, '${m.name}', ${Date.now()})`,
       );
       await db.exec("COMMIT");
+      transactionStarted = false;
     } catch (e) {
-      await db.exec("ROLLBACK");
-      throw e;
+      migrationFailure = { error: e };
+      if (transactionStarted) {
+        try {
+          await db.exec("ROLLBACK");
+        } catch (rollbackError) {
+          // A rollback failure is the most actionable error, but foreign keys
+          // still need to be restored below before it is surfaced.
+          migrationFailure = { error: rollbackError };
+        }
+      }
     }
+
+    if (m.disableForeignKeys) {
+      await db.exec("PRAGMA foreign_keys = ON");
+      const enabled = Number(await db.queryScalar("PRAGMA foreign_keys"));
+      if (enabled !== 1) {
+        throw new Error(`Migration v${m.version} could not restore SQLite foreign keys`);
+      }
+    }
+
+    if (migrationFailure) throw migrationFailure.error;
   }
 }

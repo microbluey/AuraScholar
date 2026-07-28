@@ -21,6 +21,7 @@ export interface SentinelCreateResult {
 
 export interface SentinelTaskRow {
   id: string;
+  library_id: string;
   work_id: string | null;
   /** Null when monitoring by title — the poller discovers the DOI. */
   doi: string | null;
@@ -74,7 +75,12 @@ export class SentinelTaskInactiveError extends Error {
 }
 
 export class SentinelRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private assertChanged(changed: number, error: Error): void {
     if (changed === 0) throw error;
@@ -82,8 +88,11 @@ export class SentinelRepo {
 
   private async assertActiveWork(workId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [workId],
+      `SELECT id
+       FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [workId, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Work ${workId} is missing or removed`);
   }
@@ -115,12 +124,13 @@ export class SentinelRepo {
     const id = newId();
     const now = Date.now();
     await this.db.run(
-      `INSERT INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags,
+      `INSERT INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags,
                                    hint_venue, hint_author,
                                    poll_interval_s, next_poll_at, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'accepted', ?, ?, ?, 86400, ?, 'active', ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, 'accepted', ?, ?, ?, 86400, ?, 'active', ?, ?)`,
       [
         id,
+        this.libraryId,
         prepared.workId ?? null,
         prepared.doi,
         prepared.title,
@@ -142,11 +152,12 @@ export class SentinelRepo {
 
     if (existing && existing.deleted_at == null) {
       if (prepared.workId && !existing.work_id) {
-        await this.db.run(`UPDATE sentinel_tasks SET work_id = ?, updated_at = ? WHERE id = ?`, [
-          prepared.workId,
-          Date.now(),
-          existing.id,
-        ]);
+        await this.db.run(
+          `UPDATE sentinel_tasks
+           SET work_id = ?, updated_at = ?
+           WHERE id = ? AND library_id = ?`,
+          [prepared.workId, Date.now(), existing.id, this.libraryId],
+        );
         const linked = await this.get(existing.id);
         return { id: existing.id, status: "existing", task: linked ?? existing };
       }
@@ -167,7 +178,7 @@ export class SentinelRepo {
            status = 'active',
            deleted_at = NULL,
            updated_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND library_id = ?`,
         [
           prepared.workId ?? null,
           prepared.doi,
@@ -178,6 +189,7 @@ export class SentinelRepo {
           now,
           now,
           existing.id,
+          this.libraryId,
         ],
       );
       const restored = await this.get(existing.id);
@@ -193,8 +205,11 @@ export class SentinelRepo {
 
   async get(taskId: string): Promise<SentinelTaskRow | null> {
     const rows = await this.db.query<SentinelTaskRow>(
-      `SELECT * FROM sentinel_tasks WHERE id = ? LIMIT 1`,
-      [taskId],
+      `SELECT *
+       FROM sentinel_tasks
+       WHERE id = ? AND library_id = ?
+       LIMIT 1`,
+      [taskId, this.libraryId],
     );
     return rows[0] ?? null;
   }
@@ -202,15 +217,21 @@ export class SentinelRepo {
   /** Called when title monitoring discovers the DOI. */
   async setDoi(taskId: string, doi: string): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE sentinel_tasks SET doi = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [doi, Date.now(), taskId],
+      `UPDATE sentinel_tasks
+       SET doi = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [doi, Date.now(), taskId, this.libraryId],
     );
     this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
   }
 
   async list(): Promise<SentinelTaskRow[]> {
     return this.db.query<SentinelTaskRow>(
-      `SELECT * FROM sentinel_tasks WHERE deleted_at IS NULL ORDER BY created_at DESC`,
+      `SELECT *
+       FROM sentinel_tasks
+       WHERE library_id = ? AND deleted_at IS NULL
+       ORDER BY created_at DESC`,
+      [this.libraryId],
     );
   }
 
@@ -218,16 +239,16 @@ export class SentinelRepo {
   async duePolls(now = Date.now()): Promise<SentinelTaskRow[]> {
     return this.db.query<SentinelTaskRow>(
       `SELECT * FROM sentinel_tasks
-       WHERE status = 'active' AND deleted_at IS NULL AND next_poll_at <= ?
+       WHERE library_id = ?
+         AND status = 'active'
+         AND deleted_at IS NULL
+         AND next_poll_at <= ?
        ORDER BY next_poll_at`,
-      [now],
+      [this.libraryId, now],
     );
   }
 
-  async recordCheck(
-    taskId: string,
-    update: SentinelCheckUpdate,
-  ): Promise<void> {
+  async recordCheck(taskId: string, update: SentinelCheckUpdate): Promise<void> {
     await this.recordCheckWithEvents(taskId, update);
   }
 
@@ -237,9 +258,9 @@ export class SentinelRepo {
     await this.withSavepoint("sentinel_record_check", async () => {
       const writable = await this.db.query<{ id: string }>(
         `SELECT id FROM sentinel_tasks
-         WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+         WHERE id = ? AND library_id = ? AND status = 'active' AND deleted_at IS NULL
          LIMIT 1`,
-        [taskId],
+        [taskId, this.libraryId],
       );
       if (!writable[0]) throw new SentinelTaskInactiveError(taskId);
 
@@ -271,7 +292,7 @@ export class SentinelRepo {
            last_error = CASE WHEN ? THEN ? ELSE NULL END,
            status = CASE WHEN ? THEN 'done' ELSE status END,
            updated_at = ?
-         WHERE id = ? AND status = 'active' AND deleted_at IS NULL`,
+         WHERE id = ? AND library_id = ? AND status = 'active' AND deleted_at IS NULL`,
         [
           update.doi ?? null,
           update.newState ?? null,
@@ -284,6 +305,7 @@ export class SentinelRepo {
           update.done ? 1 : 0,
           now,
           taskId,
+          this.libraryId,
         ],
       );
       this.assertChanged(changed, new SentinelTaskInactiveError(taskId));
@@ -298,18 +320,37 @@ export class SentinelRepo {
     evidence: unknown,
   ): Promise<string> {
     const id = newId();
-    await this.db.run(
+    const changed = await this.db.run(
       `INSERT INTO sentinel_events (id, task_id, from_state, to_state, evidence_json, detected_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [id, taskId, fromState, toState, evidence ? JSON.stringify(evidence) : null, Date.now()],
+       SELECT ?, ?, ?, ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1
+         FROM sentinel_tasks
+         WHERE id = ? AND library_id = ?
+       )`,
+      [
+        id,
+        taskId,
+        fromState,
+        toState,
+        evidence ? JSON.stringify(evidence) : null,
+        Date.now(),
+        taskId,
+        this.libraryId,
+      ],
     );
+    this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing`));
     return id;
   }
 
   async events(taskId: string): Promise<SentinelEventRow[]> {
     return this.db.query<SentinelEventRow>(
-      `SELECT * FROM sentinel_events WHERE task_id = ? ORDER BY detected_at`,
-      [taskId],
+      `SELECT e.*
+       FROM sentinel_events e
+       JOIN sentinel_tasks t ON t.id = e.task_id
+       WHERE e.task_id = ? AND t.library_id = ?
+       ORDER BY e.detected_at`,
+      [taskId, this.libraryId],
     );
   }
 
@@ -319,23 +360,37 @@ export class SentinelRepo {
       `SELECT e.*
        FROM sentinel_events e
        JOIN sentinel_tasks t ON t.id = e.task_id
-       WHERE e.notified_at IS NULL AND t.deleted_at IS NULL
+       WHERE t.library_id = ? AND e.notified_at IS NULL AND t.deleted_at IS NULL
        ORDER BY e.detected_at`,
+      [this.libraryId],
     );
   }
 
   async markNotified(eventId: string): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE sentinel_events SET notified_at = ? WHERE id = ? AND notified_at IS NULL`,
-      [Date.now(), eventId],
+      `UPDATE sentinel_events
+       SET notified_at = ?
+       WHERE id = ?
+         AND notified_at IS NULL
+         AND EXISTS (
+           SELECT 1
+           FROM sentinel_tasks
+           WHERE id = sentinel_events.task_id AND library_id = ?
+         )`,
+      [Date.now(), eventId, this.libraryId],
     );
-    this.assertChanged(changed, new Error(`Sentinel event ${eventId} is missing or already notified`));
+    this.assertChanged(
+      changed,
+      new Error(`Sentinel event ${eventId} is missing or already notified`),
+    );
   }
 
   async setStatus(taskId: string, status: "active" | "paused" | "done"): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE sentinel_tasks SET status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [status, Date.now(), taskId],
+      `UPDATE sentinel_tasks
+       SET status = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [status, Date.now(), taskId, this.libraryId],
     );
     this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
   }
@@ -343,8 +398,10 @@ export class SentinelRepo {
   async linkWork(taskId: string, workId: string): Promise<void> {
     await this.assertActiveWork(workId);
     const changed = await this.db.run(
-      `UPDATE sentinel_tasks SET work_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [workId, Date.now(), taskId],
+      `UPDATE sentinel_tasks
+       SET work_id = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [workId, Date.now(), taskId, this.libraryId],
     );
     this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
   }
@@ -352,35 +409,42 @@ export class SentinelRepo {
   async softDelete(taskId: string): Promise<void> {
     const now = Date.now();
     const changed = await this.db.run(
-      `UPDATE sentinel_tasks SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [now, now, taskId],
+      `UPDATE sentinel_tasks
+       SET deleted_at = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [now, now, taskId, this.libraryId],
     );
     this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or already removed`));
   }
 
   async restore(taskId: string): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE sentinel_tasks SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL`,
-      [Date.now(), taskId],
+      `UPDATE sentinel_tasks
+       SET deleted_at = NULL, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+      [Date.now(), taskId, this.libraryId],
     );
     this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or already active`));
   }
 
-  private async findMatchingTask(input: PreparedSentinelCreateInput): Promise<SentinelTaskRow | null> {
+  private async findMatchingTask(
+    input: PreparedSentinelCreateInput,
+  ): Promise<SentinelTaskRow | null> {
     if (input.doi) {
       const rows = await this.db.query<SentinelTaskRow>(
         `SELECT * FROM sentinel_tasks
-         WHERE doi = ?
+         WHERE library_id = ? AND doi = ?
          ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, created_at DESC
          LIMIT 1`,
-        [input.doi],
+        [this.libraryId, input.doi],
       );
       return rows[0] ?? null;
     }
 
     const targetTitle = normalizeSentinelTitle(input.title);
     const rows = await this.db.query<SentinelTaskRow>(
-      `SELECT * FROM sentinel_tasks WHERE doi IS NULL`,
+      `SELECT * FROM sentinel_tasks WHERE library_id = ? AND doi IS NULL`,
+      [this.libraryId],
     );
     return (
       rows
@@ -404,7 +468,7 @@ interface PreparedSentinelCreateInput {
 }
 
 function prepareCreateInput(input: SentinelCreateInput): PreparedSentinelCreateInput {
-  const doi = input.doi ? normalizeDoi(input.doi) ?? input.doi.trim().toLowerCase() : null;
+  const doi = input.doi ? (normalizeDoi(input.doi) ?? input.doi.trim().toLowerCase()) : null;
   return {
     doi,
     title: input.title.trim(),

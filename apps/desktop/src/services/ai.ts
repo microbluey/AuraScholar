@@ -1,11 +1,18 @@
 // AI service for the desktop app: BYOK config in settings. Non-secret fields
 // (kind/baseUrl/model) live in localStorage; the API key is stored encrypted
 // via safeStorage (see services/secrets.ts). Flashcard generation pipeline.
-import { OpenAICompatibleProvider, AnthropicProvider, generateFlashcards, flashcardsToCards, PROMPT_VERSION, type AIProvider } from "@aurascholar/ai";
+import {
+  OpenAICompatibleProvider,
+  AnthropicProvider,
+  generateFlashcards,
+  flashcardsToCards,
+  PROMPT_VERSION,
+  type AIProvider,
+} from "@aurascholar/ai";
 import { newId } from "@aurascholar/db/ids";
 import { FlashcardsRepo } from "@aurascholar/db/repos/flashcards";
 import { PdfDocument, extractFullText } from "@aurascholar/reader";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 import { auraHttp } from "./aura-platform";
 import { describeSafeError, toSafeError } from "./sensitive-text";
 import { SECRET_KEYS, getSecret, migrateInlineSecret, withSecretTransaction } from "./secrets";
@@ -54,7 +61,8 @@ export async function loadAiSettings(): Promise<AiSettings | null> {
 
   // Anthropic can run without a baseUrl; openai-compatible needs one.
   const baseOk =
-    stored.normalizedBaseUrl !== null && (stored.kind === "anthropic" || !!stored.normalizedBaseUrl);
+    stored.normalizedBaseUrl !== null &&
+    (stored.kind === "anthropic" || !!stored.normalizedBaseUrl);
   return baseOk && stored.model && stored.apiKey
     ? {
         apiKey: stored.apiKey,
@@ -184,26 +192,33 @@ export async function generateFlashcardsForWork(
     if (options.persistError === false) throw safeError;
     // Persist manual/on-demand failures so the reader and library panels can
     // surface them after navigation.
-    const db = await getDb();
+    const { db, libraryId } = await getLibraryDb();
     const active = await db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [workId],
+      `SELECT id
+       FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [workId, libraryId],
     );
     if (!active[0]) throw safeError;
     await db.run(
-      `INSERT INTO ai_jobs (id, kind, work_id, status, error, created_at, updated_at)
-       VALUES (?, 'flashcards', ?, 'error', ?, ?, ?)`,
-      [newId(), workId, safeMessage, Date.now(), Date.now()],
+      `INSERT INTO ai_jobs
+         (id, library_id, kind, work_id, status, error, created_at, updated_at)
+       VALUES (?, ?, 'flashcards', ?, 'error', ?, ?, ?)`,
+      [newId(), libraryId, workId, safeMessage, Date.now(), Date.now()],
     );
     throw safeError;
   }
 }
 
 async function generateInner(workId: string, title: string): Promise<GenerateResult> {
-  const db = await getDb();
+  const { db, libraryId } = await getLibraryDb();
   const active = await db.query<{ id: string }>(
-    `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-    [workId],
+    `SELECT id
+     FROM works
+     WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+     LIMIT 1`,
+    [workId, libraryId],
   );
   if (!active[0]) throw new Error("文献不存在或已在回收站，无法生成闪卡");
 
@@ -228,7 +243,7 @@ async function generateInner(workId: string, title: string): Promise<GenerateRes
   const output = await generateFlashcards(provider, { title, paperText: text, language: "zh" });
   const cards = flashcardsToCards(output, title);
 
-  const repo = new FlashcardsRepo(db);
+  const repo = new FlashcardsRepo(db, libraryId);
   const generationId = newId();
   await repo.createMany(
     cards.map((c) => ({
@@ -243,9 +258,19 @@ async function generateInner(workId: string, title: string): Promise<GenerateRes
   );
   // Record the job for observability/debugging.
   await db.run(
-    `INSERT INTO ai_jobs (id, kind, work_id, status, model, prompt_version, result_json, created_at, updated_at)
-     VALUES (?, 'flashcards', ?, 'done', ?, ?, ?, ?, ?)`,
-    [newId(), workId, provider.model, PROMPT_VERSION, JSON.stringify(output), Date.now(), Date.now()],
+    `INSERT INTO ai_jobs
+       (id, library_id, kind, work_id, status, model, prompt_version, result_json, created_at, updated_at)
+     VALUES (?, ?, 'flashcards', ?, 'done', ?, ?, ?, ?, ?)`,
+    [
+      newId(),
+      libraryId,
+      workId,
+      provider.model,
+      PROMPT_VERSION,
+      JSON.stringify(output),
+      Date.now(),
+      Date.now(),
+    ],
   );
   notifyFlashcardsUpdated();
   return { created: cards.length };

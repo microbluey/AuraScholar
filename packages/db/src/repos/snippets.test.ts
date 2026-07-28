@@ -11,8 +11,12 @@ let snippets: SnippetsRepo;
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
-  works = new WorksRepo(db);
-  snippets = new SnippetsRepo(db);
+  const libraries = await db.query<{ id: string }>(
+    `SELECT id FROM libraries WHERE deleted_at IS NULL LIMIT 1`,
+  );
+  const libraryId = libraries[0]!.id;
+  works = new WorksRepo(db, libraryId);
+  snippets = new SnippetsRepo(db, libraryId);
 });
 
 async function makeWork(title: string): Promise<string> {
@@ -21,6 +25,31 @@ async function makeWork(title: string): Promise<string> {
 }
 
 describe("SnippetsRepo", () => {
+  it("does not expose or mutate snippets owned by another Library", async () => {
+    const now = Date.now();
+    await db.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES ('library:b', 'Library B', 'personal', ?, ?)`,
+      [now, now],
+    );
+    const otherWorks = new WorksRepo(db, "library:b");
+    const otherWorkId = (await otherWorks.upsert({ title: "Other Library Paper" })).id;
+    const otherSnippets = new SnippetsRepo(db, "library:b");
+    const otherSnippetId = await otherSnippets.create({
+      workId: otherWorkId,
+      quote: "private to B",
+    });
+
+    await expect(
+      snippets.create({ workId: otherWorkId, quote: "cross-library write" }),
+    ).rejects.toThrow(`Work ${otherWorkId} is missing or removed`);
+    await expect(snippets.updateNote(otherSnippetId, "cross-library edit")).rejects.toThrow(
+      `Snippet ${otherSnippetId} is missing or removed`,
+    );
+    expect(await snippets.listAll()).toEqual([]);
+    expect(await otherSnippets.listAll()).toHaveLength(1);
+  });
+
   it("creates and lists snippets for a work", async () => {
     const w = await makeWork("Paper A");
     await snippets.create({ workId: w, pageIndex: 2, quote: "key claim", noteMd: "useful" });
@@ -104,9 +133,9 @@ describe("SnippetsRepo", () => {
     await expect(snippets.create({ workId: w, quote: "stale save" })).rejects.toThrow(
       `Work ${w} is missing or removed`,
     );
-    await expect(snippets.create({ workId: "missing-work", quote: "missing save" })).rejects.toThrow(
-      "Work missing-work is missing or removed",
-    );
+    await expect(
+      snippets.create({ workId: "missing-work", quote: "missing save" }),
+    ).rejects.toThrow("Work missing-work is missing or removed");
     await expect(snippets.updateNote(id, "stale edit")).rejects.toThrow(
       `Snippet ${id} is missing or removed`,
     );

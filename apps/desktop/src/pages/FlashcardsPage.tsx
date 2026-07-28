@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { FlashcardsRepo, Rating, type DueCard } from "@aurascholar/db/repos/flashcards";
 import { Badge, Button, Card } from "@aurascholar/ui";
-import { getDb } from "../services/aura-db";
+import { getLibraryDb } from "../services/aura-db";
 import { listWorks } from "../services/library-list";
 import { InlineNotice } from "../components/InlineNotice";
 import { isDesktopRuntime } from "../services/aura-platform";
@@ -288,8 +288,8 @@ export function FlashcardsPage() {
       try {
         const smokeFailure = consumeFlashcardsSmokeRefreshFailure();
         if (smokeFailure) throw smokeFailure;
-        const db = await getDb();
-        const repo = new FlashcardsRepo(db);
+        const { db, libraryId } = await getLibraryDb();
+        const repo = new FlashcardsRepo(db, libraryId);
         const now = Date.now();
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
@@ -300,28 +300,45 @@ export function FlashcardsPage() {
             db.query<{ n: number }>(
               `SELECT COUNT(*) AS n
              FROM flashcards f
-             JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+             JOIN works w
+               ON w.id = f.work_id
+              AND w.library_id = ?
+              AND w.deleted_at IS NULL
              WHERE f.deleted_at IS NULL`,
+              [libraryId],
             ),
             db.query<{ n: number }>(
               `SELECT COUNT(*) AS n
              FROM flashcards f
              JOIN flashcard_srs s ON s.flashcard_id = f.id
-             JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+             JOIN works w
+               ON w.id = f.work_id
+              AND w.library_id = ?
+              AND w.deleted_at IS NULL
              WHERE f.deleted_at IS NULL AND s.due_at <= ? AND s.reps = 0`,
-              [now],
+              [libraryId, now],
             ),
             db.query<{ n: number }>(
-              `SELECT COUNT(*) AS n FROM flashcard_reviews WHERE reviewed_at >= ?`,
-              [todayStart.getTime()],
+              `SELECT COUNT(*) AS n
+               FROM flashcard_reviews r
+               JOIN flashcards f ON f.id = r.flashcard_id
+               JOIN works w
+                 ON w.id = f.work_id
+                AND w.library_id = ?
+                AND w.deleted_at IS NULL
+               WHERE f.deleted_at IS NULL AND r.reviewed_at >= ?`,
+              [libraryId, todayStart.getTime()],
             ),
             db.query<{ due_at: number | null }>(
               `SELECT MIN(s.due_at) AS due_at
              FROM flashcards f
              JOIN flashcard_srs s ON s.flashcard_id = f.id
-             JOIN works w ON w.id = f.work_id AND w.deleted_at IS NULL
+             JOIN works w
+               ON w.id = f.work_id
+              AND w.library_id = ?
+              AND w.deleted_at IS NULL
              WHERE f.deleted_at IS NULL AND s.due_at > ?`,
-              [now],
+              [libraryId, now],
             ),
             listWorks(undefined, undefined, 1).catch(() => []),
           ]);
@@ -405,8 +422,8 @@ export function FlashcardsPage() {
       try {
         const smokeFailure = consumeFlashcardsSmokeReviewFailure();
         if (smokeFailure) throw smokeFailure;
-        const db = await getDb();
-        await new FlashcardsRepo(db).review(current.id, rating);
+        const { db, libraryId } = await getLibraryDb();
+        await new FlashcardsRepo(db, libraryId).review(current.id, rating);
         setReviewedCount((n) => n + 1);
         await waitForMinimumElapsed(startedAt, MIN_FLASHCARD_RATING_BUSY_MS);
         const refreshed = await refresh({ clearMessage: false, showLoading: false });
@@ -465,8 +482,8 @@ export function FlashcardsPage() {
     try {
       const smokeFailure = consumeFlashcardsSmokeRemoveFailure();
       if (smokeFailure) throw smokeFailure;
-      const db = await getDb();
-      await new FlashcardsRepo(db).softDelete(target.id);
+      const { db, libraryId } = await getLibraryDb();
+      await new FlashcardsRepo(db, libraryId).softDelete(target.id);
       setDeleteUndo({ card: target, message: "已移除这张闪卡。" });
       await waitForMinimumElapsed(startedAt, MIN_FLASHCARD_REMOVE_BUSY_MS);
       setQueue((cards) => cards.filter((card) => card.id !== target.id));
@@ -505,8 +522,8 @@ export function FlashcardsPage() {
     try {
       const smokeFailure = consumeFlashcardsSmokeRestoreFailure();
       if (smokeFailure) throw smokeFailure;
-      const db = await getDb();
-      await new FlashcardsRepo(db).restore(deleteUndo.card.id);
+      const { db, libraryId } = await getLibraryDb();
+      await new FlashcardsRepo(db, libraryId).restore(deleteUndo.card.id);
       await waitForMinimumElapsed(startedAt, MIN_FLASHCARD_REMOVE_BUSY_MS);
       setDeleteUndo(null);
       await refresh({ clearMessage: false, showLoading: false });

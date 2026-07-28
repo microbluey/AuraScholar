@@ -8,7 +8,7 @@ import {
   type SavedSearchRow,
 } from "@aurascholar/db/repos/saved-searches";
 import type { NormalizedWork } from "@aurascholar/connectors";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 import { auraNotifier } from "./aura-platform";
 import { describeSafeError } from "./sensitive-text";
 import type { DiscoveryResultWithLibrary } from "./discovery";
@@ -35,6 +35,11 @@ export interface CreateSavedSearchResult {
 
 const ALL_DISCOVERY_SOURCES: DiscoverySource[] = ["arxiv", "crossref", "openalex", "s2"];
 
+async function savedSearchesRepo(): Promise<SavedSearchesRepo> {
+  const { db, libraryId } = await getLibraryDb();
+  return new SavedSearchesRepo(db, libraryId);
+}
+
 function toView(row: SavedSearchRow): SavedSearchView {
   return {
     id: row.id,
@@ -57,7 +62,10 @@ function parseSources(value: string | null): DiscoverySource[] | null {
 function parseSeenIds(value: string): { ids: string[]; recovered: boolean } {
   const parsed = parseJsonValue(value);
   if (!Array.isArray(parsed)) return { ids: [], recovered: true };
-  return { ids: parsed.filter((item): item is string => typeof item === "string"), recovered: false };
+  return {
+    ids: parsed.filter((item): item is string => typeof item === "string"),
+    recovered: false,
+  };
 }
 
 function parseJsonValue(value: string): unknown {
@@ -69,12 +77,7 @@ function parseJsonValue(value: string): unknown {
 }
 
 function isDiscoverySource(value: unknown): value is DiscoverySource {
-  return (
-    value === "arxiv" ||
-    value === "crossref" ||
-    value === "openalex" ||
-    value === "s2"
-  );
+  return value === "arxiv" || value === "crossref" || value === "openalex" || value === "s2";
 }
 
 function normalizeQuery(value: string): string {
@@ -106,7 +109,7 @@ function stableId(work: NormalizedWork): string {
 }
 
 export async function listSavedSearches(): Promise<SavedSearchView[]> {
-  const repo = new SavedSearchesRepo(await getDb());
+  const repo = await savedSearchesRepo();
   return (await repo.list()).map(toView);
 }
 
@@ -114,11 +117,12 @@ export async function createSavedSearch(
   query: string,
   sources?: DiscoverySource[],
 ): Promise<CreateSavedSearchResult> {
-  const repo = new SavedSearchesRepo(await getDb());
+  const repo = await savedSearchesRepo();
   const normalizedQuery = normalizeQuery(query);
   const existing = (await repo.list()).find(
     (row) =>
-      normalizeQuery(row.query) === normalizedQuery && sameSources(parseSources(row.sources_json), sources),
+      normalizeQuery(row.query) === normalizedQuery &&
+      sameSources(parseSources(row.sources_json), sources),
   );
   if (existing) return { created: false, id: existing.id };
 
@@ -134,26 +138,23 @@ export async function createSavedSearch(
 }
 
 export async function deleteSavedSearch(id: string): Promise<void> {
-  const repo = new SavedSearchesRepo(await getDb());
+  const repo = await savedSearchesRepo();
   await repo.softDelete(id);
 }
 
 export async function restoreSavedSearch(id: string): Promise<void> {
-  const repo = new SavedSearchesRepo(await getDb());
+  const repo = await savedSearchesRepo();
   await repo.restore(id);
 }
 
 export async function clearSavedSearchBadge(id: string): Promise<void> {
-  const repo = new SavedSearchesRepo(await getDb());
+  const repo = await savedSearchesRepo();
   await repo.clearNew(id);
 }
 
 /** Run one saved search now. Returns the number of newly-seen results. */
-export async function runSavedSearch(
-  id: string,
-  opts: { silent?: boolean } = {},
-): Promise<number> {
-  const repo = new SavedSearchesRepo(await getDb());
+export async function runSavedSearch(id: string, opts: { silent?: boolean } = {}): Promise<number> {
+  const repo = await savedSearchesRepo();
   const rows = await repo.list();
   const row = rows.find((r) => r.id === id);
   if (!row) return 0;
@@ -221,7 +222,9 @@ async function runRow(
 
 function isDiscoveryReportUnavailable(report: { sources: DiscoverySearchReportSources }): boolean {
   const sources = sourceReports(report.sources);
-  return sources.length > 0 && sources.every((source) => SOURCE_FAILURE_STATUSES.has(source.status));
+  return (
+    sources.length > 0 && sources.every((source) => SOURCE_FAILURE_STATUSES.has(source.status))
+  );
 }
 
 function discoveryReportErrorMessage(report: { sources: DiscoverySearchReportSources }): string {
@@ -265,7 +268,7 @@ function sourceStatusLabel(status: string): string {
 
 /** Poll every due saved search once. Returns total new results found. */
 export async function runDueSavedSearches(): Promise<number> {
-  const repo = new SavedSearchesRepo(await getDb());
+  const repo = await savedSearchesRepo();
   const due = await repo.due();
   let total = 0;
   for (const row of due) {

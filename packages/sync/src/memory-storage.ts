@@ -83,6 +83,19 @@ export class MemorySyncStorage implements SyncStorage {
   async markPushed(uptoSeq: number, _options: MarkPushedOptions = {}): Promise<void> {
     this.pushedSeq = Math.max(this.pushedSeq, uptoSeq);
   }
+  async recoverPublishedSeq(uptoSeq: number): Promise<void> {
+    if (uptoSeq <= this.pushedSeq) return;
+    const shift = uptoSeq - this.pushedSeq;
+    // Recovery advances the allocator, not the acknowledgement boundary for
+    // pending local rows. Re-sequence those rows above the recovered remote
+    // tail so the in-memory reference adapter honors the same contract as the
+    // durable desktop adapter.
+    for (const entry of this.log) {
+      if (entry.seq > this.pushedSeq) entry.seq += shift;
+    }
+    this.nextSeq = Math.max(this.nextSeq + shift, uptoSeq + 1);
+    this.pushedSeq = uptoSeq;
+  }
   async lastPushedSeq(): Promise<number> {
     return this.pushedSeq;
   }

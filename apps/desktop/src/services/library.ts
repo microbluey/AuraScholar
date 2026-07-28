@@ -16,7 +16,7 @@ import type { ConnectorContext, NormalizedWork } from "@aurascholar/connectors";
 import { configureWorker, PdfDocument } from "@aurascholar/reader";
 import type { PdfDocumentMetadata } from "@aurascholar/reader";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 import { blobPath, sha256Hex, auraFs, auraHttp } from "./aura-platform";
 import { toWorkInput } from "./work-input";
 import type {
@@ -49,10 +49,10 @@ async function smokeIngestFromInput(input: string): Promise<IngestResult | null 
 }
 
 async function repos() {
-  const db = await getDb();
+  const { db, libraryId } = await getLibraryDb();
   return {
-    works: new WorksRepo(db),
-    attachments: new AttachmentsRepo(db),
+    works: new WorksRepo(db, libraryId),
+    attachments: new AttachmentsRepo(db, libraryId),
   };
 }
 
@@ -246,7 +246,9 @@ interface ExactFileResult {
  * (detaches) the underlying ArrayBuffer it's given, which would then fail to
  * clone over IPC when we later write the blob — so always hand it a copy.
  */
-async function loadPdfCopy(data: Uint8Array): Promise<{ pageCount: number; text: string; metadata: PdfDocumentMetadata }> {
+async function loadPdfCopy(
+  data: Uint8Array,
+): Promise<{ pageCount: number; text: string; metadata: PdfDocumentMetadata }> {
   const doc = await PdfDocument.load(data.slice());
   try {
     const metadata = await doc.getMetadata();
@@ -456,7 +458,7 @@ async function restoreAnnotationsFromInactiveAttachments(
   workId: string,
   activeAttachmentId: string,
 ): Promise<number> {
-  const db = await getDb();
+  const { db } = await getLibraryDb();
   return db.run(
     `UPDATE annotations
      SET attachment_id = ?, updated_at = ?

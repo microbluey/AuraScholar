@@ -18,6 +18,13 @@ export interface SyncStorage {
   unsyncedChanges(afterSeq: number): Promise<ChangeEntry[]>;
   /** Marks local changes up to seq as pushed. */
   markPushed(uptoSeq: number, options?: MarkPushedOptions): Promise<void>;
+  /**
+   * Advances the outgoing sequence cursor after the engine verifies that its
+   * own journal segments already exist remotely. Unlike markPushed, this must
+   * not acknowledge or remove any currently pending local rows: those rows
+   * need to be projected again at sequence numbers above uptoSeq.
+   */
+  recoverPublishedSeq?(uptoSeq: number): Promise<void>;
   /** Current row's column HLC stamps, or null if the row is unknown. */
   rowClocks(table: string, rowId: string): Promise<Record<string, string> | null>;
   /** Applies winning column values (upsert semantics). */
@@ -84,7 +91,8 @@ export class SyncEngine {
 
   /** Uploads local unsynced changes as one or more journal segments. */
   async push(): Promise<number> {
-    const after = await this.storage.lastPushedSeq();
+    const localCursor = await this.storage.lastPushedSeq();
+    const after = await this.recoverPublishedSegments(localCursor);
     const changes = await this.storage.unsyncedChanges(after);
     if (changes.length === 0) return 0;
     assertValidSegmentEntries(
@@ -110,6 +118,71 @@ export class SyncEngine {
     return changes.length;
   }
 
+  /**
+   * Recovers from a crash after provider.put() succeeded but before
+   * markPushed(). Remote bytes are treated as immutable: validate the complete
+   * contiguous tail first, then advance the local allocator without cleaning
+   * pending local rows.
+   */
+  private async recoverPublishedSegments(localCursor: number): Promise<number> {
+    // List the journal root, not only this device's child path. Scoped
+    // providers use the root listing to switch atomically from a legacy
+    // journal to a namespaced one. During that bootstrap we must recover this
+    // device's legacy tail so the new namespace continues above its sequence
+    // range instead of restarting at 1.
+    const objects = await this.provider.list("journal/");
+    const segments: Array<{ path: string; startSeq: number; endSeq: number }> = [];
+
+    for (const object of objects) {
+      const parsed = parseSegmentPath(object.path);
+      // Providers may retain interrupted-upload temp files. Only canonical
+      // segment paths can collide with paths this engine will publish.
+      if (!parsed || parsed.deviceId !== this.deviceId) continue;
+      if (parsed.endSeq > localCursor) {
+        segments.push({ path: object.path, ...parsed });
+      }
+    }
+
+    segments.sort((a, b) => a.startSeq - b.startSeq || a.endSeq - b.endSeq);
+    if (segments.length === 0) return localCursor;
+
+    let recoveredCursor = localCursor;
+    for (const segment of segments) {
+      const expectedSeq = recoveredCursor + 1;
+      if (segment.startSeq !== expectedSeq) {
+        const issue = segment.startSeq > expectedSeq ? "gap" : "overlap";
+        throw new Error(
+          `Invalid own sync segment ${issue} before ${segment.path}: expected sequence ${expectedSeq}, got ${segment.startSeq}`,
+        );
+      }
+
+      const entries = decodeSegmentOrThrow(segment.path, await this.provider.get(segment.path));
+      assertValidSegmentEntries(
+        segment.path,
+        this.deviceId,
+        segment.startSeq,
+        segment.endSeq,
+        entries,
+      );
+      recoveredCursor = segment.endSeq;
+    }
+
+    if (!this.storage.recoverPublishedSeq) {
+      throw new Error(
+        `Sync storage cannot recover already-published segments through sequence ${recoveredCursor}`,
+      );
+    }
+    await this.storage.recoverPublishedSeq(recoveredCursor);
+
+    const advancedCursor = await this.storage.lastPushedSeq();
+    if (advancedCursor < recoveredCursor) {
+      throw new Error(
+        `Sync storage failed to recover already-published sequence ${recoveredCursor}`,
+      );
+    }
+    return advancedCursor;
+  }
+
   /** Downloads and merges other devices' new journal segments. */
   async pull(): Promise<Omit<SyncResult, "pushedEntries">> {
     const objects = await this.provider.list("journal/");
@@ -131,15 +204,11 @@ export class SyncEngine {
       let cursor = await this.storage.getCursor(deviceId);
       const fresh = segments
         .filter((s) => s.endSeq > cursor)
-        .sort((a, b) => a.startSeq - b.startSeq);
+        .sort((a, b) => a.startSeq - b.startSeq || a.endSeq - b.endSeq);
+      assertContiguousSegmentRanges(deviceId, cursor, fresh);
 
       for (const seg of fresh) {
         if (seg.endSeq <= cursor) continue;
-        if (seg.startSeq > cursor + 1) {
-          throw new Error(
-            `Invalid sync segment gap before ${seg.path}: expected sequence ${cursor + 1}, got ${seg.startSeq}`,
-          );
-        }
         const entries = decodeSegmentOrThrow(seg.path, await this.provider.get(seg.path));
         assertValidSegmentEntries(seg.path, deviceId, seg.startSeq, seg.endSeq, entries);
         await this.assertSupportedSegmentShape(seg.path, entries);
@@ -289,6 +358,32 @@ export class SyncEngine {
       ? (entry.columnHlcs["deleted_at"] ?? entry.hlc)
       : null;
     return !remoteDeleteHlc || hlcCompare(remoteDeleteHlc, localDeleteHlc) <= 0;
+  }
+}
+
+function assertContiguousSegmentRanges(
+  deviceId: string,
+  cursor: number,
+  segments: Array<{ path: string; startSeq: number; endSeq: number }>,
+): void {
+  let expectedSeq = cursor + 1;
+  for (const segment of segments) {
+    if (
+      !Number.isSafeInteger(segment.startSeq) ||
+      !Number.isSafeInteger(segment.endSeq) ||
+      segment.startSeq < 1 ||
+      segment.endSeq < 1 ||
+      segment.startSeq > segment.endSeq
+    ) {
+      throw new Error(`Invalid sync segment ${segment.path}: bad sequence range`);
+    }
+    if (segment.startSeq !== expectedSeq) {
+      const issue = segment.startSeq > expectedSeq ? "gap" : "overlap";
+      throw new Error(
+        `Invalid sync segment ${issue} before ${segment.path}: expected sequence ${expectedSeq}, got ${segment.startSeq} for ${deviceId}`,
+      );
+    }
+    expectedSeq = segment.endSeq + 1;
   }
 }
 

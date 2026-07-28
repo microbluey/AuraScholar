@@ -1,5 +1,5 @@
 import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 import { blobPath, auraFs } from "./aura-platform";
 import { describeSafeError } from "./sensitive-text";
 
@@ -7,8 +7,8 @@ export async function loadPdfForWork(
   workId: string,
   preferredAttachmentId?: string,
 ): Promise<{ attachmentId: string; data: Uint8Array } | null> {
-  const db = await getDb();
-  const attachments = new AttachmentsRepo(db);
+  const { db, libraryId } = await getLibraryDb();
+  const attachments = new AttachmentsRepo(db, libraryId);
   const list = await attachments.forWork(workId);
   let pdfs = list
     .filter((a) => a.kind === "pdf")

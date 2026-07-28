@@ -5,6 +5,7 @@ import { newId } from "../ids.js";
 
 export interface CollectionRow {
   id: string;
+  library_id: string;
   name: string;
   parent_id: string | null;
   sort_order: number;
@@ -18,7 +19,12 @@ export interface SetWorksCollectionOptions {
 const collectionWriteQueues = new WeakMap<Database, Promise<void>>();
 
 export class CollectionsRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private async withSavepoint<T>(name: string, fn: () => Promise<T>): Promise<T> {
     await this.db.exec(`SAVEPOINT ${name}`);
@@ -60,16 +66,22 @@ export class CollectionsRepo {
 
   private async assertActiveWork(workId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [workId],
+      `SELECT id
+       FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [workId, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Work ${workId} is missing or removed`);
   }
 
   private async assertActiveCollection(collectionId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM collections WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [collectionId],
+      `SELECT id
+       FROM collections
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [collectionId, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Collection ${collectionId} is missing or removed`);
   }
@@ -87,25 +99,31 @@ export class CollectionsRepo {
     const nextOrderRows = await this.db.query<{ next_order: number }>(
       `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
        FROM collections
-       WHERE deleted_at IS NULL AND parent_id IS ?`,
-      [parentId ?? null],
+       WHERE library_id = ? AND deleted_at IS NULL AND parent_id IS ?`,
+      [this.libraryId, parentId ?? null],
     );
     await this.db.run(
-      `INSERT INTO collections (id, name, parent_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      [id, trimmed, parentId ?? null, nextOrderRows[0]?.next_order ?? 0, now, now],
+      `INSERT INTO collections
+         (id, library_id, name, parent_id, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, this.libraryId, trimmed, parentId ?? null, nextOrderRows[0]?.next_order ?? 0, now, now],
     );
     return id;
   }
 
   async list(): Promise<CollectionRow[]> {
     return this.db.query<CollectionRow>(
-      `SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
+      `SELECT c.id, c.library_id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
        FROM collections c
        LEFT JOIN collection_items ci ON ci.collection_id = c.id
-       LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
-       WHERE c.deleted_at IS NULL
-       GROUP BY c.id, c.name, c.parent_id, c.sort_order
+       LEFT JOIN works w
+         ON w.id = ci.work_id
+        AND w.library_id = c.library_id
+        AND w.deleted_at IS NULL
+       WHERE c.library_id = ? AND c.deleted_at IS NULL
+       GROUP BY c.id, c.library_id, c.name, c.parent_id, c.sort_order
        ORDER BY c.sort_order, c.name, c.id`,
+      [this.libraryId],
     );
   }
 
@@ -124,8 +142,9 @@ export class CollectionsRepo {
       }>(
         `SELECT id, name, parent_id, sort_order
          FROM collections
-         WHERE deleted_at IS NULL
+         WHERE library_id = ? AND deleted_at IS NULL
          ORDER BY sort_order, name, id`,
+        [this.libraryId],
       );
       const byId = new Map(rows.map((row) => [row.id, row]));
       const moving = byId.get(id);
@@ -161,16 +180,18 @@ export class CollectionsRepo {
       const now = Date.now();
       for (const [index, row] of previousSiblings.entries()) {
         await this.db.run(
-          `UPDATE collections SET sort_order = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-          [index, now, row.id],
+          `UPDATE collections
+           SET sort_order = ?, updated_at = ?
+           WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+          [index, now, row.id, this.libraryId],
         );
       }
       for (const [index, row] of targetSiblings.entries()) {
         await this.db.run(
           `UPDATE collections
            SET parent_id = ?, sort_order = ?, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL`,
-          [parentId, index, now, row.id],
+           WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+          [parentId, index, now, row.id, this.libraryId],
         );
       }
     });
@@ -184,8 +205,10 @@ export class CollectionsRepo {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("分组名称不能为空");
     const changed = await this.db.run(
-      `UPDATE collections SET name = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [trimmed, Date.now(), id],
+      `UPDATE collections
+       SET name = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [trimmed, Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Collection ${id} is missing or removed`);
   }
@@ -199,11 +222,19 @@ export class CollectionsRepo {
     await this.withSavepoint(`collections_soft_delete_${newId().replace(/-/g, "_")}`, async () => {
       const changed = await this.db.run(
         `UPDATE collections SET deleted_at = ?, updated_at = ?
-         WHERE id = ? AND deleted_at IS NULL`,
-        [Date.now(), Date.now(), id],
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [Date.now(), Date.now(), id, this.libraryId],
       );
       this.assertChanged(changed, `Collection ${id} is missing or already removed`);
-      await this.db.run(`DELETE FROM collection_items WHERE collection_id = ?`, [id]);
+      await this.db.run(
+        `DELETE FROM collection_items
+         WHERE collection_id = ?
+           AND EXISTS (
+             SELECT 1 FROM collections
+             WHERE id = ? AND library_id = ?
+           )`,
+        [id, id, this.libraryId],
+      );
     });
   }
 
@@ -211,11 +242,17 @@ export class CollectionsRepo {
     const rows = await this.db.query<{ work_id: string }>(
       `SELECT ci.work_id
        FROM collection_items ci
-       JOIN collections c ON c.id = ci.collection_id AND c.deleted_at IS NULL
-       JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
+       JOIN collections c
+         ON c.id = ci.collection_id
+        AND c.library_id = ?
+        AND c.deleted_at IS NULL
+       JOIN works w
+         ON w.id = ci.work_id
+        AND w.library_id = c.library_id
+        AND w.deleted_at IS NULL
        WHERE ci.collection_id = ?
        ORDER BY ci.work_id`,
-      [id],
+      [this.libraryId, id],
     );
     return rows.map((row) => row.work_id);
   }
@@ -228,8 +265,8 @@ export class CollectionsRepo {
     await this.withSavepoint(`collections_restore_${newId().replace(/-/g, "_")}`, async () => {
       const changed = await this.db.run(
         `UPDATE collections SET deleted_at = NULL, updated_at = ?
-         WHERE id = ? AND deleted_at IS NOT NULL`,
-        [Date.now(), id],
+         WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+        [Date.now(), id, this.libraryId],
       );
       this.assertChanged(changed, `Collection ${id} is missing or already active`);
       for (const workId of new Set(workIds)) {
@@ -305,11 +342,17 @@ export class CollectionsRepo {
     const rows = await this.db.query<{ collection_id: string }>(
       `SELECT ci.collection_id
        FROM collection_items ci
-       JOIN collections c ON c.id = ci.collection_id AND c.deleted_at IS NULL
-       JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
+       JOIN collections c
+         ON c.id = ci.collection_id
+        AND c.library_id = ?
+        AND c.deleted_at IS NULL
+       JOIN works w
+         ON w.id = ci.work_id
+        AND w.library_id = c.library_id
+        AND w.deleted_at IS NULL
        WHERE ci.work_id = ?
        LIMIT 1`,
-      [workId],
+      [this.libraryId, workId],
     );
     return rows[0]?.collection_id ?? null;
   }
@@ -321,10 +364,16 @@ export class CollectionsRepo {
     const rows = await this.db.query<{ work_id: string; collection_id: string }>(
       `SELECT ci.work_id, ci.collection_id
        FROM collection_items ci
-       JOIN collections c ON c.id = ci.collection_id AND c.deleted_at IS NULL
-       JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
+       JOIN collections c
+         ON c.id = ci.collection_id
+        AND c.library_id = ?
+        AND c.deleted_at IS NULL
+       JOIN works w
+         ON w.id = ci.work_id
+        AND w.library_id = c.library_id
+        AND w.deleted_at IS NULL
        WHERE ci.work_id IN (${placeholders})`,
-      workIds,
+      [this.libraryId, ...workIds],
     );
     return new Map(rows.map((r) => [r.work_id, r.collection_id]));
   }
