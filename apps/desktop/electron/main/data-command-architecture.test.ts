@@ -12,6 +12,11 @@ describe("main-process data command architecture", () => {
 
     expect(libraryPage).toContain('data.command("library.mergeWorks"');
     expect(libraryPage).toContain('data.command("library.purgeDeletedWorks"');
+    expect(libraryPage).toContain('data.command("library.restoreWorks"');
+    expect(libraryPage).toContain('data.command("library.setWorkReadingStatus"');
+    expect(libraryPage).toContain('data.command("library.setWorkStarred"');
+    expect(libraryPage).toContain('data.command("library.trashWorks"');
+    expect(libraryPage).not.toContain("WorksRepo");
     expect(libraryPage).not.toContain(".mergeInto(");
     expect(libraryPage).not.toContain(".purgeDeleted(");
     expect(libraryPage).not.toContain(".purgeDeletedMany(");
@@ -67,11 +72,19 @@ describe("main-process data command architecture", () => {
       "library.importBackup",
       "library.mergeWorks",
       "library.purgeDeletedWorks",
+      "library.restoreWorks",
+      "library.setWorkReadingStatus",
+      "library.setWorkStarred",
+      "library.trashWorks",
       "sync.applyRemoteSegment",
     ]);
     expect(dispatchedNames).toEqual(contractNames);
     expect(dispatcher).toContain('value.name !== "library.importBackup"');
     expect(dispatcher).toContain('value.name !== "library.mergeWorks"');
+    expect(dispatcher).toContain('value.name !== "library.restoreWorks"');
+    expect(dispatcher).toContain('value.name !== "library.setWorkReadingStatus"');
+    expect(dispatcher).toContain('value.name !== "library.setWorkStarred"');
+    expect(dispatcher).toContain('value.name !== "library.trashWorks"');
     expect(dispatcher).toContain('value.name !== "sync.applyRemoteSegment"');
     expect(main.match(/registerDataCommandHandlers\(\);/g)).toHaveLength(1);
   });

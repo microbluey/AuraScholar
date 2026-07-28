@@ -74,7 +74,6 @@ interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RENAME__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RESTORE__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TAG_AFTER_FIRST__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TRASH_AFTER_FIRST__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_MOVE_AFTER_FIRST__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READ__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READING_STATUS__?: string;
@@ -83,7 +82,6 @@ interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RENAME__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RESTORE__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE_AFTER_FIRST__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__?: string;
 }
 
@@ -721,14 +719,6 @@ function consumeLibrarySmokeBulkTagAfterFirstFailure(): Error | null {
   return new Error(message);
 }
 
-function consumeLibrarySmokeBulkTrashAfterFirstFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TRASH_AFTER_FIRST__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TRASH_AFTER_FIRST__;
-  return new Error(message);
-}
-
 function consumeLibrarySmokeMoveAfterFirstFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_MOVE_AFTER_FIRST__;
@@ -790,14 +780,6 @@ function consumeLibrarySmokeTrashRestoreFailure(): Error | null {
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__;
   if (!message) return null;
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__;
-  return new Error(message);
-}
-
-function consumeLibrarySmokeTrashRestoreAfterFirstFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE_AFTER_FIRST__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE_AFTER_FIRST__;
   return new Error(message);
 }
 
@@ -1920,9 +1902,12 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const { db, libraryId } = await getLibraryDb();
-        const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        await new WorksRepo(db, libraryId).setStarred(work.id, starred);
+        const { libraryId } = await getLibraryDb();
+        await window.aura.data.command("library.setWorkStarred", {
+          libraryId,
+          starred,
+          workId: work.id,
+        });
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedWorkId(work.id);
@@ -1971,9 +1956,12 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const { db, libraryId } = await getLibraryDb();
-        const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        await new WorksRepo(db, libraryId).setReadingStatus(selectedWork.id, status);
+        const { libraryId } = await getLibraryDb();
+        await window.aura.data.command("library.setWorkReadingStatus", {
+          libraryId,
+          status,
+          workId: selectedWork.id,
+        });
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedWorkId(selectedWork.id);
@@ -2031,18 +2019,20 @@ export function LibraryPage() {
     setWorkActionBusy("trash");
     setTrashUndo(null);
     setMessage(`正在将《${title}》移入回收站...`);
+    const undoMessage = `已将《${title}》移入回收站`;
+    let trashCommitted = false;
     try {
-      const { db, libraryId } = await getLibraryDb();
-      const { WorksRepo } = await import("@aurascholar/db/repos/works");
+      const { libraryId } = await getLibraryDb();
       const smokeFailure = consumeLibrarySmokeTrashFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      await new WorksRepo(db, libraryId).softDelete(workId);
-      await refresh();
+      await window.aura.data.command("library.trashWorks", { libraryId, workIds: [workId] });
+      trashCommitted = true;
+      const refreshFailure = await refresh();
+      if (refreshFailure) throw refreshFailure;
       await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      const undoMessage = `已将《${title}》移入回收站`;
       setMessage(undoMessage);
       setTrashUndo({ count: 1, ids: [workId], message: undoMessage });
       setSelectedIds((prev) => {
@@ -2052,7 +2042,19 @@ export function LibraryPage() {
       });
       window.dispatchEvent(new Event("aurascholar:library-updated"));
     } catch (e) {
-      setMessage(`移入回收站失败，文献仍保留，可重新移入回收站:${describeSafeError(e)}`);
+      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+      if (trashCommitted) {
+        setMessage(`${undoMessage}，但列表刷新失败，可点击撤销或稍后刷新:${describeSafeError(e)}`);
+        setTrashUndo({ count: 1, ids: [workId], message: undoMessage });
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(workId);
+          return next;
+        });
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      } else {
+        setMessage(`移入回收站失败，文献仍保留，可重新移入回收站:${describeSafeError(e)}`);
+      }
     } finally {
       setWorkActionBusy(null);
     }
@@ -2085,26 +2087,35 @@ export function LibraryPage() {
     }
     setWorkActionBusy("restore");
     setMessage(`正在撤销移入回收站:${count} 篇文献...`);
+    const successMessage =
+      count === 1 ? "已撤销移入回收站" : `已撤销移入回收站:${count} 篇文献已恢复`;
+    let restoreCommitted = false;
     try {
-      const { db, libraryId } = await getLibraryDb();
-      const { WorksRepo } = await import("@aurascholar/db/repos/works");
-      const worksRepo = new WorksRepo(db, libraryId);
+      const { libraryId } = await getLibraryDb();
       const smokeFailure = consumeLibrarySmokeTrashRestoreFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      for (const workId of ids) {
-        await worksRepo.restore(workId);
-      }
-      await refresh();
+      await window.aura.data.command("library.restoreWorks", { libraryId, workIds: ids });
+      restoreCommitted = true;
+      const refreshFailure = await refresh();
+      if (refreshFailure) throw refreshFailure;
       await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
       setTrashUndo(null);
       setSelectedIds(new Set());
-      setMessage(count === 1 ? "已撤销移入回收站" : `已撤销移入回收站:${count} 篇文献已恢复`);
+      setMessage(successMessage);
       window.dispatchEvent(new Event("aurascholar:library-updated"));
     } catch (e) {
-      setMessage(`撤销移入回收站失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
+      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+      if (restoreCommitted) {
+        setTrashUndo(null);
+        setSelectedIds(new Set());
+        setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      } else {
+        setMessage(`撤销移入回收站失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
+      }
     } finally {
       setWorkActionBusy(null);
     }
@@ -2609,15 +2620,8 @@ export function LibraryPage() {
     const undoMessage = `已将 ${workIds.length} 篇文献移入回收站`;
     let trashCommitted = false;
     try {
-      const { db, libraryId } = await getLibraryDb();
-      const { WorksRepo } = await import("@aurascholar/db/repos/works");
-      const worksRepo = new WorksRepo(db, libraryId);
-      const smokeFailureAfterFirst = consumeLibrarySmokeBulkTrashAfterFirstFailure();
-      await worksRepo.softDeleteMany(workIds, {
-        afterEach: (_workId, index) => {
-          if (index === 0 && smokeFailureAfterFirst) throw smokeFailureAfterFirst;
-        },
-      });
+      const { libraryId } = await getLibraryDb();
+      await window.aura.data.command("library.trashWorks", { libraryId, workIds });
       trashCommitted = true;
       const refreshFailure = await refresh();
       if (refreshFailure) throw refreshFailure;
@@ -2670,15 +2674,8 @@ export function LibraryPage() {
       const successMessage = `已恢复 ${workIds.length} 篇文献`;
       let restoreCommitted = false;
       try {
-        const { db, libraryId } = await getLibraryDb();
-        const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        const worksRepo = new WorksRepo(db, libraryId);
-        const smokeFailureAfterFirst = consumeLibrarySmokeTrashRestoreAfterFirstFailure();
-        await worksRepo.restoreMany(workIds, {
-          afterEach: (_workId, index) => {
-            if (index === 0 && smokeFailureAfterFirst) throw smokeFailureAfterFirst;
-          },
-        });
+        const { libraryId } = await getLibraryDb();
+        await window.aura.data.command("library.restoreWorks", { libraryId, workIds });
         restoreCommitted = true;
         const refreshFailure = await refresh();
         if (refreshFailure) throw refreshFailure;
