@@ -67,6 +67,7 @@ export function CollectionManager({
         aria-busy={busy}
         aria-modal="true"
         className="library-modal library-collection-modal"
+        data-library-dialog="collection-manager"
         data-modal-root="true"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
@@ -80,6 +81,7 @@ export function CollectionManager({
           <button
             type="button"
             className="library-modal__close"
+            data-library-action="close-collection-manager"
             onClick={requestClose}
             aria-label="关闭管理文件夹"
             title="关闭管理文件夹"
@@ -96,6 +98,7 @@ export function CollectionManager({
               <button
                 type="button"
                 className="library-collection-manager__status-action"
+                data-library-action="restore-collection"
                 onClick={statusAction.onClick}
                 disabled={busy || statusAction.busy}
                 aria-busy={statusAction.busy ? "true" : undefined}
@@ -118,6 +121,7 @@ export function CollectionManager({
             className={`library-collection-manager__system ${
               !activeCollection && !isTrashView ? "library-collection-manager__system--active" : ""
             }`}
+            data-library-action="select-all"
             data-autofocus={!activeCollection && !isTrashView ? "true" : undefined}
             onClick={onSelectAll}
             disabled={busy}
@@ -133,6 +137,7 @@ export function CollectionManager({
             className={`library-collection-manager__system ${
               isTrashView ? "library-collection-manager__system--active" : ""
             }`}
+            data-library-action="select-trash"
             data-autofocus={isTrashView ? "true" : undefined}
             onClick={onSelectTrash}
             disabled={busy}
@@ -149,6 +154,7 @@ export function CollectionManager({
           <span>自定义文件夹</span>
           <button
             type="button"
+            data-library-action="create-collection"
             onClick={() => onCreate()}
             disabled={busy}
             aria-busy={action?.kind === "create" ? "true" : undefined}
@@ -176,10 +182,12 @@ export function CollectionManager({
                       : ""
                   }`}
                   aria-busy={activeAction ? "true" : undefined}
+                  data-collection-id={collection.id}
                 >
                   <button
                     type="button"
                     className="library-collection-manager__select"
+                    data-library-action="select-collection"
                     data-autofocus={activeCollection === collection.id ? "true" : undefined}
                     onClick={() => onSelectCollection(collection.id)}
                     disabled={busy}
@@ -197,6 +205,7 @@ export function CollectionManager({
                   </button>
                   <button
                     type="button"
+                    data-library-action="create-child-collection"
                     onClick={() => onCreate(collection.id)}
                     disabled={busy}
                     aria-label={`在 ${collection.name} 中新建子文件夹`}
@@ -206,6 +215,7 @@ export function CollectionManager({
                   </button>
                   <button
                     type="button"
+                    data-library-action="rename-collection"
                     onClick={() => onRename(collection)}
                     disabled={busy}
                     aria-busy={activeAction === "rename" ? "true" : undefined}
@@ -217,6 +227,7 @@ export function CollectionManager({
                   <button
                     type="button"
                     className="library-collection-manager__delete"
+                    data-library-action="delete-collection"
                     onClick={() => onDelete(collection)}
                     disabled={busy}
                     aria-busy={activeAction === "delete" ? "true" : undefined}

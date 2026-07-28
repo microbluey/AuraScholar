@@ -10,7 +10,7 @@
     "build:deps": "turbo run build --filter=@aurascholar/desktop^...",
     "dev": "pnpm build:deps && electron-vite dev",
     "build": "pnpm build:deps && electron-vite build",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests && node --test scripts/*.node-test.mjs",
     "start": "electron-vite preview",
     "smoke": "pnpm build && pnpm rebuild:electron && node scripts/smoke-electron.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",

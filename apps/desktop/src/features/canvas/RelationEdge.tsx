@@ -5,7 +5,6 @@ import {
   type Edge,
   type EdgeProps,
 } from "@xyflow/react";
-import type { CanvasEdgePrimaryClick } from "./canvas-interactions";
 
 export interface RelationFlowEdgeData extends Record<string, unknown> {
   label?: string;
@@ -13,10 +12,7 @@ export interface RelationFlowEdgeData extends Record<string, unknown> {
     clientPosition: { x: number; y: number },
     returnFocusElement: HTMLElement | SVGElement,
   ) => void;
-  onPrimaryClick?: (
-    click: CanvasEdgePrimaryClick,
-    returnFocusElement: HTMLElement | SVGElement,
-  ) => void;
+  onSelect?: (returnFocusElement: HTMLElement | SVGElement) => void;
   reciprocal?: boolean;
 }
 
@@ -66,6 +62,7 @@ export function RelationEdge({
         style={style}
         interactionWidth={Math.max(interactionWidth ?? 0, 36)}
         className={`canvas-relation-edge${selected ? " canvas-relation-edge--selected" : ""}`}
+        data-canvas-edge-id={id}
       />
       {label && (
         <EdgeLabelRenderer>
@@ -73,6 +70,7 @@ export function RelationEdge({
             type="button"
             className="canvas-edge-label nodrag nopan"
             data-canvas-interactive
+            data-canvas-edge-label-id={id}
             data-edge-id={id}
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
             aria-label={`连线文字：${label}。双击或按 F2 编辑`}
@@ -80,15 +78,12 @@ export function RelationEdge({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              data?.onPrimaryClick?.(
-                {
-                  clientX: event.clientX,
-                  clientY: event.clientY,
-                  edgeId: id,
-                  timeStamp: event.timeStamp,
-                },
-                event.currentTarget,
-              );
+              data?.onSelect?.(event.currentTarget);
+            }}
+            onDoubleClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              data?.onEditLabel?.({ x: event.clientX, y: event.clientY }, event.currentTarget);
             }}
             onKeyDown={(event) => {
               if (event.key !== "F2") return;

@@ -1,10 +1,11 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, useState, type ErrorInfo, type ReactNode } from "react";
 import { writeClipboardText } from "../clipboard";
 import { describeSafeError, redactSensitiveText } from "../services/sensitive-text";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
   level?: "root" | "route";
+  onErrorChange?: (hasError: boolean) => void;
   resetKey?: string;
   scope?: string;
 }
@@ -25,6 +26,17 @@ const INITIAL_STATE: AppErrorBoundaryState = {
   occurredAt: null,
 };
 
+export function useRouteBoundaryShell(pathname: string) {
+  const [hasRouteError, setHasRouteError] = useState(false);
+  return {
+    boundaryProps: {
+      level: "route" as const,
+      onErrorChange: setHasRouteError,
+    },
+    flush: !hasRouteError && /^\/(?:reader|canvas)(?:\/|$)/.test(pathname),
+  };
+}
+
 export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
   state = INITIAL_STATE;
 
@@ -41,6 +53,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("[AuraScholar] render boundary captured an error", error, errorInfo);
     this.setState({ errorInfo });
+    this.props.onErrorChange?.(true);
   }
 
   componentDidUpdate(previousProps: AppErrorBoundaryProps) {
@@ -68,6 +81,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   }
 
   private reset = () => {
+    this.props.onErrorChange?.(false);
     this.setState(INITIAL_STATE);
   };
 

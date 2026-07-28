@@ -56,7 +56,7 @@ async function createWindow(): Promise<void> {
   attachCloseLifecycle(win);
 
   if (SMOKE_MODE) {
-    // Lazy chunk: the ~6k-line harness never loads in a normal launch.
+    // Lazy chunk: the smoke harness never loads in a normal launch.
     const { setupSmokeHarness } = await import("./main/smoke");
     setupSmokeHarness(win);
   }

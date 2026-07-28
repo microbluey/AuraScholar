@@ -50,6 +50,7 @@ import {
 import { describeSafeError } from "../services/sensitive-text";
 import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
 import { CollectionManager } from "../features/library/CollectionManager";
+import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
 import { TagManager } from "../features/library/TagManager";
 import { TextPromptDialog, type TextPromptConfig } from "../features/library/TextPromptDialog";
 import {
@@ -3018,6 +3019,7 @@ export function LibraryPage() {
   return (
     <div
       className="library-page"
+      data-library-dropzone="imports"
       onDragEnter={handleQuickDragEnter}
       onDragOver={handleQuickDragOver}
       onDragLeave={handleQuickDragLeave}
@@ -3121,13 +3123,15 @@ export function LibraryPage() {
         </div>
         <div className="library-topbar__actions">
           <Button
+            data-library-action="open-import"
             onClick={() => setImportDialogOpen(true)}
             disabled={busy}
             title="通过链接、PDF 或题录文件导入文献"
           >
             导入文献
           </Button>
-          <ActionIconButton
+          <LibraryActionIconButton
+            action="refresh"
             label="重新载入本地数据"
             icon="refresh"
             onClick={() => void refresh()}
@@ -3959,6 +3963,7 @@ function ImportPreviewDialog({
         aria-busy={importing}
         aria-modal="true"
         className="library-modal reference-import-preview"
+        data-library-dialog="reference-import-preview"
         data-modal-root="true"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
@@ -3972,6 +3977,7 @@ function ImportPreviewDialog({
           <button
             type="button"
             className="library-modal__close"
+            data-library-action="cancel-reference-import"
             onClick={requestClose}
             aria-label="关闭批量导入题录"
             title="关闭批量导入题录"
@@ -3998,13 +4004,19 @@ function ImportPreviewDialog({
         <div className="library-modal-actions reference-import-preview__actions">
           <Button
             data-autofocus="true"
+            data-library-action="confirm-reference-import"
             onClick={onConfirm}
             disabled={importing}
             aria-busy={importing}
           >
             {importing ? "导入中…" : `导入 ${count} 条`}
           </Button>
-          <Button variant="secondary" onClick={requestClose} disabled={importing}>
+          <Button
+            variant="secondary"
+            data-library-action="cancel-reference-import"
+            onClick={requestClose}
+            disabled={importing}
+          >
             取消
           </Button>
         </div>
@@ -4149,6 +4161,7 @@ function LibraryImportDialog({
         aria-labelledby={titleId}
         aria-modal="true"
         className="library-modal library-import-modal"
+        data-library-dialog="import"
         data-modal-root="true"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
@@ -4165,6 +4178,7 @@ function LibraryImportDialog({
           <button
             type="button"
             className="library-modal__close"
+            data-library-action="close-import"
             onClick={onClose}
             aria-label="关闭导入文献"
             title="关闭导入文献"
@@ -4185,6 +4199,7 @@ function LibraryImportDialog({
               key={methodId}
               type="button"
               className={method === methodId ? "library-import-method--active" : ""}
+              data-library-import-method={methodId}
               aria-pressed={method === methodId}
               onClick={() => selectMethod(methodId)}
             >
@@ -4217,7 +4232,12 @@ function LibraryImportDialog({
                   }}
                   disabled={busy}
                 />
-                <Button type="submit" disabled={!canSubmitIdentifier} aria-busy={busy}>
+                <Button
+                  type="submit"
+                  data-library-action="submit-identifier-import"
+                  disabled={!canSubmitIdentifier}
+                  aria-busy={busy}
+                >
                   {busy ? "识别中…" : "识别并继续"}
                 </Button>
               </div>
@@ -4526,58 +4546,6 @@ function AdvancedFilterDialog({
         </div>
       </section>
     </div>
-  );
-}
-
-function ActionIconButton({
-  label,
-  icon,
-  onClick,
-}: {
-  label: string;
-  icon: "refresh" | "menu" | "tag";
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      className="library-icon-button"
-      title={label}
-      aria-label={label}
-      type="button"
-      onClick={onClick}
-    >
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        {icon === "refresh" ? (
-          <>
-            <path d="M20 12a8 8 0 0 1-13.6 5.7" />
-            <path d="M4 12A8 8 0 0 1 17.6 6.3" />
-            <path d="M17.6 3.5v2.8h-2.8" />
-            <path d="M6.4 20.5v-2.8h2.8" />
-          </>
-        ) : icon === "tag" ? (
-          <>
-            <path d="M3 11.5V5a2 2 0 0 1 2-2h6.5a2 2 0 0 1 1.4.6l7 7a2 2 0 0 1 0 2.8l-6.5 6.5a2 2 0 0 1-2.8 0l-7-7a2 2 0 0 1-.6-1.4z" />
-            <circle cx="7.5" cy="7.5" r="1.3" />
-          </>
-        ) : (
-          <>
-            <path d="M4 7h16" />
-            <path d="M4 12h16" />
-            <path d="M4 17h16" />
-          </>
-        )}
-      </svg>
-    </button>
   );
 }
 

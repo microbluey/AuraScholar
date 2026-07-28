@@ -77,6 +77,12 @@ for the runtime you're using.
 
 - `dev` — electron-vite dev (HMR renderer + main)
 - `build` — build all three bundles into `out/`
+- `test` — renderer unit tests plus the smoke-runner stream parser tests
 - `typecheck` — renderer (`tsconfig.json`) + main/preload (`tsconfig.node.json`)
+- `smoke` — build, switch `better-sqlite3` to the Electron ABI, and run the
+  full in-app Electron contract suite in an isolated user-data directory. The
+  harness reports its current feature stage while running and defaults to a
+  five-minute renderer timeout; set `AURASCHOLAR_SMOKE_TIMEOUT_MS` to override
+  it when diagnosing a slower machine.
 - `package` — build + electron-builder (dmg/nsis/AppImage) into `release/`
 - `rebuild:electron` — recompile native modules against the Electron ABI

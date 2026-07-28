@@ -66,13 +66,11 @@ import {
   clampCanvasMenuPoint,
   isCanvasLayoutShortcut,
   isCanvasSelectionDeleteShortcut,
-  isRepeatedCanvasEdgePrimaryClick,
   planCanvasSelectionDeletion,
   primarySurfaceForCanvasNode,
   resolveCanvasHistoryShortcut,
   shouldActivateCanvasNode,
   type CanvasMenuPoint,
-  type CanvasEdgePrimaryClick,
   type CanvasToolboxPanel,
 } from "./canvas-interactions";
 import type { CanvasDocumentChangeOptions, CanvasHistoryMutation } from "./canvas-history";
@@ -384,7 +382,6 @@ function CanvasWorkspaceInner({
   } | null>(null);
   const dragHistoryKeyRef = useRef<string | null>(null);
   const dragHistorySequenceRef = useRef(0);
-  const lastEdgePrimaryClickRef = useRef<CanvasEdgePrimaryClick | null>(null);
   const flow = useReactFlow<CanvasFlowNode, RelationFlowEdge>();
   const flowStore = useStoreApi<CanvasFlowNode, RelationFlowEdge>();
 
@@ -682,7 +679,6 @@ function CanvasWorkspaceInner({
     setCommandOpen(false);
     commandAnchorRef.current = null;
     lastCanvasPointerRef.current = null;
-    lastEdgePrimaryClickRef.current = null;
   }, [document.workspaceId, flowStore]);
 
   useEffect(() => {
@@ -1007,7 +1003,6 @@ function CanvasWorkspaceInner({
       const wrapper = wrapperRef.current;
       const edge = document.edges.find((candidate) => candidate.id === edgeId);
       if (!wrapper || !edge) return;
-      lastEdgePrimaryClickRef.current = null;
       const wrapperRect = wrapper.getBoundingClientRect();
       const edgeRect = wrapper
         .querySelector<SVGGraphicsElement>(
@@ -1160,24 +1155,6 @@ function CanvasWorkspaceInner({
     [closeReader, connectionInProgress, tool],
   );
 
-  const handleEdgePrimaryClick = useCallback(
-    (click: CanvasEdgePrimaryClick, returnFocusElement?: HTMLElement | SVGElement | null) => {
-      if (tool !== "select" || connectionInProgress) return;
-      const repeated = isRepeatedCanvasEdgePrimaryClick(lastEdgePrimaryClickRef.current, click);
-      lastEdgePrimaryClickRef.current = repeated ? null : click;
-      if (repeated) {
-        openEdgeLabelEditor(
-          click.edgeId,
-          { x: click.clientX, y: click.clientY },
-          returnFocusElement,
-        );
-        return;
-      }
-      selectEdge(click.edgeId, returnFocusElement);
-    },
-    [connectionInProgress, openEdgeLabelEditor, selectEdge, tool],
-  );
-
   const flowEdges = useMemo<RelationFlowEdge[]>(
     () =>
       document.edges
@@ -1207,10 +1184,8 @@ function CanvasWorkspaceInner({
             data: {
               label: freeTextLabel,
               reciprocal: hasReciprocalCanvasLink(document.edges, edge),
-              onPrimaryClick: (
-                click: CanvasEdgePrimaryClick,
-                returnFocusElement: HTMLElement | SVGElement,
-              ) => handleEdgePrimaryClick(click, returnFocusElement),
+              onSelect: (returnFocusElement: HTMLElement | SVGElement) =>
+                selectEdge(edge.id, returnFocusElement),
               onEditLabel: (
                 clientPosition: CanvasMenuPoint,
                 returnFocusElement: HTMLElement | SVGElement,
@@ -1229,8 +1204,8 @@ function CanvasWorkspaceInner({
       document.edges,
       document.nodes,
       hiddenNodeProxyIds,
-      handleEdgePrimaryClick,
       openEdgeLabelEditor,
+      selectEdge,
       selectedEdgeId,
     ],
   );
@@ -1659,7 +1634,6 @@ function CanvasWorkspaceInner({
   const startCanvasConnection = useCallback(
     (event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
       if (!params.nodeId) return;
-      lastEdgePrimaryClickRef.current = null;
       const touch = "touches" in event ? event.touches[0] : null;
       const clientX = touch?.clientX ?? ("clientX" in event ? event.clientX : null);
       const clientY = touch?.clientY ?? ("clientY" in event ? event.clientY : null);
@@ -2541,7 +2515,6 @@ function CanvasWorkspaceInner({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={(event, node) => {
-            lastEdgePrimaryClickRef.current = null;
             const additive = event.shiftKey || event.metaKey || event.ctrlKey;
             const interactiveTarget =
               event.target instanceof Element &&
@@ -2601,13 +2574,20 @@ function CanvasWorkspaceInner({
             }
             event.preventDefault();
             event.stopPropagation();
-            handleEdgePrimaryClick(
-              {
-                clientX: event.clientX,
-                clientY: event.clientY,
-                edgeId: edge.id,
-                timeStamp: event.timeStamp,
-              },
+            selectEdge(
+              edge.id,
+              event.target instanceof Element
+                ? event.target.closest<SVGElement>(".react-flow__edge")
+                : null,
+            );
+          }}
+          onEdgeDoubleClick={(event, edge) => {
+            if (tool !== "select" || connectionInProgress || event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            openEdgeLabelEditor(
+              edge.id,
+              { x: event.clientX, y: event.clientY },
               event.target instanceof Element
                 ? event.target.closest<SVGElement>(".react-flow__edge")
                 : null,
@@ -2631,7 +2611,6 @@ function CanvasWorkspaceInner({
             window.requestAnimationFrame(() => wrapperRef.current?.focus({ preventScroll: true }));
           }}
           onPaneClick={() => {
-            lastEdgePrimaryClickRef.current = null;
             cancelActiveCitationLayout();
             cancelFlowConnection();
             dismissNodeMenu(false);

@@ -11,7 +11,7 @@ import {
   Quotes,
   Sparkle,
 } from "@phosphor-icons/react";
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import {
   useCallback,
   useEffect,
@@ -21,6 +21,7 @@ import {
   type ReactNode,
 } from "react";
 import { isImeComposing } from "../../keyboard";
+import { CanvasConnectionHandles } from "./CanvasConnectionHandles";
 import { CanvasMarkdown } from "./CanvasMarkdown";
 import { registerCanvasEditorPreparer } from "./canvas-route-preparation";
 import { isCanvasContextMenuShortcut } from "./canvas-interactions";
@@ -54,42 +55,6 @@ export interface CanvasFlowNodeData extends Record<string, unknown> {
 }
 
 export type CanvasFlowNode = Node<CanvasFlowNodeData, CanvasNodeType>;
-
-const CONNECTION_HANDLES = [
-  { id: "link-left", label: "左侧", position: Position.Left },
-  { id: "link-top", label: "上侧", position: Position.Top },
-  { id: "link-right", label: "右侧", position: Position.Right },
-  { id: "link-bottom", label: "下侧", position: Position.Bottom },
-] as const;
-
-function ConnectionHandles({
-  isConnectable,
-  nodeLabel,
-}: {
-  isConnectable: boolean;
-  nodeLabel: string;
-}) {
-  return (
-    <>
-      {CONNECTION_HANDLES.map((handle) => {
-        return (
-          <Handle
-            key={handle.id}
-            id={handle.id}
-            type="source"
-            position={handle.position}
-            isConnectable={isConnectable}
-            isConnectableStart={isConnectable}
-            isConnectableEnd={isConnectable}
-            tabIndex={-1}
-            aria-hidden="true"
-            title={`从“${nodeLabel}”的${handle.label}拖动建立连线`}
-          />
-        );
-      })}
-    </>
-  );
-}
 
 function CardShell({
   children,
@@ -142,7 +107,7 @@ function CardShell({
         });
       }}
     >
-      <ConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
+      <CanvasConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
       {children}
     </article>
   );
@@ -689,7 +654,7 @@ export function GroupCard({ data, isConnectable, selected }: NodeProps<CanvasFlo
         });
       }}
     >
-      <ConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
+      <CanvasConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
       <div className="canvas-group-node__label">
         <button
           className="canvas-group-node__toggle nodrag nopan"
