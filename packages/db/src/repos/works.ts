@@ -1,6 +1,7 @@
 import type { Database } from "../database.js";
 import { buildWorksFtsQuery } from "../fts.js";
 import { newId, normalizeDoi, workFingerprint } from "../ids.js";
+import { withDatabaseWriteLock } from "./write-lock.js";
 
 export type AuthorRole = "author" | "editor" | "translator";
 export type ReadingStatus = "unread" | "reading" | "read";
@@ -135,12 +136,6 @@ export interface UpsertWorksSummary {
   deduped: number;
 }
 
-export interface WorkBatchOptions {
-  afterEach?: (workId: string, index: number) => void | Promise<void>;
-}
-
-const workWriteQueues = new WeakMap<Database, Promise<void>>();
-
 // camelCase WorkInput key → works column. Single source of truth for which
 // rich fields exist and how they map; used by insert, update, and backfill.
 const RICH_COLUMNS: Array<[keyof RichBibFields, string]> = [
@@ -240,16 +235,7 @@ export class WorksRepo {
   }
 
   private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = workWriteQueues.get(this.db) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(fn);
-    workWriteQueues.set(
-      this.db,
-      next.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return next;
+    return withDatabaseWriteLock(this.db, fn);
   }
 
   /**
@@ -1280,8 +1266,8 @@ export class WorksRepo {
     return this.withWriteLock(() => this.softDeleteUnlocked(id));
   }
 
-  async softDeleteMany(ids: string[], options: WorkBatchOptions = {}): Promise<number> {
-    return this.withWriteLock(() => this.softDeleteManyUnlocked(ids, options));
+  async softDeleteMany(ids: string[]): Promise<number> {
+    return this.withWriteLock(() => this.softDeleteManyUnlocked(ids));
   }
 
   private async softDeleteUnlocked(id: string): Promise<void> {
@@ -1295,18 +1281,13 @@ export class WorksRepo {
     this.assertChanged(changed, `Work ${id} is missing or already removed`);
   }
 
-  private async softDeleteManyUnlocked(
-    ids: string[],
-    options: WorkBatchOptions = {},
-  ): Promise<number> {
+  private async softDeleteManyUnlocked(ids: string[]): Promise<number> {
     const uniqueIds = [...new Set(ids)];
     if (uniqueIds.length === 0) return 0;
     const savepoint = `works_soft_delete_many_${newId().replace(/-/g, "_")}`;
     await this.withSavepoint(savepoint, async () => {
-      for (let index = 0; index < uniqueIds.length; index += 1) {
-        const id = uniqueIds[index]!;
+      for (const id of uniqueIds) {
         await this.softDeleteUnlocked(id);
-        await options.afterEach?.(id, index);
       }
     });
     return uniqueIds.length;
@@ -1316,8 +1297,8 @@ export class WorksRepo {
     return this.withWriteLock(() => this.restoreUnlocked(id));
   }
 
-  async restoreMany(ids: string[], options: WorkBatchOptions = {}): Promise<number> {
-    return this.withWriteLock(() => this.restoreManyUnlocked(ids, options));
+  async restoreMany(ids: string[]): Promise<number> {
+    return this.withWriteLock(() => this.restoreManyUnlocked(ids));
   }
 
   private async restoreUnlocked(id: string): Promise<void> {
@@ -1330,18 +1311,13 @@ export class WorksRepo {
     this.assertChanged(changed, `Work ${id} is missing or already active`);
   }
 
-  private async restoreManyUnlocked(
-    ids: string[],
-    options: WorkBatchOptions = {},
-  ): Promise<number> {
+  private async restoreManyUnlocked(ids: string[]): Promise<number> {
     const uniqueIds = [...new Set(ids)];
     if (uniqueIds.length === 0) return 0;
     const savepoint = `works_restore_many_${newId().replace(/-/g, "_")}`;
     await this.withSavepoint(savepoint, async () => {
-      for (let index = 0; index < uniqueIds.length; index += 1) {
-        const id = uniqueIds[index]!;
+      for (const id of uniqueIds) {
         await this.restoreUnlocked(id);
-        await options.afterEach?.(id, index);
       }
     });
     return uniqueIds.length;

@@ -23,6 +23,81 @@ export interface WorkMutationCountResult {
   updated: number;
 }
 
+export interface LibraryScopedCommandInput {
+  libraryId: string;
+}
+
+export interface CreateCollectionCommandInput extends LibraryScopedCommandInput {
+  name: string;
+  parentId: string | null;
+}
+
+export interface CollectionCommandInput extends LibraryScopedCommandInput {
+  collectionId: string;
+}
+
+export interface RenameCollectionCommandInput extends CollectionCommandInput {
+  name: string;
+}
+
+export interface MoveCollectionCommandInput extends CollectionCommandInput {
+  parentId: string | null;
+  position: number;
+}
+
+export interface SetWorksCollectionCommandInput extends LibraryScopedCommandInput {
+  collectionId: string | null;
+  workIds: string[];
+}
+
+export interface RestoreCollectionCommandInput extends CollectionCommandInput {
+  workIds: string[];
+}
+
+export interface CollectionDeleteCommandResult {
+  workIds: string[];
+}
+
+export interface CollectionRestoreCommandResult {
+  restoredWorkIds: string[];
+  skippedWorkIds: string[];
+}
+
+export interface CreateTagCommandInput extends LibraryScopedCommandInput {
+  color?: string;
+  name: string;
+}
+
+export interface TagCommandInput extends LibraryScopedCommandInput {
+  tagId: string;
+}
+
+export interface RenameTagCommandInput extends TagCommandInput {
+  name: string;
+}
+
+export interface SetTagColorCommandInput extends TagCommandInput {
+  color: string | null;
+}
+
+export interface RestoreTagCommandInput extends TagCommandInput {
+  workIds: string[];
+}
+
+export interface AddTagToWorksCommandInput extends LibraryScopedCommandInput {
+  name: string;
+  workIds: string[];
+}
+
+export interface TagDeleteCommandResult {
+  workIds: string[];
+}
+
+export interface TagMutationResult {
+  tagId: string;
+  updated: number;
+}
+
 export interface PurgeDeletedWorksCommandInput {
   libraryId: string;
   workIds: string[];
@@ -52,12 +127,60 @@ export interface ApplyRemoteSyncSegmentCommandInput {
 }
 
 export interface DataCommandMap {
+  "library.addTagToWorks": {
+    input: AddTagToWorksCommandInput;
+    output: TagMutationResult;
+  };
+  "library.createCollection": {
+    input: CreateCollectionCommandInput;
+    output: { collectionId: string };
+  };
+  "library.createTag": {
+    input: CreateTagCommandInput;
+    output: TagMutationResult;
+  };
+  "library.deleteCollection": {
+    input: CollectionCommandInput;
+    output: CollectionDeleteCommandResult;
+  };
+  "library.deleteTag": {
+    input: TagCommandInput;
+    output: TagDeleteCommandResult;
+  };
   "library.mergeWorks": {
     input: MergeWorksCommandInput;
     output: MergeWorksCommandResult;
   };
+  "library.moveCollection": {
+    input: MoveCollectionCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "library.renameCollection": {
+    input: RenameCollectionCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "library.renameTag": {
+    input: RenameTagCommandInput;
+    output: TagMutationResult;
+  };
+  "library.restoreCollection": {
+    input: RestoreCollectionCommandInput;
+    output: CollectionRestoreCommandResult;
+  };
+  "library.restoreTag": {
+    input: RestoreTagCommandInput;
+    output: TagMutationResult;
+  };
   "library.restoreWorks": {
     input: WorkIdsCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "library.setTagColor": {
+    input: SetTagColorCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "library.setWorksCollection": {
+    input: SetWorksCollectionCommandInput;
     output: WorkMutationCountResult;
   };
   "library.setWorkReadingStatus": {

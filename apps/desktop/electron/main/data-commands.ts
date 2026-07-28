@@ -1,10 +1,11 @@
 import type { Database } from "@aurascholar/db";
-import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import { WorksRepo } from "@aurascholar/db/repos/works";
 import { applyRemoteSegment, type ApplyRemoteSegmentCommand } from "@aurascholar/sync";
 import { CH } from "../shared";
 import type {
   ApplyRemoteSyncSegmentCommandInput,
+  DataCommandName,
+  DataCommandOutput,
   DataCommandRequest,
   ImportLibraryBackupCommandInput,
   MergeWorksCommandInput,
@@ -21,21 +22,23 @@ import { SqliteSyncStorage } from "../../src/shared/sqlite-sync-storage";
 import { withMainDatabaseTransaction } from "./db";
 import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
+import { executeLibraryCollectionCommand } from "./library-collection-commands";
+import { executeLibraryTagCommand } from "./library-tag-commands";
+import {
+  assertActiveLocalLibrary,
+  isRecord,
+  requireNonEmptyString,
+  requireRecordId,
+  type DataCommandDependencies,
+} from "./data-command-runtime";
 
 const MAX_BACKUP_TEXT_LENGTH = 64 * 1024 * 1024;
 const MAX_MERGE_DUPLICATE_IDS = 500;
 const MAX_WORK_IDS_PER_COMMAND = 500;
-const MAX_RECORD_ID_LENGTH = 512;
 const MAX_REMOTE_SEGMENT_ENTRIES = 500;
 const PROVIDER_SCOPE_PATTERN = /^webdav-[a-z0-9]{14}$/;
 
-export interface DataCommandDependencies {
-  getDeviceId?(): Promise<string>;
-  transaction<T>(
-    commandName: string,
-    operation: (database: Database) => Promise<T> | T,
-  ): Promise<T>;
-}
+export type { DataCommandDependencies } from "./data-command-runtime";
 
 const defaultDependencies: DataCommandDependencies = {
   getDeviceId: getStableDeviceId,
@@ -49,9 +52,23 @@ export function registerDataCommandHandlers(): void {
 export async function executeDataCommand(
   request: unknown,
   dependencies: DataCommandDependencies = defaultDependencies,
-): Promise<unknown> {
+): Promise<DataCommandOutput<DataCommandName>> {
   const envelope = parseEnvelope(request);
   switch (envelope.name) {
+    case "library.addTagToWorks":
+    case "library.createTag":
+    case "library.deleteTag":
+    case "library.renameTag":
+    case "library.restoreTag":
+    case "library.setTagColor":
+      return executeLibraryTagCommand(envelope, dependencies);
+    case "library.createCollection":
+    case "library.deleteCollection":
+    case "library.moveCollection":
+    case "library.renameCollection":
+    case "library.restoreCollection":
+    case "library.setWorksCollection":
+      return executeLibraryCollectionCommand(envelope, dependencies);
     case "library.mergeWorks": {
       const input = parseMergeWorksInput(envelope.input);
       return dependencies.transaction(envelope.name, async (database) => {
@@ -89,10 +106,7 @@ export async function executeDataCommand(
       return dependencies.transaction(envelope.name, async (database) => {
         await assertActiveLocalLibrary(database, input.libraryId);
         await assertActiveWorksBelongToLibrary(database, input.libraryId, [input.workId]);
-        await new WorksRepo(database, input.libraryId).setReadingStatus(
-          input.workId,
-          input.status,
-        );
+        await new WorksRepo(database, input.libraryId).setReadingStatus(input.workId, input.status);
         return { updated: 1 };
       });
     }
@@ -110,7 +124,9 @@ export async function executeDataCommand(
       return dependencies.transaction(envelope.name, async (database) => {
         await assertActiveLocalLibrary(database, input.libraryId);
         await assertActiveWorksBelongToLibrary(database, input.libraryId, input.workIds);
-        const updated = await new WorksRepo(database, input.libraryId).softDeleteMany(input.workIds);
+        const updated = await new WorksRepo(database, input.libraryId).softDeleteMany(
+          input.workIds,
+        );
         if (updated !== input.workIds.length) {
           throw new Error("Trash did not update every requested work");
         }
@@ -165,10 +181,22 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     throw new Error("Invalid data command request");
   }
   if (
+    value.name !== "library.addTagToWorks" &&
+    value.name !== "library.createCollection" &&
+    value.name !== "library.createTag" &&
+    value.name !== "library.deleteCollection" &&
+    value.name !== "library.deleteTag" &&
     value.name !== "library.mergeWorks" &&
+    value.name !== "library.moveCollection" &&
+    value.name !== "library.renameCollection" &&
+    value.name !== "library.renameTag" &&
+    value.name !== "library.restoreCollection" &&
+    value.name !== "library.restoreTag" &&
     value.name !== "library.restoreWorks" &&
+    value.name !== "library.setTagColor" &&
     value.name !== "library.setWorkReadingStatus" &&
     value.name !== "library.setWorkStarred" &&
+    value.name !== "library.setWorksCollection" &&
     value.name !== "library.trashWorks" &&
     value.name !== "library.purgeDeletedWorks" &&
     value.name !== "library.importBackup" &&
@@ -282,20 +310,6 @@ function parseApplyRemoteSyncSegmentInput(value: unknown): ApplyRemoteSyncSegmen
   };
 }
 
-async function assertActiveLocalLibrary(database: Database, expectedLibraryId: string) {
-  const durableLibraryId = await requireLocalLibraryId(database);
-  if (durableLibraryId !== expectedLibraryId) {
-    throw new Error("Rejected stale or foreign Library scope");
-  }
-  const rows = await database.query<{ id: string }>(
-    `SELECT id FROM libraries WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-    [expectedLibraryId],
-  );
-  if (rows.length !== 1) {
-    throw new Error("Target Library does not exist or is deleted");
-  }
-}
-
 async function assertDeletedWorksBelongToLibrary(
   database: Database,
   libraryId: string,
@@ -353,23 +367,4 @@ async function assertActiveMergeWorksBelongToLibrary(
   if (rows.length !== workIds.length) {
     throw new Error("Every merge work must be active and belong to the active Library");
   }
-}
-
-function requireRecordId(value: unknown, label: string): string {
-  const id = requireNonEmptyString(value, label).trim();
-  if (id.length > MAX_RECORD_ID_LENGTH) {
-    throw new Error(`${label} is too long`);
-  }
-  return id;
-}
-
-function requireNonEmptyString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${label} is required`);
-  }
-  return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

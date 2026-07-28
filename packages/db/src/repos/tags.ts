@@ -3,6 +3,7 @@
 // so the same label never splits into two rows.
 import type { Database } from "../database.js";
 import { newId } from "../ids.js";
+import { withDatabaseWriteLock } from "./write-lock.js";
 
 export interface TagRow {
   id: string;
@@ -15,10 +16,6 @@ export interface TagRow {
 interface TagIdentityRow {
   id: string;
   deleted_at: number | null;
-}
-
-export interface AddTagToWorksOptions {
-  afterEach?: (workId: string, index: number) => void | Promise<void>;
 }
 
 export class TagsRepo {
@@ -51,6 +48,10 @@ export class TagsRepo {
 
   private assertChanged(changed: number, message: string): void {
     if (changed === 0) throw new Error(message);
+  }
+
+  private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    return withDatabaseWriteLock(this.db, fn);
   }
 
   private async assertActive(id: string): Promise<void> {
@@ -94,6 +95,10 @@ export class TagsRepo {
 
   /** Upsert by name: returns the existing tag id, or creates a fresh one. */
   async ensure(name: string, color?: string): Promise<string> {
+    return this.withWriteLock(() => this.ensureUnlocked(name, color));
+  }
+
+  private async ensureUnlocked(name: string, color?: string): Promise<string> {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("标签名称不能为空");
     const existing = await this.db.query<TagIdentityRow>(
@@ -117,15 +122,20 @@ export class TagsRepo {
     }
     const id = newId();
     const now = Date.now();
-    await this.db.run(
+    const changed = await this.db.run(
       `INSERT INTO tags (id, library_id, name, color, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [id, this.libraryId, trimmed, color ?? null, now, now],
     );
+    this.assertChanged(changed, `Tag "${trimmed}" was not created`);
     return id;
   }
 
-  async rename(id: string, name: string): Promise<void> {
+  async rename(id: string, name: string): Promise<string> {
+    return this.withWriteLock(() => this.renameUnlocked(id, name));
+  }
+
+  private async renameUnlocked(id: string, name: string): Promise<string> {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("标签名称不能为空");
     const now = Date.now();
@@ -138,7 +148,7 @@ export class TagsRepo {
     );
     const mergeTarget = conflict[0];
     if (mergeTarget && mergeTarget.id !== id) {
-      await this.withSavepoint("tags_rename_merge", async () => {
+      await this.withSavepoint(`tags_rename_merge_${newId().replace(/-/g, "_")}`, async () => {
         await this.assertActive(id);
         if (mergeTarget.deleted_at !== null) {
           const restored = await this.db.run(
@@ -155,10 +165,27 @@ export class TagsRepo {
            JOIN works w
              ON w.id = wt.work_id
             AND w.library_id = ?
-            AND w.deleted_at IS NULL
            WHERE wt.tag_id = ?`,
           [mergeTarget.id, this.libraryId, id],
         );
+        const missingLinks = await this.db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM work_tags source
+           JOIN works w
+             ON w.id = source.work_id
+            AND w.library_id = ?
+           WHERE source.tag_id = ?
+             AND NOT EXISTS (
+               SELECT 1
+               FROM work_tags target
+               WHERE target.work_id = source.work_id
+                 AND target.tag_id = ?
+             )`,
+          [this.libraryId, id, mergeTarget.id],
+        );
+        if ((missingLinks[0]?.n ?? 0) !== 0) {
+          throw new Error("Tag merge did not preserve every work association");
+        }
         await this.db.run(
           `DELETE FROM work_tags
            WHERE tag_id = ?
@@ -168,6 +195,13 @@ export class TagsRepo {
              )`,
           [id, id, this.libraryId],
         );
+        const remainingLinks = await this.db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM work_tags WHERE tag_id = ?`,
+          [id],
+        );
+        if ((remainingLinks[0]?.n ?? 0) !== 0) {
+          throw new Error("Tag merge did not retire every source association");
+        }
         const retired = await this.db.run(
           `UPDATE tags SET deleted_at = ?, updated_at = ?
            WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
@@ -175,7 +209,7 @@ export class TagsRepo {
         );
         this.assertChanged(retired, `Tag ${id} is missing or removed`);
       });
-      return;
+      return mergeTarget.id;
     }
     const changed = await this.db.run(
       `UPDATE tags
@@ -184,9 +218,14 @@ export class TagsRepo {
       [trimmed, now, id, this.libraryId],
     );
     this.assertChanged(changed, `Tag ${id} is missing or removed`);
+    return id;
   }
 
   async setColor(id: string, color: string | null): Promise<void> {
+    return this.withWriteLock(() => this.setColorUnlocked(id, color));
+  }
+
+  private async setColorUnlocked(id: string, color: string | null): Promise<void> {
     const changed = await this.db.run(
       `UPDATE tags
        SET color = ?, updated_at = ?
@@ -197,8 +236,27 @@ export class TagsRepo {
   }
 
   /** Removes the tag and all its work associations. */
-  async softDelete(id: string): Promise<void> {
-    await this.withSavepoint("tags_soft_delete", async () => {
+  async softDelete(id: string): Promise<string[]> {
+    return this.withWriteLock(() => this.softDeleteUnlocked(id));
+  }
+
+  private async softDeleteUnlocked(id: string): Promise<string[]> {
+    return this.withSavepoint(`tags_soft_delete_${newId().replace(/-/g, "_")}`, async () => {
+      const workRows = await this.db.query<{ work_id: string }>(
+        `SELECT wt.work_id
+         FROM work_tags wt
+         JOIN tags t
+           ON t.id = wt.tag_id
+          AND t.library_id = ?
+          AND t.deleted_at IS NULL
+         JOIN works w
+           ON w.id = wt.work_id
+          AND w.library_id = t.library_id
+         WHERE wt.tag_id = ?
+         ORDER BY wt.work_id`,
+        [this.libraryId, id],
+      );
+      const workIds = workRows.map((row) => row.work_id);
       const changed = await this.db.run(
         `UPDATE tags SET deleted_at = ?, updated_at = ?
          WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
@@ -214,6 +272,14 @@ export class TagsRepo {
            )`,
         [id, id, this.libraryId],
       );
+      const remainingLinks = await this.db.query<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM work_tags WHERE tag_id = ?`,
+        [id],
+      );
+      if ((remainingLinks[0]?.n ?? 0) !== 0) {
+        throw new Error("Tag deletion did not remove every work association");
+      }
+      return workIds;
     });
   }
 
@@ -233,49 +299,91 @@ export class TagsRepo {
     return rows.map((row) => row.work_id);
   }
 
-  async restore(id: string, workIds: string[] = []): Promise<void> {
-    await this.withSavepoint("tags_restore", async () => {
+  async restore(id: string, workIds: string[] = []): Promise<number> {
+    return this.withWriteLock(() => this.restoreUnlocked(id, workIds));
+  }
+
+  private async restoreUnlocked(id: string, workIds: string[] = []): Promise<number> {
+    return this.withSavepoint(`tags_restore_${newId().replace(/-/g, "_")}`, async () => {
       const changed = await this.db.run(
         `UPDATE tags SET deleted_at = NULL, updated_at = ?
          WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
         [Date.now(), id, this.libraryId],
       );
       this.assertChanged(changed, `Tag ${id} is missing or already active`);
+      let restored = 0;
       for (const workId of new Set(workIds)) {
-        await this.assertActiveWork(workId);
+        const workRows = await this.db.query<{ library_id: string }>(
+          `SELECT library_id
+           FROM works
+           WHERE id = ?
+           LIMIT 1`,
+          [workId],
+        );
+        const work = workRows[0];
+        if (!work) continue;
+        if (work.library_id !== this.libraryId) {
+          throw new Error(`Work ${workId} belongs to another Library`);
+        }
         await this.db.run(`INSERT OR IGNORE INTO work_tags (work_id, tag_id) VALUES (?, ?)`, [
           workId,
           id,
         ]);
+        const link = await this.db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM work_tags WHERE work_id = ? AND tag_id = ?`,
+          [workId, id],
+        );
+        if ((link[0]?.n ?? 0) !== 1) {
+          throw new Error(`Tag ${id} was not restored to work ${workId}`);
+        }
+        restored += 1;
       }
+      return restored;
     });
   }
 
   /** Attaches a tag (by name, upserting) to many works. Idempotent. */
-  async addToWorks(
-    workIds: string[],
-    tagName: string,
-    options: AddTagToWorksOptions = {},
-  ): Promise<void> {
-    if (workIds.length === 0) return;
-    await this.withSavepoint("tags_add_to_works", async () => {
-      const tagId = await this.ensure(tagName);
+  async addToWorks(workIds: string[], tagName: string): Promise<string | null> {
+    if (workIds.length === 0) return null;
+    return this.withWriteLock(() => this.addToWorksUnlocked(workIds, tagName));
+  }
+
+  private async addToWorksUnlocked(workIds: string[], tagName: string): Promise<string> {
+    return this.withSavepoint(`tags_add_to_works_${newId().replace(/-/g, "_")}`, async () => {
+      const tagId = await this.ensureUnlocked(tagName);
       const uniqueWorkIds = [...new Set(workIds)];
-      for (let index = 0; index < uniqueWorkIds.length; index += 1) {
-        const workId = uniqueWorkIds[index]!;
+      for (const workId of uniqueWorkIds) {
         await this.assertActiveWork(workId);
         await this.db.run(`INSERT OR IGNORE INTO work_tags (work_id, tag_id) VALUES (?, ?)`, [
           workId,
           tagId,
         ]);
-        await options.afterEach?.(workId, index);
+        const link = await this.db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM work_tags WHERE work_id = ? AND tag_id = ?`,
+          [workId, tagId],
+        );
+        if ((link[0]?.n ?? 0) !== 1) {
+          throw new Error(`Tag ${tagId} was not assigned to work ${workId}`);
+        }
       }
+      return tagId;
     });
   }
 
   async removeFromWork(workId: string, tagId: string): Promise<void> {
+    return this.withWriteLock(() => this.removeFromWorkUnlocked(workId, tagId));
+  }
+
+  private async removeFromWorkUnlocked(workId: string, tagId: string): Promise<void> {
     await this.assertActive(tagId);
     await this.assertActiveWork(workId);
     await this.db.run(`DELETE FROM work_tags WHERE work_id = ? AND tag_id = ?`, [workId, tagId]);
+    const link = await this.db.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM work_tags WHERE work_id = ? AND tag_id = ?`,
+      [workId, tagId],
+    );
+    if ((link[0]?.n ?? 0) !== 0) {
+      throw new Error(`Tag ${tagId} was not removed from work ${workId}`);
+    }
   }
 }

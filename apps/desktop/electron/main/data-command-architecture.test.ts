@@ -1,6 +1,19 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { DataCommandDependencies } from "./data-command-runtime";
+
+function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDependencies): void {
+  void dependencies.transaction("library.createCollection", async () => ({
+    collectionId: "collection-id",
+  }));
+  // @ts-expect-error createCollection must return its declared collection result.
+  void dependencies.transaction("library.createCollection", async () => ({
+    updated: 1,
+  }));
+}
+
+void assertCompileTimeDataCommandOutputContract;
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -35,7 +48,34 @@ describe("main-process data command architecture", () => {
     }
   });
 
-  it("uses a typed allowlist rather than accepting arbitrary SQL commands", () => {
+  it("keeps Library organization writes behind the typed service gateway", () => {
+    const libraryPage = source("src/pages/LibraryPage.tsx");
+    const gateway = source("src/services/library-organization.ts");
+    const commandNames = [
+      "library.addTagToWorks",
+      "library.createCollection",
+      "library.createTag",
+      "library.deleteCollection",
+      "library.deleteTag",
+      "library.moveCollection",
+      "library.renameCollection",
+      "library.renameTag",
+      "library.restoreCollection",
+      "library.restoreTag",
+      "library.setTagColor",
+      "library.setWorksCollection",
+    ];
+
+    expect(libraryPage).not.toContain("CollectionsRepo");
+    expect(libraryPage).not.toContain("TagsRepo");
+    expect(libraryPage).not.toContain("@aurascholar/db/repos/collections");
+    expect(libraryPage).not.toContain("@aurascholar/db/repos/tags");
+    for (const commandName of commandNames) {
+      expect(gateway).toContain(`data.command("${commandName}"`);
+    }
+  });
+
+  it("keeps durable data commands on a typed allowlist", () => {
     const contract = source("electron/data-command-contract.ts");
     const dispatcher = source("electron/main/data-commands.ts");
 
@@ -46,6 +86,18 @@ describe("main-process data command architecture", () => {
     expect(contract).not.toMatch(/\b(sql|statements)\s*[?:]/i);
     expect(dispatcher).toContain("assertActiveLocalLibrary");
     expect(dispatcher).toContain("withMainDatabaseTransaction");
+  });
+
+  it("binds main-process transaction outputs to the command contract", () => {
+    const runtime = source("electron/main/data-command-runtime.ts");
+    const dispatcher = source("electron/main/data-commands.ts");
+    const tagCommands = source("electron/main/library-tag-commands.ts");
+    const collectionCommands = source("electron/main/library-collection-commands.ts");
+
+    expect(runtime).toContain("DataCommandOutput<NoInfer<K>>");
+    expect(dispatcher).not.toContain("): Promise<unknown>");
+    expect(tagCommands).not.toContain("): Promise<unknown>");
+    expect(collectionCommands).not.toContain("): Promise<unknown>");
   });
 
   it("routes every raw database IPC method through the connection coordinator", () => {
@@ -64,28 +116,14 @@ describe("main-process data command architecture", () => {
     const contractNames = [...contract.matchAll(/^\s*"([^"]+)":\s*\{/gm)]
       .map((match) => match[1])
       .sort();
-    const dispatchedNames = [...dispatcher.matchAll(/^\s*case "([^"]+)":\s*\{/gm)]
+    const dispatchedNames = [...dispatcher.matchAll(/^\s*case "([^"]+)":/gm)]
       .map((match) => match[1])
       .sort();
 
-    expect(contractNames).toEqual([
-      "library.importBackup",
-      "library.mergeWorks",
-      "library.purgeDeletedWorks",
-      "library.restoreWorks",
-      "library.setWorkReadingStatus",
-      "library.setWorkStarred",
-      "library.trashWorks",
-      "sync.applyRemoteSegment",
-    ]);
     expect(dispatchedNames).toEqual(contractNames);
-    expect(dispatcher).toContain('value.name !== "library.importBackup"');
-    expect(dispatcher).toContain('value.name !== "library.mergeWorks"');
-    expect(dispatcher).toContain('value.name !== "library.restoreWorks"');
-    expect(dispatcher).toContain('value.name !== "library.setWorkReadingStatus"');
-    expect(dispatcher).toContain('value.name !== "library.setWorkStarred"');
-    expect(dispatcher).toContain('value.name !== "library.trashWorks"');
-    expect(dispatcher).toContain('value.name !== "sync.applyRemoteSegment"');
+    for (const commandName of contractNames) {
+      expect(dispatcher).toContain(`value.name !== "${commandName}"`);
+    }
     expect(main.match(/registerDataCommandHandlers\(\);/g)).toHaveLength(1);
   });
 });
