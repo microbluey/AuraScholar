@@ -6,6 +6,7 @@ import { WorksRepo } from "./works";
 import { AnnotationsRepo } from "./annotations";
 import { AttachmentsRepo } from "./attachments";
 import { CollectionsRepo } from "./collections";
+import { TagsRepo } from "./tags";
 
 let db: Database;
 let libraryId: string;
@@ -13,6 +14,7 @@ let works: WorksRepo;
 let annotations: AnnotationsRepo;
 let attachments: AttachmentsRepo;
 let collections: CollectionsRepo;
+let tags: TagsRepo;
 
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
@@ -22,6 +24,7 @@ beforeEach(async () => {
   annotations = new AnnotationsRepo(db, libraryId);
   attachments = new AttachmentsRepo(db, libraryId);
   collections = new CollectionsRepo(db, libraryId);
+  tags = new TagsRepo(db, libraryId);
 });
 
 const ATTENTION = {
@@ -364,6 +367,193 @@ describe("WorksRepo", () => {
     expect(await attachments.forWork(primary.id)).toHaveLength(1);
     const movedNotes = await annotations.listForAttachment(attachment.id);
     expect(movedNotes[0]).toMatchObject({ work_id: primary.id, content_md: "Useful note" });
+  });
+
+  it("unions every valid folder and tag membership when merging duplicate works", async () => {
+    const primary = await works.upsert({
+      title: "Primary folder paper",
+      doi: "10.9/folder-primary",
+    });
+    const duplicate = await works.upsert({
+      title: "Duplicate folder paper",
+      doi: "10.9/folder-duplicate",
+    });
+    const primaryFolder = await collections.create("Primary folder");
+    const duplicateFolder = await collections.create("Duplicate folder");
+    const legacyExtraFolder = await collections.create("Legacy extra folder");
+    await collections.setWorkCollection(primary.id, primaryFolder);
+    await collections.setWorkCollection(duplicate.id, duplicateFolder);
+    await db.run(`INSERT INTO collection_items (collection_id, work_id) VALUES (?, ?)`, [
+      legacyExtraFolder,
+      duplicate.id,
+    ]);
+    await tags.addToWorks([primary.id], "primary-tag");
+    await tags.addToWorks([duplicate.id], "duplicate-tag");
+    await tags.addToWorks([duplicate.id], "stale-tag");
+    await db.run(`UPDATE tags SET deleted_at = ?, updated_at = ? WHERE name = 'stale-tag'`, [
+      Date.now(),
+      Date.now(),
+    ]);
+
+    await works.mergeInto(primary.id, [duplicate.id]);
+
+    expect(
+      await db.query<{ collection_id: string }>(
+        `SELECT collection_id
+         FROM collection_items
+         WHERE work_id = ?
+         ORDER BY collection_id`,
+        [primary.id],
+      ),
+    ).toEqual(
+      [primaryFolder, duplicateFolder, legacyExtraFolder]
+        .sort()
+        .map((collection_id) => ({ collection_id })),
+    );
+    expect(
+      await db.query<{ collection_id: string }>(
+        `SELECT collection_id FROM collection_items WHERE work_id = ?`,
+        [duplicate.id],
+      ),
+    ).toEqual([]);
+    expect(
+      await db.query<{ name: string }>(
+        `SELECT t.name
+         FROM work_tags wt
+         JOIN tags t ON t.id = wt.tag_id
+         WHERE wt.work_id = ?
+         ORDER BY t.name`,
+        [primary.id],
+      ),
+    ).toEqual([{ name: "duplicate-tag" }, { name: "primary-tag" }]);
+    expect(
+      await db.query<{ tag_id: string }>(`SELECT tag_id FROM work_tags WHERE work_id = ?`, [
+        duplicate.id,
+      ]),
+    ).toEqual([]);
+  });
+
+  it("rolls back a merge when SQLite ignores a required folder membership copy", async () => {
+    const primary = await works.upsert({ title: "Ignored folder primary" });
+    const duplicate = await works.upsert({ title: "Ignored folder duplicate" });
+    const folder = await collections.create("Must survive merge");
+    await collections.setWorkCollection(duplicate.id, folder);
+    await db.exec(`
+      CREATE TEMP TRIGGER ignore_merge_collection_copy
+      BEFORE INSERT ON collection_items
+      WHEN NEW.collection_id = '${folder}' AND NEW.work_id = '${primary.id}'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END;
+    `);
+
+    try {
+      await expect(works.mergeInto(primary.id, [duplicate.id])).rejects.toThrow(
+        "Collection memberships could not be merged",
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS ignore_merge_collection_copy");
+    }
+
+    expect(await works.get(primary.id)).toMatchObject({ deleted_at: null });
+    expect(await works.get(duplicate.id)).toMatchObject({ deleted_at: null });
+    expect(
+      await db.query<{ collection_id: string; work_id: string }>(
+        `SELECT collection_id, work_id FROM collection_items WHERE collection_id = ?`,
+        [folder],
+      ),
+    ).toEqual([{ collection_id: folder, work_id: duplicate.id }]);
+  });
+
+  it("keeps annotations with an already-retired duplicate attachment coherent", async () => {
+    const primary = await works.upsert({ title: "Retired attachment primary" });
+    const duplicate = await works.upsert({ title: "Retired attachment duplicate" });
+    const attachment = await attachments.create({
+      workId: duplicate.id,
+      sha256: "retired-before-merge",
+      byteSize: 300,
+    });
+    const annotation = await annotations.create({
+      attachmentId: attachment.id,
+      workId: duplicate.id,
+      type: "note",
+      pageIndex: 0,
+      contentMd: "Keep this retired chain coherent",
+    });
+    await db.run(`UPDATE attachments SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
+      Date.now(),
+      Date.now(),
+      attachment.id,
+    ]);
+
+    await expect(works.mergeInto(primary.id, [duplicate.id])).resolves.toMatchObject({
+      merged: 1,
+    });
+
+    expect(
+      await db.query<{ work_id: string; deleted_at: number | null }>(
+        `SELECT work_id, deleted_at FROM attachments WHERE id = ?`,
+        [attachment.id],
+      ),
+    ).toEqual([{ work_id: duplicate.id, deleted_at: expect.any(Number) }]);
+    expect(
+      await db.query<{ attachment_id: string; work_id: string }>(
+        `SELECT attachment_id, work_id FROM annotations WHERE id = ?`,
+        [annotation],
+      ),
+    ).toEqual([{ attachment_id: attachment.id, work_id: duplicate.id }]);
+  });
+
+  it("transfers a duplicate DOI to a primary that does not have one", async () => {
+    const primary = await works.upsert({ title: "Primary without DOI" });
+    const duplicate = await works.upsert({
+      title: "Duplicate with DOI",
+      doi: "10.9/doi-transfer",
+    });
+
+    await works.mergeInto(primary.id, [duplicate.id]);
+
+    expect(await works.get(primary.id)).toMatchObject({
+      doi: "10.9/doi-transfer",
+      deleted_at: null,
+    });
+    expect(await works.get(duplicate.id)).toMatchObject({
+      doi: null,
+      deleted_at: expect.any(Number),
+    });
+  });
+
+  it("keeps an existing citation pair when duplicate sources disagree", async () => {
+    const primary = await works.upsert({ title: "Citation source primary" });
+    const duplicate = await works.upsert({ title: "Citation source duplicate" });
+    const target = await works.upsert({ title: "Citation source target" });
+    await db.run(
+      `INSERT INTO citations (citing_work_id, cited_work_id, source) VALUES (?, ?, 'openalex')`,
+      [primary.id, target.id],
+    );
+    await db.run(
+      `INSERT INTO citations (citing_work_id, cited_work_id, source) VALUES (?, ?, 'semantic-scholar')`,
+      [duplicate.id, target.id],
+    );
+
+    await expect(works.mergeInto(primary.id, [duplicate.id])).resolves.toMatchObject({
+      merged: 1,
+    });
+
+    expect(
+      await db.query<{ citing_work_id: string; cited_work_id: string; source: string }>(
+        `SELECT citing_work_id, cited_work_id, source
+         FROM citations
+         WHERE citing_work_id IN (?, ?) OR cited_work_id IN (?, ?)`,
+        [primary.id, duplicate.id, primary.id, duplicate.id],
+      ),
+    ).toEqual([
+      {
+        citing_work_id: primary.id,
+        cited_work_id: target.id,
+        source: "openalex",
+      },
+    ]);
   });
 
   it("dedups by fingerprint when no DOI", async () => {

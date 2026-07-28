@@ -7,6 +7,7 @@ import type {
   ApplyRemoteSyncSegmentCommandInput,
   DataCommandRequest,
   ImportLibraryBackupCommandInput,
+  MergeWorksCommandInput,
   PurgeDeletedWorksCommandInput,
 } from "../data-command-contract";
 import {
@@ -19,6 +20,7 @@ import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
 
 const MAX_BACKUP_TEXT_LENGTH = 64 * 1024 * 1024;
+const MAX_MERGE_DUPLICATE_IDS = 500;
 const MAX_PURGE_WORK_IDS = 500;
 const MAX_RECORD_ID_LENGTH = 512;
 const MAX_REMOTE_SEGMENT_ENTRIES = 500;
@@ -47,6 +49,26 @@ export async function executeDataCommand(
 ): Promise<unknown> {
   const envelope = parseEnvelope(request);
   switch (envelope.name) {
+    case "library.mergeWorks": {
+      const input = parseMergeWorksInput(envelope.input);
+      return dependencies.transaction(envelope.name, async (database) => {
+        await assertActiveLocalLibrary(database, input.libraryId);
+        await assertActiveMergeWorksBelongToLibrary(
+          database,
+          input.libraryId,
+          input.primaryId,
+          input.duplicateIds,
+        );
+        const result = await new WorksRepo(database, input.libraryId).mergeInto(
+          input.primaryId,
+          input.duplicateIds,
+        );
+        if (result.primaryId !== input.primaryId || result.merged !== input.duplicateIds.length) {
+          throw new Error("Merge did not retire every requested duplicate work");
+        }
+        return result;
+      });
+    }
     case "library.purgeDeletedWorks": {
       const input = parsePurgeDeletedWorksInput(envelope.input);
       return dependencies.transaction(envelope.name, async (database) => {
@@ -95,6 +117,7 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     throw new Error("Invalid data command request");
   }
   if (
+    value.name !== "library.mergeWorks" &&
     value.name !== "library.purgeDeletedWorks" &&
     value.name !== "library.importBackup" &&
     value.name !== "sync.applyRemoteSegment"
@@ -102,6 +125,28 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     throw new Error(`Unsupported data command "${value.name}"`);
   }
   return value as unknown as DataCommandRequest;
+}
+
+function parseMergeWorksInput(value: unknown): MergeWorksCommandInput {
+  if (!isRecord(value)) throw new Error("Invalid library.mergeWorks input");
+  const libraryId = requireRecordId(value.libraryId, "Library id");
+  const primaryId = requireRecordId(value.primaryId, "Primary work id");
+  if (!Array.isArray(value.duplicateIds) || value.duplicateIds.length === 0) {
+    throw new Error("At least one duplicate work id is required");
+  }
+  if (value.duplicateIds.length > MAX_MERGE_DUPLICATE_IDS) {
+    throw new Error(`Merging is limited to ${MAX_MERGE_DUPLICATE_IDS} duplicate works at a time`);
+  }
+  const duplicateIds = Array.from(value.duplicateIds, (workId, index) =>
+    requireRecordId(workId, `Duplicate work id at index ${index}`),
+  );
+  if (new Set(duplicateIds).size !== duplicateIds.length) {
+    throw new Error("Duplicate work ids must be unique");
+  }
+  if (duplicateIds.includes(primaryId)) {
+    throw new Error("Primary work cannot also be a duplicate");
+  }
+  return { libraryId, primaryId, duplicateIds };
 }
 
 function parsePurgeDeletedWorksInput(value: unknown): PurgeDeletedWorksCommandInput {
@@ -188,6 +233,27 @@ async function assertDeletedWorksBelongToLibrary(
   );
   if (rows.length !== workIds.length) {
     throw new Error("Every work must belong to the active Library recycle bin");
+  }
+}
+
+async function assertActiveMergeWorksBelongToLibrary(
+  database: Database,
+  libraryId: string,
+  primaryId: string,
+  duplicateIds: string[],
+): Promise<void> {
+  const workIds = [primaryId, ...duplicateIds];
+  const placeholders = workIds.map(() => "?").join(",");
+  const rows = await database.query<{ id: string }>(
+    `SELECT id
+     FROM works
+     WHERE library_id = ?
+       AND deleted_at IS NULL
+       AND id IN (${placeholders})`,
+    [libraryId, ...workIds],
+  );
+  if (rows.length !== workIds.length) {
+    throw new Error("Every merge work must be active and belong to the active Library");
   }
 }
 

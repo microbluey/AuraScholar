@@ -1087,6 +1087,7 @@ export function LibraryPage() {
       const detail = describeSafeError(e);
       setLibraryLoadError(detail);
       setMessage(`读取文献库失败：${detail}`);
+      return e instanceof Error ? e : new Error(detail);
     }
   }, [search, activeCollection, activeFilter, previewItems, previewTrashItems, previewWorkMeta]);
 
@@ -1926,7 +1927,8 @@ export function LibraryPage() {
         setMessage(successMessage);
         setSelectedWorkId(work.id);
         try {
-          await refresh();
+          const refreshFailure = await refresh();
+          if (refreshFailure) throw refreshFailure;
         } catch (e) {
           setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
         }
@@ -1976,7 +1978,8 @@ export function LibraryPage() {
         setMessage(successMessage);
         setSelectedWorkId(selectedWork.id);
         try {
-          await refresh();
+          const refreshFailure = await refresh();
+          if (refreshFailure) throw refreshFailure;
         } catch (e) {
           setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
         }
@@ -2491,7 +2494,8 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_BULK_TAG_BUSY_MS);
           setMessage(successMessage);
           setSelectedIds(new Set());
-          await refresh();
+          const refreshFailure = await refresh();
+          if (refreshFailure) throw refreshFailure;
         } catch (e) {
           await waitForMinimumElapsed(startedAt, MIN_BULK_TAG_BUSY_MS);
           if (tagCommitted) {
@@ -2543,7 +2547,8 @@ export function LibraryPage() {
         await waitForMinimumElapsed(startedAt, MIN_MOVE_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedIds(new Set());
-        await refresh();
+        const refreshFailure = await refresh();
+        if (refreshFailure) throw refreshFailure;
         return true;
       } catch (e) {
         await waitForMinimumElapsed(startedAt, MIN_MOVE_ACTION_BUSY_MS);
@@ -2614,7 +2619,8 @@ export function LibraryPage() {
         },
       });
       trashCommitted = true;
-      await refresh();
+      const refreshFailure = await refresh();
+      if (refreshFailure) throw refreshFailure;
       await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
       setMessage(undoMessage);
       setTrashUndo({ count: workIds.length, ids: workIds, message: undoMessage });
@@ -2674,7 +2680,8 @@ export function LibraryPage() {
           },
         });
         restoreCommitted = true;
-        await refresh();
+        const refreshFailure = await refresh();
+        if (refreshFailure) throw refreshFailure;
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedIds(new Set());
@@ -2726,7 +2733,8 @@ export function LibraryPage() {
         const { libraryId } = await getLibraryDb();
         await window.aura.data.command("library.purgeDeletedWorks", { libraryId, workIds });
         purgeCommitted = true;
-        await refresh();
+        const refreshFailure = await refresh();
+        if (refreshFailure) throw refreshFailure;
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedIds(new Set());
@@ -2777,9 +2785,12 @@ export function LibraryPage() {
     setWorkActionBusy("merge");
     setMessage(`正在合并 ${duplicates.length} 篇重复文献到《${selectedWork.title}》...`);
     try {
-      const { db, libraryId } = await getLibraryDb();
-      const { WorksRepo } = await import("@aurascholar/db/repos/works");
-      const result = await new WorksRepo(db, libraryId).mergeInto(selectedWork.id, duplicates);
+      const { libraryId } = await getLibraryDb();
+      const result = await window.aura.data.command("library.mergeWorks", {
+        libraryId,
+        primaryId: selectedWork.id,
+        duplicateIds: duplicates,
+      });
       await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
       const successMessage = `已合并 ${result.merged} 篇重复文献到《${selectedWork.title}》${
         result.movedAttachments ? `，迁移 ${result.movedAttachments} 个附件` : ""
@@ -2788,7 +2799,8 @@ export function LibraryPage() {
       setSelectedIds(new Set());
       setSelectedWorkId(selectedWork.id);
       try {
-        await refresh();
+        const refreshFailure = await refresh();
+        if (refreshFailure) throw refreshFailure;
       } catch (e) {
         setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
       }

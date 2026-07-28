@@ -3,6 +3,7 @@ import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
 import { requireLocalLibraryId } from "../local-first";
 import { AttachmentsRepo } from "./attachments";
+import { AnnotationsRepo } from "./annotations";
 import { WorksRepo } from "./works";
 import {
   CanvasRepo,
@@ -14,6 +15,7 @@ let db: Database;
 let libraryId: string;
 let works: WorksRepo;
 let attachments: AttachmentsRepo;
+let annotations: AnnotationsRepo;
 let canvas: CanvasRepo;
 
 beforeEach(async () => {
@@ -22,6 +24,7 @@ beforeEach(async () => {
   libraryId = await requireLocalLibraryId(db);
   works = new WorksRepo(db, libraryId);
   attachments = new AttachmentsRepo(db, libraryId);
+  annotations = new AnnotationsRepo(db, libraryId);
   canvas = new CanvasRepo(db, libraryId);
 });
 
@@ -510,6 +513,92 @@ describe("CanvasRepo", () => {
 
     await expect(canvas.save(merged!)).resolves.toBeUndefined();
     expect(await canvas.load(document.workspaceId)).toEqual(merged);
+  });
+
+  it("retargets excerpt anchors and derived data when equal attachments are deduplicated", async () => {
+    const primary = await works.upsert({
+      title: "Canonical attachment paper",
+      doi: "10.9/attachment-primary",
+    });
+    const duplicate = await works.upsert({
+      title: "Duplicate attachment paper",
+      doi: "10.9/attachment-duplicate",
+    });
+    const primaryAttachment = await attachments.create({
+      workId: primary.id,
+      sha256: "shared-pdf-hash",
+      byteSize: 2048,
+    });
+    const duplicateAttachment = await attachments.create({
+      workId: duplicate.id,
+      sha256: "shared-pdf-hash",
+      byteSize: 2048,
+      originalFilename: "metadata-rich.pdf",
+      pageCount: 9,
+    });
+    await annotations.create({
+      attachmentId: duplicateAttachment.id,
+      workId: duplicate.id,
+      type: "highlight",
+      pageIndex: 2,
+      contentMd: "Retarget this note",
+    });
+    const seed = await canvas.ensureDefault();
+    const baseDocument = makeDocument(duplicate.id, seed);
+    const document: StoredCanvasWorkspaceDocument = {
+      ...baseDocument,
+      nodes: baseDocument.nodes.map((node) =>
+        node.type === "excerpt"
+          ? {
+              ...node,
+              data: { ...node.data, attachmentId: duplicateAttachment.id },
+            }
+          : node,
+      ),
+    };
+    await canvas.save(document);
+    const now = Date.now();
+    await db.run(
+      `INSERT INTO derived_artifacts (
+         id, library_id, source_table, source_id, kind, payload_json, created_at, updated_at
+       ) VALUES (?, ?, 'attachments', ?, 'ocr', '{}', ?, ?)`,
+      ["artifact:attachment-merge", libraryId, duplicateAttachment.id, now, now],
+    );
+
+    await works.mergeInto(primary.id, [duplicate.id]);
+
+    expect(await annotations.listForAttachment(primaryAttachment.id)).toEqual([
+      expect.objectContaining({
+        attachment_id: primaryAttachment.id,
+        work_id: primary.id,
+        content_md: "Retarget this note",
+      }),
+    ]);
+    expect(await attachments.forWork(primary.id)).toEqual([
+      expect.objectContaining({
+        id: primaryAttachment.id,
+        original_filename: "metadata-rich.pdf",
+        page_count: 9,
+      }),
+    ]);
+    const merged = await canvas.load(document.workspaceId);
+    expect(merged?.nodes.find((node) => node.id === "node-excerpt")?.data).toEqual(
+      expect.objectContaining({
+        attachmentId: primaryAttachment.id,
+        workId: primary.id,
+      }),
+    );
+    expect(
+      await db.query<{ source_id: string }>(
+        `SELECT source_id FROM derived_artifacts WHERE id = 'artifact:attachment-merge'`,
+      ),
+    ).toEqual([{ source_id: primaryAttachment.id }]);
+    expect(
+      await db.query<{ deleted_at: number | null }>(
+        `SELECT deleted_at FROM attachments WHERE id = ?`,
+        [duplicateAttachment.id],
+      ),
+    ).toEqual([{ deleted_at: expect.any(Number) }]);
   });
 
   it("rolls canvas reference changes back when a work merge fails", async () => {

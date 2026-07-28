@@ -208,6 +208,17 @@ export class WorksRepo {
     if (changed === 0) throw new Error(message);
   }
 
+  private assertChangedExactly(changed: number, expected: number, message: string): void {
+    if (changed !== expected) {
+      throw new Error(`${message} (expected ${expected}, changed ${changed})`);
+    }
+  }
+
+  private async countRows(sql: string, params: unknown[] = []): Promise<number> {
+    const rows = await this.db.query<{ n: number }>(sql, params);
+    return Number(rows[0]?.n ?? 0);
+  }
+
   private async withSavepoint<T>(name: string, fn: () => Promise<T>): Promise<T> {
     await this.db.exec(`SAVEPOINT ${name}`);
     try {
@@ -350,20 +361,20 @@ export class WorksRepo {
     const duplicates = [...new Set(duplicateIds)].filter((id) => id && id !== primaryId);
     if (duplicates.length === 0) return { primaryId, merged: 0, movedAttachments: 0 };
 
-    const primary = await this.db.query<{ id: string }>(
-      `SELECT id
-       FROM works
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
-       LIMIT 1`,
-      [primaryId, this.libraryId],
-    );
-    if (primary.length === 0) throw new Error("主文献不存在或已删除");
-
     let merged = 0;
     let movedAttachments = 0;
     const now = Date.now();
-    await this.db.exec("BEGIN");
-    try {
+    const savepoint = `works_merge_into_${newId().replace(/-/g, "_")}`;
+    await this.withSavepoint(savepoint, async () => {
+      const primary = await this.db.query<{ id: string }>(
+        `SELECT id
+         FROM works
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+         LIMIT 1`,
+        [primaryId, this.libraryId],
+      );
+      if (primary.length === 0) throw new Error("主文献不存在或已删除");
+
       for (const duplicateId of duplicates) {
         const exists = await this.db.query<{ id: string }>(
           `SELECT id
@@ -380,16 +391,12 @@ export class WorksRepo {
           if (owner[0] && owner[0].library_id !== this.libraryId) {
             throw new Error(`Work ${duplicateId} is outside library ${this.libraryId}`);
           }
-          continue;
+          throw new Error(`Duplicate work ${duplicateId} is missing or removed`);
         }
         movedAttachments += await this.mergeOneDuplicate(primaryId, duplicateId, now);
         merged++;
       }
-      await this.db.exec("COMMIT");
-    } catch (e) {
-      await this.db.exec("ROLLBACK");
-      throw e;
-    }
+    });
 
     return { primaryId, merged, movedAttachments };
   }
@@ -467,6 +474,7 @@ export class WorksRepo {
     duplicateId: string,
     now: number,
   ): Promise<number> {
+    await this.transferUniqueDoi(primaryId, duplicateId, now);
     await this.backfillPrimaryWork(primaryId, duplicateId, now);
     await this.mergeAuthorsIfPrimaryEmpty(primaryId, duplicateId);
 
@@ -489,55 +497,79 @@ export class WorksRepo {
         [primaryId, attachment.sha256, attachment.kind],
       );
       if (existing[0]) {
-        await this.db.run(
-          `UPDATE annotations SET attachment_id = ?, work_id = ?, updated_at = ?
-           WHERE attachment_id = ?`,
-          [existing[0].id, primaryId, now, attachment.id],
-        );
-        await this.db.run(`UPDATE attachments SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
-          now,
-          now,
-          attachment.id,
-        ]);
+        await this.mergeDuplicateAttachment(existing[0].id, attachment.id, primaryId, now);
       } else {
-        await this.db.run(`UPDATE attachments SET work_id = ?, updated_at = ? WHERE id = ?`, [
-          primaryId,
-          now,
-          attachment.id,
-        ]);
-        await this.db.run(
+        const moved = await this.db.run(
+          `UPDATE attachments SET work_id = ?, updated_at = ? WHERE id = ?`,
+          [primaryId, now, attachment.id],
+        );
+        this.assertChanged(moved, `Attachment ${attachment.id} could not be merged`);
+        const annotationCount = await this.countRows(
+          `SELECT COUNT(*) AS n FROM annotations WHERE attachment_id = ?`,
+          [attachment.id],
+        );
+        const movedAnnotations = await this.db.run(
           `UPDATE annotations SET work_id = ?, updated_at = ? WHERE attachment_id = ?`,
           [primaryId, now, attachment.id],
+        );
+        this.assertChangedExactly(
+          movedAnnotations,
+          annotationCount,
+          `Annotations for attachment ${attachment.id} could not be merged`,
         );
         movedAttachments++;
       }
     }
 
-    await this.mergeCollection(primaryId, duplicateId);
+    await this.mergeCollections(primaryId, duplicateId);
     await this.moveTags(primaryId, duplicateId);
     await this.moveCitations(primaryId, duplicateId);
     await this.moveGraphCache(primaryId, duplicateId);
     await this.moveCanvasReferences(primaryId, duplicateId, now);
 
-    for (const table of ["annotations", "flashcards", "snippets"]) {
-      await this.db.run(`UPDATE ${table} SET work_id = ?, updated_at = ? WHERE work_id = ?`, [
-        primaryId,
-        now,
-        duplicateId,
-      ]);
+    // Annotations move with their attachment above. Keeping annotations that
+    // belong to already-retired attachments on the duplicate preserves a
+    // coherent attachment/work pair and avoids manufacturing a cross-work
+    // annotation link.
+    for (const table of ["flashcards", "snippets"]) {
+      const expected = await this.countRows(
+        `SELECT COUNT(*) AS n FROM ${table} WHERE work_id = ?`,
+        [duplicateId],
+      );
+      const changed = await this.db.run(
+        `UPDATE ${table} SET work_id = ?, updated_at = ? WHERE work_id = ?`,
+        [primaryId, now, duplicateId],
+      );
+      this.assertChangedExactly(changed, expected, `${table} could not be merged`);
     }
     for (const table of ["sentinel_tasks", "ai_jobs"]) {
-      await this.db.run(
+      const expected = await this.countRows(
+        `SELECT COUNT(*) AS n FROM ${table} WHERE work_id = ? AND library_id = ?`,
+        [duplicateId, this.libraryId],
+      );
+      const changed = await this.db.run(
         `UPDATE ${table}
          SET work_id = ?, updated_at = ?
          WHERE work_id = ? AND library_id = ?`,
         [primaryId, now, duplicateId, this.libraryId],
       );
+      this.assertChangedExactly(changed, expected, `${table} could not be merged`);
     }
-    await this.db.run(
+    const derivedArtifactCount = await this.countRows(
+      `SELECT COUNT(*) AS n
+       FROM derived_artifacts
+       WHERE library_id = ? AND source_table = 'works' AND source_id = ?`,
+      [this.libraryId, duplicateId],
+    );
+    const movedDerivedArtifacts = await this.db.run(
       `UPDATE derived_artifacts SET source_id = ?, updated_at = ?
        WHERE library_id = ? AND source_table = 'works' AND source_id = ?`,
       [primaryId, now, this.libraryId, duplicateId],
+    );
+    this.assertChangedExactly(
+      movedDerivedArtifacts,
+      derivedArtifactCount,
+      "Work-derived artifacts could not be merged",
     );
     const changed = await this.db.run(
       `UPDATE works
@@ -548,6 +580,141 @@ export class WorksRepo {
     this.assertChanged(changed, `Work ${duplicateId} is outside library ${this.libraryId}`);
 
     return movedAttachments;
+  }
+
+  private async transferUniqueDoi(
+    primaryId: string,
+    duplicateId: string,
+    now: number,
+  ): Promise<void> {
+    const rows = await this.db.query<{ id: string; doi: string | null }>(
+      `SELECT id, doi
+       FROM works
+       WHERE library_id = ? AND id IN (?, ?)`,
+      [this.libraryId, primaryId, duplicateId],
+    );
+    const primaryDoi = rows.find((row) => row.id === primaryId)?.doi ?? null;
+    const duplicateDoi = rows.find((row) => row.id === duplicateId)?.doi ?? null;
+    if (primaryDoi || !duplicateDoi) return;
+
+    const cleared = await this.db.run(
+      `UPDATE works
+       SET doi = NULL, updated_at = ?
+       WHERE id = ? AND library_id = ? AND doi = ?`,
+      [now, duplicateId, this.libraryId, duplicateDoi],
+    );
+    this.assertChanged(cleared, `DOI could not be released from duplicate work ${duplicateId}`);
+    const transferred = await this.db.run(
+      `UPDATE works
+       SET doi = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND doi IS NULL`,
+      [duplicateDoi, now, primaryId, this.libraryId],
+    );
+    this.assertChanged(transferred, `DOI could not be transferred to primary work ${primaryId}`);
+  }
+
+  private async mergeDuplicateAttachment(
+    primaryAttachmentId: string,
+    duplicateAttachmentId: string,
+    primaryWorkId: string,
+    now: number,
+  ): Promise<void> {
+    const backfilled = await this.db.run(
+      `UPDATE attachments
+       SET original_filename = COALESCE(original_filename, (
+             SELECT original_filename FROM attachments WHERE id = ?
+           )),
+           source_url = COALESCE(source_url, (
+             SELECT source_url FROM attachments WHERE id = ?
+           )),
+           fetched_via = COALESCE(fetched_via, (
+             SELECT fetched_via FROM attachments WHERE id = ?
+           )),
+           page_count = COALESCE(page_count, (
+             SELECT page_count FROM attachments WHERE id = ?
+           )),
+           updated_at = ?
+       WHERE id = ?`,
+      [
+        duplicateAttachmentId,
+        duplicateAttachmentId,
+        duplicateAttachmentId,
+        duplicateAttachmentId,
+        now,
+        primaryAttachmentId,
+      ],
+    );
+    this.assertChanged(
+      backfilled,
+      `Primary attachment ${primaryAttachmentId} could not be updated`,
+    );
+    const annotationCount = await this.countRows(
+      `SELECT COUNT(*) AS n FROM annotations WHERE attachment_id = ?`,
+      [duplicateAttachmentId],
+    );
+    const movedAnnotations = await this.db.run(
+      `UPDATE annotations SET attachment_id = ?, work_id = ?, updated_at = ?
+       WHERE attachment_id = ?`,
+      [primaryAttachmentId, primaryWorkId, now, duplicateAttachmentId],
+    );
+    this.assertChangedExactly(
+      movedAnnotations,
+      annotationCount,
+      `Annotations for attachment ${duplicateAttachmentId} could not be merged`,
+    );
+    const canvasExcerptCount = await this.countRows(
+      `SELECT COUNT(*) AS n
+       FROM canvas_nodes
+       WHERE type = 'excerpt'
+         AND json_valid(data_json)
+         AND json_extract(data_json, '$.attachmentId') = ?
+         AND EXISTS (
+           SELECT 1
+           FROM canvas_workspaces
+           WHERE id = canvas_nodes.workspace_id AND library_id = ?
+         )`,
+      [duplicateAttachmentId, this.libraryId],
+    );
+    const movedCanvasExcerpts = await this.db.run(
+      `UPDATE canvas_nodes
+       SET data_json = json_set(data_json, '$.attachmentId', ?), updated_at = ?
+       WHERE type = 'excerpt'
+         AND json_valid(data_json)
+         AND json_extract(data_json, '$.attachmentId') = ?
+         AND EXISTS (
+           SELECT 1
+           FROM canvas_workspaces
+           WHERE id = canvas_nodes.workspace_id AND library_id = ?
+         )`,
+      [primaryAttachmentId, now, duplicateAttachmentId, this.libraryId],
+    );
+    this.assertChangedExactly(
+      movedCanvasExcerpts,
+      canvasExcerptCount,
+      `Canvas excerpts for attachment ${duplicateAttachmentId} could not be merged`,
+    );
+    const derivedArtifactCount = await this.countRows(
+      `SELECT COUNT(*) AS n
+       FROM derived_artifacts
+       WHERE library_id = ? AND source_table = 'attachments' AND source_id = ?`,
+      [this.libraryId, duplicateAttachmentId],
+    );
+    const movedDerivedArtifacts = await this.db.run(
+      `UPDATE derived_artifacts
+       SET source_id = ?, updated_at = ?
+       WHERE library_id = ? AND source_table = 'attachments' AND source_id = ?`,
+      [primaryAttachmentId, now, this.libraryId, duplicateAttachmentId],
+    );
+    this.assertChangedExactly(
+      movedDerivedArtifacts,
+      derivedArtifactCount,
+      `Derived artifacts for attachment ${duplicateAttachmentId} could not be merged`,
+    );
+    const retired = await this.db.run(
+      `UPDATE attachments SET deleted_at = ?, updated_at = ? WHERE id = ?`,
+      [now, now, duplicateAttachmentId],
+    );
+    this.assertChanged(retired, `Attachment ${duplicateAttachmentId} could not be merged`);
   }
 
   private async backfillPrimaryWork(
@@ -597,7 +764,7 @@ export class WorksRepo {
           SELECT ${column} FROM works WHERE id = ? AND library_id = ?
         ))`,
     );
-    await this.db.run(
+    const changed = await this.db.run(
       `UPDATE works SET ${sets.join(", ")},
          starred = CASE WHEN (
            SELECT starred FROM works WHERE id = ? AND library_id = ?
@@ -613,6 +780,7 @@ export class WorksRepo {
         this.libraryId,
       ],
     );
+    this.assertChanged(changed, `Primary work ${primaryId} could not be updated`);
   }
 
   private async mergeAuthorsIfPrimaryEmpty(primaryId: string, duplicateId: string): Promise<void> {
@@ -621,34 +789,100 @@ export class WorksRepo {
       [primaryId],
     );
     if ((rows[0]?.n ?? 0) > 0) return;
-    await this.db.run(`UPDATE work_authors SET work_id = ? WHERE work_id = ?`, [
+    const expected = await this.countRows(
+      `SELECT COUNT(*) AS n FROM work_authors WHERE work_id = ?`,
+      [duplicateId],
+    );
+    const changed = await this.db.run(`UPDATE work_authors SET work_id = ? WHERE work_id = ?`, [
       primaryId,
       duplicateId,
     ]);
+    this.assertChangedExactly(changed, expected, "Work authors could not be merged");
   }
 
-  private async mergeCollection(primaryId: string, duplicateId: string): Promise<void> {
-    const primaryRows = await this.db.query<{ collection_id: string }>(
-      `SELECT collection_id FROM collection_items WHERE work_id = ? LIMIT 1`,
-      [primaryId],
+  private async mergeCollections(primaryId: string, duplicateId: string): Promise<void> {
+    // Backups and older databases can contain more than one folder membership
+    // even though today's Library UI presents a single-folder move. Preserve
+    // every valid membership during deduplication instead of silently dropping
+    // all but one. A later explicit folder move can normalize the union.
+    const memberships = await this.db.query<{ collection_id: string }>(
+      `SELECT ci.collection_id
+       FROM collection_items ci
+       JOIN collections c
+         ON c.id = ci.collection_id
+        AND c.library_id = ?
+        AND c.deleted_at IS NULL
+       WHERE ci.work_id = ?`,
+      [this.libraryId, duplicateId],
     );
-    if (!primaryRows[0]) {
-      await this.db.run(
-        `INSERT OR IGNORE INTO collection_items (collection_id, work_id)
-         SELECT collection_id, ? FROM collection_items WHERE work_id = ? LIMIT 1`,
-        [primaryId, duplicateId],
+    await this.db.run(
+      `INSERT OR IGNORE INTO collection_items (collection_id, work_id)
+       SELECT ci.collection_id, ?
+       FROM collection_items ci
+       JOIN collections c
+         ON c.id = ci.collection_id
+        AND c.library_id = ?
+        AND c.deleted_at IS NULL
+       WHERE ci.work_id = ?`,
+      [primaryId, this.libraryId, duplicateId],
+    );
+    if (memberships.length > 0) {
+      const placeholders = memberships.map(() => "?").join(",");
+      const preserved = await this.countRows(
+        `SELECT COUNT(*) AS n
+         FROM collection_items
+         WHERE work_id = ? AND collection_id IN (${placeholders})`,
+        [primaryId, ...memberships.map((row) => row.collection_id)],
       );
+      if (preserved !== memberships.length) {
+        throw new Error("Collection memberships could not be merged");
+      }
     }
     await this.db.run(`DELETE FROM collection_items WHERE work_id = ?`, [duplicateId]);
+    const residual = await this.countRows(
+      `SELECT COUNT(*) AS n FROM collection_items WHERE work_id = ?`,
+      [duplicateId],
+    );
+    if (residual !== 0) throw new Error("Duplicate collection memberships could not be retired");
   }
 
   private async moveTags(primaryId: string, duplicateId: string): Promise<void> {
+    const tags = await this.db.query<{ tag_id: string }>(
+      `SELECT wt.tag_id
+       FROM work_tags wt
+       JOIN tags t
+         ON t.id = wt.tag_id
+        AND t.library_id = ?
+        AND t.deleted_at IS NULL
+       WHERE wt.work_id = ?`,
+      [this.libraryId, duplicateId],
+    );
     await this.db.run(
       `INSERT OR IGNORE INTO work_tags (work_id, tag_id)
-       SELECT ?, tag_id FROM work_tags WHERE work_id = ?`,
-      [primaryId, duplicateId],
+       SELECT ?, wt.tag_id
+       FROM work_tags wt
+       JOIN tags t
+         ON t.id = wt.tag_id
+        AND t.library_id = ?
+        AND t.deleted_at IS NULL
+       WHERE wt.work_id = ?`,
+      [primaryId, this.libraryId, duplicateId],
     );
+    if (tags.length > 0) {
+      const placeholders = tags.map(() => "?").join(",");
+      const preserved = await this.countRows(
+        `SELECT COUNT(*) AS n
+         FROM work_tags
+         WHERE work_id = ? AND tag_id IN (${placeholders})`,
+        [primaryId, ...tags.map((row) => row.tag_id)],
+      );
+      if (preserved !== tags.length) throw new Error("Work tags could not be merged");
+    }
     await this.db.run(`DELETE FROM work_tags WHERE work_id = ?`, [duplicateId]);
+    const residual = await this.countRows(`SELECT COUNT(*) AS n FROM work_tags WHERE work_id = ?`, [
+      duplicateId,
+    ]);
+    if (residual !== 0) throw new Error("Duplicate work tags could not be retired");
   }
 
   private async moveCitations(primaryId: string, duplicateId: string): Promise<void> {
@@ -677,11 +911,25 @@ export class WorksRepo {
          VALUES (?, ?, ?)`,
         [citing, cited, row.source],
       );
+      const preserved = await this.countRows(
+        `SELECT COUNT(*) AS n
+         FROM citations
+         WHERE citing_work_id = ? AND cited_work_id = ?`,
+        [citing, cited],
+      );
+      if (preserved !== 1) throw new Error("Citation relationships could not be merged");
     }
     await this.db.run(`DELETE FROM citations WHERE citing_work_id = ? OR cited_work_id = ?`, [
       duplicateId,
       duplicateId,
     ]);
+    const residual = await this.countRows(
+      `SELECT COUNT(*) AS n
+       FROM citations
+       WHERE citing_work_id = ? OR cited_work_id = ?`,
+      [duplicateId, duplicateId],
+    );
+    if (residual !== 0) throw new Error("Duplicate citations could not be retired");
   }
 
   private async moveGraphCache(primaryId: string, duplicateId: string): Promise<void> {
@@ -689,13 +937,20 @@ export class WorksRepo {
       `SELECT work_id FROM graph_cache WHERE work_id = ?`,
       [primaryId],
     );
+    const duplicateRows = await this.db.query<{ work_id: string }>(
+      `SELECT work_id FROM graph_cache WHERE work_id = ?`,
+      [duplicateId],
+    );
+    if (!duplicateRows[0]) return;
     if (primaryRows[0]) {
-      await this.db.run(`DELETE FROM graph_cache WHERE work_id = ?`, [duplicateId]);
+      const changed = await this.db.run(`DELETE FROM graph_cache WHERE work_id = ?`, [duplicateId]);
+      this.assertChangedExactly(changed, 1, "Duplicate graph cache could not be retired");
     } else {
-      await this.db.run(`UPDATE graph_cache SET work_id = ? WHERE work_id = ?`, [
+      const changed = await this.db.run(`UPDATE graph_cache SET work_id = ? WHERE work_id = ?`, [
         primaryId,
         duplicateId,
       ]);
+      this.assertChangedExactly(changed, 1, "Graph cache could not be merged");
     }
   }
 
@@ -708,7 +963,18 @@ export class WorksRepo {
     // integrity, while paper/excerpt payloads use data.workId to open Reader.
     // These statements run inside mergeInto's transaction, so a later merge
     // failure rolls the canvas changes back with every other moved reference.
-    await this.db.run(
+    const workReferenceCount = await this.countRows(
+      `SELECT COUNT(*) AS n
+       FROM canvas_nodes
+       WHERE work_id = ?
+         AND EXISTS (
+           SELECT 1
+           FROM canvas_workspaces
+           WHERE id = canvas_nodes.workspace_id AND library_id = ?
+         )`,
+      [duplicateId, this.libraryId],
+    );
+    const movedWorkReferences = await this.db.run(
       `UPDATE canvas_nodes
        SET work_id = ?, updated_at = ?
        WHERE work_id = ?
@@ -719,7 +985,25 @@ export class WorksRepo {
          )`,
       [primaryId, now, duplicateId, this.libraryId],
     );
-    await this.db.run(
+    this.assertChangedExactly(
+      movedWorkReferences,
+      workReferenceCount,
+      "Canvas work references could not be merged",
+    );
+    const payloadReferenceCount = await this.countRows(
+      `SELECT COUNT(*) AS n
+       FROM canvas_nodes
+       WHERE type IN ('paper', 'excerpt')
+         AND json_valid(data_json)
+         AND json_extract(data_json, '$.workId') = ?
+         AND EXISTS (
+           SELECT 1
+           FROM canvas_workspaces
+           WHERE id = canvas_nodes.workspace_id AND library_id = ?
+         )`,
+      [duplicateId, this.libraryId],
+    );
+    const movedPayloadReferences = await this.db.run(
       `UPDATE canvas_nodes
        SET data_json = json_set(data_json, '$.workId', ?), updated_at = ?
        WHERE type IN ('paper', 'excerpt')
@@ -731,6 +1015,11 @@ export class WorksRepo {
            WHERE id = canvas_nodes.workspace_id AND library_id = ?
          )`,
       [primaryId, now, duplicateId, this.libraryId],
+    );
+    this.assertChangedExactly(
+      movedPayloadReferences,
+      payloadReferenceCount,
+      "Canvas payload references could not be merged",
     );
   }
 

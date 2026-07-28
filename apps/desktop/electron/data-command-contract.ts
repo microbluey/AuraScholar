@@ -1,3 +1,4 @@
+import type { MergeWorksResult } from "@aurascholar/db/repos/works";
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
 
@@ -9,6 +10,14 @@ export interface PurgeDeletedWorksCommandInput {
 export interface PurgeDeletedWorksCommandResult {
   purged: number;
 }
+
+export interface MergeWorksCommandInput {
+  libraryId: string;
+  primaryId: string;
+  duplicateIds: string[];
+}
+
+export type MergeWorksCommandResult = MergeWorksResult;
 
 export interface ImportLibraryBackupCommandInput {
   backupText: string;
@@ -22,6 +31,10 @@ export interface ApplyRemoteSyncSegmentCommandInput {
 }
 
 export interface DataCommandMap {
+  "library.mergeWorks": {
+    input: MergeWorksCommandInput;
+    output: MergeWorksCommandResult;
+  };
   "library.purgeDeletedWorks": {
     input: PurgeDeletedWorksCommandInput;
     output: PurgeDeletedWorksCommandResult;

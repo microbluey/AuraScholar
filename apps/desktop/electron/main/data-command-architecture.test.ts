@@ -7,10 +7,12 @@ function source(path: string): string {
 }
 
 describe("main-process data command architecture", () => {
-  it("keeps permanent Library erasure behind the typed main-process command", () => {
+  it("keeps destructive Library mutations behind typed main-process commands", () => {
     const libraryPage = source("src/pages/LibraryPage.tsx");
 
+    expect(libraryPage).toContain('data.command("library.mergeWorks"');
     expect(libraryPage).toContain('data.command("library.purgeDeletedWorks"');
+    expect(libraryPage).not.toContain(".mergeInto(");
     expect(libraryPage).not.toContain(".purgeDeleted(");
     expect(libraryPage).not.toContain(".purgeDeletedMany(");
   });
@@ -33,6 +35,7 @@ describe("main-process data command architecture", () => {
     const dispatcher = source("electron/main/data-commands.ts");
 
     expect(contract).toContain('"library.importBackup"');
+    expect(contract).toContain('"library.mergeWorks"');
     expect(contract).toContain('"library.purgeDeletedWorks"');
     expect(contract).toContain('"sync.applyRemoteSegment"');
     expect(contract).not.toMatch(/\b(sql|statements)\s*[?:]/i);
@@ -62,11 +65,13 @@ describe("main-process data command architecture", () => {
 
     expect(contractNames).toEqual([
       "library.importBackup",
+      "library.mergeWorks",
       "library.purgeDeletedWorks",
       "sync.applyRemoteSegment",
     ]);
     expect(dispatchedNames).toEqual(contractNames);
     expect(dispatcher).toContain('value.name !== "library.importBackup"');
+    expect(dispatcher).toContain('value.name !== "library.mergeWorks"');
     expect(dispatcher).toContain('value.name !== "sync.applyRemoteSegment"');
     expect(main.match(/registerDataCommandHandlers\(\);/g)).toHaveLength(1);
   });
