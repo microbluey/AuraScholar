@@ -27,28 +27,6 @@ export interface CanvasNodeActivationIntent {
   tool: CanvasTool;
 }
 
-export interface CanvasEdgePrimaryClick {
-  clientX: number;
-  clientY: number;
-  edgeId: string;
-  timeStamp: number;
-}
-
-export function isRepeatedCanvasEdgePrimaryClick(
-  previous: CanvasEdgePrimaryClick | null,
-  current: CanvasEdgePrimaryClick,
-  maxDelayMs = 450,
-  maxDistancePx = 8,
-): boolean {
-  if (!previous || previous.edgeId !== current.edgeId) return false;
-  const delay = current.timeStamp - previous.timeStamp;
-  if (delay < 0 || delay > maxDelayMs) return false;
-  return (
-    Math.hypot(current.clientX - previous.clientX, current.clientY - previous.clientY) <=
-    maxDistancePx
-  );
-}
-
 export function shouldActivateCanvasNode(intent: CanvasNodeActivationIntent): boolean {
   return (
     intent.tool === "select" &&

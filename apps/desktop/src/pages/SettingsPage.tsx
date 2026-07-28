@@ -26,9 +26,14 @@ import {
 import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { downloadBlob } from "../download";
+import {
+  readBackupSafetySnapshot,
+  saveBackupSafetySnapshot,
+  type BackupSafetySnapshot,
+} from "../features/settings/backup-safety";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { describeSafeError } from "../services/sensitive-text";
-import { isStorageRecord, readLocalStorageJson, tryWriteLocalStorageJson } from "../storage";
+import { LIBRARY_BACKUP_VERSION } from "../shared/library-backup";
 
 const AI_SETTINGS_UPDATED_EVENT = "aurascholar:ai-settings-updated";
 
@@ -79,13 +84,6 @@ interface SyncSettingsSnapshot {
   baseUrl: string;
   username: string;
   password: string;
-}
-
-interface BackupSafetySnapshot {
-  exportedAt: string;
-  filename: string;
-  size: number;
-  version: 1;
 }
 
 interface BackupSafetyDisplay {
@@ -143,11 +141,10 @@ const PREVIEW_BACKUP_SAFETY: BackupSafetySnapshot = {
   exportedAt: new Date(Date.UTC(2026, 6, 1, 10, 30, 0)).toISOString(),
   filename: "aurascholar-backup-preview.json",
   size: 388_240,
-  version: 1,
+  version: LIBRARY_BACKUP_VERSION,
 };
 
 const MIN_SETTINGS_BUSY_MS = 500;
-const BACKUP_SAFETY_KEY = "library-backup-safety";
 const BACKUP_FRESH_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -259,20 +256,6 @@ function formatBackupIgnoredTables(ignoredTables: string[]): string {
   return `${names.length} 个不支持或运行态数据表（${listed}${names.length > 3 ? " 等" : ""}）`;
 }
 
-function readBackupSafetySnapshot(): BackupSafetySnapshot | null {
-  const parsed = readLocalStorageJson<unknown>(BACKUP_SAFETY_KEY, null);
-  if (!isStorageRecord(parsed)) return null;
-  const exportedAt = typeof parsed.exportedAt === "string" ? parsed.exportedAt : "";
-  const filename = typeof parsed.filename === "string" ? parsed.filename : "";
-  const size = typeof parsed.size === "number" ? parsed.size : 0;
-  if (!exportedAt || !filename || !Number.isFinite(size) || size <= 0) return null;
-  return { exportedAt, filename, size, version: 1 };
-}
-
-function saveBackupSafetySnapshot(snapshot: BackupSafetySnapshot): boolean {
-  return tryWriteLocalStorageJson(BACKUP_SAFETY_KEY, snapshot);
-}
-
 function formatBackupTimestamp(value: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "时间不可读";
@@ -288,7 +271,7 @@ function describeBackupSafety(snapshot: BackupSafetySnapshot | null): BackupSafe
   if (!snapshot) {
     return {
       detail: "尚未记录本机导出",
-      secondaryDetail: "导出 JSON 后会自动更新",
+      secondaryDetail: `导出 JSON 后会自动更新 · 格式 v${LIBRARY_BACKUP_VERSION}`,
       tone: "warning",
       value: "建议备份",
     };
@@ -1137,7 +1120,7 @@ export function SettingsPage() {
         exportedAt: exportedAt.toISOString(),
         filename,
         size: blob.size,
-        version: 1,
+        version: LIBRARY_BACKUP_VERSION,
       };
       const safetySaved = saveBackupSafetySnapshot(snapshot);
       setBackupSafety(snapshot);
@@ -1210,7 +1193,7 @@ export function SettingsPage() {
           exportedAt: preview.exportedAt ?? new Date().toISOString(),
           filename: file.name,
           size: file.size,
-          version: 1,
+          version: preview.version,
         });
         setSyncStatus(
           `预览已模拟导入 ${preview.totalRows} 条备份记录；真实合并、去重和 PDF 重挂载会在桌面应用中完成。`,
@@ -1675,7 +1658,9 @@ export function SettingsPage() {
                     <span>备份文件</span>
                     <strong>{backupSafety ? formatBytes(backupSafety.size) : "待导出"}</strong>
                     <small>
-                      {backupSafety ? backupSafety.filename : backupSafetyDisplay.secondaryDetail}
+                      {backupSafety
+                        ? `${backupSafety.filename} · 格式 v${backupSafety.version}`
+                        : backupSafetyDisplay.secondaryDetail}
                     </small>
                   </div>
                   <div>

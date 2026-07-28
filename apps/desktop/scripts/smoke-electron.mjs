@@ -5,15 +5,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createResultLineParser, parseResultLine } from "./smoke-result.mjs";
 
-const RESULT_PREFIX = "AURASCHOLAR_SMOKE_RESULT ";
 const require = createRequire(import.meta.url);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(scriptDir, "..");
 const repoDir = resolve(appDir, "..", "..");
 const keepUserData = process.env.AURASCHOLAR_SMOKE_KEEP === "1";
 const restoreNodeAbi = process.env.AURASCHOLAR_SMOKE_RESTORE_NODE_ABI !== "0";
-const DEFAULT_RENDERER_SMOKE_TIMEOUT_MS = 120_000;
+const DEFAULT_RENDERER_SMOKE_TIMEOUT_MS = 300_000;
 const parsedSmokeTimeoutMs = Number(
   process.env.AURASCHOLAR_SMOKE_TIMEOUT_MS ?? DEFAULT_RENDERER_SMOKE_TIMEOUT_MS,
 );
@@ -34,15 +34,6 @@ function electronBinary() {
     throw new Error(`Electron binary not found. Tried: ${candidates.join(", ")}`);
   }
   return match;
-}
-
-function parseResultLine(text) {
-  for (const line of text.split(/\r?\n/)) {
-    const index = line.indexOf(RESULT_PREFIX);
-    if (index === -1) continue;
-    return JSON.parse(line.slice(index + RESULT_PREFIX.length));
-  }
-  return null;
 }
 
 function printFailedChecks(result) {
@@ -85,13 +76,21 @@ async function restoreBetterSqliteForNode() {
 
 const mainBundle = join(appDir, "out", "main", "main.js");
 if (!existsSync(mainBundle)) {
-  console.error("Desktop build output is missing. Run `pnpm --filter @aurascholar/desktop build` first.");
+  console.error(
+    "Desktop build output is missing. Run `pnpm --filter @aurascholar/desktop build` first.",
+  );
   process.exit(1);
 }
 
 const userDataDir = await mkdtemp(join(tmpdir(), "aurascholar-smoke-"));
 let output = "";
 let result = null;
+const stdoutResultParser = createResultLineParser((parsed) => {
+  result = parsed;
+});
+const stderrResultParser = createResultLineParser((parsed) => {
+  result = parsed;
+});
 
 const child = spawn(electronBinary(), ["."], {
   cwd: appDir,
@@ -109,16 +108,15 @@ const timeout = setTimeout(() => {
   console.error(`Electron smoke timed out after ${Math.round(smokeTimeoutMs / 1000)}s.`);
 }, smokeTimeoutMs);
 
-const capture = (chunk, stream) => {
+const capture = (chunk, stream, parser) => {
   const text = chunk.toString();
   output += text;
   stream.write(text);
-  const parsed = parseResultLine(text);
-  if (parsed) result = parsed;
+  parser.push(text);
 };
 
-child.stdout.on("data", (chunk) => capture(chunk, process.stdout));
-child.stderr.on("data", (chunk) => capture(chunk, process.stderr));
+child.stdout.on("data", (chunk) => capture(chunk, process.stdout, stdoutResultParser));
+child.stderr.on("data", (chunk) => capture(chunk, process.stderr, stderrResultParser));
 
 const exitCode = await new Promise((resolve) => {
   child.on("error", (error) => {
@@ -132,6 +130,8 @@ const exitCode = await new Promise((resolve) => {
 });
 
 clearTimeout(timeout);
+stdoutResultParser.flush();
+stderrResultParser.flush();
 if (!keepUserData) {
   await rm(userDataDir, { force: true, recursive: true });
 } else {

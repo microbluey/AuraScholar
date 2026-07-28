@@ -11,7 +11,7 @@ import {
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Graph } from "@phosphor-icons/react";
 import { ThemeToggle } from "@aurascholar/ui";
-import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { AppErrorBoundary, useRouteBoundaryShell } from "./components/AppErrorBoundary";
 import { useModalFocusTrap } from "./components/useModalFocusTrap";
 import { CANVAS_COMMAND_PALETTE_REQUEST_EVENT } from "./features/canvas/canvas-command";
 import { isImeComposing } from "./keyboard";
@@ -21,8 +21,7 @@ import { isDesktopRuntime } from "./services/aura-platform";
 import { cancelExitBarriers, runExitBarriers } from "./services/exit-barriers";
 import { describeSafeError } from "./services/sensitive-text";
 
-// 阅读器不在导航中 — 它是文献库里点击一篇文献后进入的页面。
-// /graph 路由保留供深链使用。
+// 阅读器从文献库进入；/graph 仅保留给深链。
 const NAV = [
   { to: "/library", icon: "library", label: "文献库" },
   { to: "/discovery", icon: "search", label: "学术检索" },
@@ -356,8 +355,7 @@ export function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const previousPathRef = useRef(location.pathname);
-  // The reader and spatial canvas need edge-to-edge layout; other pages keep comfortable padding.
-  const flush = location.pathname.startsWith("/reader") || location.pathname.startsWith("/canvas");
+  const { boundaryProps: routeBoundaryProps, flush } = useRouteBoundaryShell(location.pathname);
   const showLibraryMeta = location.pathname.startsWith("/library");
   const currentLabel = activeRouteLabel(location.pathname);
   const currentRuntime = runtimeLabel();
@@ -435,8 +433,7 @@ export function App() {
     setCommandOpen(true);
   }, [commandOpen, rememberCommandReturnFocus, restoreCommandReturnFocus]);
 
-  // Catch-up poll on startup, then hourly while the app is open. These services
-  // pull network/connectors code, so load them after the shell is interactive.
+  // Start deferred network-backed services after the shell becomes interactive.
   useEffect(() => {
     if (!isDesktopRuntime()) return;
     void import("./services/sentinel")
@@ -481,8 +478,7 @@ export function App() {
 
   useEffect(() => {
     const onRuntimeError = (event: ErrorEvent) => {
-      // Chromium reports these layout diagnostics as global errors even when the
-      // observer successfully delivers the next frame. They are not app crashes.
+      // ResizeObserver loop diagnostics recover next frame and are not app crashes.
       if (isBenignResizeObserverDiagnostic(event)) {
         event.preventDefault();
         return;
@@ -913,6 +909,7 @@ export function App() {
           <button
             type="button"
             className="app-command-trigger"
+            data-app-action="open-command-palette"
             onClick={(event) => openCommandPalette(event.currentTarget)}
           >
             <span>快速打开</span>
@@ -989,7 +986,7 @@ export function App() {
           tabIndex={-1}
         >
           <AppErrorBoundary
-            level="route"
+            {...routeBoundaryProps}
             resetKey={`${location.pathname}${location.search}`}
             scope={currentLabel}
           >
@@ -1804,6 +1801,7 @@ function LibrarySidebarMeta({
           <button
             type="button"
             className="app-sidebar-library-root app-sidebar-library-root--all"
+            data-library-view="all"
             aria-current={allWorksActive ? "page" : undefined}
             onClick={() => onSelect({ filter: "all", collectionId: null, tag: null })}
             onKeyDown={(event) => {
@@ -1828,6 +1826,7 @@ function LibrarySidebarMeta({
             <button
               type="button"
               aria-label="新建目录"
+              data-library-action="create-collection"
               title="新建目录"
               onClick={() => onCreateCollection()}
             >
@@ -1871,6 +1870,7 @@ function LibrarySidebarMeta({
             ? "app-sidebar-library-root--active"
             : ""
         }`}
+        data-library-view="trash"
         aria-current={
           sameLibraryView(activeView, { filter: "trash", collectionId: null, tag: null })
             ? "page"
