@@ -94,6 +94,282 @@ describe("main-process data commands", () => {
     backupText = await exportLibraryBackupJsonFromDatabase(source.database, source.libraryId);
   });
 
+  it("rejects malformed merge input before acquiring a database lease", async () => {
+    let transactionCalls = 0;
+    const dependencies: DataCommandDependencies = {
+      async transaction() {
+        transactionCalls += 1;
+        throw new Error("must not run");
+      },
+    };
+    const invalidInputs = [
+      { libraryId: "library", primaryId: "primary", duplicateIds: [] },
+      {
+        libraryId: "library",
+        primaryId: "primary",
+        duplicateIds: ["duplicate", "duplicate"],
+      },
+      { libraryId: "library", primaryId: "primary", duplicateIds: ["primary"] },
+      { libraryId: "library", primaryId: "primary", duplicateIds: new Array(1) },
+      {
+        libraryId: "library",
+        primaryId: "primary",
+        duplicateIds: Array.from({ length: 501 }, (_, index) => `duplicate-${index}`),
+      },
+    ];
+
+    for (const input of invalidInputs) {
+      await expect(
+        executeDataCommand({ name: "library.mergeWorks", input }, dependencies),
+      ).rejects.toThrow();
+    }
+    expect(transactionCalls).toBe(0);
+  });
+
+  it("merges active Library works through one main-process transaction", async () => {
+    const target = await createLibraryDatabase("merge-target-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const attachments = new AttachmentsRepo(target.database, target.libraryId);
+    const primary = await works.upsert({ title: "Merge primary", doi: "10.9/main-merge-primary" });
+    const duplicate = await works.upsert({
+      title: "Merge duplicate",
+      doi: "10.9/main-merge-duplicate",
+      abstract: "Metadata moved by the command",
+    });
+    const attachment = await attachments.create({
+      workId: duplicate.id,
+      sha256: "main-command-merge-pdf",
+      byteSize: 200,
+    });
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.mergeWorks",
+          input: {
+            libraryId: target.libraryId,
+            primaryId: primary.id,
+            duplicateIds: [duplicate.id],
+          },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).resolves.toEqual({
+      primaryId: primary.id,
+      merged: 1,
+      movedAttachments: 1,
+    });
+
+    await expect(works.get(primary.id)).resolves.toMatchObject({
+      id: primary.id,
+      abstract: "Metadata moved by the command",
+      deleted_at: null,
+    });
+    await expect(works.get(duplicate.id)).resolves.toMatchObject({
+      id: duplicate.id,
+      deleted_at: expect.any(Number),
+    });
+    await expect(attachments.forWork(primary.id)).resolves.toEqual([
+      expect.objectContaining({ id: attachment.id, work_id: primary.id }),
+    ]);
+  });
+
+  it("rejects stale, deleted, or foreign merge targets without changing any work", async () => {
+    const target = await createLibraryDatabase("merge-scope-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const primary = await works.upsert({ title: "Scoped primary" });
+    const deleted = await works.upsert({ title: "Deleted duplicate" });
+    await works.softDelete(deleted.id);
+    const now = Date.now();
+    await target.database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at, deleted_at)
+       VALUES ('foreign-library', 'Foreign', 'personal', ?, ?, NULL)`,
+      [now, now],
+    );
+    await target.database.run(
+      `INSERT INTO works
+         (id, library_id, title, type, reading_status, starred, created_at, updated_at, deleted_at)
+       VALUES ('foreign-merge-work', 'foreign-library', 'Foreign merge work',
+               'article', 'unread', 0, ?, ?, NULL)`,
+      [now, now],
+    );
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.mergeWorks",
+          input: {
+            libraryId: target.libraryId,
+            primaryId: primary.id,
+            duplicateIds: ["foreign-merge-work"],
+          },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every merge work must be active and belong to the active Library");
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.mergeWorks",
+          input: {
+            libraryId: target.libraryId,
+            primaryId: primary.id,
+            duplicateIds: [deleted.id],
+          },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every merge work must be active and belong to the active Library");
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.mergeWorks",
+          input: {
+            libraryId: "foreign-library",
+            primaryId: "foreign-merge-work",
+            duplicateIds: [primary.id],
+          },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
+
+    await expect(works.get(primary.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(works.get(deleted.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+    });
+    await expect(
+      target.database.query<{ deleted_at: number | null }>(
+        `SELECT deleted_at FROM works WHERE id = 'foreign-merge-work'`,
+      ),
+    ).resolves.toEqual([{ deleted_at: null }]);
+  });
+
+  it("rolls back a failed merge before allowing a queued unrelated write", async () => {
+    const target = await createLibraryDatabase("merge-rollback-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const attachments = new AttachmentsRepo(target.database, target.libraryId);
+    const primary = await works.upsert({ title: "Merge rollback primary" });
+    const first = await works.upsert({
+      title: "Merge rollback first",
+      abstract: "This backfill must roll back",
+    });
+    const failing = await works.upsert({ title: "Merge rollback failing" });
+    const firstAttachment = await attachments.create({
+      workId: first.id,
+      sha256: "merge-rollback-first-pdf",
+      byteSize: 201,
+    });
+    const firstRetired = deferred();
+    const releaseMerge = deferred();
+    const gatedDatabase: Database = {
+      query: target.database.query.bind(target.database),
+      queryScalar: target.database.queryScalar.bind(target.database),
+      exec: target.database.exec.bind(target.database),
+      async run(sql, params = []) {
+        const changes = await target.database.run(sql, params);
+        if (
+          sql.includes("UPDATE works") &&
+          sql.includes("SET deleted_at = ?, updated_at = ?") &&
+          params[2] === first.id
+        ) {
+          firstRetired.resolve();
+          await releaseMerge.promise;
+        }
+        return changes;
+      },
+    };
+    const coordinator = new DatabaseCoordinator(gatedDatabase);
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER fail_second_main_merge
+      BEFORE UPDATE OF deleted_at ON works
+      WHEN OLD.id = '${failing.id}' AND NEW.deleted_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(FAIL, 'injected main merge failure');
+      END
+    `);
+    const mergeResult = executeDataCommand(
+      {
+        name: "library.mergeWorks",
+        input: {
+          libraryId: target.libraryId,
+          primaryId: primary.id,
+          duplicateIds: [first.id, failing.id],
+        },
+      },
+      dependenciesFor(coordinator),
+    );
+    await firstRetired.promise;
+
+    const queuedWrite = coordinator.run(
+      `INSERT INTO settings (key, value_json, scope, updated_at)
+       VALUES ('uow.merge-concurrent-write', '"preserved"', 'local', ?)`,
+      [Date.now()],
+    );
+    releaseMerge.resolve();
+
+    await expect(mergeResult).rejects.toThrow("injected main merge failure");
+    await expect(queuedWrite).resolves.toBe(1);
+    await expect(works.get(primary.id)).resolves.toMatchObject({
+      abstract: null,
+      deleted_at: null,
+    });
+    await expect(works.get(first.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(works.get(failing.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(attachments.forWork(first.id)).resolves.toEqual([
+      expect.objectContaining({ id: firstAttachment.id, work_id: first.id }),
+    ]);
+    await expect(
+      target.database.query<{ key: string }>(
+        `SELECT key FROM settings WHERE key = 'uow.merge-concurrent-write'`,
+      ),
+    ).resolves.toEqual([{ key: "uow.merge-concurrent-write" }]);
+  });
+
+  it("rolls back when SQLite ignores a required attachment move", async () => {
+    const target = await createLibraryDatabase("merge-ignore-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const attachments = new AttachmentsRepo(target.database, target.libraryId);
+    const primary = await works.upsert({ title: "Ignored move primary" });
+    const duplicate = await works.upsert({ title: "Ignored move duplicate" });
+    const attachment = await attachments.create({
+      workId: duplicate.id,
+      sha256: "ignored-attachment-move",
+      byteSize: 202,
+    });
+    const coordinator = new DatabaseCoordinator(target.database);
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER ignore_main_merge_attachment_move
+      BEFORE UPDATE OF work_id ON attachments
+      WHEN OLD.id = '${attachment.id}' AND NEW.work_id = '${primary.id}'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.mergeWorks",
+          input: {
+            libraryId: target.libraryId,
+            primaryId: primary.id,
+            duplicateIds: [duplicate.id],
+          },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow(`Attachment ${attachment.id} could not be merged`);
+
+    await expect(works.get(primary.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(works.get(duplicate.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(attachments.forWork(duplicate.id)).resolves.toEqual([
+      expect.objectContaining({ id: attachment.id, work_id: duplicate.id }),
+    ]);
+  });
+
   it("rejects malformed permanent-deletion input before acquiring a database lease", async () => {
     let transactionCalls = 0;
     const dependencies: DataCommandDependencies = {
