@@ -96,6 +96,45 @@ describe("main-process data command architecture", () => {
     }
   });
 
+  it("keeps Library collection workflows inside the feature controller", () => {
+    const appShell = source("src/App.tsx");
+    const libraryPage = source("src/pages/LibraryPage.tsx");
+    const controller = source("src/features/library/useLibraryCollectionController.ts");
+    const collectionMutations = [
+      "createLibraryCollection",
+      "deleteLibraryCollection",
+      "moveLibraryCollection",
+      "renameLibraryCollection",
+      "restoreLibraryCollection",
+    ];
+    const collectionSmokeFlags = [
+      "__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_CREATE__",
+      "__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_DELETE__",
+      "__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RENAME__",
+      "__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RESTORE__",
+    ];
+
+    for (const mutation of collectionMutations) {
+      expect(libraryPage).not.toContain(mutation);
+      expect(controller).toContain(mutation);
+      expect(controller).toMatch(new RegExp(`\\b${mutation}\\s*\\(`));
+    }
+    for (const smokeFlag of collectionSmokeFlags) {
+      expect(libraryPage).not.toContain(smokeFlag);
+      expect(controller).toContain(smokeFlag);
+    }
+    expect(appShell).toContain("LIBRARY_COLLECTION_EVENTS");
+    for (const eventName of [
+      "aurascholar:create-collection",
+      "aurascholar:delete-collection",
+      "aurascholar:manage-collections",
+      "aurascholar:move-collection",
+      "aurascholar:rename-collection",
+    ]) {
+      expect(appShell).not.toContain(`"${eventName}"`);
+    }
+  });
+
   it("keeps durable data commands on a typed allowlist", () => {
     const contract = source("electron/data-command-contract.ts");
     const dispatcher = source("electron/main/data-commands.ts");

@@ -295,6 +295,8 @@ export const smokeSharedState = String.raw`        let initialWorkCount = null;
         let libraryCollectionCreateFailureDidNotPersist = false;
         let libraryCollectionCreateFailurePreserved = false;
         let libraryCollectionCreateFailureVisible = false;
+        let libraryCollectionMovePersisted = false;
+        let libraryCollectionMoveSuccessVisible = false;
         let libraryCollectionRenameFailureBusyVisible = false;
         let libraryCollectionRenameFailureDidNotPersist = false;
         let libraryCollectionRenameFailurePreserved = false;

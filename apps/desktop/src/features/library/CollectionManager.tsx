@@ -1,11 +1,7 @@
 import { useCallback, useId, useRef } from "react";
 import type { CollectionRow } from "@aurascholar/db";
 import { useModalFocusTrap } from "../../components/useModalFocusTrap";
-
-export interface CollectionManagerAction {
-  id: string;
-  kind: "create" | "delete" | "rename" | "restore";
-}
+import type { CollectionManagerAction } from "./library-collection-model";
 
 export interface CollectionManagerProps {
   collections: CollectionRow[];

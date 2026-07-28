@@ -260,6 +260,11 @@ export function buildLibraryCoreSmokeChecks(renderer: SmokeRendererResult): Smok
       detail: `visible=${renderer.libraryCollectionCreateFailureVisible}; busy=${renderer.libraryCollectionCreateFailureBusyVisible}; preserved=${renderer.libraryCollectionCreateFailurePreserved}; notPersisted=${renderer.libraryCollectionCreateFailureDidNotPersist}`,
     },
     {
+      name: "library-collection-hierarchy-move-feedback",
+      pass: renderer.libraryCollectionMoveSuccessVisible && renderer.libraryCollectionMovePersisted,
+      detail: `success=${renderer.libraryCollectionMoveSuccessVisible}; persisted=${renderer.libraryCollectionMovePersisted}`,
+    },
+    {
       name: "library-collection-rename-failure-preserves-draft",
       pass:
         renderer.libraryCollectionRenameFailureVisible &&

@@ -10,8 +10,8 @@
     "production": {
       "byExtension": {
         ".css": 16808,
-        ".ts": 31205,
-        ".tsx": 33139
+        ".ts": 31773,
+        ".tsx": 32793
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 221,
@@ -31,7 +31,7 @@
         "apps/desktop/electron/preload.ts": 225,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/shared.ts": 144,
-        "apps/desktop/src/App.tsx": 2053,
+        "apps/desktop/src/App.tsx": 2043,
         "apps/desktop/src/app.css": 12442,
         "apps/desktop/src/clipboard.ts": 56,
         "apps/desktop/src/components/AppErrorBoundary.tsx": 168,
@@ -85,10 +85,14 @@
         "apps/desktop/src/features/canvas/workspace-controls.css": 649,
         "apps/desktop/src/features/canvas/workspace-controls.ts": 74,
         "apps/desktop/src/features/canvas/workspace-load.ts": 117,
-        "apps/desktop/src/features/library/CollectionManager.tsx": 247,
+        "apps/desktop/src/features/library/CollectionManager.tsx": 243,
         "apps/desktop/src/features/library/LibraryActionIconButton.tsx": 56,
+        "apps/desktop/src/features/library/LibraryCollectionManagement.tsx": 66,
         "apps/desktop/src/features/library/TagManager.tsx": 166,
         "apps/desktop/src/features/library/TextPromptDialog.tsx": 189,
+        "apps/desktop/src/features/library/library-collection-events.ts": 36,
+        "apps/desktop/src/features/library/library-collection-model.ts": 78,
+        "apps/desktop/src/features/library/useLibraryCollectionController.ts": 454,
         "apps/desktop/src/features/library/useTagManager.ts": 313,
         "apps/desktop/src/features/reader/library-reader-session.ts": 178,
         "apps/desktop/src/features/settings/backup-safety.ts": 31,
@@ -98,7 +102,7 @@
         "apps/desktop/src/pages/FlashcardsPage.tsx": 864,
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1149,
-        "apps/desktop/src/pages/LibraryPage.tsx": 5106,
+        "apps/desktop/src/pages/LibraryPage.tsx": 4708,
         "apps/desktop/src/pages/ReaderPage.tsx": 2183,
         "apps/desktop/src/pages/SentinelPage.tsx": 1361,
         "apps/desktop/src/pages/SettingsPage.tsx": 2067,
@@ -239,16 +243,16 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 81152
+      "totalLines": 81374
     },
     "tests": {
       "byExtension": {
-        ".ts": 36790,
+        ".ts": 37013,
         ".tsx": 104
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 150,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 189,
         "apps/desktop/electron/main/data-commands.test.ts": 1210,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
         "apps/desktop/electron/main/legacy-transaction-debt.test.ts": 258,
@@ -261,7 +265,7 @@
         "apps/desktop/electron/main/smoke/checks/discovery.ts": 216,
         "apps/desktop/electron/main/smoke/checks/graph.ts": 29,
         "apps/desktop/electron/main/smoke/checks/homepage.ts": 84,
-        "apps/desktop/electron/main/smoke/checks/library-core.ts": 346,
+        "apps/desktop/electron/main/smoke/checks/library-core.ts": 351,
         "apps/desktop/electron/main/smoke/checks/library-navigation.ts": 39,
         "apps/desktop/electron/main/smoke/checks/library-utility.ts": 56,
         "apps/desktop/electron/main/smoke/checks/reader.ts": 250,
@@ -269,7 +273,7 @@
         "apps/desktop/electron/main/smoke/checks/settings.ts": 177,
         "apps/desktop/electron/main/smoke/checks/snippets.ts": 91,
         "apps/desktop/electron/main/smoke/checks/summarize.ts": 4,
-        "apps/desktop/electron/main/smoke/contracts.ts": 646,
+        "apps/desktop/electron/main/smoke/contracts.ts": 648,
         "apps/desktop/electron/main/smoke/fragments/canvas.ts": 672,
         "apps/desktop/electron/main/smoke/fragments/discovery-import.ts": 390,
         "apps/desktop/electron/main/smoke/fragments/discovery-results.ts": 246,
@@ -282,7 +286,7 @@
         "apps/desktop/electron/main/smoke/fragments/library-base.ts": 265,
         "apps/desktop/electron/main/smoke/fragments/library-bulk-operations.ts": 505,
         "apps/desktop/electron/main/smoke/fragments/library-bulk-trash.ts": 739,
-        "apps/desktop/electron/main/smoke/fragments/library-collections.ts": 460,
+        "apps/desktop/electron/main/smoke/fragments/library-collections.ts": 486,
         "apps/desktop/electron/main/smoke/fragments/library-command-palette.ts": 260,
         "apps/desktop/electron/main/smoke/fragments/library-import-metadata.ts": 480,
         "apps/desktop/electron/main/smoke/fragments/library-keyboard.ts": 108,
@@ -298,7 +302,7 @@
         "apps/desktop/electron/main/smoke/fragments/reader-annotations.ts": 563,
         "apps/desktop/electron/main/smoke/fragments/reader-recovery.ts": 399,
         "apps/desktop/electron/main/smoke/fragments/reader-translation.ts": 356,
-        "apps/desktop/electron/main/smoke/fragments/result.ts": 657,
+        "apps/desktop/electron/main/smoke/fragments/result.ts": 659,
         "apps/desktop/electron/main/smoke/fragments/sentinel.ts": 377,
         "apps/desktop/electron/main/smoke/fragments/settings-ai-translate.ts": 328,
         "apps/desktop/electron/main/smoke/fragments/settings-ai.ts": 225,
@@ -309,7 +313,7 @@
         "apps/desktop/electron/main/smoke/fragments/settings-backup-validation.ts": 132,
         "apps/desktop/electron/main/smoke/fragments/settings-cache.ts": 63,
         "apps/desktop/electron/main/smoke/fragments/settings-sync.ts": 293,
-        "apps/desktop/electron/main/smoke/fragments/shared-state.ts": 643,
+        "apps/desktop/electron/main/smoke/fragments/shared-state.ts": 645,
         "apps/desktop/electron/main/smoke/fragments/shell-bootstrap.ts": 72,
         "apps/desktop/electron/main/smoke/fragments/snippets.ts": 523,
         "apps/desktop/electron/main/smoke/renderer-script.ts": 101,
@@ -339,6 +343,7 @@
         "apps/desktop/src/features/canvas/synthesis.test.ts": 318,
         "apps/desktop/src/features/canvas/workspace-controls.test.ts": 116,
         "apps/desktop/src/features/canvas/workspace-load.test.ts": 290,
+        "apps/desktop/src/features/library/library-collection-model.test.ts": 147,
         "apps/desktop/src/features/reader/library-reader-session.test.ts": 225,
         "apps/desktop/src/services/citation-graph.test.ts": 198,
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
@@ -394,7 +399,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 213
       },
-      "totalLines": 36894
+      "totalLines": 37117
     }
   },
   "uiDatabaseBoundary": {

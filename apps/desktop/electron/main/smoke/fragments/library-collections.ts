@@ -3,6 +3,32 @@ export const smokeLibraryCollections = String.raw`        const collectionManage
           return dialog?.textContent?.includes(COLLECTION_MANAGER_SMOKE.name) ? dialog : null;
         }, 3_000);
         if (collectionManagerDialog) {
+          window.dispatchEvent(
+            new CustomEvent("aurascholar:move-collection", {
+              detail: {
+                id: COLLECTION_MANAGER_SMOKE.id,
+                parentId: MOVE_COLLECTION_SMOKE.id,
+                position: 0
+              }
+            })
+          );
+          libraryCollectionMoveSuccessVisible = Boolean(
+            await waitFor(
+              () =>
+                bodyIncludes(
+                  "已移动文件夹「" + COLLECTION_MANAGER_SMOKE.name + "」"
+                ),
+              3_000
+            )
+          );
+          const collectionMoveRows = await window.aura.db.query(
+            "SELECT parent_id, sort_order FROM collections WHERE id = ? AND library_id = ? AND deleted_at IS NULL LIMIT 1",
+            [COLLECTION_MANAGER_SMOKE.id, libraryId]
+          );
+          libraryCollectionMovePersisted =
+            collectionMoveRows[0]?.parent_id === MOVE_COLLECTION_SMOKE.id &&
+            Number(collectionMoveRows[0]?.sort_order ?? -1) === 0;
+
           const collectionCreateRowsBefore = await window.aura.db.query(
             "SELECT COUNT(*) AS n FROM collections WHERE deleted_at IS NULL AND name = ? AND collections.library_id = ?",
             [COLLECTION_CREATE_FAILURE_SMOKE.name, libraryId]
