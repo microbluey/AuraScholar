@@ -1,11 +1,13 @@
 import type { Database } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
+import { WorksRepo } from "@aurascholar/db/repos/works";
 import { applyRemoteSegment, type ApplyRemoteSegmentCommand } from "@aurascholar/sync";
 import { CH } from "../shared";
 import type {
   ApplyRemoteSyncSegmentCommandInput,
   DataCommandRequest,
   ImportLibraryBackupCommandInput,
+  PurgeDeletedWorksCommandInput,
 } from "../data-command-contract";
 import {
   importParsedLibraryBackupIntoDatabase,
@@ -17,6 +19,8 @@ import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
 
 const MAX_BACKUP_TEXT_LENGTH = 64 * 1024 * 1024;
+const MAX_PURGE_WORK_IDS = 500;
+const MAX_RECORD_ID_LENGTH = 512;
 const MAX_REMOTE_SEGMENT_ENTRIES = 500;
 const PROVIDER_SCOPE_PATTERN = /^webdav-[a-z0-9]{14}$/;
 
@@ -43,6 +47,20 @@ export async function executeDataCommand(
 ): Promise<unknown> {
   const envelope = parseEnvelope(request);
   switch (envelope.name) {
+    case "library.purgeDeletedWorks": {
+      const input = parsePurgeDeletedWorksInput(envelope.input);
+      return dependencies.transaction(envelope.name, async (database) => {
+        await assertActiveLocalLibrary(database, input.libraryId);
+        await assertDeletedWorksBelongToLibrary(database, input.libraryId, input.workIds);
+        const purged = await new WorksRepo(database, input.libraryId).purgeDeletedMany(
+          input.workIds,
+        );
+        if (purged !== input.workIds.length) {
+          throw new Error("Permanent deletion did not remove every requested work");
+        }
+        return { purged };
+      });
+    }
     case "library.importBackup": {
       const input = parseImportLibraryBackupInput(envelope.input);
       // Parsing, sanitization, graph validation, and potentially expensive JSON
@@ -76,10 +94,32 @@ function parseEnvelope(value: unknown): DataCommandRequest {
   if (!isRecord(value) || typeof value.name !== "string" || !("input" in value)) {
     throw new Error("Invalid data command request");
   }
-  if (value.name !== "library.importBackup" && value.name !== "sync.applyRemoteSegment") {
+  if (
+    value.name !== "library.purgeDeletedWorks" &&
+    value.name !== "library.importBackup" &&
+    value.name !== "sync.applyRemoteSegment"
+  ) {
     throw new Error(`Unsupported data command "${value.name}"`);
   }
   return value as unknown as DataCommandRequest;
+}
+
+function parsePurgeDeletedWorksInput(value: unknown): PurgeDeletedWorksCommandInput {
+  if (!isRecord(value)) throw new Error("Invalid library.purgeDeletedWorks input");
+  const libraryId = requireRecordId(value.libraryId, "Library id");
+  if (!Array.isArray(value.workIds) || value.workIds.length === 0) {
+    throw new Error("At least one work id is required");
+  }
+  if (value.workIds.length > MAX_PURGE_WORK_IDS) {
+    throw new Error(`Permanent deletion is limited to ${MAX_PURGE_WORK_IDS} works at a time`);
+  }
+  const workIds = Array.from(value.workIds, (workId, index) =>
+    requireRecordId(workId, `Work id at index ${index}`),
+  );
+  if (new Set(workIds).size !== workIds.length) {
+    throw new Error("Work ids must be unique");
+  }
+  return { libraryId, workIds };
 }
 
 function parseImportLibraryBackupInput(value: unknown): ImportLibraryBackupCommandInput {
@@ -130,6 +170,33 @@ async function assertActiveLocalLibrary(database: Database, expectedLibraryId: s
   if (rows.length !== 1) {
     throw new Error("Target Library does not exist or is deleted");
   }
+}
+
+async function assertDeletedWorksBelongToLibrary(
+  database: Database,
+  libraryId: string,
+  workIds: string[],
+): Promise<void> {
+  const placeholders = workIds.map(() => "?").join(",");
+  const rows = await database.query<{ id: string }>(
+    `SELECT id
+     FROM works
+     WHERE library_id = ?
+       AND deleted_at IS NOT NULL
+       AND id IN (${placeholders})`,
+    [libraryId, ...workIds],
+  );
+  if (rows.length !== workIds.length) {
+    throw new Error("Every work must belong to the active Library recycle bin");
+  }
+}
+
+function requireRecordId(value: unknown, label: string): string {
+  const id = requireNonEmptyString(value, label).trim();
+  if (id.length > MAX_RECORD_ID_LENGTH) {
+    throw new Error(`${label} is too long`);
+  }
+  return id;
 }
 
 function requireNonEmptyString(value: unknown, label: string): string {

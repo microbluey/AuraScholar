@@ -1085,20 +1085,17 @@ export class WorksRepo {
     );
     if (targets.length === 0) return 0;
 
-    await this.db.exec("BEGIN");
-    try {
+    const savepoint = `works_purge_deleted_many_${newId().replace(/-/g, "_")}`;
+    await this.withSavepoint(savepoint, async () => {
       for (const { id } of targets) {
         await this.purgeWorkArtifacts(id);
-        await this.db.run(`DELETE FROM works WHERE id = ? AND library_id = ?`, [
+        const changed = await this.db.run(`DELETE FROM works WHERE id = ? AND library_id = ?`, [
           id,
           this.libraryId,
         ]);
+        this.assertChanged(changed, `Work ${id} could not be permanently removed`);
       }
-      await this.db.exec("COMMIT");
-    } catch (e) {
-      await this.db.exec("ROLLBACK");
-      throw e;
-    }
+    });
     return targets.length;
   }
 

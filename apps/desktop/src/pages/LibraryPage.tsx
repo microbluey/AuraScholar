@@ -2705,7 +2705,11 @@ export function LibraryPage() {
       const confirmed = await confirm({
         title: "永久删除文献？",
         description: `将永久删除 ${workIds.length} 篇回收站文献。`,
-        details: ["这会移除元数据、PDF、标签、笔记和引用关联。", "该操作不能撤销。"],
+        details: [
+          "这会移除文献库记录、PDF 关联、批注、标签、笔记和引用关联。",
+          "内容寻址的本地文件当前不会立即从磁盘回收。",
+          "该操作不能撤销。",
+        ],
         confirmationHelp: "输入“永久删除”后才会启用确认按钮。",
         confirmationPhrase: "永久删除",
         confirmLabel: "永久删除",
@@ -2716,18 +2720,28 @@ export function LibraryPage() {
       setWorkActionBusy("purge");
       setTrashUndo(null);
       setMessage(`正在永久删除 ${workIds.length} 篇文献...`);
+      const successMessage = `已永久删除 ${workIds.length} 篇文献`;
+      let purgeCommitted = false;
       try {
-        const { db, libraryId } = await getLibraryDb();
-        const { WorksRepo } = await import("@aurascholar/db/repos/works");
-        await new WorksRepo(db, libraryId).purgeDeletedMany(workIds);
+        const { libraryId } = await getLibraryDb();
+        await window.aura.data.command("library.purgeDeletedWorks", { libraryId, workIds });
+        purgeCommitted = true;
         await refresh();
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        setMessage(`已永久删除 ${workIds.length} 篇文献`);
+        setMessage(successMessage);
         setSelectedIds(new Set());
         window.dispatchEvent(new Event("aurascholar:library-updated"));
       } catch (e) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        setMessage(`永久删除失败，所选文献仍保留在回收站，可重新永久删除:${describeSafeError(e)}`);
+        if (purgeCommitted) {
+          setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+          setSelectedIds(new Set());
+          window.dispatchEvent(new Event("aurascholar:library-updated"));
+        } else {
+          setMessage(
+            `永久删除失败，所选文献仍保留在回收站，可重新永久删除:${describeSafeError(e)}`,
+          );
+        }
       } finally {
         setWorkActionBusy(null);
       }

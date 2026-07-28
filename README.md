@@ -22,6 +22,7 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 
 - **Ingest from anywhere**: add papers by DOI / arXiv ID / URL / local PDF in one step; metadata is fetched automatically and open-access (OA) full text is downloaded when available. Local PDFs are matched back to their DOI from the body text.
 - **Bulk migration**: import BibTeX / RIS / CSL-JSON from Zotero / EndNote, with automatic deduplication by DOI and a title+year+authors fingerprint.
+- **Rollback-safe recycle bin**: moving papers to the recycle bin remains reversible. Permanent deletion is one Library-scoped main-process transaction, so a failed dependent-record cleanup cannot leave a paper half-erased. Reclaiming unreferenced content-addressed blob files is intentionally deferred to a future serialized compactor.
 - **Metadata sources**: aggregates five open data sources — Crossref, OpenAlex, Semantic Scholar, Unpaywall, and arXiv.
 
 ### 🔍 Academic search

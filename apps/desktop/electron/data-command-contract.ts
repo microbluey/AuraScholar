@@ -1,6 +1,15 @@
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
 
+export interface PurgeDeletedWorksCommandInput {
+  libraryId: string;
+  workIds: string[];
+}
+
+export interface PurgeDeletedWorksCommandResult {
+  purged: number;
+}
+
 export interface ImportLibraryBackupCommandInput {
   backupText: string;
   libraryId: string;
@@ -13,6 +22,10 @@ export interface ApplyRemoteSyncSegmentCommandInput {
 }
 
 export interface DataCommandMap {
+  "library.purgeDeletedWorks": {
+    input: PurgeDeletedWorksCommandInput;
+    output: PurgeDeletedWorksCommandResult;
+  };
   "library.importBackup": {
     input: ImportLibraryBackupCommandInput;
     output: LibraryBackupImportSummary;
