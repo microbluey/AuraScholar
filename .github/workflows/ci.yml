@@ -6,6 +6,26 @@ on:
   pull_request:
 
 jobs:
+  branch-name:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate pull request branch name
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [[ "$PR_AUTHOR" == 'dependabot[bot]' ]]; then
+            echo "Dependabot managed branch is exempt from the contributor naming rule."
+            exit 0
+          fi
+          pattern='^(feat|fix)/[a-z0-9]+(-[a-z0-9]+)*$'
+          description="${HEAD_REF#*/}"
+          if [[ ! "$HEAD_REF" =~ $pattern || ! "$description" =~ [a-z] ]]; then
+            echo "::error title=Invalid branch name::Expected feat/<kebab-case> or fix/<kebab-case>, got $HEAD_REF"
+            exit 1
+          fi
+
   check:
     runs-on: ubuntu-latest
     steps:

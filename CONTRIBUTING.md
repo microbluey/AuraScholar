@@ -58,6 +58,8 @@ pnpm --filter @aurascholar/desktop dev
 - 缺陷修复分支使用 `fix/<short-description>`。
 - `<short-description>` 必须使用简短的英文 kebab-case,例如
   `feat/library-workspace-redesign` 或 `fix/pdf-render-overflow`。
+- Pull Request 的源分支会由 CI 强制校验;不符合上述格式时无法通过检查。
+  Dependabot 使用的托管分支不受此限制。
 
 ### Commit Message
 
