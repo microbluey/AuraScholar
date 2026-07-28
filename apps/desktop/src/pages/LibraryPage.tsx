@@ -46,19 +46,19 @@ import {
 } from "../services/preview-library";
 import { describeSafeError } from "../services/sensitive-text";
 import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
-import { CollectionManager } from "../features/library/CollectionManager";
+import { LibraryCollectionManagement } from "../features/library/LibraryCollectionManagement";
 import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
 import { TagManager } from "../features/library/TagManager";
 import { TextPromptDialog, type TextPromptConfig } from "../features/library/TextPromptDialog";
+import type {
+  CollectionActivationReason,
+  CollectionManagerViewTarget,
+} from "../features/library/useLibraryCollectionController";
 import {
-  addLibraryTagToWorks,
-  createLibraryCollection,
-  deleteLibraryCollection,
-  moveLibraryCollection,
-  renameLibraryCollection,
-  restoreLibraryCollection,
-  setWorksLibraryCollection,
-} from "../services/library-organization";
+  moveCollectionRows,
+  type MoveCollectionEventDetail,
+} from "../features/library/library-collection-model";
+import { addLibraryTagToWorks, setWorksLibraryCollection } from "../services/library-organization";
 import {
   emptyWorkMeta,
   loadLibraryPageData,
@@ -93,10 +93,6 @@ interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_IMPORT_PDF__?: (file: File) => Promise<void>;
   __AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__?: number;
   __AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__?: number;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_CREATE__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_DELETE__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RENAME__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RESTORE__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TAG_AFTER_FIRST__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_MOVE_AFTER_FIRST__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READ__?: string;
@@ -124,7 +120,6 @@ function normalizeLibraryFilter(value: string | null): LibraryFilter | null {
 const PAGE_SIZE = 30;
 const LIST_HARD_LIMIT = 1000;
 const MIN_CITATION_BUSY_MS = 350;
-const MIN_COLLECTION_ACTION_BUSY_MS = 250;
 const MIN_BULK_TAG_BUSY_MS = 250;
 const MIN_MOVE_ACTION_BUSY_MS = 250;
 const MIN_REFERENCE_IMPORT_BUSY_MS = 250;
@@ -151,32 +146,9 @@ interface LibraryViewDetail {
   tag?: string | null;
 }
 
-interface MoveCollectionEventDetail {
-  id: string;
-  parentId: string | null;
-  position: number;
-}
-
-interface CollectionContextActionEventDetail {
-  id: string;
-  name: string;
-}
-
-interface CreateCollectionEventDetail {
-  parentId?: string | null;
-}
-
 interface TrashUndoState {
   count: number;
   ids: string[];
-  message: string;
-}
-
-interface CollectionDeleteUndoState {
-  id: string;
-  name: string;
-  workIds: string[];
-  wasActive: boolean;
   message: string;
 }
 
@@ -628,38 +600,6 @@ function consumeLibrarySmokeReadFailure(): Error | null {
   return new Error(message);
 }
 
-function consumeLibrarySmokeCollectionCreateFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_CREATE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_CREATE__;
-  return new Error(message);
-}
-
-function consumeLibrarySmokeCollectionRenameFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RENAME__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RENAME__;
-  return new Error(message);
-}
-
-function consumeLibrarySmokeCollectionDeleteFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_DELETE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_DELETE__;
-  return new Error(message);
-}
-
-function consumeLibrarySmokeCollectionRestoreFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RESTORE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RESTORE__;
-  return new Error(message);
-}
-
 function consumeLibrarySmokeBulkTagAfterFirstFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TAG_AFTER_FIRST__;
@@ -742,17 +682,8 @@ export function LibraryPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [page, setPage] = useState(0);
   const [tagManagerIntent, setTagManagerIntent] = useState<"create" | "manage" | null>(null);
-  const [collectionManagerOpen, setCollectionManagerOpen] = useState(false);
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [textPrompt, setTextPrompt] = useState<TextPromptConfig | null>(null);
-  const [collectionAction, setCollectionAction] = useState<{
-    id: string;
-    kind: "create" | "delete" | "rename" | "restore";
-  } | null>(null);
-  const [collectionManagerStatus, setCollectionManagerStatus] = useState<string | null>(null);
-  const [collectionManagerError, setCollectionManagerError] = useState<string | null>(null);
-  const [collectionDeleteUndo, setCollectionDeleteUndo] =
-    useState<CollectionDeleteUndoState | null>(null);
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [citeMenuOpen, setCiteMenuOpen] = useState(false);
   const [citationBusy, setCitationBusy] = useState<"copy" | "export" | null>(null);
@@ -883,21 +814,6 @@ export function LibraryPage() {
       return e instanceof Error ? e : new Error(detail);
     }
   }, [search, activeCollection, activeFilter, previewItems, previewTrashItems, previewWorkMeta]);
-
-  const finishCommittedCollectionAction = useCallback(
-    async (successMessage: string, reportInManager = true): Promise<void> => {
-      const refreshFailure = await refresh();
-      if (!refreshFailure) return;
-      const detail = describeSafeError(refreshFailure);
-      setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${detail}`);
-      if (reportInManager) {
-        setCollectionManagerStatus(successMessage);
-        setCollectionManagerError(`操作已保存，但文件夹列表刷新失败:${detail}`);
-      }
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    },
-    [refresh],
-  );
 
   useEffect(() => {
     const t = setTimeout(() => void refresh(), search ? 250 : 0);
@@ -1114,238 +1030,6 @@ export function LibraryPage() {
       .catch(() => {});
   }, [confirmDraft]);
 
-  const handleNewFolder = useCallback(
-    async (parentId?: string | null) => {
-      if (collectionAction) return;
-      if (!isDesktopRuntime()) {
-        setMessage("预览模式下不会写入本地数据库");
-        return;
-      }
-      const parent = parentId ? collections.find((collection) => collection.id === parentId) : null;
-      setTextPrompt({
-        title: parent ? `在「${parent.name}」中新建文件夹` : "新建文件夹",
-        label: "文件夹名称",
-        placeholder: "例如：Transformer 综述",
-        confirmLabel: "创建",
-        description: parent
-          ? `新文件夹会显示在「${parent.name}」下。`
-          : "新文件夹会显示在文件夹树顶层。",
-        onSubmit: async (value) => {
-          const name = value.trim();
-          const startedAt = Date.now();
-          setCollectionAction({ id: "__create__", kind: "create" });
-          setCollectionManagerStatus(`正在创建文件夹「${name}」...`);
-          setCollectionManagerError(null);
-          setCollectionDeleteUndo(null);
-          try {
-            const smokeFailure = consumeLibrarySmokeCollectionCreateFailure();
-            if (smokeFailure) {
-              await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-              throw smokeFailure;
-            }
-            const id = await createLibraryCollection(name, parent?.id ?? null);
-            await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-            setActiveFilter("all");
-            setActiveCollection(id);
-            setActiveTag(null);
-            setActiveSource(null);
-            const successMessage = parent
-              ? `已在「${parent.name}」中新建「${name}」`
-              : `已新建文件夹「${name}」`;
-            setMessage(successMessage);
-            setCollectionManagerStatus(successMessage);
-            await finishCommittedCollectionAction(successMessage);
-          } catch (e) {
-            const message = describeSafeError(e);
-            const error = new Error(`创建文件夹失败，名称仍保留，可重新创建:${message}`);
-            setCollectionManagerStatus(null);
-            setCollectionManagerError(error.message);
-            throw error;
-          } finally {
-            setCollectionAction(null);
-          }
-        },
-      });
-    },
-    [collectionAction, collections, finishCommittedCollectionAction],
-  );
-
-  const handleRenameFolder = useCallback(
-    async (id: string, name: string) => {
-      if (collectionAction) return;
-      if (!isDesktopRuntime()) {
-        setMessage("预览模式下不会写入本地数据库");
-        return;
-      }
-      setTextPrompt({
-        title: "重命名文件夹",
-        label: "文件夹名称",
-        initialValue: name,
-        confirmLabel: "保存",
-        onSubmit: async (value) => {
-          const next = value.trim();
-          if (next === name) return;
-          const startedAt = Date.now();
-          setCollectionAction({ id, kind: "rename" });
-          setCollectionManagerStatus(`正在重命名文件夹「${name}」...`);
-          setCollectionManagerError(null);
-          setCollectionDeleteUndo(null);
-          try {
-            const smokeFailure = consumeLibrarySmokeCollectionRenameFailure();
-            if (smokeFailure) {
-              await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-              throw smokeFailure;
-            }
-            await renameLibraryCollection(id, next);
-            await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-            const successMessage = `已重命名为「${next}」`;
-            setMessage(successMessage);
-            setCollectionManagerStatus(successMessage);
-            await finishCommittedCollectionAction(successMessage);
-          } catch (e) {
-            const message = describeSafeError(e);
-            const error = new Error(`重命名文件夹失败，名称仍保留，可重新保存:${message}`);
-            setCollectionManagerStatus(null);
-            setCollectionManagerError(error.message);
-            throw error;
-          } finally {
-            setCollectionAction(null);
-          }
-        },
-      });
-    },
-    [collectionAction, finishCommittedCollectionAction],
-  );
-
-  const handleDeleteFolder = useCallback(
-    async (id: string, name: string) => {
-      if (collectionAction) return;
-      if (!isDesktopRuntime()) {
-        setMessage("预览模式下不会写入本地数据库");
-        return;
-      }
-      const childCount = collections.filter((collection) => collection.parent_id === id).length;
-      if (childCount > 0) {
-        const errorMessage = `无法删除「${name}」：请先移动或删除其中的 ${childCount} 个子文件夹`;
-        setMessage(errorMessage);
-        setCollectionManagerError(errorMessage);
-        return;
-      }
-      const confirmed = await confirm({
-        title: "删除文件夹？",
-        description: `「${name}」会从文件夹树移除，里面的文献会回到“全部文献”。`,
-        details: [
-          "文献记录、PDF、批注和标签不会被删除。",
-          "删除后可继续通过全部文献或搜索找到这些论文。",
-        ],
-        confirmLabel: "删除文件夹",
-        tone: "warning",
-      });
-      if (!confirmed) return;
-      const startedAt = Date.now();
-      setCollectionAction({ id, kind: "delete" });
-      setCollectionManagerStatus(`正在删除文件夹「${name}」...`);
-      setCollectionManagerError(null);
-      try {
-        const smokeFailure = consumeLibrarySmokeCollectionDeleteFailure();
-        if (smokeFailure) {
-          await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-          throw smokeFailure;
-        }
-        const { workIds } = await deleteLibraryCollection(id);
-        await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-        if (activeCollection === id) setActiveCollection(null);
-        const undoMessage = `已删除文件夹「${name}」`;
-        setCollectionDeleteUndo({
-          id,
-          name,
-          workIds,
-          wasActive: activeCollection === id,
-          message: undoMessage,
-        });
-        setMessage(undoMessage);
-        setCollectionManagerStatus(undoMessage);
-        await finishCommittedCollectionAction(undoMessage);
-      } catch (e) {
-        const errorMessage = `删除文件夹失败，文件夹仍保留，可重新删除:${describeSafeError(e)}`;
-        setMessage(errorMessage);
-        setCollectionManagerStatus(null);
-        setCollectionManagerError(errorMessage);
-      } finally {
-        setCollectionAction(null);
-      }
-    },
-    [activeCollection, collectionAction, collections, confirm, finishCommittedCollectionAction],
-  );
-
-  const undoCollectionDelete = useCallback(async () => {
-    if (!collectionDeleteUndo || collectionAction) return;
-    if (!isDesktopRuntime()) {
-      setCollectionManagerStatus("预览模式下不会写入本地数据库");
-      return;
-    }
-    const { id, name, wasActive, workIds } = collectionDeleteUndo;
-    const startedAt = Date.now();
-    setCollectionAction({ id, kind: "restore" });
-    setCollectionManagerStatus(`正在恢复文件夹「${name}」...`);
-    setCollectionManagerError(null);
-    try {
-      const smokeFailure = consumeLibrarySmokeCollectionRestoreFailure();
-      if (smokeFailure) {
-        await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-        throw smokeFailure;
-      }
-      const { skippedWorkIds } = await restoreLibraryCollection(id, workIds);
-      await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-      const restoredMessage =
-        skippedWorkIds.length > 0
-          ? `已恢复文件夹「${name}」；${skippedWorkIds.length} 篇文献因已永久删除或后来改放其他文件夹而未恢复原归属`
-          : `已恢复文件夹「${name}」`;
-      setCollectionDeleteUndo(null);
-      setMessage(restoredMessage);
-      setCollectionManagerStatus(restoredMessage);
-      if (wasActive) {
-        setActiveFilter("all");
-        setActiveCollection(id);
-        setActiveTag(null);
-        setActiveSource(null);
-        setExtraFilter(null);
-        setSelectedIds(new Set());
-      }
-      await finishCommittedCollectionAction(restoredMessage);
-    } catch (e) {
-      const errorMessage = `恢复文件夹失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`;
-      setMessage(errorMessage);
-      setCollectionManagerStatus(collectionDeleteUndo.message);
-      setCollectionManagerError(errorMessage);
-    } finally {
-      setCollectionAction(null);
-    }
-  }, [collectionAction, collectionDeleteUndo, finishCommittedCollectionAction]);
-
-  const handleMoveFolder = useCallback(
-    async ({ id, parentId, position }: MoveCollectionEventDetail) => {
-      const folder = collections.find((collection) => collection.id === id);
-      if (!folder) return;
-      if (!isDesktopRuntime()) {
-        setCollections((current) => moveCollectionRows(current, { id, parentId, position }));
-        setMessage(`已移动文件夹「${folder.name}」`);
-        return;
-      }
-      try {
-        await moveLibraryCollection(id, parentId, position);
-        const successMessage = `已移动文件夹「${folder.name}」`;
-        setMessage(successMessage);
-        await finishCommittedCollectionAction(successMessage, false);
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
-      } catch (error) {
-        setMessage(`移动文件夹失败，原有层级未改变:${describeSafeError(error)}`);
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
-      }
-    },
-    [collections, finishCommittedCollectionAction],
-  );
-
   useEffect(() => {
     const onLibraryView = (event: Event) => {
       const detail = (event as CustomEvent<LibraryViewDetail>).detail ?? {};
@@ -1358,52 +1042,17 @@ export function LibraryPage() {
       setSelectedWorkId(null);
       setSelectedIds(new Set());
     };
-    const onCreateCollection = (event: Event) => {
-      const detail = (event as CustomEvent<CreateCollectionEventDetail>).detail;
-      void handleNewFolder(detail?.parentId ?? null);
-    };
-    const onManageCollections = () => {
-      setCollectionManagerStatus(null);
-      setCollectionManagerError(null);
-      setCollectionDeleteUndo(null);
-      setCollectionManagerOpen(true);
-    };
-    const onMoveCollection = (event: Event) => {
-      const detail = (event as CustomEvent<MoveCollectionEventDetail>).detail;
-      if (!detail?.id) return;
-      void handleMoveFolder(detail);
-    };
-    const onRenameCollection = (event: Event) => {
-      const detail = (event as CustomEvent<CollectionContextActionEventDetail>).detail;
-      if (!detail?.id) return;
-      void handleRenameFolder(detail.id, detail.name);
-    };
-    const onDeleteCollection = (event: Event) => {
-      const detail = (event as CustomEvent<CollectionContextActionEventDetail>).detail;
-      if (!detail?.id) return;
-      void handleDeleteFolder(detail.id, detail.name);
-    };
     const onCreateTag = () => setTagManagerIntent("create");
     const onManageTags = () => setTagManagerIntent("manage");
     window.addEventListener("aurascholar:library-view", onLibraryView);
-    window.addEventListener("aurascholar:create-collection", onCreateCollection);
-    window.addEventListener("aurascholar:manage-collections", onManageCollections);
-    window.addEventListener("aurascholar:move-collection", onMoveCollection);
-    window.addEventListener("aurascholar:rename-collection", onRenameCollection);
-    window.addEventListener("aurascholar:delete-collection", onDeleteCollection);
     window.addEventListener("aurascholar:create-tag", onCreateTag);
     window.addEventListener("aurascholar:manage-tags", onManageTags);
     return () => {
       window.removeEventListener("aurascholar:library-view", onLibraryView);
-      window.removeEventListener("aurascholar:create-collection", onCreateCollection);
-      window.removeEventListener("aurascholar:manage-collections", onManageCollections);
-      window.removeEventListener("aurascholar:move-collection", onMoveCollection);
-      window.removeEventListener("aurascholar:rename-collection", onRenameCollection);
-      window.removeEventListener("aurascholar:delete-collection", onDeleteCollection);
       window.removeEventListener("aurascholar:create-tag", onCreateTag);
       window.removeEventListener("aurascholar:manage-tags", onManageTags);
     };
-  }, [handleDeleteFolder, handleMoveFolder, handleNewFolder, handleRenameFolder]);
+  }, []);
 
   useEffect(() => {
     if (!requestedWorkId) return;
@@ -2785,6 +2434,48 @@ export function LibraryPage() {
     setSelectedIds(new Set());
   }, []);
 
+  const activateManagedCollection = useCallback(
+    (collectionId: string, reason: CollectionActivationReason) => {
+      setActiveFilter("all");
+      setActiveCollection(collectionId);
+      setActiveTag(null);
+      setActiveSource(null);
+      if (reason === "restore") {
+        setExtraFilter(null);
+        setSelectedIds(new Set());
+      }
+    },
+    [],
+  );
+
+  const clearManagedActiveCollection = useCallback(() => {
+    setActiveCollection(null);
+  }, []);
+
+  const previewMoveCollection = useCallback((detail: MoveCollectionEventDetail) => {
+    setCollections((current) => moveCollectionRows(current, detail));
+  }, []);
+
+  const selectManagedCollectionView = useCallback(
+    (target: CollectionManagerViewTarget) => {
+      if (target.kind === "all") {
+        clearLibraryView();
+        return;
+      }
+      if (target.kind === "collection") {
+        openBreadcrumbCollection(target.collectionId);
+        return;
+      }
+      setActiveFilter("trash");
+      setActiveCollection(null);
+      setActiveTag(null);
+      setActiveSource(null);
+      setExtraFilter(null);
+      setSelectedIds(new Set());
+    },
+    [clearLibraryView, openBreadcrumbCollection],
+  );
+
   const clearInlineSearch = useCallback(() => {
     setSearch("");
     searchInputRef.current?.focus();
@@ -3598,73 +3289,19 @@ export function LibraryPage() {
         />
       )}
 
-      {collectionManagerOpen && (
-        <CollectionManager
-          collections={collections}
-          activeCollection={activeCollection}
-          action={collectionAction}
-          status={collectionManagerStatus}
-          statusAction={
-            collectionDeleteUndo &&
-            (collectionManagerStatus === collectionDeleteUndo.message ||
-              collectionAction?.kind === "restore")
-              ? {
-                  ariaLabel: "撤销删除文件夹",
-                  busy: collectionAction?.kind === "restore",
-                  label: collectionAction?.kind === "restore" ? "撤销中..." : "撤销",
-                  onClick: () => void undoCollectionDelete(),
-                }
-              : null
-          }
-          error={collectionManagerError}
-          trashCount={trashCount}
-          isTrashView={isTrashView}
-          onClose={() => {
-            if (collectionAction) return;
-            setCollectionManagerOpen(false);
-            setCollectionManagerStatus(null);
-            setCollectionManagerError(null);
-            setCollectionDeleteUndo(null);
-          }}
-          onSelectAll={() => {
-            if (collectionAction) return;
-            setCollectionDeleteUndo(null);
-            clearLibraryView();
-            setCollectionManagerOpen(false);
-          }}
-          onSelectTrash={() => {
-            if (collectionAction) return;
-            setCollectionDeleteUndo(null);
-            setActiveFilter("trash");
-            setActiveCollection(null);
-            setActiveTag(null);
-            setActiveSource(null);
-            setExtraFilter(null);
-            setSelectedIds(new Set());
-            setCollectionManagerOpen(false);
-          }}
-          onSelectCollection={(collectionId) => {
-            if (collectionAction) return;
-            setCollectionDeleteUndo(null);
-            setActiveFilter("all");
-            setActiveCollection(collectionId);
-            setActiveTag(null);
-            setActiveSource(null);
-            setExtraFilter(null);
-            setSelectedIds(new Set());
-            setCollectionManagerOpen(false);
-          }}
-          onCreate={(parentId) => {
-            void handleNewFolder(parentId);
-          }}
-          onRename={(collection) => {
-            void handleRenameFolder(collection.id, collection.name);
-          }}
-          onDelete={(collection) => {
-            void handleDeleteFolder(collection.id, collection.name);
-          }}
-        />
-      )}
+      <LibraryCollectionManagement
+        activeCollection={activeCollection}
+        collections={collections}
+        confirm={confirm}
+        isTrashView={isTrashView}
+        trashCount={trashCount}
+        activateCollection={activateManagedCollection}
+        clearActiveCollection={clearManagedActiveCollection}
+        previewMoveCollection={previewMoveCollection}
+        refreshLibrary={refresh}
+        selectManagerView={selectManagedCollectionView}
+        setMessage={setMessage}
+      />
 
       {tagManagerIntent && (
         <TagManager
@@ -4431,41 +4068,6 @@ function collectionPath(
     current = current.parent_id ? (byId.get(current.parent_id) ?? null) : null;
   }
   return path;
-}
-
-function moveCollectionRows(
-  collections: CollectionRow[],
-  detail: MoveCollectionEventDetail,
-): CollectionRow[] {
-  const moving = collections.find((collection) => collection.id === detail.id);
-  if (!moving) return collections;
-  const targetSiblings = collections
-    .filter((collection) => collection.id !== detail.id && collection.parent_id === detail.parentId)
-    .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, "zh-CN"));
-  const position = Math.max(0, Math.min(Math.trunc(detail.position), targetSiblings.length));
-  targetSiblings.splice(position, 0, { ...moving, parent_id: detail.parentId });
-  const targetOrder = new Map(targetSiblings.map((collection, index) => [collection.id, index]));
-  const previousSiblings = collections
-    .filter(
-      (collection) => collection.id !== detail.id && collection.parent_id === moving.parent_id,
-    )
-    .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, "zh-CN"));
-  const previousOrder = new Map(
-    previousSiblings.map((collection, index) => [collection.id, index]),
-  );
-  return collections.map((collection) => {
-    if (targetOrder.has(collection.id)) {
-      return {
-        ...collection,
-        parent_id: detail.parentId,
-        sort_order: targetOrder.get(collection.id)!,
-      };
-    }
-    if (moving.parent_id !== detail.parentId && previousOrder.has(collection.id)) {
-      return { ...collection, sort_order: previousOrder.get(collection.id)! };
-    }
-    return collection;
-  });
 }
 
 function formatAddedDate(createdAt: number | null | undefined) {

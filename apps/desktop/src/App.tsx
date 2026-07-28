@@ -14,6 +14,16 @@ import { ThemeToggle } from "@aurascholar/ui";
 import { AppErrorBoundary, useRouteBoundaryShell } from "./components/AppErrorBoundary";
 import { useModalFocusTrap } from "./components/useModalFocusTrap";
 import { CANVAS_COMMAND_PALETTE_REQUEST_EVENT } from "./features/canvas/canvas-command";
+import {
+  LIBRARY_COLLECTION_EVENTS,
+  type MoveCollectionEventDetail,
+} from "./features/library/library-collection-model";
+import {
+  requestCreateLibraryCollection,
+  requestDeleteLibraryCollection,
+  requestMoveLibraryCollection,
+  requestRenameLibraryCollection,
+} from "./features/library/library-collection-events";
 import { isImeComposing } from "./keyboard";
 import { isPlatformShortcut, shortcutLabel } from "./shortcut-labels";
 import { readLocalStorageJson } from "./storage";
@@ -85,18 +95,12 @@ interface LibraryViewDetail {
   tag?: string | null;
 }
 
-interface LibraryCollectionMoveDetail {
-  id: string;
-  parentId: string | null;
-  position: number;
-}
-
 type LibraryViewState = Required<LibraryViewDetail>;
 
 type LibraryActionEventName =
-  | "aurascholar:create-collection"
+  | typeof LIBRARY_COLLECTION_EVENTS.create
+  | typeof LIBRARY_COLLECTION_EVENTS.manage
   | "aurascholar:create-tag"
-  | "aurascholar:manage-collections"
   | "aurascholar:manage-tags";
 
 type PendingLibraryCommand =
@@ -760,7 +764,7 @@ export function App() {
         icon: "library",
         id: "library:create-collection",
         keywords: ["新建文件夹", "分组", "集合", "collection"],
-        run: () => dispatchLibraryAction("aurascholar:create-collection"),
+        run: () => dispatchLibraryAction(LIBRARY_COLLECTION_EVENTS.create),
         title: "新建目录",
       },
       {
@@ -769,7 +773,7 @@ export function App() {
         icon: "library",
         id: "library:manage-collections",
         keywords: ["目录", "文件夹", "分组", "管理目录", "collection"],
-        run: () => dispatchLibraryAction("aurascholar:manage-collections"),
+        run: () => dispatchLibraryAction(LIBRARY_COLLECTION_EVENTS.manage),
         title: "管理目录",
       },
       {
@@ -934,26 +938,12 @@ export function App() {
               stats={libraryStats}
               activeView={activeLibraryView}
               onSelect={openLibraryView}
-              onCreateCollection={(parentId) =>
-                window.dispatchEvent(
-                  new CustomEvent("aurascholar:create-collection", {
-                    detail: { parentId: parentId ?? null },
-                  }),
-                )
-              }
+              onCreateCollection={requestCreateLibraryCollection}
               onRenameCollection={(collection) =>
-                window.dispatchEvent(
-                  new CustomEvent("aurascholar:rename-collection", {
-                    detail: { id: collection.id, name: collection.name },
-                  }),
-                )
+                requestRenameLibraryCollection({ id: collection.id, name: collection.name })
               }
               onDeleteCollection={(collection) =>
-                window.dispatchEvent(
-                  new CustomEvent("aurascholar:delete-collection", {
-                    detail: { id: collection.id, name: collection.name },
-                  }),
-                )
+                requestDeleteLibraryCollection({ id: collection.id, name: collection.name })
               }
               onMoveCollection={(detail) => {
                 setLibraryStats((current) =>
@@ -964,7 +954,7 @@ export function App() {
                       }
                     : current,
                 );
-                window.dispatchEvent(new CustomEvent("aurascholar:move-collection", { detail }));
+                requestMoveLibraryCollection(detail);
               }}
             />
           )}
@@ -1424,7 +1414,7 @@ function buildLibraryCollectionTree(
 
 function moveLibraryShellCollection(
   collections: LibraryShellCollection[],
-  detail: LibraryCollectionMoveDetail,
+  detail: MoveCollectionEventDetail,
 ): LibraryShellCollection[] {
   const moving = collections.find((collection) => collection.id === detail.id);
   if (!moving) return collections;
@@ -1634,7 +1624,7 @@ function LibrarySidebarMeta({
   onSelect: (detail: LibraryViewDetail) => void;
   onCreateCollection: (parentId?: string) => void;
   onDeleteCollection: (collection: LibraryShellCollection) => void;
-  onMoveCollection: (detail: LibraryCollectionMoveDetail) => void;
+  onMoveCollection: (detail: MoveCollectionEventDetail) => void;
   onRenameCollection: (collection: LibraryShellCollection) => void;
 }) {
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());

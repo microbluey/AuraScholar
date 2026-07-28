@@ -21,6 +21,9 @@ built with [electron-vite](https://electron-vite.org/).
   through typed `window.aura.data.command` gateways so transaction ownership
   remains in the main process. Remaining legacy page-level boundaries are
   frozen by the architecture-health ratchet and must decrease over time.
+- **Renderer feature controllers** — migrated workflows keep async mutations,
+  modal lifecycles, and global event subscriptions in feature hooks. Pages
+  consume semantic actions and compose those workflows with their view state.
 - Domain logic lives in `packages/*` and is shell-agnostic (depends only on the
   `@aurascholar/platform` interfaces).
 

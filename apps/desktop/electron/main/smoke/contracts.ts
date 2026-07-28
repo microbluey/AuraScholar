@@ -267,6 +267,8 @@ export interface SmokeRendererResult {
   libraryCollectionCreateFailureDidNotPersist: boolean;
   libraryCollectionCreateFailurePreserved: boolean;
   libraryCollectionCreateFailureVisible: boolean;
+  libraryCollectionMovePersisted: boolean;
+  libraryCollectionMoveSuccessVisible: boolean;
   libraryCollectionRenameFailureBusyVisible: boolean;
   libraryCollectionRenameFailureDidNotPersist: boolean;
   libraryCollectionRenameFailurePreserved: boolean;

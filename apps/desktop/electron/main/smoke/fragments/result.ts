@@ -291,6 +291,8 @@ export const smokeResult = String.raw`        return {
           libraryCollectionCreateFailureDidNotPersist,
           libraryCollectionCreateFailurePreserved,
           libraryCollectionCreateFailureVisible,
+          libraryCollectionMovePersisted,
+          libraryCollectionMoveSuccessVisible,
           libraryCollectionRenameFailureBusyVisible,
           libraryCollectionRenameFailureDidNotPersist,
           libraryCollectionRenameFailurePreserved,
