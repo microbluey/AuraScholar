@@ -11,8 +11,12 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "health:baseline": "node scripts/architecture-health.mjs baseline",
+    "health:ci": "node scripts/architecture-health.mjs check",
+    "health:report": "node scripts/architecture-health.mjs report",
+    "health:test": "node --test scripts/architecture-health.test.mjs",
     "lint": "eslint .",
-    "test": "turbo run test",
+    "test": "pnpm health:test && turbo run test",
     "typecheck": "turbo run typecheck",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\""
   },
