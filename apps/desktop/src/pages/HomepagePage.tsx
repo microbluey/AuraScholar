@@ -77,6 +77,7 @@ const EMPTY: StoredProfile = {
 };
 
 const PREVIEW_HOMEPAGE_TIMESTAMP = Date.UTC(2026, 6, 1, 10, 0, 0);
+const PREVIEW_HOMEPAGE_LIBRARY_ID = "library:preview-homepage";
 
 const PREVIEW_HOMEPAGE_PROFILE: StoredProfile = {
   displayName: "林知微",
@@ -120,6 +121,7 @@ function previewWork(
     edition: null,
     fingerprint: null,
     id: input.id,
+    library_id: PREVIEW_HOMEPAGE_LIBRARY_ID,
     isbn: null,
     issn: null,
     issue: null,

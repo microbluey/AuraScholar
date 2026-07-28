@@ -1,14 +1,14 @@
 import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
 import { WorksRepo } from "@aurascholar/db/repos/works";
-import { getDb } from "./aura-db";
-import { blobPath, auraFs } from "./aura-platform";
+import { getLibraryDb } from "./aura-db";
+import { auraFs } from "./aura-platform";
 import type { CommitIngestArgs, IngestResult, PendingPdf } from "./library-types";
 
 async function repos() {
-  const db = await getDb();
+  const { db, libraryId } = await getLibraryDb();
   return {
-    works: new WorksRepo(db),
-    attachments: new AttachmentsRepo(db),
+    works: new WorksRepo(db, libraryId),
+    attachments: new AttachmentsRepo(db, libraryId),
   };
 }
 
@@ -59,17 +59,14 @@ export async function attachStagedPdf(
 
 /**
  * Discard a PDF staged during analysis when the user cancels before commit.
- * The content-addressed blob is only removed if no active attachment references
- * its sha, so cancelling a duplicate/stale dialog cannot break an existing PDF.
+ * Only the transient research-download path is removed here. Content-addressed
+ * blobs are global across Libraries, so a scoped reference check followed by a
+ * filesystem delete would race another Library attaching the same SHA. Orphan
+ * cleanup belongs to a future globally serialized blob compactor.
  */
 export async function discardStagedPdf(pdf: PendingPdf | null | undefined): Promise<void> {
   if (!pdf) return;
   if (pdf.relPath) {
     await auraFs.deleteFile(pdf.relPath).catch(() => {});
-  }
-  const { attachments } = await repos();
-  const existing = await attachments.bySha(pdf.sha);
-  if (!existing) {
-    await auraFs.deleteFile(blobPath(pdf.sha)).catch(() => {});
   }
 }

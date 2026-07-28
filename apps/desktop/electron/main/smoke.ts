@@ -1447,6 +1447,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         );
 
         let initialWorkCount = null;
+        let libraryId = "";
         let readingStatus = null;
         let commandCompositionEscapeIgnored = false;
         let commandCompositionIgnored = false;
@@ -2086,8 +2087,22 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         let snippetVisibleCopySuccessVisible = false;
         let dbError = null;
         try {
-          if (window.aura?.db?.queryScalar) {
-            initialWorkCount = await window.aura.db.queryScalar("SELECT COUNT(*) FROM works");
+          if (window.aura?.db?.query && window.aura?.db?.queryScalar) {
+            const libraryRows = await window.aura.db.query(
+              "SELECT value_json FROM settings WHERE key = 'local.library_id' LIMIT 1"
+            );
+            const parsedLibraryId = libraryRows[0]?.value_json
+              ? JSON.parse(libraryRows[0].value_json)
+              : "";
+            if (typeof parsedLibraryId !== "string" || parsedLibraryId.length === 0) {
+              throw new Error("Smoke test requires an explicit local Library identity");
+            }
+            libraryId = parsedLibraryId;
+            const countRows = await window.aura.db.query(
+              "SELECT COUNT(*) AS n FROM works WHERE library_id = ?",
+              [libraryId]
+            );
+            initialWorkCount = Number(countRows[0]?.n ?? 0);
           }
         } catch (error) {
           dbError = error instanceof Error ? error.message : String(error);
@@ -2243,9 +2258,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           await window.aura.db.exec("BEGIN");
           try {
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, pmid, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, pmid, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                SAMPLE.workId,
+                SAMPLE.workId, libraryId,
                 SAMPLE.doi,
                 SAMPLE.pmid,
                 SAMPLE.title,
@@ -2260,9 +2275,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                MISSING_PDF.workId,
+                MISSING_PDF.workId, libraryId,
                 MISSING_PDF.doi,
                 MISSING_PDF.title,
                 "A deterministic smoke-test paper for validating the missing-PDF reader recovery state.",
@@ -2278,9 +2293,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             for (let index = 0; index < 35; index += 1) {
               const createdAt = now - 100 - index;
               await window.aura.db.run(
-                "INSERT OR REPLACE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                  "smoke-work-library-deeplink-filler-" + index,
+                  "smoke-work-library-deeplink-filler-" + index, libraryId,
                   "10.4242/aurascholar.library-deeplink-filler-" + index,
                   "Smoke Library Deep Link Filler " + String(index + 1).padStart(2, "0"),
                   "A deterministic smoke-test paper used to force library deep-link pagination.",
@@ -2295,9 +2310,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               );
             }
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                BROKEN_BLOB.workId,
+                BROKEN_BLOB.workId, libraryId,
                 BROKEN_BLOB.doi,
                 BROKEN_BLOB.title,
                 "A deterministic smoke-test paper for validating broken local blob recovery.",
@@ -2311,9 +2326,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                CORRUPT_PDF.workId,
+                CORRUPT_PDF.workId, libraryId,
                 CORRUPT_PDF.doi,
                 CORRUPT_PDF.title,
                 "A deterministic smoke-test paper for validating corrupt PDF repair.",
@@ -2327,9 +2342,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                LIBRARY_UPLOAD_PDF.workId,
+                LIBRARY_UPLOAD_PDF.workId, libraryId,
                 LIBRARY_UPLOAD_PDF.doi,
                 LIBRARY_UPLOAD_PDF.title,
                 "A deterministic smoke-test paper for validating Library detail PDF upload feedback.",
@@ -2343,9 +2358,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                MERGE_SMOKE.primaryId,
+                MERGE_SMOKE.primaryId, libraryId,
                 MERGE_SMOKE.primaryDoi,
                 MERGE_SMOKE.primaryTitle,
                 null,
@@ -2359,9 +2374,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                MERGE_SMOKE.duplicateId,
+                MERGE_SMOKE.duplicateId, libraryId,
                 MERGE_SMOKE.duplicateDoi,
                 MERGE_SMOKE.duplicateTitle,
                 "Metadata moved by merge smoke",
@@ -2375,9 +2390,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                MERGE_FAILURE_SMOKE.primaryId,
+                MERGE_FAILURE_SMOKE.primaryId, libraryId,
                 MERGE_FAILURE_SMOKE.primaryDoi,
                 MERGE_FAILURE_SMOKE.primaryTitle,
                 "Primary record for validating failed merge rollback.",
@@ -2391,9 +2406,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                MERGE_FAILURE_SMOKE.duplicateId,
+                MERGE_FAILURE_SMOKE.duplicateId, libraryId,
                 MERGE_FAILURE_SMOKE.duplicateDoi,
                 MERGE_FAILURE_SMOKE.duplicateTitle,
                 "Duplicate record for validating failed merge rollback.",
@@ -2407,9 +2422,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                READER_ARCHIVED_SMOKE.workId,
+                READER_ARCHIVED_SMOKE.workId, libraryId,
                 READER_ARCHIVED_SMOKE.doi,
                 READER_ARCHIVED_SMOKE.title,
                 "A deterministic smoke-test paper for validating archived Reader links.",
@@ -2424,9 +2439,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                TRASH_ACTION_SMOKE.workId,
+                TRASH_ACTION_SMOKE.workId, libraryId,
                 TRASH_ACTION_SMOKE.doi,
                 TRASH_ACTION_SMOKE.title,
                 "A deterministic smoke-test paper for validating recoverable trash actions.",
@@ -2441,9 +2456,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                TRASH_FAILURE_SMOKE.workId,
+                TRASH_FAILURE_SMOKE.workId, libraryId,
                 TRASH_FAILURE_SMOKE.doi,
                 TRASH_FAILURE_SMOKE.title,
                 "A deterministic smoke-test paper for validating retryable trash failures.",
@@ -2458,9 +2473,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             for (const work of BULK_TRASH_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                  work.workId,
+                  work.workId, libraryId,
                   work.doi,
                   work.title,
                   "A deterministic smoke-test paper for validating atomic bulk trash rollback.",
@@ -2476,9 +2491,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             }
             for (const work of MOVE_COLLECTION_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                  work.workId,
+                  work.workId, libraryId,
                   work.doi,
                   work.title,
                   "A deterministic smoke-test paper for validating atomic collection move rollback.",
@@ -2494,9 +2509,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             }
             for (const work of BULK_TAG_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                  work.workId,
+                  work.workId, libraryId,
                   work.doi,
                   work.title,
                   "A deterministic smoke-test paper for validating atomic bulk tag rollback.",
@@ -2511,9 +2526,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               );
             }
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                TRASH_UNDO_SMOKE.workId,
+                TRASH_UNDO_SMOKE.workId, libraryId,
                 TRASH_UNDO_SMOKE.doi,
                 TRASH_UNDO_SMOKE.title,
                 "A deterministic smoke-test paper for validating instant undo after accidental trash.",
@@ -2527,9 +2542,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [
-                TRASH_PURGE_SMOKE.workId,
+                TRASH_PURGE_SMOKE.workId, libraryId,
                 TRASH_PURGE_SMOKE.doi,
                 TRASH_PURGE_SMOKE.title,
                 "A deterministic smoke-test paper for validating typed confirmation before permanent deletion.",
@@ -2545,9 +2560,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             for (const work of TRASH_PURGE_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                  work.workId,
+                  work.workId, libraryId,
                   work.doi,
                   work.title,
                   "A deterministic smoke-test paper for validating atomic permanent delete rollback.",
@@ -2564,9 +2579,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             }
             for (const work of TRASH_RESTORE_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                  work.workId,
+                  work.workId, libraryId,
                   work.doi,
                   work.title,
                   "A deterministic smoke-test paper for validating atomic trash restore rollback.",
@@ -2582,23 +2597,23 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               );
             }
             await window.aura.db.run(
-              "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ?",
-              [now - 2_000, now - 4, TRASH_ACTION_SMOKE.workId]
+              "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ? AND library_id = ?",
+              [now - 2_000, now - 4, TRASH_ACTION_SMOKE.workId, libraryId]
             );
             await window.aura.db.run(
-              "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ?",
-              [now - 4, TRASH_FAILURE_SMOKE.workId]
+              "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ? AND library_id = ?",
+              [now - 4, TRASH_FAILURE_SMOKE.workId, libraryId]
             );
             for (const work of BULK_TRASH_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ?",
-                [now - 4, work.workId]
+                "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ? AND library_id = ?",
+                [now - 4, work.workId, libraryId]
               );
             }
             for (const work of MOVE_COLLECTION_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ?",
-                [now - 4, work.workId]
+                "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ? AND library_id = ?",
+                [now - 4, work.workId, libraryId]
               );
               await window.aura.db.run(
                 "DELETE FROM collection_items WHERE work_id = ?",
@@ -2607,106 +2622,106 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             }
             for (const work of BULK_TAG_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ?",
-                [now - 4, work.workId]
+                "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ? AND library_id = ?",
+                [now - 4, work.workId, libraryId]
               );
             }
             await window.aura.db.run(
-              "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ?",
-              [now - 4, TRASH_UNDO_SMOKE.workId]
+              "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ? AND library_id = ?",
+              [now - 4, TRASH_UNDO_SMOKE.workId, libraryId]
             );
             await window.aura.db.run(
-              "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ?",
-              [now - 3_000, now - 4, TRASH_PURGE_SMOKE.workId]
+              "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ? AND library_id = ?",
+              [now - 3_000, now - 4, TRASH_PURGE_SMOKE.workId, libraryId]
             );
             for (const work of TRASH_PURGE_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ?",
-                [now - 3_500, now - 4, work.workId]
+                "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ? AND library_id = ?",
+                [now - 3_500, now - 4, work.workId, libraryId]
               );
             }
             for (const work of TRASH_RESTORE_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ?",
-                [now - 3_800, now - 4, work.workId]
+                "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ? AND library_id = ?",
+                [now - 3_800, now - 4, work.workId, libraryId]
               );
             }
             await window.aura.db.run(
-              "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ?",
-              [now - 4_200, now - 4, READER_ARCHIVED_SMOKE.workId]
+              "UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ? AND library_id = ?",
+              [now - 4_200, now - 4, READER_ARCHIVED_SMOKE.workId, libraryId]
             );
             await window.aura.db.run(
-              "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id IN (?, ?)",
-              [now - 4, MERGE_FAILURE_SMOKE.primaryId, MERGE_FAILURE_SMOKE.duplicateId]
+              "UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id IN (?, ?) AND library_id = ?",
+              [now - 4, MERGE_FAILURE_SMOKE.primaryId, MERGE_FAILURE_SMOKE.duplicateId, libraryId]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [SAMPLE.authorId, SAMPLE.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [SAMPLE.authorId, libraryId, SAMPLE.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [MISSING_PDF.authorId, MISSING_PDF.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [MISSING_PDF.authorId, libraryId, MISSING_PDF.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [BROKEN_BLOB.authorId, BROKEN_BLOB.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [BROKEN_BLOB.authorId, libraryId, BROKEN_BLOB.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [CORRUPT_PDF.authorId, CORRUPT_PDF.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [CORRUPT_PDF.authorId, libraryId, CORRUPT_PDF.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [LIBRARY_UPLOAD_PDF.authorId, LIBRARY_UPLOAD_PDF.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [LIBRARY_UPLOAD_PDF.authorId, libraryId, LIBRARY_UPLOAD_PDF.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [READER_ARCHIVED_SMOKE.authorId, READER_ARCHIVED_SMOKE.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [READER_ARCHIVED_SMOKE.authorId, libraryId, READER_ARCHIVED_SMOKE.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [TRASH_ACTION_SMOKE.authorId, TRASH_ACTION_SMOKE.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [TRASH_ACTION_SMOKE.authorId, libraryId, TRASH_ACTION_SMOKE.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [TRASH_FAILURE_SMOKE.authorId, TRASH_FAILURE_SMOKE.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [TRASH_FAILURE_SMOKE.authorId, libraryId, TRASH_FAILURE_SMOKE.author, now, now]
             );
             for (const work of BULK_TRASH_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                [work.authorId, work.author, now, now]
+                "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                [work.authorId, libraryId, work.author, now, now]
               );
             }
             for (const work of MOVE_COLLECTION_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                [work.authorId, work.author, now, now]
+                "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                [work.authorId, libraryId, work.author, now, now]
               );
             }
             for (const work of BULK_TAG_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                [work.authorId, work.author, now, now]
+                "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                [work.authorId, libraryId, work.author, now, now]
               );
             }
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [TRASH_UNDO_SMOKE.authorId, TRASH_UNDO_SMOKE.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [TRASH_UNDO_SMOKE.authorId, libraryId, TRASH_UNDO_SMOKE.author, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-              [TRASH_PURGE_SMOKE.authorId, TRASH_PURGE_SMOKE.author, now, now]
+              "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+              [TRASH_PURGE_SMOKE.authorId, libraryId, TRASH_PURGE_SMOKE.author, now, now]
             );
             for (const work of TRASH_PURGE_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                [work.authorId, work.author, now, now]
+                "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                [work.authorId, libraryId, work.author, now, now]
               );
             }
             for (const work of TRASH_RESTORE_FAILURE_SMOKE.works) {
               await window.aura.db.run(
-                "INSERT OR IGNORE INTO authors (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                [work.authorId, work.author, now, now]
+                "INSERT OR IGNORE INTO authors (id, library_id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                [work.authorId, libraryId, work.author, now, now]
               );
             }
             await window.aura.db.run(
@@ -2786,28 +2801,28 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               );
             }
             await window.aura.db.run(
-              "DELETE FROM work_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ?)",
-              [BULK_TAG_FAILURE_SMOKE.name]
+              "DELETE FROM work_tags WHERE tag_id IN (SELECT id FROM tags WHERE name = ? AND library_id = ?)",
+              [BULK_TAG_FAILURE_SMOKE.name, libraryId]
             );
             await window.aura.db.run(
-              "DELETE FROM tags WHERE name = ?",
-              [BULK_TAG_FAILURE_SMOKE.name]
+              "DELETE FROM tags WHERE name = ? AND library_id = ?",
+              [BULK_TAG_FAILURE_SMOKE.name, libraryId]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-              [SAMPLE.tagId, SAMPLE.tag, "#0f766e", now, now]
+              "INSERT OR IGNORE INTO tags (id, library_id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+              [SAMPLE.tagId, libraryId, SAMPLE.tag, "#0f766e", now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-              [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.name, TAG_MANAGER_SMOKE.color, now, now]
+              "INSERT OR IGNORE INTO tags (id, library_id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+              [TAG_MANAGER_SMOKE.id, libraryId, TAG_MANAGER_SMOKE.name, TAG_MANAGER_SMOKE.color, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO collections (id, name, parent_id, sort_order, created_at, updated_at) VALUES (?, ?, NULL, 0, ?, ?)",
-              [COLLECTION_MANAGER_SMOKE.id, COLLECTION_MANAGER_SMOKE.name, now, now]
+              "INSERT OR IGNORE INTO collections (id, library_id, name, parent_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, NULL, 0, ?, ?)",
+              [COLLECTION_MANAGER_SMOKE.id, libraryId, COLLECTION_MANAGER_SMOKE.name, now, now]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO collections (id, name, parent_id, sort_order, created_at, updated_at) VALUES (?, ?, NULL, 0, ?, ?)",
-              [MOVE_COLLECTION_SMOKE.id, MOVE_COLLECTION_SMOKE.name, now, now]
+              "INSERT OR IGNORE INTO collections (id, library_id, name, parent_id, sort_order, created_at, updated_at) VALUES (?, ?, ?, NULL, 0, ?, ?)",
+              [MOVE_COLLECTION_SMOKE.id, libraryId, MOVE_COLLECTION_SMOKE.name, now, now]
             );
             await window.aura.db.run(
               "INSERT OR IGNORE INTO collection_items (collection_id, work_id) VALUES (?, ?)",
@@ -2930,9 +2945,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
+              "INSERT OR IGNORE INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, ?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
               [
-                LIBRARY_SENTINEL_LINK_SMOKE.id,
+                LIBRARY_SENTINEL_LINK_SMOKE.id, libraryId,
                 LIBRARY_SENTINEL_LINK_SMOKE.doi,
                 LIBRARY_SENTINEL_LINK_SMOKE.title,
                 now + 43_200_000,
@@ -2941,9 +2956,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
+              "INSERT OR IGNORE INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, ?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
               [
-                SENTINEL_DUPLICATE_SMOKE.id,
+                SENTINEL_DUPLICATE_SMOKE.id, libraryId,
                 SENTINEL_DUPLICATE_SMOKE.doi,
                 SENTINEL_DUPLICATE_SMOKE.title,
                 now + 43_200_000,
@@ -2952,9 +2967,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, last_error, status, created_at, updated_at, deleted_at) VALUES (?, NULL, ?, ?, 'accepted', NULL, 86400, ?, ?, 2, ?, 'active', ?, ?, NULL)",
+              "INSERT OR IGNORE INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, last_error, status, created_at, updated_at, deleted_at) VALUES (?, ?, NULL, ?, ?, 'accepted', NULL, 86400, ?, ?, 2, ?, 'active', ?, ?, NULL)",
               [
-                SENTINEL_ERROR_SMOKE.id,
+                SENTINEL_ERROR_SMOKE.id, libraryId,
                 SENTINEL_ERROR_SMOKE.doi,
                 SENTINEL_ERROR_SMOKE.title,
                 now + 43_200_000,
@@ -2965,9 +2980,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, last_error, status, created_at, updated_at, deleted_at) VALUES (?, NULL, ?, ?, 'accepted', ?, 86400, ?, NULL, 0, NULL, 'active', ?, ?, NULL)",
+              "INSERT OR IGNORE INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, last_error, status, created_at, updated_at, deleted_at) VALUES (?, ?, NULL, ?, ?, 'accepted', ?, 86400, ?, NULL, 0, NULL, 'active', ?, ?, NULL)",
               [
-                SENTINEL_MANUAL_FAILURE_SMOKE.id,
+                SENTINEL_MANUAL_FAILURE_SMOKE.id, libraryId,
                 SENTINEL_MANUAL_FAILURE_SMOKE.doi,
                 SENTINEL_MANUAL_FAILURE_SMOKE.title,
                 "{broken",
@@ -2977,9 +2992,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
+              "INSERT OR IGNORE INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, ?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
               [
-                SENTINEL_DELETE_UNDO_SMOKE.id,
+                SENTINEL_DELETE_UNDO_SMOKE.id, libraryId,
                 SENTINEL_DELETE_UNDO_SMOKE.doi,
                 SENTINEL_DELETE_UNDO_SMOKE.title,
                 now + 43_200_000,
@@ -2988,9 +3003,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'paused', ?, ?, ?)",
+              "INSERT OR IGNORE INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, ?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'paused', ?, ?, ?)",
               [
-                SENTINEL_RESTORE_SMOKE.id,
+                SENTINEL_RESTORE_SMOKE.id, libraryId,
                 SENTINEL_RESTORE_SMOKE.doi,
                 SENTINEL_RESTORE_SMOKE.title,
                 now + 43_200_000,
@@ -3000,9 +3015,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO saved_searches (id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO saved_searches (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
               [
-                SAVED_SEARCH_SMOKE.id,
+                SAVED_SEARCH_SMOKE.id, libraryId,
                 SAVED_SEARCH_SMOKE.query,
                 null,
                 "[]",
@@ -3013,9 +3028,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO saved_searches (id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO saved_searches (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
               [
-                SAVED_SEARCH_MANUAL_SMOKE.id,
+                SAVED_SEARCH_MANUAL_SMOKE.id, libraryId,
                 SAVED_SEARCH_MANUAL_SMOKE.query,
                 "[]",
                 "[]",
@@ -3026,9 +3041,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO saved_searches (id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, 2, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO saved_searches (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 2, ?, ?, ?, ?)",
               [
-                SAVED_SEARCH_HOME_OPEN_SMOKE.id,
+                SAVED_SEARCH_HOME_OPEN_SMOKE.id, libraryId,
                 SAVED_SEARCH_HOME_OPEN_SMOKE.query,
                 "[]",
                 "[]",
@@ -3039,7 +3054,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ]
             );
             await window.aura.db.run(
-              "UPDATE saved_searches SET query = ?, sources_json = ?, seen_ids_json = ?, new_count = 2, last_run_at = ?, next_run_at = ?, last_error = NULL, updated_at = ?, deleted_at = NULL WHERE id = ?",
+              "UPDATE saved_searches SET query = ?, sources_json = ?, seen_ids_json = ?, new_count = 2, last_run_at = ?, next_run_at = ?, last_error = NULL, updated_at = ?, deleted_at = NULL WHERE id = ? AND library_id = ?",
               [
                 SAVED_SEARCH_HOME_OPEN_SMOKE.query,
                 "[]",
@@ -3048,12 +3063,12 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 now + 43_200_000,
                 now + 2,
                 SAVED_SEARCH_HOME_OPEN_SMOKE.id
-              ]
+              , libraryId]
             );
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO saved_searches (id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO saved_searches (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
               [
-                SAVED_SEARCH_ERROR_SMOKE.id,
+                SAVED_SEARCH_ERROR_SMOKE.id, libraryId,
                 SAVED_SEARCH_ERROR_SMOKE.query,
                 null,
                 "[]",
@@ -3337,9 +3352,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             await selectLibraryDetailTab("笔记");
             const canvasWorkspaceFixtureNow = Date.now();
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO canvas_workspaces (id, name, description, schema_version, viewport_json, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO canvas_workspaces (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)",
               [
-                "canvas:default",
+                "canvas:default", libraryId,
                 "研究画布",
                 1,
                 JSON.stringify({ x: 0, y: 0, zoom: 1 }),
@@ -3357,9 +3372,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             window.dispatchEvent(new Event("aurascholar:canvas-updated"));
           const libraryRaceTitle = "Smoke Library Race Newer Refresh Wins";
-          await window.aura.db.run("DELETE FROM works WHERE id = ?", [
+          await window.aura.db.run("DELETE FROM works WHERE id = ? AND library_id = ?", [
             "smoke-library-refresh-race"
-          ]);
+          , libraryId]);
           window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__ = 450;
           window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__ = 0;
           findButton("刷新")?.click();
@@ -3369,9 +3384,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           const libraryRaceNow = Date.now();
           await window.aura.db.run(
-            "INSERT OR REPLACE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-              "smoke-library-refresh-race",
+              "smoke-library-refresh-race", libraryId,
               "10.4242/aurascholar.library-refresh-race",
               libraryRaceTitle,
               "A deterministic smoke-test paper for validating library refresh race handling.",
@@ -3394,12 +3409,12 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           delete window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__;
 
           const positiveSearchRows = await window.aura.db.query(
-            "SELECT w.id FROM works w JOIN works_fts f ON f.rowid = w.rowid WHERE works_fts MATCH ? AND w.deleted_at IS NULL",
-            ['"Extreme"* "Consumer"*']
+            "SELECT w.id FROM works w JOIN works_fts f ON f.rowid = w.rowid WHERE works_fts MATCH ? AND w.deleted_at IS NULL AND w.library_id = ?",
+            ['"Extreme"* "Consumer"*', libraryId]
           );
           const negativeSearchRows = await window.aura.db.query(
-            "SELECT w.id FROM works w JOIN works_fts f ON f.rowid = w.rowid WHERE works_fts MATCH ? AND w.deleted_at IS NULL",
-            ['"NoMatchingSmokePaper"*']
+            "SELECT w.id FROM works w JOIN works_fts f ON f.rowid = w.rowid WHERE works_fts MATCH ? AND w.deleted_at IS NULL AND w.library_id = ?",
+            ['"NoMatchingSmokePaper"*', libraryId]
           );
           searchDataPathOk =
             positiveSearchRows.some((row) => row.id === SAMPLE.workId) &&
@@ -3734,8 +3749,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 return label === "删除" || label === "移入中...";
               });
             const bulkTrashFailureRowsBefore = await window.aura.db.query(
-              "SELECT id, deleted_at FROM works WHERE id IN (?, ?) ORDER BY id",
-              BULK_TRASH_FAILURE_SMOKE.works.map((work) => work.workId)
+              "SELECT id, deleted_at FROM works WHERE id IN (?, ?) AND works.library_id = ? ORDER BY id",
+              [...BULK_TRASH_FAILURE_SMOKE.works.map((work) => work.workId), libraryId]
             );
             bulkTrashFailureButton()?.click();
             const bulkTrashFailureDialog = await waitFor(() => {
@@ -3767,8 +3782,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TRASH_AFTER_FIRST__;
             const bulkTrashFailureRowsAfter = await window.aura.db.query(
-              "SELECT id, deleted_at FROM works WHERE id IN (?, ?) ORDER BY id",
-              BULK_TRASH_FAILURE_SMOKE.works.map((work) => work.workId)
+              "SELECT id, deleted_at FROM works WHERE id IN (?, ?) AND works.library_id = ? ORDER BY id",
+              [...BULK_TRASH_FAILURE_SMOKE.works.map((work) => work.workId), libraryId]
             );
             const bulkTrashFailureRetryButton = bulkTrashFailureButton();
             libraryBulkTrashFailureVisible =
@@ -3808,8 +3823,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 }
               );
             const trashFailureRowsBefore = await window.aura.db.query(
-              "SELECT deleted_at FROM works WHERE id = ? LIMIT 1",
-              [TRASH_FAILURE_SMOKE.workId]
+              "SELECT deleted_at FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [TRASH_FAILURE_SMOKE.workId, libraryId]
             );
             singleTrashButton()?.click();
             const trashFailureDialog = await waitFor(() => {
@@ -3841,8 +3856,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH__;
             const trashFailureRowsAfter = await window.aura.db.query(
-              "SELECT deleted_at FROM works WHERE id = ? LIMIT 1",
-              [TRASH_FAILURE_SMOKE.workId]
+              "SELECT deleted_at FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [TRASH_FAILURE_SMOKE.workId, libraryId]
             );
             const retryTrashButton = singleTrashButton();
             libraryTrashFailureVisible =
@@ -3913,8 +3928,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__;
             const trashUndoRowsAfterFailure = await window.aura.db.query(
-              "SELECT deleted_at FROM works WHERE id = ? LIMIT 1",
-              [TRASH_UNDO_SMOKE.workId]
+              "SELECT deleted_at FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [TRASH_UNDO_SMOKE.workId, libraryId]
             );
             const trashUndoButtonAfterFailure = document.querySelector(
               'button[aria-label="撤销移入回收站"]'
@@ -3945,8 +3960,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               3_000
             );
             const trashUndoRows = await window.aura.db.query(
-              "SELECT deleted_at FROM works WHERE id = ? LIMIT 1",
-              [TRASH_UNDO_SMOKE.workId]
+              "SELECT deleted_at FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [TRASH_UNDO_SMOKE.workId, libraryId]
             );
             libraryTrashUndoRecovered =
               libraryTrashUndoVisible &&
@@ -4003,11 +4018,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 return label === "永久删除" || label === "删除中...";
               });
             const purgeFailureRowsBefore = await window.aura.db.query(
-              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL",
+              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL AND works.library_id = ?",
               [
                 TRASH_PURGE_FAILURE_SMOKE.works[0].workId,
                 TRASH_PURGE_FAILURE_SMOKE.works[1].workId
-              ]
+              , libraryId]
             );
             trashPurgeFailureButton()?.click();
             const trashPurgeFailureDialog = await waitFor(() => {
@@ -4048,11 +4063,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             await window.aura.db.exec("DROP TRIGGER IF EXISTS aurascholar_smoke_purge_failure");
             const purgeFailureRowsAfter = await window.aura.db.query(
-              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL",
+              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL AND works.library_id = ?",
               [
                 TRASH_PURGE_FAILURE_SMOKE.works[0].workId,
                 TRASH_PURGE_FAILURE_SMOKE.works[1].workId
-              ]
+              , libraryId]
             );
             const trashPurgeFailureRetryButton = trashPurgeFailureButton();
             libraryTrashPurgeFailureVisible =
@@ -4093,11 +4108,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 return label === "恢复" || label === "恢复中...";
               });
             const restoreFailureRowsBefore = await window.aura.db.query(
-              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL",
+              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL AND works.library_id = ?",
               [
                 TRASH_RESTORE_FAILURE_SMOKE.works[0].workId,
                 TRASH_RESTORE_FAILURE_SMOKE.works[1].workId
-              ]
+              , libraryId]
             );
             window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE_AFTER_FIRST__ =
               TRASH_RESTORE_FAILURE_SMOKE.error;
@@ -4121,11 +4136,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE_AFTER_FIRST__;
             const restoreFailureRowsAfter = await window.aura.db.query(
-              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL",
+              "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL AND works.library_id = ?",
               [
                 TRASH_RESTORE_FAILURE_SMOKE.works[0].workId,
                 TRASH_RESTORE_FAILURE_SMOKE.works[1].workId
-              ]
+              , libraryId]
             );
             const trashRestoreFailureRetryButton = trashRestoreFailureButton();
             libraryTrashRestoreFailureVisible =
@@ -4173,8 +4188,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ".library-confirm-modal__phrase input"
             );
             const blockedRows = await window.aura.db.query(
-              "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-              [TRASH_PURGE_SMOKE.workId]
+              "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+              [TRASH_PURGE_SMOKE.workId, libraryId]
             );
             libraryTrashPurgeTypedConfirmProtected =
               Boolean(trashPurgeConfirmButton?.disabled) &&
@@ -4205,8 +4220,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               3_000
             );
             const purgedRows = await window.aura.db.query(
-              "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-              [TRASH_PURGE_SMOKE.workId]
+              "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+              [TRASH_PURGE_SMOKE.workId, libraryId]
             );
             libraryTrashPurgePersisted =
               bodyIncludes("已永久删除 1 篇文献") && Number(purgedRows[0]?.n ?? 0) === 0;
@@ -4244,8 +4259,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               3_000
             );
             const restoredRows = await window.aura.db.query(
-              "SELECT deleted_at FROM works WHERE id = ? LIMIT 1",
-              [TRASH_ACTION_SMOKE.workId]
+              "SELECT deleted_at FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [TRASH_ACTION_SMOKE.workId, libraryId]
             );
             libraryTrashRestoreSuccessVisible =
               bodyIncludes("已恢复 1 篇文献") && restoredRows[0]?.deleted_at == null;
@@ -4295,8 +4310,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
           };
           const readingStatusRowsBeforeFailure = await window.aura.db.query(
-            "SELECT reading_status FROM works WHERE id = ? LIMIT 1",
-            [SAMPLE.workId]
+            "SELECT reading_status FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+            [SAMPLE.workId, libraryId]
           );
           window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READING_STATUS__ =
             "Smoke library reading status failure";
@@ -4322,8 +4337,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READING_STATUS__;
           const readingStatusRowsAfterFailure = await window.aura.db.query(
-            "SELECT reading_status FROM works WHERE id = ? LIMIT 1",
-            [SAMPLE.workId]
+            "SELECT reading_status FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+            [SAMPLE.workId, libraryId]
           );
           const activeReadingStatusLabelAfterFailure =
             document
@@ -4358,10 +4373,14 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           await waitFor(() => bodyIncludes("已更新阅读状态:阅读中"), 3_000);
           libraryReadingStatusSuccessVisible = bodyIncludes("已更新阅读状态:阅读中");
-          seededWorkCount = await window.aura.db.queryScalar("SELECT COUNT(*) FROM works");
+          const seededWorkCountRows = await window.aura.db.query(
+            "SELECT COUNT(*) AS n FROM works WHERE library_id = ?",
+            [libraryId]
+          );
+          seededWorkCount = Number(seededWorkCountRows[0]?.n ?? 0);
           const statusRows = await window.aura.db.query(
-            "SELECT reading_status FROM works WHERE id = ? LIMIT 1",
-            [SAMPLE.workId]
+            "SELECT reading_status FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+            [SAMPLE.workId, libraryId]
           );
           readingStatus = statusRows[0]?.reading_status ?? null;
           libraryReadingStatusPersisted = readingStatus === "reading";
@@ -4391,8 +4410,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               ? "已标记重点:《" + SAMPLE.title + "》"
               : "已取消重点:《" + SAMPLE.title + "》";
             const starRowsBeforeFailure = await window.aura.db.query(
-              "SELECT starred FROM works WHERE id = ? LIMIT 1",
-              [SAMPLE.workId]
+              "SELECT starred FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [SAMPLE.workId, libraryId]
             );
             window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_STAR__ =
               "Smoke library star failure";
@@ -4416,8 +4435,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_STAR__;
             const starRowsAfterFailure = await window.aura.db.query(
-              "SELECT starred FROM works WHERE id = ? LIMIT 1",
-              [SAMPLE.workId]
+              "SELECT starred FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [SAMPLE.workId, libraryId]
             );
             libraryStarFailureVisible =
               bodyIncludes("更新重点状态失败，重点状态仍保留，可重新切换") &&
@@ -4446,8 +4465,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             await waitFor(() => bodyIncludes(successMessage), 3_000);
             libraryStarSuccessVisible = bodyIncludes(successMessage);
             const starRows = await window.aura.db.query(
-              "SELECT starred FROM works WHERE id = ? LIMIT 1",
-              [SAMPLE.workId]
+              "SELECT starred FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [SAMPLE.workId, libraryId]
             );
             libraryStarPersisted = Number(starRows[0]?.starred ?? -1) === (starTarget ? 1 : 0);
           }
@@ -4965,8 +4984,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           const bulkTagFailureInput = bulkTagFailureDialog?.querySelector("input");
           if (bulkTagFailureInput) setInputValue(bulkTagFailureInput, BULK_TAG_FAILURE_SMOKE.name);
           const bulkTagFailureRowsBefore = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE name = ?) AS tag_count, (SELECT COUNT(*) FROM work_tags wt JOIN tags t ON t.id = wt.tag_id WHERE t.name = ? AND wt.work_id IN (?, ?)) AS item_count",
-            [
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE name = ?) AS tag_count, (SELECT COUNT(*) FROM work_tags wt JOIN (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS t ON t.id = wt.tag_id WHERE t.name = ? AND wt.work_id IN (?, ?)) AS item_count",
+            [libraryId,
               BULK_TAG_FAILURE_SMOKE.name,
               BULK_TAG_FAILURE_SMOKE.name,
               BULK_TAG_FAILURE_SMOKE.works[0].workId,
@@ -5003,8 +5022,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TAG_AFTER_FIRST__;
           const bulkTagFailureRowsAfter = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE name = ?) AS tag_count, (SELECT COUNT(*) FROM work_tags wt JOIN tags t ON t.id = wt.tag_id WHERE t.name = ? AND wt.work_id IN (?, ?)) AS item_count",
-            [
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE name = ?) AS tag_count, (SELECT COUNT(*) FROM work_tags wt JOIN (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS t ON t.id = wt.tag_id WHERE t.name = ? AND wt.work_id IN (?, ?)) AS item_count",
+            [libraryId,
               BULK_TAG_FAILURE_SMOKE.name,
               BULK_TAG_FAILURE_SMOKE.name,
               BULK_TAG_FAILURE_SMOKE.works[0].workId,
@@ -5097,8 +5116,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             "已为 1 篇文献添加标签「" + BULK_TAG_SMOKE.name + "」"
           );
           const bulkTagRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM work_tags wt JOIN tags t ON t.id = wt.tag_id WHERE wt.work_id = ? AND t.name = ? AND t.deleted_at IS NULL",
-            [SAMPLE.workId, BULK_TAG_SMOKE.name]
+            "WITH current_library(id) AS (VALUES (?)) SELECT COUNT(*) AS n FROM work_tags wt JOIN (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS t ON t.id = wt.tag_id WHERE wt.work_id = ? AND t.name = ? AND t.deleted_at IS NULL",
+            [libraryId, SAMPLE.workId, BULK_TAG_SMOKE.name]
           );
           libraryBulkTagPersisted = Number(bulkTagRows[0]?.n ?? 0) === 1;
         }
@@ -5134,14 +5153,14 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           }
           await waitFor(() => bodyIncludes("已选 2 篇"), 1_000);
           const mergeFailureRowsBefore = await window.aura.db.query(
-            "SELECT SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS primary_active, SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS duplicate_active, (SELECT work_id FROM attachments WHERE id = ?) AS attachment_work_id FROM works WHERE id IN (?, ?)",
+            "SELECT SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS primary_active, SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS duplicate_active, (SELECT work_id FROM attachments WHERE id = ?) AS attachment_work_id FROM works WHERE id IN (?, ?) AND works.library_id = ?",
             [
               MERGE_FAILURE_SMOKE.primaryId,
               MERGE_FAILURE_SMOKE.duplicateId,
               MERGE_FAILURE_SMOKE.attachmentId,
               MERGE_FAILURE_SMOKE.primaryId,
               MERGE_FAILURE_SMOKE.duplicateId
-            ]
+            , libraryId]
           );
           await window.aura.db.exec("DROP TRIGGER IF EXISTS aurascholar_smoke_merge_failure");
           await window.aura.db.exec(
@@ -5181,14 +5200,14 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           await window.aura.db.exec("DROP TRIGGER IF EXISTS aurascholar_smoke_merge_failure");
           const mergeFailureRowsAfter = await window.aura.db.query(
-            "SELECT SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS primary_active, SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS duplicate_active, (SELECT work_id FROM attachments WHERE id = ?) AS attachment_work_id FROM works WHERE id IN (?, ?)",
+            "SELECT SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS primary_active, SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS duplicate_active, (SELECT work_id FROM attachments WHERE id = ?) AS attachment_work_id FROM works WHERE id IN (?, ?) AND works.library_id = ?",
             [
               MERGE_FAILURE_SMOKE.primaryId,
               MERGE_FAILURE_SMOKE.duplicateId,
               MERGE_FAILURE_SMOKE.attachmentId,
               MERGE_FAILURE_SMOKE.primaryId,
               MERGE_FAILURE_SMOKE.duplicateId
-            ]
+            , libraryId]
           );
           const mergeFailureRetryButton = Array.from(
             document.querySelectorAll(".library-bulkbar button")
@@ -5268,13 +5287,13 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           "已合并 1 篇重复文献到《" + MERGE_SMOKE.primaryTitle + "》"
         );
         const mergeRows = await window.aura.db.query(
-          "SELECT SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS primary_active, SUM(CASE WHEN id = ? AND deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS duplicate_deleted FROM works WHERE id IN (?, ?)",
+          "SELECT SUM(CASE WHEN id = ? AND deleted_at IS NULL THEN 1 ELSE 0 END) AS primary_active, SUM(CASE WHEN id = ? AND deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS duplicate_deleted FROM works WHERE id IN (?, ?) AND works.library_id = ?",
           [
             MERGE_SMOKE.primaryId,
             MERGE_SMOKE.duplicateId,
             MERGE_SMOKE.primaryId,
             MERGE_SMOKE.duplicateId
-          ]
+          , libraryId]
         );
         libraryMergePersisted =
           Number(mergeRows[0]?.primary_active ?? 0) === 1 &&
@@ -5289,8 +5308,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         }, 3_000);
         if (collectionManagerDialog) {
           const collectionCreateRowsBefore = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM collections WHERE deleted_at IS NULL AND name = ?",
-            [COLLECTION_CREATE_FAILURE_SMOKE.name]
+            "SELECT COUNT(*) AS n FROM collections WHERE deleted_at IS NULL AND name = ? AND collections.library_id = ?",
+            [COLLECTION_CREATE_FAILURE_SMOKE.name, libraryId]
           );
           const collectionCreateButton = Array.from(
             collectionManagerDialog.querySelectorAll("button")
@@ -5339,8 +5358,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_CREATE__;
           }
           const collectionCreateRowsAfter = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM collections WHERE deleted_at IS NULL AND name = ?",
-            [COLLECTION_CREATE_FAILURE_SMOKE.name]
+            "SELECT COUNT(*) AS n FROM collections WHERE deleted_at IS NULL AND name = ? AND collections.library_id = ?",
+            [COLLECTION_CREATE_FAILURE_SMOKE.name, libraryId]
           );
           const collectionCreatePromptAfter = Array.from(
             document.querySelectorAll('[role="dialog"]')
@@ -5375,8 +5394,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             collectionManagerDialog.querySelectorAll(".library-collection-manager__row")
           ).find((row) => row.textContent?.includes(COLLECTION_MANAGER_SMOKE.name));
           const collectionRenameRowsBefore = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM collections WHERE deleted_at IS NULL AND name = ?) AS draft_count",
-            [
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE deleted_at IS NULL AND name = ?) AS draft_count",
+            [libraryId,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.name,
               COLLECTION_RENAME_FAILURE_SMOKE.name
@@ -5425,8 +5444,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RENAME__;
           }
           const collectionRenameRowsAfter = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM collections WHERE deleted_at IS NULL AND name = ?) AS draft_count",
-            [
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE deleted_at IS NULL AND name = ?) AS draft_count",
+            [libraryId,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.name,
               COLLECTION_RENAME_FAILURE_SMOKE.name
@@ -5465,8 +5484,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             1_000
           );
           const collectionDeleteFailureRowsBefore = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
-            [
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
+            [libraryId,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.id,
@@ -5523,8 +5542,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_DELETE__;
           }
           const collectionDeleteFailureRowsAfter = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
-            [
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
+            [libraryId,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.id,
@@ -5617,8 +5636,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           }, 3_000);
           libraryCollectionDeleteSuccessVisible = Boolean(collectionDeleteSuccessDialog);
           const collectionDeleteRows = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ?) AS item_count",
-            [COLLECTION_MANAGER_SMOKE.id, COLLECTION_MANAGER_SMOKE.id]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ?) AS item_count",
+            [libraryId, COLLECTION_MANAGER_SMOKE.id, COLLECTION_MANAGER_SMOKE.id]
           );
           libraryCollectionDeletePersisted =
             Number(collectionDeleteRows[0]?.deleted_count ?? 0) === 1 &&
@@ -5656,8 +5675,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_COLLECTION_RESTORE__;
           }
           const collectionRestoreFailureRows = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
-            [
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
+            [libraryId,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.id,
               COLLECTION_MANAGER_SMOKE.id,
@@ -5721,8 +5740,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               : null;
           }, 3_000);
           const collectionRestoreRows = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
-            [COLLECTION_MANAGER_SMOKE.id, COLLECTION_MANAGER_SMOKE.id, MISSING_PDF.workId]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM collections WHERE library_id = (SELECT id FROM current_library)) AS collections WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND work_id = ?) AS item_count",
+            [libraryId, COLLECTION_MANAGER_SMOKE.id, COLLECTION_MANAGER_SMOKE.id, MISSING_PDF.workId]
           );
           libraryCollectionDeleteUndoRecovered =
             Boolean(collectionRestoreDialog?.textContent?.includes(COLLECTION_MANAGER_SMOKE.name)) &&
@@ -5753,8 +5772,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             tagManagerDialog.querySelectorAll(".library-tag-manager__row")
           ).find((row) => row.textContent?.includes(TAG_MANAGER_SMOKE.name));
           const tagRenameRowsBefore = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM tags WHERE deleted_at IS NULL AND name = ?) AS draft_count",
-            [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.name, TAG_RENAME_FAILURE_SMOKE.name]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE deleted_at IS NULL AND name = ?) AS draft_count",
+            [libraryId, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.name, TAG_RENAME_FAILURE_SMOKE.name]
           );
           const tagRenameButton = Array.from(tagManagerRow?.querySelectorAll("button") ?? []).find(
             (button) => button.textContent?.replace(/\s+/g, " ").trim() === "重命名"
@@ -5799,8 +5818,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RENAME__;
           }
           const tagRenameRowsAfter = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM tags WHERE deleted_at IS NULL AND name = ?) AS draft_count",
-            [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.name, TAG_RENAME_FAILURE_SMOKE.name]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NULL AND name = ?) AS original_count, (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE deleted_at IS NULL AND name = ?) AS draft_count",
+            [libraryId, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.name, TAG_RENAME_FAILURE_SMOKE.name]
           );
           const tagRenamePromptAfter = Array.from(document.querySelectorAll(".library-prompt-modal")).find(
             (item) => item.textContent?.includes("重命名标签")
@@ -5835,8 +5854,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             1_000
           );
           const tagDeleteFailureRowsBefore = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
-            [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
+            [libraryId, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
           );
           const tagManagerRowForFailedDelete = Array.from(
             tagManagerDialog.querySelectorAll(".library-tag-manager__row")
@@ -5888,8 +5907,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_DELETE__;
           }
           const tagDeleteFailureRowsAfter = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
-            [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
+            [libraryId, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
           );
           const tagManagerDialogAfterFailedDelete = Array.from(
             document.querySelectorAll('[role="dialog"]')
@@ -5971,8 +5990,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           }, 3_000);
           libraryTagDeleteSuccessVisible = Boolean(tagDeleteSuccessDialog);
           const tagDeleteRows = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ?) AS item_count",
-            [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ?) AS item_count",
+            [libraryId, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id]
           );
           libraryTagDeletePersisted =
             Number(tagDeleteRows[0]?.deleted_count ?? 0) === 1 &&
@@ -6010,8 +6029,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RESTORE__;
           }
           const tagRestoreFailureRows = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
-            [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
+            [libraryId, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
           );
           const tagManagerDialogAfterFailedRestore = Array.from(
             document.querySelectorAll('[role="dialog"]')
@@ -6068,8 +6087,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               : null;
           }, 3_000);
           const tagRestoreRows = await window.aura.db.query(
-            "SELECT (SELECT COUNT(*) FROM tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
-            [TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
+            "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM tags WHERE library_id = (SELECT id FROM current_library)) AS tags WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM work_tags WHERE tag_id = ? AND work_id = ?) AS item_count",
+            [libraryId, TAG_MANAGER_SMOKE.id, TAG_MANAGER_SMOKE.id, MISSING_PDF.workId]
           );
           libraryTagDeleteUndoRecovered =
             Boolean(tagRestoreDialog?.textContent?.includes(TAG_MANAGER_SMOKE.name)) &&
@@ -6204,8 +6223,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               : null;
           }, 3_000);
           const failureImportRowsBefore = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE doi IN (?, ?) AND deleted_at IS NULL",
-            [failureImportDoiA, failureImportDoiB]
+            "SELECT COUNT(*) AS n FROM works WHERE doi IN (?, ?) AND deleted_at IS NULL AND works.library_id = ?",
+            [failureImportDoiA, failureImportDoiB, libraryId]
           );
           await window.aura.db.exec("DROP TRIGGER IF EXISTS aurascholar_smoke_reference_import_failure");
           await window.aura.db.exec(
@@ -6239,8 +6258,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           await window.aura.db.exec("DROP TRIGGER IF EXISTS aurascholar_smoke_reference_import_failure");
           const failureImportRowsAfter = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE doi IN (?, ?) AND deleted_at IS NULL",
-            [failureImportDoiA, failureImportDoiB]
+            "SELECT COUNT(*) AS n FROM works WHERE doi IN (?, ?) AND deleted_at IS NULL AND works.library_id = ?",
+            [failureImportDoiA, failureImportDoiB, libraryId]
           );
           const failureImportDialogAfter = Array.from(
             document.querySelectorAll('[role="dialog"]')
@@ -6321,8 +6340,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           await waitFor(() => bodyIncludes("导入完成:新增"), 4_000);
           quickDropImportConfirmSuccessVisible = bodyIncludes("导入完成:新增");
           const confirmImportRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n, MAX(pmid) AS pmid FROM works WHERE deleted_at IS NULL AND (doi = ? OR pmid = ? OR title = ? OR title LIKE ?)",
-            [confirmImportDoi, confirmImportPmid, confirmImportTitle, "%" + confirmImportTitle + "%"]
+            "SELECT COUNT(*) AS n, MAX(pmid) AS pmid FROM works WHERE deleted_at IS NULL AND (doi = ? OR pmid = ? OR title = ? OR title LIKE ?) AND works.library_id = ?",
+            [confirmImportDoi, confirmImportPmid, confirmImportTitle, "%" + confirmImportTitle + "%", libraryId]
           );
           quickDropImportConfirmPersisted = Number(confirmImportRows[0]?.n ?? 0) >= 1;
           quickDropImportConfirmPmidPersisted =
@@ -6381,8 +6400,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           await waitFor(() => bodyIncludes("已入库:"), 4_000);
           const importConfirmRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works w JOIN attachments a ON a.work_id = w.id WHERE w.deleted_at IS NULL AND a.deleted_at IS NULL AND a.original_filename = ? AND w.title = ?",
-            [importConfirmFileName, importConfirmTitle]
+            "SELECT COUNT(*) AS n FROM works w JOIN attachments a ON a.work_id = w.id WHERE w.deleted_at IS NULL AND a.deleted_at IS NULL AND a.original_filename = ? AND w.title = ? AND w.library_id = ?",
+            [importConfirmFileName, importConfirmTitle, libraryId]
           );
           quickImportConfirmCommitPersisted = Number(importConfirmRows[0]?.n ?? 0) >= 1;
         }
@@ -6393,8 +6412,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           2_000
         );
         const metadataBeforeRows = await window.aura.db.query(
-          "SELECT year FROM works WHERE id = ? LIMIT 1",
-          [SAMPLE.workId]
+          "SELECT year FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+          [SAMPLE.workId, libraryId]
         );
         const metadataEditButton = Array.from(
           document.querySelectorAll(".library-inspector__summary .library-panel-actions button")
@@ -6425,8 +6444,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             2_000
           );
           const metadataAfterRows = await window.aura.db.query(
-            "SELECT year FROM works WHERE id = ? LIMIT 1",
-            [SAMPLE.workId]
+            "SELECT year FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+            [SAMPLE.workId, libraryId]
           );
           metadataInvalidYearErrorVisible = Boolean(yearError);
           metadataInvalidYearBlocked = Boolean(
@@ -6486,8 +6505,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             2_000
           );
           const metadataProtectedRows = await window.aura.db.query(
-            "SELECT label FROM works WHERE id = ? LIMIT 1",
-            [SAMPLE.workId]
+            "SELECT label FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+            [SAMPLE.workId, libraryId]
           );
           metadataDiscardCancelPreserved =
             bodyIncludes("已继续编辑，未保存修改仍在。") &&
@@ -6516,8 +6535,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           delete window.__AURASCHOLAR_SMOKE_METADATA_FAIL_NEXT_SAVE__;
           const metadataFailureRows = await window.aura.db.query(
-            "SELECT label FROM works WHERE id = ? LIMIT 1",
-            [SAMPLE.workId]
+            "SELECT label FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+            [SAMPLE.workId, libraryId]
           );
           metadataSaveFailureVisible = Boolean(metadataFailureAlert);
           metadataSaveFailurePreserved =
@@ -6560,8 +6579,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             2_000
           );
           const metadataSavedRows = await window.aura.db.query(
-            "SELECT label FROM works WHERE id = ? LIMIT 1",
-            [SAMPLE.workId]
+            "SELECT label FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+            [SAMPLE.workId, libraryId]
           );
           metadataSavePersisted = metadataSavedRows[0]?.label === metadataSavedLabel;
         }
@@ -7690,11 +7709,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
 
         await window.aura.db.run("DELETE FROM snippets");
         const snippetEmptyNow = Date.now();
-        await window.aura.db.run("UPDATE works SET created_at = ?, updated_at = ? WHERE id = ?", [
+        await window.aura.db.run("UPDATE works SET created_at = ?, updated_at = ? WHERE id = ? AND library_id = ?", [
           snippetEmptyNow,
           snippetEmptyNow,
           SAMPLE.workId
-        ]);
+        , libraryId]);
         window.dispatchEvent(new Event("aurascholar:snippets-updated"));
         location.hash = "#/snippets";
         await waitFor(
@@ -7731,8 +7750,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           5_000
         );
         await window.aura.db.run(
-          "UPDATE works SET reading_status = 'unread', updated_at = ? WHERE id = ?",
-          [Date.now(), SAMPLE.workId]
+          "UPDATE works SET reading_status = 'unread', updated_at = ? WHERE id = ? AND library_id = ?",
+          [Date.now(), SAMPLE.workId, libraryId]
         );
         location.hash = "#/reader?work=" + encodeURIComponent(SAMPLE.workId);
         await waitFor(() => location.hash.includes("/reader") && bodyIncludes("PDF Reader"), 10_000);
@@ -7747,8 +7766,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         readerAutoReadingStatusPersisted = Boolean(
           await waitFor(async () => {
             const rows = await window.aura.db.query(
-              "SELECT reading_status FROM works WHERE id = ? LIMIT 1",
-              [SAMPLE.workId]
+              "SELECT reading_status FROM works WHERE id = ? AND works.library_id = ? LIMIT 1",
+              [SAMPLE.workId, libraryId]
             );
             return rows[0]?.reading_status === "reading";
           }, 3_000)
@@ -9144,14 +9163,14 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         delete window.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
         await waitFor(async () => {
           const rows = await window.aura.db.query(
-            "SELECT new_count FROM saved_searches WHERE id = ? LIMIT 1",
-            [SAVED_SEARCH_HOME_OPEN_SMOKE.id]
+            "SELECT new_count FROM saved_searches WHERE id = ? AND saved_searches.library_id = ? LIMIT 1",
+            [SAVED_SEARCH_HOME_OPEN_SMOKE.id, libraryId]
           );
           return Number(rows[0]?.new_count ?? -1) === 0;
         }, 2_000);
         const homeOpenRows = await window.aura.db.query(
-          "SELECT new_count FROM saved_searches WHERE id = ? LIMIT 1",
-          [SAVED_SEARCH_HOME_OPEN_SMOKE.id]
+          "SELECT new_count FROM saved_searches WHERE id = ? AND saved_searches.library_id = ? LIMIT 1",
+          [SAVED_SEARCH_HOME_OPEN_SMOKE.id, libraryId]
         );
         discoverySavedSearchHomeOpenNavigated =
           Boolean(document.querySelector(".discovery-page--opensource")) &&
@@ -9186,8 +9205,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         await waitFor(() => Boolean(document.querySelector(".discovery-page--home")), 2_000);
         const discoveryImportDoi = "10.4242/aurascholar.discovery-preview";
         const discoveryImportBeforeRows = await window.aura.db.query(
-          "SELECT COUNT(*) AS n FROM works WHERE doi = ? AND deleted_at IS NULL",
-          [discoveryImportDoi]
+          "SELECT COUNT(*) AS n FROM works WHERE doi = ? AND deleted_at IS NULL AND works.library_id = ?",
+          [discoveryImportDoi, libraryId]
         );
         const discoveryReferenceInput = document.querySelector('.web-import-card input[type="file"]');
         if (discoveryReferenceInput) {
@@ -9223,8 +9242,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           cancelDiscoveryImport?.click();
           await waitFor(() => !document.querySelector('[role="dialog"]'), 1_000);
           const discoveryImportAfterRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE doi = ? AND deleted_at IS NULL",
-            [discoveryImportDoi]
+            "SELECT COUNT(*) AS n FROM works WHERE doi = ? AND deleted_at IS NULL AND works.library_id = ?",
+            [discoveryImportDoi, libraryId]
           );
           discoveryReferenceImportCancelPreserved =
             discoveryReferenceImportConfirmVisible &&
@@ -9270,8 +9289,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             3_000
           );
           const discoveryImportedRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE doi = ? AND deleted_at IS NULL",
-            [discoveryImportDoi]
+            "SELECT COUNT(*) AS n FROM works WHERE doi = ? AND deleted_at IS NULL AND works.library_id = ?",
+            [discoveryImportDoi, libraryId]
           );
           discoveryReferenceImportCommitPersisted = Number(discoveryImportedRows[0]?.n ?? 0) === 1;
           discoveryReferenceImportCommitSuccessVisible =
@@ -9280,8 +9299,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             bodyIncludes("引用文件导入完成");
 
           const emptyReferenceBeforeRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE title = ? AND deleted_at IS NULL",
-            ["(无标题)"]
+            "SELECT COUNT(*) AS n FROM works WHERE title = ? AND deleted_at IS NULL AND works.library_id = ?",
+            ["(无标题)", libraryId]
           );
           const emptyReferenceFile = new File(
             ["@article{empty-discovery-smoke,\n}"],
@@ -9302,8 +9321,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             document.querySelector('[role="dialog"]')?.textContent?.includes("确认导入引用文件")
           );
           const emptyReferenceAfterRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE title = ? AND deleted_at IS NULL",
-            ["(无标题)"]
+            "SELECT COUNT(*) AS n FROM works WHERE title = ? AND deleted_at IS NULL AND works.library_id = ?",
+            ["(无标题)", libraryId]
           );
           discoveryReferenceImportRejectsEmptyVisible =
             bodyIncludes("没有解析出文献。请选择") && !emptyReferenceDialogOpen;
@@ -9379,8 +9398,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             const richReferencePersisted = Boolean(
               await waitFor(async () => {
                 const rows = await window.aura.db.query(
-                  "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN pmid IS ? THEN 1 ELSE 0 END), 0) AS pmid_ok FROM works WHERE doi = ? AND deleted_at IS NULL",
-                  [richReferenceImport.pmid, richReferenceImport.doi]
+                  "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN pmid IS ? THEN 1 ELSE 0 END), 0) AS pmid_ok FROM works WHERE doi = ? AND deleted_at IS NULL AND works.library_id = ?",
+                  [richReferenceImport.pmid, richReferenceImport.doi, libraryId]
                 );
                 return (
                   Number(rows[0]?.n ?? 0) === 1 &&
@@ -9391,8 +9410,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             const richReferenceMetadataPersisted = Boolean(
               await waitFor(async () => {
                 const rows = await window.aura.db.query(
-                  "SELECT pmid FROM works WHERE doi = ? AND deleted_at IS NULL LIMIT 1",
-                  [richReferenceImport.doi]
+                  "SELECT pmid FROM works WHERE doi = ? AND deleted_at IS NULL AND works.library_id = ? LIMIT 1",
+                  [richReferenceImport.doi, libraryId]
                 );
                 return richReferenceImport.pmid === null
                   ? rows[0]?.pmid == null
@@ -9990,8 +10009,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           return Boolean(button && !button.disabled);
         }, 1_000);
         const savedSearchSaveFailureRowsBefore = await window.aura.db.query(
-          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ?",
-          [SAVED_SEARCH_SAVE_FAILURE_SMOKE.query]
+          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ? AND saved_searches.library_id = ?",
+          [SAVED_SEARCH_SAVE_FAILURE_SMOKE.query, libraryId]
         );
         if (duplicateSavedSearchInput) {
           setInputValue(duplicateSavedSearchInput, SAVED_SEARCH_SAVE_FAILURE_SMOKE.query);
@@ -10025,8 +10044,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           delete window.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__;
         }
         const savedSearchSaveFailureRowsAfter = await window.aura.db.query(
-          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ?",
-          [SAVED_SEARCH_SAVE_FAILURE_SMOKE.query]
+          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ? AND saved_searches.library_id = ?",
+          [SAVED_SEARCH_SAVE_FAILURE_SMOKE.query, libraryId]
         );
         const saveFailureButtonAfter = saveDuplicateSearchButton();
         discoverySavedSearchSaveFailureVisible =
@@ -10052,8 +10071,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         saveDuplicateSearchButton()?.click();
         await waitFor(() => bodyIncludes("检索订阅已存在"), 2_000);
         const duplicateSearchRows = await window.aura.db.query(
-          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ?",
-          [SAVED_SEARCH_SMOKE.query]
+          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ? AND saved_searches.library_id = ?",
+          [SAVED_SEARCH_SMOKE.query, libraryId]
         );
         discoveryDuplicateSavedSearchCount = Number(duplicateSearchRows[0]?.n ?? 0);
         discoveryDuplicateSavedSearchMessageVisible = bodyIncludes("检索订阅已存在");
@@ -10113,8 +10132,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           (button) => button.getAttribute("title")?.includes("删除订阅")
         );
         const savedSearchDeleteFailureRowsBefore = await window.aura.db.query(
-          "SELECT (SELECT COUNT(*) FROM saved_searches WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM saved_searches WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count",
-          [SAVED_SEARCH_ERROR_SMOKE.id, SAVED_SEARCH_ERROR_SMOKE.id]
+          "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM saved_searches WHERE library_id = (SELECT id FROM current_library)) AS saved_searches WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM saved_searches WHERE library_id = (SELECT id FROM current_library)) AS saved_searches WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count",
+          [libraryId, SAVED_SEARCH_ERROR_SMOKE.id, SAVED_SEARCH_ERROR_SMOKE.id]
         );
         savedSearchDeleteButton?.click();
         const savedSearchDeleteFailureDialog = await waitFor(() => {
@@ -10154,8 +10173,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           delete window.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__;
         }
         const savedSearchDeleteFailureRowsAfter = await window.aura.db.query(
-          "SELECT (SELECT COUNT(*) FROM saved_searches WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM saved_searches WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count",
-          [SAVED_SEARCH_ERROR_SMOKE.id, SAVED_SEARCH_ERROR_SMOKE.id]
+          "WITH current_library(id) AS (VALUES (?)) SELECT (SELECT COUNT(*) FROM (SELECT * FROM saved_searches WHERE library_id = (SELECT id FROM current_library)) AS saved_searches WHERE id = ? AND deleted_at IS NULL) AS active_count, (SELECT COUNT(*) FROM (SELECT * FROM saved_searches WHERE library_id = (SELECT id FROM current_library)) AS saved_searches WHERE id = ? AND deleted_at IS NOT NULL) AS deleted_count",
+          [libraryId, SAVED_SEARCH_ERROR_SMOKE.id, SAVED_SEARCH_ERROR_SMOKE.id]
         );
         const savedSearchDeleteSubAfterFailure = Array.from(
           document.querySelectorAll(".discovery-sub")
@@ -10213,8 +10232,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           3_000
         );
         const savedSearchDeleteRows = await window.aura.db.query(
-          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ?",
-          [SAVED_SEARCH_ERROR_SMOKE.query]
+          "SELECT COUNT(*) AS n FROM saved_searches WHERE deleted_at IS NULL AND query = ? AND saved_searches.library_id = ?",
+          [SAVED_SEARCH_ERROR_SMOKE.query, libraryId]
         );
         discoverySavedSearchDeletePersisted = Number(savedSearchDeleteRows[0]?.n ?? 0) === 0;
         discoverySavedSearchDeleted =
@@ -10251,8 +10270,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           delete window.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__;
         }
         const savedSearchUndoFailureRows = await window.aura.db.query(
-          "SELECT deleted_at, last_error FROM saved_searches WHERE id = ? LIMIT 1",
-          [SAVED_SEARCH_ERROR_SMOKE.id]
+          "SELECT deleted_at, last_error FROM saved_searches WHERE id = ? AND saved_searches.library_id = ? LIMIT 1",
+          [SAVED_SEARCH_ERROR_SMOKE.id, libraryId]
         );
         const savedSearchUndoButtonAfterFailure = await waitFor(() => {
           const button = document.querySelector('button[aria-label="撤销删除检索订阅"]');
@@ -10288,8 +10307,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           3_000
         );
         const restoredSavedSearchRows = await window.aura.db.query(
-          "SELECT deleted_at, last_error FROM saved_searches WHERE id = ? LIMIT 1",
-          [SAVED_SEARCH_ERROR_SMOKE.id]
+          "SELECT deleted_at, last_error FROM saved_searches WHERE id = ? AND saved_searches.library_id = ? LIMIT 1",
+          [SAVED_SEARCH_ERROR_SMOKE.id, libraryId]
         );
         discoverySavedSearchDeleteUndoRestored =
           discoverySavedSearchDeleteUndoVisible &&
@@ -11428,9 +11447,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           ]
         );
         await window.aura.db.run(
-          "INSERT OR REPLACE INTO saved_searches (id, query, sources_json, seen_ids_json, new_count, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
+          "INSERT OR REPLACE INTO saved_searches (id, library_id, query, sources_json, seen_ids_json, new_count, last_error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)",
           [
-            backupExportSavedSearchId,
+            backupExportSavedSearchId, libraryId,
             "Smoke backup credential source",
             JSON.stringify(["https://source-user:source-pass@source.example.test/feed"]),
             "[]",
@@ -11443,7 +11462,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           "INSERT OR REPLACE INTO derived_artifacts (id, library_id, source_table, source_id, kind, model, prompt_hash, input_hash, payload_json, local_only, syncable, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)",
           [
             backupExportDerivedArtifactId,
-            "smoke-backup-export-library",
+            libraryId,
             "works",
             "smoke-backup-export-work",
             "reader-digest",
@@ -11487,7 +11506,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         );
         await window.aura.db.run(
           "INSERT OR REPLACE INTO settings (key, value_json, scope, updated_at) VALUES (?, ?, 'local', ?)",
-          ["local.library_id", JSON.stringify("smoke-backup-local-library"), Date.now()]
+          ["local.library_id", JSON.stringify(libraryId), Date.now()]
         );
         await window.aura.db.run(
           "INSERT OR REPLACE INTO settings (key, value_json, scope, updated_at) VALUES (?, ?, 'local', ?)",
@@ -11653,7 +11672,6 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               !exportedBackupText.includes("artifact-id-token") &&
               !exportedBackupText.includes("artifact-session-id") &&
               !exportedBackupText.includes("backup-secret-key") &&
-              !exportedBackupText.includes("smoke-backup-local-library") &&
               !exportedBackupText.includes("smoke-backup-local-device") &&
               !exportedBackupText.includes("sync.smoke-backup.last_pushed_at") &&
               !exportedBackupText.includes("sync.conflict.smoke-backup");
@@ -11718,9 +11736,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           const backupImportRuntimeConflictKey = "sync.conflict.import-smoke.works.w1.title";
           const now = Date.now();
           await window.aura.db.run(
-            "INSERT OR IGNORE INTO works (id, doi, title, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, 'article', 'unread', 0, ?, ?)",
+            "INSERT OR IGNORE INTO works (id, library_id, doi, title, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, 'article', 'unread', 0, ?, ?)",
             [
-              backupMergeExistingWorkId,
+              backupMergeExistingWorkId, libraryId,
               backupMergeDoi,
               "Existing Backup Merge Target",
               now,
@@ -11728,9 +11746,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             ]
           );
           await window.aura.db.run(
-            "INSERT OR IGNORE INTO works (id, doi, title, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, 'article', 'unread', 0, ?, ?)",
+            "INSERT OR IGNORE INTO works (id, library_id, doi, title, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, 'article', 'unread', 0, ?, ?)",
             [
-              backupCollisionLocalWorkId,
+              backupCollisionLocalWorkId, libraryId,
               "10.4242/aurascholar.backup-attachment-collision-local",
               "Existing Attachment Collision Local Work",
               now,
@@ -12086,8 +12104,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             { type: "application/json" }
           );
           const beforeBackupImportRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-            [backupImportWorkId]
+            "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+            [backupImportWorkId, libraryId]
           );
           const cancelledBackupTransfer = new DataTransfer();
           cancelledBackupTransfer.items.add(backupImportFile);
@@ -12114,8 +12132,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           cancelBackupImport?.click();
           await waitFor(() => !document.querySelector('[role="dialog"]'), 1_000);
           const cancelledBackupRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-            [backupImportWorkId]
+            "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+            [backupImportWorkId, libraryId]
           );
           settingsBackupImportCancelPreserved =
             settingsBackupImportConfirmVisible &&
@@ -12279,12 +12297,12 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             );
           }
           const failedImportWorkRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-            [backupFailureWorkId]
+            "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+            [backupFailureWorkId, libraryId]
           );
           const failedImportAuthorRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM authors WHERE id = ?",
-            [backupFailureAuthorId]
+            "SELECT COUNT(*) AS n FROM authors WHERE id = ? AND authors.library_id = ?",
+            [backupFailureAuthorId, libraryId]
           );
           const failedImportSettingRows = await window.aura.db.query(
             "SELECT COUNT(*) AS n FROM settings WHERE key = ?",
@@ -12341,16 +12359,16 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             "1 条旧设备未完成的 AI 任务未恢复，可在新设备重新生成"
           );
           const importedBackupRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-            [backupImportWorkId]
+            "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+            [backupImportWorkId, libraryId]
           );
           const importedSnippetRows = await window.aura.db.query(
             "SELECT COUNT(*) AS n FROM snippets WHERE id = ?",
             [backupImportSnippetId]
           );
           const importedSavedSearchRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM saved_searches WHERE id = ?",
-            [backupImportSavedSearchId]
+            "SELECT COUNT(*) AS n FROM saved_searches WHERE id = ? AND saved_searches.library_id = ?",
+            [backupImportSavedSearchId, libraryId]
           );
           const importedProxySettingRows = await window.aura.db.query(
             "SELECT value_json FROM settings WHERE key = ?",
@@ -12380,16 +12398,16 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             currentLibraryId = "";
           }
           const importedDerivedArtifactRows = await window.aura.db.query(
-            "SELECT library_id, source_id, payload_json FROM derived_artifacts WHERE id = ?",
-            [backupImportDerivedArtifactId]
+            "SELECT library_id, source_id, payload_json FROM derived_artifacts WHERE id = ? AND library_id = ?",
+            [backupImportDerivedArtifactId, libraryId]
           );
           const oldBackupLibraryRows = await window.aura.db.query(
             "SELECT COUNT(*) AS n FROM libraries WHERE id = ?",
             [backupImportOldLibraryId]
           );
           const importedSearchRows = await window.aura.db.query(
-            "SELECT w.id FROM works w JOIN works_fts f ON f.rowid = w.rowid WHERE works_fts MATCH ? AND w.deleted_at IS NULL",
-            ['"Backup"* "Import"*']
+            "SELECT w.id FROM works w JOIN works_fts f ON f.rowid = w.rowid WHERE works_fts MATCH ? AND w.deleted_at IS NULL AND w.library_id = ?",
+            ['"Backup"* "Import"*', libraryId]
           );
           const importedAttachmentRows = await window.aura.db.query(
             "SELECT COUNT(*) AS n FROM attachments WHERE id = ? AND deleted_at IS NOT NULL",
@@ -12404,8 +12422,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             [backupImportAnnotationId]
           );
           const duplicateWorkRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-            [backupMergeWorkId]
+            "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+            [backupMergeWorkId, libraryId]
           );
           const mergedSnippetRows = await window.aura.db.query(
             "SELECT COUNT(*) AS n FROM snippets WHERE id = ? AND work_id = ?",
@@ -12442,12 +12460,12 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             ]
           );
           const importedPendingAiJobRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM ai_jobs WHERE id = ?",
-            [backupImportPendingAiJobId]
+            "SELECT COUNT(*) AS n FROM ai_jobs WHERE id = ? AND ai_jobs.library_id = ?",
+            [backupImportPendingAiJobId, libraryId]
           );
           const importedDoneAiJobRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM ai_jobs WHERE id = ? AND work_id = ? AND status = 'done'",
-            [backupImportDoneAiJobId, backupImportWorkId]
+            "SELECT COUNT(*) AS n FROM ai_jobs WHERE id = ? AND work_id = ? AND status = 'done' AND ai_jobs.library_id = ?",
+            [backupImportDoneAiJobId, backupImportWorkId, libraryId]
           );
           settingsBackupImportAiJobsPortable =
             Number(importedPendingAiJobRows[0]?.n ?? 0) === 0 &&
@@ -12602,8 +12620,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             3_000
           );
           const futureVersionRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM works WHERE id = ?",
-            ["smoke-backup-future-version-work"]
+            "SELECT COUNT(*) AS n FROM works WHERE id = ? AND works.library_id = ?",
+            ["smoke-backup-future-version-work", libraryId]
           );
           settingsBackupImportRejectsFutureVersionVisible =
             Number(futureVersionRows[0]?.n ?? 0) === 0 &&
@@ -12784,9 +12802,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           1_000
         );
         await window.aura.db.run(
-          "INSERT OR REPLACE INTO sentinel_tasks (id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
+          "INSERT OR REPLACE INTO sentinel_tasks (id, library_id, work_id, doi, title, current_state, target_flags, poll_interval_s, next_poll_at, last_polled_at, error_count, status, created_at, updated_at, deleted_at) VALUES (?, ?, NULL, ?, ?, 'accepted', NULL, 86400, ?, NULL, 0, 'active', ?, ?, NULL)",
           [
-            "smoke-sentinel-refresh-race",
+            "smoke-sentinel-refresh-race", libraryId,
             "10.4242/aurascholar.sentinel-refresh-race",
             sentinelRaceTitle,
             sentinelRaceNow + 86_400_000,
@@ -12872,8 +12890,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           )
         );
         const sentinelManualFailureRows = await window.aura.db.query(
-          "SELECT error_count, last_error FROM sentinel_tasks WHERE id = ?",
-          [SENTINEL_MANUAL_FAILURE_SMOKE.id]
+          "SELECT error_count, last_error FROM sentinel_tasks WHERE id = ? AND sentinel_tasks.library_id = ?",
+          [SENTINEL_MANUAL_FAILURE_SMOKE.id, libraryId]
         );
         sentinelManualFailureRecorded =
           Number(sentinelManualFailureRows[0]?.error_count ?? 0) > 0 &&
@@ -12925,8 +12943,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           );
           await waitFor(() => bodyIncludes("监控已存在"), 2_000);
           const sentinelDuplicateRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n FROM sentinel_tasks WHERE doi = ? AND deleted_at IS NULL",
-            [SENTINEL_DUPLICATE_SMOKE.doi]
+            "SELECT COUNT(*) AS n FROM sentinel_tasks WHERE doi = ? AND deleted_at IS NULL AND sentinel_tasks.library_id = ?",
+            [SENTINEL_DUPLICATE_SMOKE.doi, libraryId]
           );
           sentinelDuplicateDoiCount = Number(sentinelDuplicateRows[0]?.n ?? 0);
           sentinelDuplicateDoiMessageVisible = bodyIncludes("监控已存在");
@@ -12937,8 +12955,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           findExactButton("开始监控")?.click();
           await waitFor(() => bodyIncludes("已恢复监控"), 2_000);
           const sentinelRestoreRows = await window.aura.db.query(
-            "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN deleted_at IS NULL AND status = 'active' THEN 1 ELSE 0 END), 0) AS active FROM sentinel_tasks WHERE doi = ?",
-            [SENTINEL_RESTORE_SMOKE.doi]
+            "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN deleted_at IS NULL AND status = 'active' THEN 1 ELSE 0 END), 0) AS active FROM sentinel_tasks WHERE doi = ? AND sentinel_tasks.library_id = ?",
+            [SENTINEL_RESTORE_SMOKE.doi, libraryId]
           );
           sentinelDeletedDoiRestoredCount = Number(sentinelRestoreRows[0]?.n ?? 0);
           sentinelDeletedDoiRestored =
@@ -12970,8 +12988,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         };
 
         const sentinelDeleteRowsBeforeFailure = await window.aura.db.query(
-          "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS active FROM sentinel_tasks WHERE id = ?",
-          [SENTINEL_DELETE_UNDO_SMOKE.id]
+          "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS active FROM sentinel_tasks WHERE id = ? AND sentinel_tasks.library_id = ?",
+          [SENTINEL_DELETE_UNDO_SMOKE.id, libraryId]
         );
         findSentinelDeleteUndoDeleteButton()?.click();
         await waitFor(() => document.querySelector('[role="dialog"]')?.textContent?.includes("删除哨兵监控？"), 3_000);
@@ -12997,8 +13015,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         );
         delete window.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_DELETE__;
         const sentinelDeleteRowsAfterFailure = await window.aura.db.query(
-          "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS active FROM sentinel_tasks WHERE id = ?",
-          [SENTINEL_DELETE_UNDO_SMOKE.id]
+          "SELECT COUNT(*) AS n, COALESCE(MAX(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS active FROM sentinel_tasks WHERE id = ? AND sentinel_tasks.library_id = ?",
+          [SENTINEL_DELETE_UNDO_SMOKE.id, libraryId]
         );
         const sentinelDeleteUndoButtonAfterFailure = findSentinelDeleteUndoDeleteButton();
         sentinelDeleteFailureVisible =
@@ -13064,8 +13082,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         );
         delete window.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_RESTORE__;
         const sentinelDeleteUndoRowsAfterFailure = await window.aura.db.query(
-          "SELECT deleted_at, status FROM sentinel_tasks WHERE id = ? LIMIT 1",
-          [SENTINEL_DELETE_UNDO_SMOKE.id]
+          "SELECT deleted_at, status FROM sentinel_tasks WHERE id = ? AND sentinel_tasks.library_id = ? LIMIT 1",
+          [SENTINEL_DELETE_UNDO_SMOKE.id, libraryId]
         );
         const sentinelDeleteUndoActionAfterFailure = document.querySelector(
           'button[aria-label="撤销删除监控任务"]'
@@ -13100,8 +13118,8 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           3_000
         );
         const sentinelDeleteUndoRows = await window.aura.db.query(
-          "SELECT deleted_at, status FROM sentinel_tasks WHERE id = ? LIMIT 1",
-          [SENTINEL_DELETE_UNDO_SMOKE.id]
+          "SELECT deleted_at, status FROM sentinel_tasks WHERE id = ? AND sentinel_tasks.library_id = ? LIMIT 1",
+          [SENTINEL_DELETE_UNDO_SMOKE.id, libraryId]
         );
         sentinelDeleteUndoRestored =
           sentinelDeleteUndoVisible &&
@@ -13111,11 +13129,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           sentinelDeleteUndoRows[0]?.status === "active";
 
         const graphEmptyLatestNow = Date.now();
-        await window.aura.db.run("UPDATE works SET created_at = ?, updated_at = ? WHERE id = ?", [
+        await window.aura.db.run("UPDATE works SET created_at = ?, updated_at = ? WHERE id = ? AND library_id = ?", [
           graphEmptyLatestNow,
           graphEmptyLatestNow,
           SAMPLE.workId
-        ]);
+        , libraryId]);
         location.hash = "#/graph";
         await waitFor(
           () =>
@@ -13226,17 +13244,20 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           Boolean(findExactButton("以此为中心展开")?.disabled);
         await waitFor(() => bodyIncludes("没有解析出可入库文献"), 3_000);
         graphImportFailureFeedbackVisible = bodyIncludes("没有解析出可入库文献");
+        const graphLibraryCountRows = await window.aura?.db?.query?.(
+          "SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND library_id = ?",
+          [libraryId]
+        );
         const graphLibraryCountBefore =
-          statusbarMetric("文献") ??
-          Number(await window.aura?.db?.queryScalar?.("SELECT COUNT(*) FROM works WHERE deleted_at IS NULL"));
+          statusbarMetric("文献") ?? Number(graphLibraryCountRows?.[0]?.n ?? 0);
         window.__AURASCHOLAR_SMOKE_INGEST_FROM_INPUT__ = async (input) => {
           if (input === GRAPH_SMOKE.referenceDoi) return null;
           if (input !== GRAPH_SMOKE.successDoi) return undefined;
           const now = Date.now();
           await window.aura.db.run(
-            "INSERT OR REPLACE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-              "smoke-work-graph-import-success",
+              "smoke-work-graph-import-success", libraryId,
               GRAPH_SMOKE.successDoi,
               GRAPH_SMOKE.successTitle,
               "A deterministic smoke-test paper for validating graph import success refresh handling.",
@@ -13365,9 +13386,9 @@ export function setupSmokeHarness(win: BrowserWindow): void {
           1_000
         );
         await window.aura.db.run(
-          "INSERT OR REPLACE INTO works (id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT OR REPLACE INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           [
-            "smoke-homepage-refresh-race",
+            "smoke-homepage-refresh-race", libraryId,
             "10.4242/aurascholar.homepage-refresh-race",
             homepageRaceTitle,
             "A deterministic smoke-test paper for validating homepage library refresh race handling.",

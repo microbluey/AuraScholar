@@ -18,7 +18,7 @@ import {
 } from "@aurascholar/core";
 import { Badge, Button } from "@aurascholar/ui";
 import { InlineNotice, type InlineNoticeTone } from "./InlineNotice";
-import { getDb } from "../services/aura-db";
+import { getLibraryDb } from "../services/aura-db";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { loadCitationGraphByDoi } from "../services/citation-graph";
 import { describeSafeError } from "../services/sensitive-text";
@@ -244,7 +244,7 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
       setImportNotice(null);
       setInLibrary(new Set());
       try {
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const graph = await loadCitationGraphByDoi(requestedDoi, {
           buildGraph: (doi) => smokeBuildCitationGraph({ doi }),
           db,
@@ -266,8 +266,10 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
         if (dois.length > 0) {
           const placeholders = dois.map(() => "?").join(",");
           const rows = await db.query<{ doi: string }>(
-            `SELECT doi FROM works WHERE doi IN (${placeholders}) AND deleted_at IS NULL`,
-            dois,
+            `SELECT doi
+             FROM works
+             WHERE library_id = ? AND doi IN (${placeholders}) AND deleted_at IS NULL`,
+            [libraryId, ...dois],
           );
           if (isCurrent()) setInLibrary(new Set(rows.map((row) => row.doi)));
         }

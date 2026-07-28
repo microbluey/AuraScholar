@@ -7,6 +7,7 @@ import {
   primaryKey,
   index,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
@@ -38,6 +39,9 @@ export const works = sqliteTable(
   "works",
   {
     id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     doi: text("doi"),
     title: text("title").notNull(),
     abstract: text("abstract"),
@@ -85,13 +89,13 @@ export const works = sqliteTable(
     deletedAt: deletedAt(),
   },
   (t) => [
-    uniqueIndex("works_doi_uq").on(t.doi),
-    index("works_fingerprint_idx").on(t.fingerprint),
-    index("works_arxiv_idx").on(t.arxivId),
-    index("works_openalex_idx").on(t.openalexId),
-    index("works_s2_idx").on(t.s2Id),
-    index("works_pmid_idx").on(t.pmid),
-    index("works_year_idx").on(t.year),
+    uniqueIndex("works_doi_uq").on(t.libraryId, t.doi),
+    index("works_fingerprint_idx").on(t.libraryId, t.fingerprint),
+    index("works_arxiv_idx").on(t.libraryId, t.arxivId),
+    index("works_openalex_idx").on(t.libraryId, t.openalexId),
+    index("works_s2_idx").on(t.libraryId, t.s2Id),
+    index("works_pmid_idx").on(t.libraryId, t.pmid),
+    index("works_year_idx").on(t.libraryId, t.year),
   ],
 );
 
@@ -99,6 +103,9 @@ export const authors = sqliteTable(
   "authors",
   {
     id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     displayName: text("display_name").notNull(),
     orcid: text("orcid"),
     openalexId: text("openalex_id"),
@@ -106,7 +113,10 @@ export const authors = sqliteTable(
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
   },
-  (t) => [uniqueIndex("authors_orcid_uq").on(t.orcid)],
+  (t) => [
+    uniqueIndex("authors_orcid_uq").on(t.libraryId, t.orcid),
+    index("authors_openalex_idx").on(t.libraryId, t.openalexId),
+  ],
 );
 
 export const workAuthors = sqliteTable(
@@ -154,15 +164,22 @@ export const attachments = sqliteTable(
 // Organization: collections (hierarchical) and tags
 // ---------------------------------------------------------------------------
 
-export const collections = sqliteTable("collections", {
-  id: id(),
-  name: text("name").notNull(),
-  parentId: text("parent_id"),
-  sortOrder: integer("sort_order").notNull().default(0),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-  deletedAt: deletedAt(),
-});
+export const collections = sqliteTable(
+  "collections",
+  {
+    id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
+    name: text("name").notNull(),
+    parentId: text("parent_id").references((): AnySQLiteColumn => collections.id),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [index("collections_library_parent_idx").on(t.libraryId, t.parentId, t.sortOrder)],
+);
 
 export const collectionItems = sqliteTable(
   "collection_items",
@@ -181,13 +198,16 @@ export const tags = sqliteTable(
   "tags",
   {
     id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     name: text("name").notNull(),
     color: text("color"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
   },
-  (t) => [uniqueIndex("tags_name_uq").on(t.name)],
+  (t) => [uniqueIndex("tags_name_uq").on(t.libraryId, t.name)],
 );
 
 export const workTags = sqliteTable(
@@ -277,6 +297,9 @@ export const savedSearches = sqliteTable(
   "saved_searches",
   {
     id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     query: text("query").notNull(),
     sourcesJson: text("sources_json"),
     seenIdsJson: text("seen_ids_json").notNull().default("[]"),
@@ -288,7 +311,7 @@ export const savedSearches = sqliteTable(
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
   },
-  (t) => [index("saved_searches_due_idx").on(t.nextRunAt)],
+  (t) => [index("saved_searches_due_idx").on(t.libraryId, t.nextRunAt)],
 );
 
 // ---------------------------------------------------------------------------
@@ -372,6 +395,9 @@ export const canvasWorkspaces = sqliteTable(
   "canvas_workspaces",
   {
     id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     name: text("name").notNull(),
     description: text("description"),
     schemaVersion: integer("schema_version").notNull().default(1),
@@ -379,7 +405,10 @@ export const canvasWorkspaces = sqliteTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [check("canvas_workspaces_schema_version_check", sql`${t.schemaVersion} >= 1`)],
+  (t) => [
+    index("canvas_workspaces_library_updated_idx").on(t.libraryId, t.updatedAt),
+    check("canvas_workspaces_schema_version_check", sql`${t.schemaVersion} >= 1`),
+  ],
 );
 
 export const canvasNodes = sqliteTable(
@@ -458,6 +487,9 @@ export const sentinelTasks = sqliteTable(
   "sentinel_tasks",
   {
     id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     workId: text("work_id").references(() => works.id),
     doi: text("doi"),
     title: text("title").notNull(),
@@ -474,7 +506,7 @@ export const sentinelTasks = sqliteTable(
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
   },
-  (t) => [index("sentinel_next_poll_idx").on(t.status, t.nextPollAt)],
+  (t) => [index("sentinel_next_poll_idx").on(t.libraryId, t.status, t.nextPollAt)],
 );
 
 export const sentinelEvents = sqliteTable(
@@ -501,7 +533,9 @@ export const syncLog = sqliteTable(
   "sync_log",
   {
     seq: integer("seq").primaryKey({ autoIncrement: true }),
-    libraryId: text("library_id"),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     entityTable: text("entity_table").notNull(),
     entityId: text("entity_id").notNull(),
     op: text("op").notNull(), // upsert | delete
@@ -516,18 +550,24 @@ export const syncLog = sqliteTable(
     syncedAt: integer("synced_at"),
   },
   (t) => [
-    index("sync_log_entity_idx").on(t.entityTable, t.entityId),
+    index("sync_log_entity_idx").on(t.libraryId, t.entityTable, t.entityId),
     index("sync_log_library_seq_idx").on(t.libraryId, t.seq),
   ],
 );
 
-export const syncState = sqliteTable("sync_state", {
-  providerId: text("provider_id").primaryKey(),
-  libraryId: text("library_id"),
-  lastPushedSeq: integer("last_pushed_seq").notNull().default(0),
-  lastPulledCursor: text("last_pulled_cursor"),
-  remoteConfigJson: text("remote_config_json", { mode: "json" }),
-});
+export const syncState = sqliteTable(
+  "sync_state",
+  {
+    providerId: text("provider_id").notNull(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
+    lastPushedSeq: integer("last_pushed_seq").notNull().default(0),
+    lastPulledCursor: text("last_pulled_cursor"),
+    remoteConfigJson: text("remote_config_json", { mode: "json" }),
+  },
+  (t) => [primaryKey({ columns: [t.libraryId, t.providerId] })],
+);
 
 export const devices = sqliteTable("devices", {
   deviceId: text("device_id").primaryKey(),
@@ -541,12 +581,14 @@ export const syncRowClocks = sqliteTable(
   {
     tableName: text("table_name").notNull(),
     rowId: text("row_id").notNull(),
-    libraryId: text("library_id"),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     columnHlcsJson: text("column_hlcs_json", { mode: "json" }).notNull(),
     updatedAt: updatedAt(),
   },
   (t) => [
-    primaryKey({ columns: [t.tableName, t.rowId] }),
+    primaryKey({ columns: [t.libraryId, t.tableName, t.rowId] }),
     index("sync_row_clocks_library_idx").on(t.libraryId, t.tableName),
   ],
 );
@@ -556,7 +598,9 @@ export const blobSyncState = sqliteTable(
   {
     sha256: text("sha256").notNull(),
     providerId: text("provider_id").notNull(),
-    libraryId: text("library_id"),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     status: text("status").notNull().default("pending"),
     remotePath: text("remote_path"),
     uploadedAt: integer("uploaded_at"),
@@ -565,7 +609,7 @@ export const blobSyncState = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    primaryKey({ columns: [t.sha256, t.providerId] }),
+    primaryKey({ columns: [t.libraryId, t.sha256, t.providerId] }),
     index("blob_sync_state_library_idx").on(t.libraryId, t.status),
   ],
 );
@@ -578,6 +622,9 @@ export const aiJobs = sqliteTable(
   "ai_jobs",
   {
     id: id(),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     kind: text("kind").notNull(), // flashcards | summary | ...
     workId: text("work_id").references(() => works.id),
     status: text("status").notNull().default("pending"), // pending | running | done | error
@@ -588,14 +635,16 @@ export const aiJobs = sqliteTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index("ai_jobs_status_idx").on(t.status)],
+  (t) => [index("ai_jobs_status_idx").on(t.libraryId, t.status)],
 );
 
 export const derivedArtifacts = sqliteTable(
   "derived_artifacts",
   {
     id: id(),
-    libraryId: text("library_id"),
+    libraryId: text("library_id")
+      .notNull()
+      .references(() => libraries.id),
     sourceTable: text("source_table").notNull(),
     sourceId: text("source_id").notNull(),
     kind: text("kind").notNull(),
@@ -611,7 +660,7 @@ export const derivedArtifacts = sqliteTable(
     deletedAt: deletedAt(),
   },
   (t) => [
-    index("derived_artifacts_source_idx").on(t.sourceTable, t.sourceId, t.kind),
+    index("derived_artifacts_source_idx").on(t.libraryId, t.sourceTable, t.sourceId, t.kind),
     index("derived_artifacts_library_idx").on(t.libraryId, t.kind),
   ],
 );

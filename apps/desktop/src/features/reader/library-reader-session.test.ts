@@ -13,6 +13,7 @@ import {
 function work(overrides: Partial<WorkWithAuthors> = {}): WorkWithAuthors {
   return {
     id: "work-1",
+    library_id: "library:test-reader-session",
     title: "Evidence Graphs",
     abstract: "Abstract",
     year: 2024,

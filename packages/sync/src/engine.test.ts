@@ -4,7 +4,8 @@ import type { MarkPushedOptions } from "./engine";
 import { HlcClock } from "./hlc";
 import { MemorySyncProvider } from "./memory-provider";
 import { MemorySyncStorage } from "./memory-storage";
-import { encodeSegment } from "./types";
+import { LibraryScopedSyncProvider } from "./scoped-provider";
+import { encodeSegment, type ChangeEntry } from "./types";
 
 const encoder = new TextEncoder();
 
@@ -34,12 +35,51 @@ class FailingApplyStorage extends MemorySyncStorage {
 class TrackingMarkPushedStorage extends MemorySyncStorage {
   readonly markCalls: Array<{ complete: boolean | undefined; uptoSeq: number }> = [];
 
-  override async markPushed(
-    uptoSeq: number,
-    options: MarkPushedOptions = {},
-  ): Promise<void> {
+  override async markPushed(uptoSeq: number, options: MarkPushedOptions = {}): Promise<void> {
     this.markCalls.push({ complete: options.complete, uptoSeq });
     await super.markPushed(uptoSeq, options);
+  }
+}
+
+/**
+ * Mirrors the desktop adapter's row-coalescing behavior: a pending row is
+ * materialized at the next transport sequence each time the engine asks. A
+ * recovery advance must preserve it, while a successful push acknowledges it.
+ */
+class CoalescingPendingStorage extends MemorySyncStorage {
+  readonly recoverCalls: number[] = [];
+  private pending: ChangeEntry | null = null;
+
+  override write(table: string, rowId: string, values: Record<string, unknown>, hlc: string): void {
+    super.write(table, rowId, values, hlc);
+    const logged = this.log[this.log.length - 1]!;
+    this.pending = {
+      ...logged,
+      columnHlcs: { ...logged.columnHlcs },
+      values: { ...logged.values },
+    };
+  }
+
+  override async unsyncedChanges(afterSeq: number): Promise<ChangeEntry[]> {
+    if (!this.pending) return [];
+    return [
+      {
+        ...this.pending,
+        columnHlcs: { ...this.pending.columnHlcs },
+        seq: afterSeq + 1,
+        values: { ...this.pending.values },
+      },
+    ];
+  }
+
+  override async markPushed(uptoSeq: number, options: MarkPushedOptions = {}): Promise<void> {
+    this.pending = null;
+    await super.markPushed(uptoSeq, options);
+  }
+
+  override async recoverPublishedSeq(uptoSeq: number): Promise<void> {
+    this.recoverCalls.push(uptoSeq);
+    await super.recoverPublishedSeq(uptoSeq);
   }
 }
 
@@ -137,6 +177,238 @@ describe("SyncEngine", () => {
       { uptoSeq: 500, complete: false },
       { uptoSeq: 501, complete: true },
     ]);
+  });
+
+  it("keeps in-memory pending rows above a recovered published cursor", async () => {
+    const storage = new MemorySyncStorage("dev-a");
+    const clock = new HlcClock("dev-a");
+    storage.write("works", "w1", { title: "Still pending" }, clock.tick());
+
+    await storage.recoverPublishedSeq(3);
+
+    await expect(storage.lastPushedSeq()).resolves.toBe(3);
+    await expect(storage.unsyncedChanges(3)).resolves.toEqual([
+      expect.objectContaining({ rowId: "w1", seq: 4 }),
+    ]);
+    storage.write("works", "w2", { title: "Written after recovery" }, clock.tick());
+    expect(storage.log.at(-1)?.seq).toBe(5);
+  });
+
+  it("recovers an already-published own segment without overwriting it", async () => {
+    const remote = new MemorySyncProvider();
+    const aClock = new HlcClock("dev-a");
+    const aStorage = new CoalescingPendingStorage("dev-a");
+    const a = {
+      clock: aClock,
+      engine: new SyncEngine(remote, aStorage, "dev-a", aClock),
+      storage: aStorage,
+    };
+    const peer = makeDevice("dev-b", remote);
+
+    a.storage.write("works", "w1", { title: "Published before crash" }, a.clock.tick());
+    const firstEntry = (await a.storage.unsyncedChanges(0))[0]!;
+    const firstPath = "journal/dev-a/000000000001-000000000001.jsonl";
+    const publishedBytes = encodeSegment({
+      deviceId: "dev-a",
+      startSeq: 1,
+      endSeq: 1,
+      entries: [firstEntry],
+    });
+    const originalBytes = Uint8Array.from(publishedBytes);
+
+    // Simulate provider.put() succeeding immediately before the process dies:
+    // the remote object exists, but the local pushed cursor is still zero.
+    await remote.put(firstPath, publishedBytes);
+    await peer.engine.pull();
+    expect(peer.storage.get("works", "w1")).toEqual({ title: "Published before crash" });
+
+    // The pending row is materialized with changed bytes after restart. It
+    // must be assigned seq 2, not overwrite the already-observed seq 1 object.
+    a.storage.write("works", "w1", { title: "Edited after restart" }, a.clock.tick());
+
+    await a.engine.push();
+
+    expect(await remote.get(firstPath)).toEqual(originalBytes);
+    expect((await remote.list("journal/dev-a/")).map((item) => item.path).sort()).toEqual([
+      firstPath,
+      "journal/dev-a/000000000002-000000000002.jsonl",
+    ]);
+    expect(await a.storage.lastPushedSeq()).toBe(2);
+    expect(a.storage.recoverCalls).toEqual([1]);
+    expect(a.storage.log).toHaveLength(2);
+
+    const pulled = await peer.engine.pull();
+    expect(pulled.pulledEntries).toBe(1);
+    expect(peer.storage.get("works", "w1")).toEqual({ title: "Edited after restart" });
+    expect(await peer.storage.getCursor("dev-a")).toBe(2);
+  });
+
+  it("continues above its legacy sequence when a remote becomes Library-scoped", async () => {
+    const remote = new MemorySyncProvider();
+    const legacyClock = new HlcClock("dev-a", () => 1_000);
+    const legacyHlc = legacyClock.tick();
+    const legacyPath = "journal/dev-a/000000000001-000000000001.jsonl";
+    await remote.put(
+      legacyPath,
+      encodeSegment({
+        deviceId: "dev-a",
+        startSeq: 1,
+        endSeq: 1,
+        entries: [
+          {
+            seq: 1,
+            table: "works",
+            rowId: "w1",
+            op: "upsert",
+            values: { title: "Legacy remote value" },
+            columnHlcs: { title: legacyHlc },
+            hlc: legacyHlc,
+            deviceId: "dev-a",
+          },
+        ],
+      }),
+    );
+
+    const scopedA = new LibraryScopedSyncProvider(remote, "shared-target", {
+      legacyReadFallback: true,
+    });
+    const scopedB = new LibraryScopedSyncProvider(remote, "shared-target", {
+      legacyReadFallback: true,
+    });
+    const peerStorage = new MemorySyncStorage("dev-b");
+    const peerEngine = new SyncEngine(scopedB, peerStorage, "dev-b", new HlcClock("dev-b"));
+
+    await peerEngine.pull();
+    expect(peerStorage.get("works", "w1")).toEqual({ title: "Legacy remote value" });
+    expect(await peerStorage.getCursor("dev-a")).toBe(1);
+
+    const currentClock = new HlcClock("dev-a", () => 2_000);
+    const currentStorage = new CoalescingPendingStorage("dev-a");
+    currentStorage.write("works", "w1", { title: "Namespaced current value" }, currentClock.tick());
+    const currentEngine = new SyncEngine(scopedA, currentStorage, "dev-a", currentClock);
+
+    await currentEngine.push();
+
+    expect(currentStorage.recoverCalls).toEqual([1]);
+    expect(await currentStorage.lastPushedSeq()).toBe(2);
+    expect(await remote.get(legacyPath)).toBeInstanceOf(Uint8Array);
+    expect([...remote.objects.keys()]).toContain(
+      `${scopedA.prefix}journal/dev-a/000000000002-000000000002.jsonl`,
+    );
+
+    await scopedA.markBootstrapComplete();
+    const pulled = await peerEngine.pull();
+    expect(pulled.pulledEntries).toBe(1);
+    expect(peerStorage.get("works", "w1")).toEqual({ title: "Namespaced current value" });
+    expect(await peerStorage.getCursor("dev-a")).toBe(2);
+
+    const lateScoped = new LibraryScopedSyncProvider(remote, "shared-target", {
+      legacyReadFallback: true,
+    });
+    const lateStorage = new MemorySyncStorage("dev-c");
+    const lateEngine = new SyncEngine(lateScoped, lateStorage, "dev-c", new HlcClock("dev-c"));
+    const latePull = await lateEngine.pull();
+
+    expect(latePull.pulledEntries).toBe(2);
+    expect(lateStorage.get("works", "w1")).toEqual({ title: "Namespaced current value" });
+    expect(await lateStorage.getCursor("dev-a")).toBe(2);
+    await expect(remote.get(`${scopedA.prefix}${legacyPath}`)).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  it("recovers a pre-marker scoped segment without overwriting its published bytes", async () => {
+    const remote = new MemorySyncProvider();
+    const legacyClock = new HlcClock("dev-a", () => 1_000);
+    const legacyHlc = legacyClock.tick();
+    const legacyPath = "journal/dev-a/000000000001-000000000001.jsonl";
+    await remote.put(
+      legacyPath,
+      encodeSegment({
+        deviceId: "dev-a",
+        startSeq: 1,
+        endSeq: 1,
+        entries: [
+          {
+            seq: 1,
+            table: "works",
+            rowId: "w1",
+            op: "upsert",
+            values: { title: "Legacy remote value" },
+            columnHlcs: { title: legacyHlc },
+            hlc: legacyHlc,
+            deviceId: "dev-a",
+          },
+        ],
+      }),
+    );
+
+    const scoped = new LibraryScopedSyncProvider(remote, "shared-target", {
+      legacyReadFallback: true,
+    });
+    const clock = new HlcClock("dev-a", () => 2_000);
+    const storage = new CoalescingPendingStorage("dev-a");
+    storage.write("works", "w1", { title: "Published before crash" }, clock.tick());
+    const publishedEntry = (await storage.unsyncedChanges(1))[0]!;
+    const publishedPath = "journal/dev-a/000000000002-000000000002.jsonl";
+    const publishedBytes = encodeSegment({
+      deviceId: "dev-a",
+      startSeq: 2,
+      endSeq: 2,
+      entries: [publishedEntry],
+    });
+    const originalBytes = Uint8Array.from(publishedBytes);
+    await scoped.put(publishedPath, publishedBytes);
+
+    storage.write("works", "w1", { title: "Edited after restart" }, clock.tick());
+    const engine = new SyncEngine(scoped, storage, "dev-a", clock);
+    await engine.push();
+
+    await expect(remote.get(`${scoped.prefix}${publishedPath}`)).resolves.toEqual(originalBytes);
+    expect([...remote.objects.keys()]).toContain(
+      `${scoped.prefix}journal/dev-a/000000000003-000000000003.jsonl`,
+    );
+    expect(storage.recoverCalls).toEqual([2]);
+    expect(await storage.lastPushedSeq()).toBe(3);
+  });
+
+  it("fails closed when an unacknowledged own segment is malformed", async () => {
+    const remote = new MemorySyncProvider();
+    const a = makeDevice("dev-a", remote);
+    const path = "journal/dev-a/000000000001-000000000001.jsonl";
+    const malformedBytes = encoder.encode('{"seq":1,"table":"works"');
+
+    a.storage.write("works", "w1", { title: "Must not overwrite remote" }, a.clock.tick());
+    await remote.put(path, malformedBytes);
+
+    await expect(a.engine.push()).rejects.toThrow(`Invalid sync segment ${path}: unreadable JSON`);
+
+    expect(await remote.get(path)).toEqual(malformedBytes);
+    expect(await a.storage.lastPushedSeq()).toBe(0);
+    expect(await remote.list("journal/dev-a/")).toHaveLength(1);
+  });
+
+  it("fails closed when unacknowledged own segments have a sequence gap", async () => {
+    const remote = new MemorySyncProvider();
+    const a = makeDevice("dev-a", remote);
+
+    a.storage.write("works", "w1", { title: "Missing remote sequence" }, a.clock.tick());
+    a.storage.write("works", "w2", { title: "Remote sequence two" }, a.clock.tick());
+    const secondEntry = a.storage.log[1]!;
+    const secondPath = "journal/dev-a/000000000002-000000000002.jsonl";
+    const secondBytes = encodeSegment({
+      deviceId: "dev-a",
+      startSeq: 2,
+      endSeq: 2,
+      entries: [secondEntry],
+    });
+    await remote.put(secondPath, secondBytes);
+
+    await expect(a.engine.push()).rejects.toThrow(
+      `Invalid own sync segment gap before ${secondPath}: expected sequence 1, got 2`,
+    );
+
+    expect(await remote.get(secondPath)).toEqual(secondBytes);
+    expect(await a.storage.lastPushedSeq()).toBe(0);
+    expect((await remote.list("journal/dev-a/")).map((item) => item.path)).toEqual([secondPath]);
   });
 
   it("rejects malformed local push entries before uploading or marking them pushed", async () => {
@@ -265,6 +537,87 @@ describe("SyncEngine", () => {
     );
 
     expect(b.storage.get("works", "w2")).toBeNull();
+    expect(await b.storage.getCursor("dev-a")).toBe(0);
+  });
+
+  it("rejects overlapping remote ranges before applying rows or advancing cursors", async () => {
+    const remote = new MemorySyncProvider();
+    const b = makeDevice("dev-b", remote);
+    const clock = new HlcClock("dev-a");
+    const firstHlc = clock.tick();
+    const secondHlc = clock.tick();
+    const thirdHlc = clock.tick();
+
+    await remote.put(
+      "journal/dev-a/000000000001-000000000002.jsonl",
+      encodeSegment({
+        deviceId: "dev-a",
+        startSeq: 1,
+        endSeq: 2,
+        entries: [
+          {
+            seq: 1,
+            table: "works",
+            rowId: "w1",
+            op: "upsert",
+            values: { title: "First" },
+            columnHlcs: { title: firstHlc },
+            hlc: firstHlc,
+            deviceId: "dev-a",
+          },
+          {
+            seq: 2,
+            table: "works",
+            rowId: "w2",
+            op: "upsert",
+            values: { title: "Second" },
+            columnHlcs: { title: secondHlc },
+            hlc: secondHlc,
+            deviceId: "dev-a",
+          },
+        ],
+      }),
+    );
+    const overlappingPath = "journal/dev-a/000000000002-000000000003.jsonl";
+    await remote.put(
+      overlappingPath,
+      encodeSegment({
+        deviceId: "dev-a",
+        startSeq: 2,
+        endSeq: 3,
+        entries: [
+          {
+            seq: 2,
+            table: "works",
+            rowId: "w2-conflict",
+            op: "upsert",
+            values: { title: "Conflicting second" },
+            columnHlcs: { title: secondHlc },
+            hlc: secondHlc,
+            deviceId: "dev-a",
+          },
+          {
+            seq: 3,
+            table: "works",
+            rowId: "w3",
+            op: "upsert",
+            values: { title: "Third" },
+            columnHlcs: { title: thirdHlc },
+            hlc: thirdHlc,
+            deviceId: "dev-a",
+          },
+        ],
+      }),
+    );
+
+    await expect(b.engine.pull()).rejects.toThrow(
+      `Invalid sync segment overlap before ${overlappingPath}`,
+    );
+
+    expect(b.storage.get("works", "w1")).toBeNull();
+    expect(b.storage.get("works", "w2")).toBeNull();
+    expect(b.storage.get("works", "w2-conflict")).toBeNull();
+    expect(b.storage.get("works", "w3")).toBeNull();
     expect(await b.storage.getCursor("dev-a")).toBe(0);
   });
 
@@ -453,7 +806,7 @@ describe("SyncEngine", () => {
     expect(await b.storage.getCursor("dev-a")).toBe(0);
   });
 
-  it("does not downgrade the cursor when a stale overlapping segment follows a larger segment", async () => {
+  it("rejects a byte-equivalent stale overlap instead of accepting ambiguous history", async () => {
     const remote = new MemorySyncProvider();
     const b = makeDevice("dev-b", remote);
     const clock = new HlcClock("dev-a");
@@ -522,13 +875,14 @@ describe("SyncEngine", () => {
       }),
     );
 
-    const result = await b.engine.pull();
+    await expect(b.engine.pull()).rejects.toThrow(
+      "Invalid sync segment overlap before journal/dev-a/000000000002-000000000002.jsonl",
+    );
 
-    expect(result.pulledEntries).toBe(3);
-    expect(b.storage.get("works", "w1")).toEqual({ title: "First" });
-    expect(b.storage.get("works", "w2")).toEqual({ title: "Second" });
-    expect(b.storage.get("works", "w3")).toEqual({ title: "Third" });
-    expect(await b.storage.getCursor("dev-a")).toBe(3);
+    expect(b.storage.get("works", "w1")).toBeNull();
+    expect(b.storage.get("works", "w2")).toBeNull();
+    expect(b.storage.get("works", "w3")).toBeNull();
+    expect(await b.storage.getCursor("dev-a")).toBe(0);
   });
 
   it("does not re-apply already-merged segments", async () => {
@@ -755,12 +1109,7 @@ describe("SyncEngine", () => {
     expect(a.storage.get("works", "w1")).toBeNull();
 
     wallA = 3000;
-    a.storage.write(
-      "works",
-      "w1",
-      { title: "Restored on A", deleted_at: null },
-      a.clock.tick(),
-    );
+    a.storage.write("works", "w1", { title: "Restored on A", deleted_at: null }, a.clock.tick());
     await a.engine.sync();
     await b.engine.sync();
 

@@ -7,6 +7,7 @@ import { newId } from "../ids.js";
 
 export interface SavedSearchRow {
   id: string;
+  library_id: string;
   query: string;
   sources_json: string | null;
   seen_ids_json: string;
@@ -32,7 +33,12 @@ export class SavedSearchInactiveError extends Error {
 }
 
 export class SavedSearchesRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private assertChanged(changed: number, error: Error): void {
     if (changed === 0) throw error;
@@ -43,30 +49,43 @@ export class SavedSearchesRepo {
     const now = Date.now();
     await this.db.run(
       `INSERT INTO saved_searches
-         (id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at)
-       VALUES (?, ?, ?, '[]', 0, NULL, ?, ?, ?)`,
-      [id, input.query, input.sources ? JSON.stringify(input.sources) : null, now, now, now],
+         (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '[]', 0, NULL, ?, ?, ?)`,
+      [
+        id,
+        this.libraryId,
+        input.query,
+        input.sources ? JSON.stringify(input.sources) : null,
+        now,
+        now,
+        now,
+      ],
     );
     return id;
   }
 
   async list(): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
-      `SELECT id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
+      `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
               created_at, updated_at
-       FROM saved_searches WHERE deleted_at IS NULL ORDER BY created_at DESC`,
+       FROM saved_searches
+       WHERE library_id = ? AND deleted_at IS NULL
+       ORDER BY created_at DESC`,
+      [this.libraryId],
     );
   }
 
   /** Searches whose next_run_at has come due (or was never scheduled). */
   async due(now = Date.now()): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
-      `SELECT id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
+      `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
               created_at, updated_at
        FROM saved_searches
-       WHERE deleted_at IS NULL AND (next_run_at IS NULL OR next_run_at <= ?)
+       WHERE library_id = ?
+         AND deleted_at IS NULL
+         AND (next_run_at IS NULL OR next_run_at <= ?)
        ORDER BY created_at`,
-      [now],
+      [this.libraryId, now],
     );
   }
 
@@ -85,8 +104,8 @@ export class SavedSearchesRepo {
       `UPDATE saved_searches
        SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?,
            last_error = NULL, updated_at = ?
-       WHERE id = ? AND deleted_at IS NULL`,
-      [JSON.stringify(seenIds), newCount, now, nextRunAt, now, id],
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [JSON.stringify(seenIds), newCount, now, nextRunAt, now, id, this.libraryId],
     );
     this.assertChanged(changed, new SavedSearchInactiveError(id));
   }
@@ -96,8 +115,8 @@ export class SavedSearchesRepo {
     const changed = await this.db.run(
       `UPDATE saved_searches
        SET last_run_at = ?, next_run_at = ?, last_error = ?, updated_at = ?
-       WHERE id = ? AND deleted_at IS NULL`,
-      [now, nextRunAt, summarizePersistedError(error), now, id],
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [now, nextRunAt, summarizePersistedError(error), now, id, this.libraryId],
     );
     this.assertChanged(changed, new SavedSearchInactiveError(id));
   }
@@ -105,8 +124,10 @@ export class SavedSearchesRepo {
   /** Clear the unread badge (user has viewed the new results). */
   async clearNew(id: string): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE saved_searches SET new_count = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [Date.now(), id],
+      `UPDATE saved_searches
+       SET new_count = 0, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, new SavedSearchInactiveError(id));
   }
@@ -114,16 +135,20 @@ export class SavedSearchesRepo {
   async softDelete(id: string): Promise<void> {
     const now = Date.now();
     const changed = await this.db.run(
-      `UPDATE saved_searches SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [now, now, id],
+      `UPDATE saved_searches
+       SET deleted_at = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [now, now, id, this.libraryId],
     );
     this.assertChanged(changed, new Error(`Saved search ${id} is missing or already removed`));
   }
 
   async restore(id: string): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE saved_searches SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL`,
-      [Date.now(), id],
+      `UPDATE saved_searches
+       SET deleted_at = NULL, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+      [Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, new Error(`Saved search ${id} is missing or already active`));
   }

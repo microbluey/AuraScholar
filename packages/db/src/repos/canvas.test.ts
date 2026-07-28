@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
+import { requireLocalLibraryId } from "../local-first";
 import { AttachmentsRepo } from "./attachments";
 import { WorksRepo } from "./works";
 import {
@@ -10,6 +11,7 @@ import {
 } from "./canvas";
 
 let db: Database;
+let libraryId: string;
 let works: WorksRepo;
 let attachments: AttachmentsRepo;
 let canvas: CanvasRepo;
@@ -17,9 +19,10 @@ let canvas: CanvasRepo;
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
-  works = new WorksRepo(db);
-  attachments = new AttachmentsRepo(db);
-  canvas = new CanvasRepo(db);
+  libraryId = await requireLocalLibraryId(db);
+  works = new WorksRepo(db, libraryId);
+  attachments = new AttachmentsRepo(db, libraryId);
+  canvas = new CanvasRepo(db, libraryId);
 });
 
 async function createSourceWork(): Promise<string> {

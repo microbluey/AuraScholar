@@ -94,6 +94,7 @@ export interface CanvasWorkspaceSummary {
 
 interface CanvasWorkspaceRow {
   id: string;
+  library_id: string;
   name: string;
   description: string | null;
   schema_version: number;
@@ -251,6 +252,7 @@ function workIdForNode(node: StoredCanvasNode): string | null {
 
 async function existingWorkIdsForNodes(
   db: Database,
+  libraryId: string,
   nodes: StoredCanvasNode[],
 ): Promise<Set<string>> {
   const requested = [
@@ -268,11 +270,16 @@ async function existingWorkIdsForNodes(
   for (let offset = 0; offset < requested.length; offset += 500) {
     const chunk = requested.slice(offset, offset + 500);
     const placeholders = chunk.map(() => "?").join(",");
-    const rows = await db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id IN (${placeholders})`,
+    const rows = await db.query<{ id: string; library_id: string }>(
+      `SELECT id, library_id FROM works WHERE id IN (${placeholders})`,
       chunk,
     );
-    for (const row of rows) existing.add(row.id);
+    for (const row of rows) {
+      if (row.library_id !== libraryId) {
+        throw new Error(`Canvas node references a work outside library ${libraryId}`);
+      }
+      existing.add(row.id);
+    }
   }
 
   return existing;
@@ -353,7 +360,12 @@ function validateDocument(document: StoredCanvasWorkspaceDocument): void {
 }
 
 export class CanvasRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
     const previous = canvasWriteQueues.get(this.db) ?? Promise.resolve();
@@ -391,20 +403,32 @@ export class CanvasRepo {
 
   async ensureDefault(): Promise<StoredCanvasWorkspaceDocument> {
     return this.withWriteLock(async () => {
+      const legacyDefault = await this.db.query<{ id: string; library_id: string }>(
+        `SELECT id, library_id
+         FROM canvas_workspaces
+         WHERE id = ?
+         LIMIT 1`,
+        [DEFAULT_CANVAS_WORKSPACE_ID],
+      );
+      const workspaceId =
+        !legacyDefault[0] || legacyDefault[0].library_id === this.libraryId
+          ? DEFAULT_CANVAS_WORKSPACE_ID
+          : `${DEFAULT_CANVAS_WORKSPACE_ID}:${this.libraryId}`;
       const now = Date.now();
       await this.db.run(
         `INSERT OR IGNORE INTO canvas_workspaces
-           (id, name, description, schema_version, viewport_json, created_at, updated_at)
-         VALUES (?, ?, NULL, 1, ?, ?, ?)`,
+           (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, 1, ?, ?, ?)`,
         [
-          DEFAULT_CANVAS_WORKSPACE_ID,
+          workspaceId,
+          this.libraryId,
           DEFAULT_CANVAS_WORKSPACE_NAME,
           JSON.stringify({ x: 0, y: 0, zoom: 1 }),
           now,
           now,
         ],
       );
-      const workspace = await this.load(DEFAULT_CANVAS_WORKSPACE_ID);
+      const workspace = await this.load(workspaceId);
       if (!workspace) throw new Error("Failed to create the default canvas workspace");
       return workspace;
     });
@@ -424,10 +448,11 @@ export class CanvasRepo {
         const now = Date.now();
         await this.db.run(
           `INSERT INTO canvas_workspaces
-             (id, name, description, schema_version, viewport_json, created_at, updated_at)
-           VALUES (?, ?, ?, 1, ?, ?, ?)`,
+             (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
           [
             workspaceId,
+            this.libraryId,
             trimmedName,
             description ?? null,
             JSON.stringify({ x: 0, y: 0, zoom: 1 }),
@@ -452,18 +477,23 @@ export class CanvasRepo {
     return this.withWriteLock(() =>
       this.withSavepoint("canvas_rename", async () => {
         const rows = await this.db.query<{ updated_at: number }>(
-          `SELECT updated_at FROM canvas_workspaces WHERE id = ? LIMIT 1`,
-          [workspaceId],
+          `SELECT updated_at
+           FROM canvas_workspaces
+           WHERE id = ? AND library_id = ?
+           LIMIT 1`,
+          [workspaceId, this.libraryId],
         );
         const existing = rows[0];
         if (!existing) throw new Error(`Canvas workspace ${workspaceId} does not exist`);
 
         const updatedAt = Math.max(Date.now(), existing.updated_at + 1);
-        await this.db.run(`UPDATE canvas_workspaces SET name = ?, updated_at = ? WHERE id = ?`, [
-          trimmedName,
-          updatedAt,
-          workspaceId,
-        ]);
+        const changed = await this.db.run(
+          `UPDATE canvas_workspaces
+           SET name = ?, updated_at = ?
+           WHERE id = ? AND library_id = ?`,
+          [trimmedName, updatedAt, workspaceId, this.libraryId],
+        );
+        if (changed === 0) throw new Error(`Canvas workspace ${workspaceId} does not exist`);
 
         const workspace = await this.load(workspaceId);
         if (!workspace) throw new Error(`Failed to rename canvas workspace ${workspaceId}`);
@@ -474,9 +504,11 @@ export class CanvasRepo {
 
   async list(): Promise<CanvasWorkspaceSummary[]> {
     const rows = await this.db.query<Omit<CanvasWorkspaceRow, "viewport_json">>(
-      `SELECT id, name, description, schema_version, created_at, updated_at
+      `SELECT id, library_id, name, description, schema_version, created_at, updated_at
        FROM canvas_workspaces
+       WHERE library_id = ?
        ORDER BY updated_at DESC, created_at ASC, id ASC`,
+      [this.libraryId],
     );
     return rows.map((row) => ({
       schemaVersion: row.schema_version,
@@ -490,9 +522,11 @@ export class CanvasRepo {
 
   async load(workspaceId: string): Promise<StoredCanvasWorkspaceDocument | null> {
     const workspaces = await this.db.query<CanvasWorkspaceRow>(
-      `SELECT id, name, description, schema_version, viewport_json, created_at, updated_at
-       FROM canvas_workspaces WHERE id = ? LIMIT 1`,
-      [workspaceId],
+      `SELECT id, library_id, name, description, schema_version, viewport_json, created_at, updated_at
+       FROM canvas_workspaces
+       WHERE id = ? AND library_id = ?
+       LIMIT 1`,
+      [workspaceId, this.libraryId],
     );
     const workspace = workspaces[0];
     if (!workspace) return null;
@@ -572,10 +606,14 @@ export class CanvasRepo {
         const rows = await this.db.query<{ id: string; workspace_total: number }>(
           `SELECT target.id, totals.total AS workspace_total
            FROM canvas_workspaces AS target
-           CROSS JOIN (SELECT COUNT(*) AS total FROM canvas_workspaces) AS totals
-           WHERE target.id = ?
+           CROSS JOIN (
+             SELECT COUNT(*) AS total
+             FROM canvas_workspaces
+             WHERE library_id = ?
+           ) AS totals
+           WHERE target.id = ? AND target.library_id = ?
            LIMIT 1`,
-          [workspaceId],
+          [this.libraryId, workspaceId, this.libraryId],
         );
         const target = rows[0];
         if (!target) return false;
@@ -591,9 +629,10 @@ export class CanvasRepo {
         // outbound, so these deletes never mutate works.
         await this.db.run(`DELETE FROM canvas_edges WHERE workspace_id = ?`, [workspaceId]);
         await this.db.run(`DELETE FROM canvas_nodes WHERE workspace_id = ?`, [workspaceId]);
-        const changed = await this.db.run(`DELETE FROM canvas_workspaces WHERE id = ?`, [
-          workspaceId,
-        ]);
+        const changed = await this.db.run(
+          `DELETE FROM canvas_workspaces WHERE id = ? AND library_id = ?`,
+          [workspaceId, this.libraryId],
+        );
         return changed > 0;
       }),
     );
@@ -608,20 +647,33 @@ export class CanvasRepo {
     validateDocument(document);
     return this.withWriteLock(() =>
       this.withSavepoint("canvas_save", async () => {
-        const existingWorkIds = await existingWorkIdsForNodes(this.db, document.nodes);
+        const existingWorkspace = await this.db.query<{ library_id: string }>(
+          `SELECT library_id FROM canvas_workspaces WHERE id = ? LIMIT 1`,
+          [document.workspaceId],
+        );
+        if (existingWorkspace[0] && existingWorkspace[0].library_id !== this.libraryId) {
+          throw new Error(`Canvas workspace ${document.workspaceId} belongs to another library`);
+        }
+        const existingWorkIds = await existingWorkIdsForNodes(
+          this.db,
+          this.libraryId,
+          document.nodes,
+        );
 
-        await this.db.run(
+        const workspaceChanged = await this.db.run(
           `INSERT INTO canvas_workspaces
-             (id, name, description, schema_version, viewport_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+             (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              name = excluded.name,
              description = excluded.description,
              schema_version = excluded.schema_version,
              viewport_json = excluded.viewport_json,
-             updated_at = excluded.updated_at`,
+             updated_at = excluded.updated_at
+           WHERE canvas_workspaces.library_id = excluded.library_id`,
           [
             document.workspaceId,
+            this.libraryId,
             document.name,
             document.description ?? null,
             document.schemaVersion,
@@ -630,6 +682,9 @@ export class CanvasRepo {
             document.updatedAt,
           ],
         );
+        if (workspaceChanged === 0) {
+          throw new Error(`Canvas workspace ${document.workspaceId} belongs to another library`);
+        }
 
         // Explicit edge deletion keeps this safe even on drivers that do not
         // enable SQLite foreign-key cascades themselves.
@@ -698,6 +753,14 @@ export class CanvasRepo {
   async deleteNode(workspaceId: string, nodeId: string): Promise<boolean> {
     return this.withWriteLock(() =>
       this.withSavepoint("canvas_delete_node", async () => {
+        const workspace = await this.db.query<{ id: string }>(
+          `SELECT id
+           FROM canvas_workspaces
+           WHERE id = ? AND library_id = ?
+           LIMIT 1`,
+          [workspaceId, this.libraryId],
+        );
+        if (!workspace[0]) return false;
         const now = Date.now();
         await this.db.run(
           `UPDATE canvas_nodes SET group_id = NULL, updated_at = ?
@@ -714,10 +777,12 @@ export class CanvasRepo {
           [workspaceId, nodeId],
         );
         if (changed > 0) {
-          await this.db.run(`UPDATE canvas_workspaces SET updated_at = ? WHERE id = ?`, [
-            now,
-            workspaceId,
-          ]);
+          await this.db.run(
+            `UPDATE canvas_workspaces
+             SET updated_at = ?
+             WHERE id = ? AND library_id = ?`,
+            [now, workspaceId, this.libraryId],
+          );
         }
         return changed > 0;
       }),

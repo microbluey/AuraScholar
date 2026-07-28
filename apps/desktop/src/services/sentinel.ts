@@ -18,7 +18,7 @@ import {
   type SentinelState,
 } from "@aurascholar/core";
 import type { ConnectorContext } from "@aurascholar/connectors";
-import { getDb } from "./aura-db";
+import { getLibraryDb } from "./aura-db";
 import { auraHttp, auraNotifier } from "./aura-platform";
 import { describeSafeError } from "./sensitive-text";
 
@@ -43,8 +43,8 @@ export async function runDuePolls(): Promise<number> {
 }
 
 export async function runDuePollsDetailed(): Promise<SentinelPollSummary> {
-  const db = await getDb();
-  const repo = new SentinelRepo(db);
+  const { db, libraryId } = await getLibraryDb();
+  const repo = new SentinelRepo(db, libraryId);
   const due = await repo.duePolls();
   const summary = await pollTasks(repo, due);
   notifySentinelUpdated();
@@ -52,8 +52,8 @@ export async function runDuePollsDetailed(): Promise<SentinelPollSummary> {
 }
 
 export async function runSentinelTaskNow(taskId: string): Promise<SentinelPollSummary> {
-  const db = await getDb();
-  const repo = new SentinelRepo(db);
+  const { db, libraryId } = await getLibraryDb();
+  const repo = new SentinelRepo(db, libraryId);
   const task = await repo.get(taskId);
   if (!task || task.deleted_at) throw new Error("监控任务不存在或已删除");
   if (task.status !== "active") throw new Error("只能检查监控中的任务");

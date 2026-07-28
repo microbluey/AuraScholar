@@ -55,6 +55,7 @@ function options(
 ): ResolveCanvasCitationRelationsOptions {
   return {
     db: fakeDb(),
+    libraryId: "library:test",
     listLocalRelations: vi.fn(async () => []),
     persistRelation: vi.fn(async () => undefined),
     ...overrides,
@@ -145,7 +146,7 @@ describe("canvas citation relation resolver", () => {
       source: "graph",
       truncated: false,
     });
-    expect(persistRelation).toHaveBeenCalledWith(expect.anything(), {
+    expect(persistRelation).toHaveBeenCalledWith(expect.anything(), "library:test", {
       citingWorkId: "work-a",
       citedWorkId: "work-b",
     });
@@ -163,14 +164,23 @@ describe("canvas citation relation resolver", () => {
 
     await resolveCanvasCitationRelations(PAPERS, {
       db,
+      libraryId: "library:test",
       listLocalRelations: vi.fn(async () => []),
       loadGraph: vi.fn(async (doi: string) => (doi === "10.1000/a" ? GRAPH : null)),
     });
 
     expect(runs).toHaveLength(1);
     expect(runs[0]?.sql).toContain("SELECT ?, ?, 'openalex'");
-    expect(runs[0]?.sql).toContain("FROM works WHERE id = ? AND deleted_at IS NULL");
-    expect(runs[0]?.params).toEqual(["work-a", "work-b", "work-a", "work-b"]);
+    expect(runs[0]?.sql).toContain("FROM works citing");
+    expect(runs[0]?.sql).toContain("citing.library_id = ?");
+    expect(runs[0]?.params).toEqual([
+      "work-a",
+      "work-b",
+      "work-b",
+      "work-a",
+      "library:test",
+      "library:test",
+    ]);
   });
 
   it("keeps useful graph results when another selected DOI fails", async () => {

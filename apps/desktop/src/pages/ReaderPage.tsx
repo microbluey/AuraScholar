@@ -33,7 +33,7 @@ import { writeClipboardText } from "../clipboard";
 import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
 import { downloadBlob } from "../download";
 import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
-import { getDb } from "../services/aura-db";
+import { getLibraryDb } from "../services/aura-db";
 import { fulltextLandingUrl } from "../services/fulltext";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { loadPdfForWork } from "../services/library-read";
@@ -398,8 +398,8 @@ async function loadLibraryPdfContext(
   workId: string,
   preferredAttachmentId?: string,
 ): Promise<LibraryPdfContext> {
-  const db = await getDb();
-  const work = await new WorksRepo(db).get(workId);
+  const { db, libraryId } = await getLibraryDb();
+  const work = await new WorksRepo(db, libraryId).get(workId);
   if (work?.deleted_at != null) {
     return {
       annotations: [],
@@ -452,7 +452,7 @@ async function loadLibraryPdfContext(
     };
   }
   try {
-    const rows = await new AnnotationsRepo(db).listForAttachment(pdf.attachmentId);
+    const rows = await new AnnotationsRepo(db, libraryId).listForAttachment(pdf.attachmentId);
     return {
       annotations: rows.map(rowToAnnotation),
       archivedWork: null,
@@ -663,8 +663,8 @@ export function ReaderPage() {
       }
       let readingStatusError: string | null = null;
       try {
-        const db = await getDb();
-        const changed = await new WorksRepo(db).markReadingStarted(workIdParam);
+        const { db, libraryId } = await getLibraryDb();
+        const changed = await new WorksRepo(db, libraryId).markReadingStarted(workIdParam);
         if (changed) window.dispatchEvent(new Event("aurascholar:library-updated"));
       } catch (error) {
         readingStatusError = describeSafeError(error);
@@ -833,8 +833,8 @@ export function ReaderPage() {
         try {
           const smokeFailure = consumeReaderSmokeAnnotationCreateFailure();
           if (smokeFailure) throw smokeFailure;
-          const db = await getDb();
-          const id = await new AnnotationsRepo(db).create({
+          const { db, libraryId } = await getLibraryDb();
+          const id = await new AnnotationsRepo(db, libraryId).create({
             attachmentId: ctx.attachmentId,
             workId: ctx.workId,
             type: a.type,
@@ -893,8 +893,8 @@ export function ReaderPage() {
           throw smokeFailure;
         }
         if (ctx?.workId) {
-          const db = await getDb();
-          await new AnnotationsRepo(db).softDelete(id);
+          const { db, libraryId } = await getLibraryDb();
+          await new AnnotationsRepo(db, libraryId).softDelete(id);
         }
         await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
         setAnnotationDeleteUndo({ annotation: target, index: targetIndex, message: "已删除批注" });
@@ -924,8 +924,8 @@ export function ReaderPage() {
         throw smokeFailure;
       }
       if (ctx?.workId) {
-        const db = await getDb();
-        await new AnnotationsRepo(db).restore(annotation.id);
+        const { db, libraryId } = await getLibraryDb();
+        await new AnnotationsRepo(db, libraryId).restore(annotation.id);
       }
       setAnnotations((prev) => {
         if (prev.some((item) => item.id === annotation.id)) return prev;
@@ -973,8 +973,8 @@ export function ReaderPage() {
         if (ctx?.workId) {
           const smokeFailure = consumeReaderSmokeCommentSaveFailure();
           if (smokeFailure) throw smokeFailure;
-          const db = await getDb();
-          await new AnnotationsRepo(db).updateContent(id, contentMd);
+          const { db, libraryId } = await getLibraryDb();
+          await new AnnotationsRepo(db, libraryId).updateContent(id, contentMd);
         }
         setSnippetToast("批注评论已保存");
         return true;

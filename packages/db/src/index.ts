@@ -2,7 +2,12 @@ export * as schema from "./schema.js";
 export { MIGRATIONS, runMigrations } from "./migrations.js";
 export type { SqlExecutor, Migration } from "./migrations.js";
 export { newId, workFingerprint, normalizeDoi } from "./ids.js";
-export { ensureLocalFirstState } from "./local-first.js";
+export {
+  ensureLocalFirstState,
+  ensureLocalLibraryIdentity,
+  requireLocalLibraryId,
+  LOCAL_LIBRARY_ID_KEY,
+} from "./local-first.js";
 export type { LocalFirstState, EnsureLocalFirstOptions } from "./local-first.js";
 export type { Database } from "./database.js";
 export { WorksRepo } from "./repos/works.js";

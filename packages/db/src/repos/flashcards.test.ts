@@ -12,12 +12,36 @@ let workId: string;
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
-  works = new WorksRepo(db);
-  cards = new FlashcardsRepo(db);
+  const libraries = await db.query<{ id: string }>(
+    `SELECT id FROM libraries WHERE deleted_at IS NULL LIMIT 1`,
+  );
+  const libraryId = libraries[0]!.id;
+  works = new WorksRepo(db, libraryId);
+  cards = new FlashcardsRepo(db, libraryId);
   workId = (await works.upsert({ title: "Test Paper", year: 2024 })).id;
 });
 
 describe("FlashcardsRepo", () => {
+  it("keeps cards and work validation inside the requested Library", async () => {
+    const now = Date.now();
+    await db.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES ('library:b', 'Library B', 'personal', ?, ?)`,
+      [now, now],
+    );
+    const otherWorks = new WorksRepo(db, "library:b");
+    const otherWorkId = (await otherWorks.upsert({ title: "Other Library Paper" })).id;
+    const otherCards = new FlashcardsRepo(db, "library:b");
+
+    await expect(
+      cards.create({ workId: otherWorkId, frontMd: "foreign", backMd: "blocked" }),
+    ).rejects.toThrow(`Work ${otherWorkId} is missing or removed`);
+
+    await otherCards.create({ workId: otherWorkId, frontMd: "B", backMd: "only B" });
+    expect(await cards.countDue()).toBe(0);
+    expect(await otherCards.countDue()).toBe(1);
+  });
+
   it("creates cards due immediately", async () => {
     await cards.create({ workId, frontMd: "Q1", backMd: "A1" });
     const due = await cards.dueCards();
@@ -36,9 +60,9 @@ describe("FlashcardsRepo", () => {
     `);
 
     try {
-      await expect(
-        cards.create({ workId, frontMd: "Broken", backMd: "No SRS" }),
-      ).rejects.toThrow("forced srs failure");
+      await expect(cards.create({ workId, frontMd: "Broken", backMd: "No SRS" })).rejects.toThrow(
+        "forced srs failure",
+      );
     } finally {
       await db.exec("DROP TRIGGER IF EXISTS fail_flashcard_srs_insert");
     }

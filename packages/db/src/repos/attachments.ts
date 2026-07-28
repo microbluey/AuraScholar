@@ -25,12 +25,19 @@ export interface AttachmentRow {
 }
 
 export class AttachmentsRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private async assertActiveWork(workId: string): Promise<void> {
     const rows = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [workId],
+      `SELECT id FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [workId, this.libraryId],
     );
     if (!rows[0]) throw new Error(`Work ${workId} is missing or removed`);
   }
@@ -71,9 +78,12 @@ export class AttachmentsRepo {
     return this.db.query<AttachmentRow>(
       `SELECT a.*
        FROM attachments a
-       JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = a.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE a.work_id = ? AND a.deleted_at IS NULL`,
-      [workId],
+      [this.libraryId, workId],
     );
   }
 
@@ -82,10 +92,13 @@ export class AttachmentsRepo {
     const rows = await this.db.query<AttachmentRow>(
       `SELECT a.*
        FROM attachments a
-       JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
+       JOIN works w
+         ON w.id = a.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
        WHERE a.sha256 = ? AND a.deleted_at IS NULL
        LIMIT 1`,
-      [sha256],
+      [this.libraryId, sha256],
     );
     return rows[0] ?? null;
   }

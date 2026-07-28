@@ -1,7 +1,7 @@
 import type { CanvasCitationRelation, CitationGraph } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
 import { citationRelationsForWorks, type WorkCitationRelation } from "@aurascholar/db/work-list";
-import { getDb } from "../../services/aura-db";
+import { getLibraryDb } from "../../services/aura-db";
 import { loadCitationGraphByDoi } from "../../services/citation-graph";
 import {
   canvasCitationRelationsFromGraph,
@@ -21,10 +21,19 @@ export interface CanvasCitationResolution {
 
 export interface ResolveCanvasCitationRelationsOptions {
   db?: Database;
-  listLocalRelations?: (db: Database, workIds: string[]) => Promise<WorkCitationRelation[]>;
+  libraryId?: string;
+  listLocalRelations?: (
+    db: Database,
+    libraryId: string,
+    workIds: string[],
+  ) => Promise<WorkCitationRelation[]>;
   loadGraph?: (doi: string, signal?: AbortSignal) => Promise<CitationGraph | null>;
   maxGraphLoads?: number;
-  persistRelation?: (db: Database, relation: CanvasCitationRelation) => Promise<void>;
+  persistRelation?: (
+    db: Database,
+    libraryId: string,
+    relation: CanvasCitationRelation,
+  ) => Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -52,18 +61,27 @@ function isAbortError(error: unknown): boolean {
 
 async function defaultPersistRelation(
   db: Database,
+  libraryId: string,
   relation: CanvasCitationRelation,
 ): Promise<void> {
   await db.run(
     `INSERT OR IGNORE INTO citations (citing_work_id, cited_work_id, source)
      SELECT ?, ?, 'openalex'
-     WHERE EXISTS (
-       SELECT 1 FROM works WHERE id = ? AND deleted_at IS NULL
-     )
-       AND EXISTS (
-         SELECT 1 FROM works WHERE id = ? AND deleted_at IS NULL
-       )`,
-    [relation.citingWorkId, relation.citedWorkId, relation.citingWorkId, relation.citedWorkId],
+     FROM works citing
+     JOIN works cited ON cited.id = ?
+     WHERE citing.id = ?
+       AND citing.library_id = ?
+       AND cited.library_id = ?
+       AND citing.deleted_at IS NULL
+       AND cited.deleted_at IS NULL`,
+    [
+      relation.citingWorkId,
+      relation.citedWorkId,
+      relation.citedWorkId,
+      relation.citingWorkId,
+      libraryId,
+      libraryId,
+    ],
   );
 }
 
@@ -73,7 +91,13 @@ export async function resolveCanvasCitationRelations(
 ): Promise<CanvasCitationResolution> {
   const signal = options.signal;
   throwIfAborted(signal);
-  const db = options.db ?? (await getDb());
+  const context = options.db
+    ? { db: options.db, libraryId: options.libraryId?.trim() ?? "" }
+    : await getLibraryDb();
+  if (!context.libraryId) {
+    throw new Error("libraryId is required when resolving citations with an injected database");
+  }
+  const { db, libraryId } = context;
   throwIfAborted(signal);
 
   const workIds = [...new Set(selectedPapers.map((paper) => paper.workId).filter(Boolean))].sort(
@@ -81,6 +105,7 @@ export async function resolveCanvasCitationRelations(
   );
   const localRelations = await (options.listLocalRelations ?? citationRelationsForWorks)(
     db,
+    libraryId,
     workIds,
   );
   throwIfAborted(signal);
@@ -132,7 +157,7 @@ export async function resolveCanvasCitationRelations(
     const persistRelation = options.persistRelation ?? defaultPersistRelation;
     for (const relation of newGraphRelations) {
       throwIfAborted(signal);
-      await persistRelation(db, relation);
+      await persistRelation(db, libraryId, relation);
     }
   }
   throwIfAborted(signal);

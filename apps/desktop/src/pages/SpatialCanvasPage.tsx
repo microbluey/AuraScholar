@@ -74,7 +74,7 @@ import {
   planCanvasWorkspaceDeletion,
 } from "../features/canvas/workspace-controls";
 import { libraryReaderRowToAnnotation } from "../features/reader/library-reader-session";
-import { getDb } from "../services/aura-db";
+import { getLibraryDb } from "../services/aura-db";
 import { registerExitBarrier } from "../services/exit-barriers";
 import { synthesizeCanvasSelection as desktopSynthesizeCanvasSelection } from "../services/canvas-ai";
 import { isDesktopRuntime } from "../services/aura-platform";
@@ -945,8 +945,8 @@ export function SpatialCanvasPage() {
     }
 
     let cancelled = false;
-    void getDb()
-      .then(async (db) => {
+    void getLibraryDb()
+      .then(async ({ db, libraryId }) => {
         const rows = await db.query<AnnotationRow>(
           `SELECT an.*
            FROM annotations an
@@ -955,13 +955,17 @@ export function SpatialCanvasPage() {
              ON at.id = an.attachment_id
             AND at.work_id = an.work_id
             AND at.deleted_at IS NULL
-           WHERE an.id = ? AND an.work_id = ? AND an.deleted_at IS NULL LIMIT 1`,
-          [requestedAnnotationId, requestedWorkId],
+           WHERE an.id = ?
+             AND an.work_id = ?
+             AND w.library_id = ?
+             AND an.deleted_at IS NULL
+           LIMIT 1`,
+          [requestedAnnotationId, requestedWorkId, libraryId],
         );
         const row = rows[0];
         if (!row) throw new Error("没有找到属于这篇文献的批注，可能已被移除");
         if (requestedWorkId !== row.work_id) throw new Error("这条批注不属于请求加入的文献");
-        const sourceWork = await new WorksRepo(db).get(row.work_id);
+        const sourceWork = await new WorksRepo(db, libraryId).get(row.work_id);
         if (!sourceWork || sourceWork.deleted_at !== null) {
           throw new Error("批注的来源文献已不存在或位于回收站");
         }
@@ -1045,8 +1049,8 @@ export function SpatialCanvasPage() {
     const resolveWork = listed
       ? Promise.resolve(listed)
       : desktopRuntime
-        ? getDb().then(async (db) => {
-            const row = await new WorksRepo(db).get(requestedWorkId);
+        ? getLibraryDb().then(async ({ db, libraryId }) => {
+            const row = await new WorksRepo(db, libraryId).get(requestedWorkId);
             return row && row.deleted_at === null ? canvasLibraryWork(row) : null;
           })
         : Promise.resolve(null);

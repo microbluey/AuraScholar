@@ -509,8 +509,8 @@ export function App() {
       return;
     }
     try {
-      const { getDb } = await import("./services/aura-db");
-      const db = await getDb();
+      const { getLibraryDb } = await import("./services/aura-db");
+      const { db, libraryId } = await getLibraryDb();
       const [
         totalRows,
         trashRows,
@@ -523,29 +523,52 @@ export function App() {
         collections,
         tags,
       ] = await Promise.all([
-        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL`),
-        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NOT NULL`),
         db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'reading'`,
+          `SELECT COUNT(*) AS n FROM works WHERE library_id = ? AND deleted_at IS NULL`,
+          [libraryId],
         ),
         db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND reading_status = 'unread'`,
+          `SELECT COUNT(*) AS n FROM works WHERE library_id = ? AND deleted_at IS NOT NULL`,
+          [libraryId],
         ),
         db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM works WHERE deleted_at IS NULL AND starred = 1`,
+          `SELECT COUNT(*) AS n
+           FROM works
+           WHERE library_id = ? AND deleted_at IS NULL AND reading_status = 'reading'`,
+          [libraryId],
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM works
+           WHERE library_id = ? AND deleted_at IS NULL AND reading_status = 'unread'`,
+          [libraryId],
+        ),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM works
+           WHERE library_id = ? AND deleted_at IS NULL AND starred = 1`,
+          [libraryId],
         ),
         db.query<{ n: number }>(
           `SELECT COUNT(*) AS n
            FROM annotations a
            JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
-           WHERE a.deleted_at IS NULL`,
+           WHERE w.library_id = ? AND a.deleted_at IS NULL`,
+          [libraryId],
         ),
-        db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM canvas_nodes`),
+        db.query<{ n: number }>(
+          `SELECT COUNT(*) AS n
+           FROM canvas_nodes n
+           JOIN canvas_workspaces cw ON cw.id = n.workspace_id
+           WHERE cw.library_id = ?`,
+          [libraryId],
+        ),
         db.query<{ n: number }>(
           `SELECT COUNT(*) AS n
            FROM snippets s
            JOIN works w ON w.id = s.work_id AND w.deleted_at IS NULL
-           WHERE s.deleted_at IS NULL`,
+           WHERE w.library_id = ? AND s.deleted_at IS NULL`,
+          [libraryId],
         ),
         db.query<{
           id: string;
@@ -557,19 +580,27 @@ export function App() {
           `SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
            FROM collections c
            LEFT JOIN collection_items ci ON ci.collection_id = c.id
-           LEFT JOIN works w ON w.id = ci.work_id AND w.deleted_at IS NULL
-           WHERE c.deleted_at IS NULL
+           LEFT JOIN works w
+             ON w.id = ci.work_id
+            AND w.library_id = c.library_id
+            AND w.deleted_at IS NULL
+           WHERE c.library_id = ? AND c.deleted_at IS NULL
            GROUP BY c.id, c.name, c.parent_id, c.sort_order
            ORDER BY c.sort_order, c.name, c.id`,
+          [libraryId],
         ),
         db.query<{ name: string; color: string | null; count: number }>(
           `SELECT t.name, t.color, COUNT(DISTINCT w.id) AS count
            FROM tags t
            LEFT JOIN work_tags wt ON wt.tag_id = t.id
-           LEFT JOIN works w ON w.id = wt.work_id AND w.deleted_at IS NULL
-           WHERE t.deleted_at IS NULL
+           LEFT JOIN works w
+             ON w.id = wt.work_id
+            AND w.library_id = t.library_id
+            AND w.deleted_at IS NULL
+           WHERE t.library_id = ? AND t.deleted_at IS NULL
            GROUP BY t.id, t.name, t.color
            ORDER BY count DESC, t.name`,
+          [libraryId],
         ),
       ]);
       await waitForAppStatsSmokeAfterReadDelay();

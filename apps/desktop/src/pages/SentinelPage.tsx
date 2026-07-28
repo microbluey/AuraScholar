@@ -8,7 +8,7 @@ import {
 } from "@aurascholar/db/repos/sentinel";
 import { STATE_LABEL, SENTINEL_STATES, stateRank, type SentinelState } from "@aurascholar/core";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
-import { getDb } from "../services/aura-db";
+import { getLibraryDb } from "../services/aura-db";
 import {
   runDuePollsDetailed,
   runSentinelTaskNow,
@@ -92,6 +92,7 @@ function safeSentinelTask(task: SentinelTaskRow): SentinelTaskRow {
 
 const PREVIEW_SENTINEL_NOW = Date.now();
 const PREVIEW_DAY = 24 * 60 * 60 * 1000;
+const PREVIEW_SENTINEL_LIBRARY_ID = "library:preview-sentinel";
 const PREVIEW_SENTINEL_SCOPE_MESSAGE =
   "浏览器预览使用可重置的哨兵样例；新增、检查、暂停、删除和撤销会在本页模拟生效，真实检查和证据快照会在桌面应用中保存。";
 
@@ -110,6 +111,7 @@ function previewTask(input: {
   const createdAt = PREVIEW_SENTINEL_NOW - PREVIEW_DAY * 21;
   return {
     id: input.id,
+    library_id: PREVIEW_SENTINEL_LIBRARY_ID,
     work_id: input.workId ?? null,
     doi: input.doi ?? null,
     title: input.title,
@@ -234,6 +236,7 @@ function createPreviewSentinelTask(input: {
   const normalizedDoi = input.mode === "doi" ? normalizeDoi(input.doi) : null;
   return {
     id: `preview-sentinel-custom-${now}`,
+    library_id: PREVIEW_SENTINEL_LIBRARY_ID,
     work_id: null,
     doi: normalizedDoi,
     title: input.title.trim() || normalizedDoi || "新的预览监控",
@@ -375,8 +378,8 @@ export function SentinelPage() {
     try {
       const smokeFailure = consumeSentinelSmokeReadFailure();
       if (smokeFailure) throw smokeFailure;
-      const db = await getDb();
-      const repo = new SentinelRepo(db);
+      const { db, libraryId } = await getLibraryDb();
+      const repo = new SentinelRepo(db, libraryId);
       const list = await repo.list();
       const eventPairs = await Promise.all(
         list.map(async (task) => [task.id, await repo.events(task.id)] as const),
@@ -476,8 +479,8 @@ export function SentinelPage() {
       return;
     }
     try {
-      const db = await getDb();
-      const repo = new SentinelRepo(db);
+      const { db, libraryId } = await getLibraryDb();
+      const repo = new SentinelRepo(db, libraryId);
       let result: Awaited<ReturnType<SentinelRepo["createOrRestore"]>>;
       if (mode === "doi") {
         const normalized = normalizeDoi(doi)!;
@@ -625,8 +628,8 @@ export function SentinelPage() {
         return;
       }
       try {
-        const db = await getDb();
-        await new SentinelRepo(db).setStatus(task.id, nextStatus);
+        const { db, libraryId } = await getLibraryDb();
+        await new SentinelRepo(db, libraryId).setStatus(task.id, nextStatus);
         finalMessage = nextStatus === "active" ? "已恢复监控" : "已暂停监控";
         await refresh();
       } catch (e) {
@@ -675,13 +678,13 @@ export function SentinelPage() {
         return;
       }
       try {
-        const db = await getDb();
+        const { db, libraryId } = await getLibraryDb();
         const smokeFailure = consumeSentinelSmokeDeleteFailure();
         if (smokeFailure) {
           await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        await new SentinelRepo(db).softDelete(task.id);
+        await new SentinelRepo(db, libraryId).softDelete(task.id);
         finalMessage = `已删除监控任务:《${task.title}》`;
         deleteUndo = { id: task.id, message: finalMessage };
         if (expanded === task.id) setExpanded(null);
@@ -731,13 +734,13 @@ export function SentinelPage() {
       return;
     }
     try {
-      const db = await getDb();
+      const { db, libraryId } = await getLibraryDb();
       const smokeFailure = consumeSentinelSmokeRestoreFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      await new SentinelRepo(db).restore(sentinelUndo.id);
+      await new SentinelRepo(db, libraryId).restore(sentinelUndo.id);
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
       await refresh();
       setExpanded(sentinelUndo.id);

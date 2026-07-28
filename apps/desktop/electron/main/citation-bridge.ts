@@ -5,6 +5,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { WorksRepo } from "@aurascholar/db/repos/works";
+import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import { formatEntry, toCslItem } from "@aurascholar/cite";
 import { describeSafeError } from "@aurascholar/platform";
 import { getMainDb } from "./db";
@@ -21,7 +22,7 @@ function send(req: IncomingMessage, res: ServerResponse, status: number, body: u
     "access-control-allow-origin": "*",
     "access-control-allow-methods": ALLOW_HEADER,
     "access-control-allow-headers": "content-type",
-    "allow": ALLOW_HEADER,
+    allow: ALLOW_HEADER,
   };
   res.writeHead(status, headers);
   if (req.method === "HEAD" || status === 204) {
@@ -55,7 +56,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return send(req, res, 401, { error: "bad token" });
   }
   const db = await getMainDb();
-  const works = new WorksRepo(db);
+  const libraryId = await requireLocalLibraryId(db);
+  const works = new WorksRepo(db, libraryId);
 
   if (url.pathname === "/works/search") {
     const q = url.searchParams.get("q") ?? "";

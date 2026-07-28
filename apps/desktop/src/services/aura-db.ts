@@ -2,12 +2,22 @@
 // the better-sqlite3 connection in the Electron main process via the preload
 // bridge (window.aura.db). Migrations run main-side at startup.
 import type { Database as AppDatabase } from "@aurascholar/db";
+import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 
 let instance: Promise<AppDatabase> | null = null;
 
 export function getDb(): Promise<AppDatabase> {
   instance ??= open();
   return instance;
+}
+
+export async function getLibraryDb(): Promise<{
+  db: AppDatabase;
+  libraryId: string;
+}> {
+  const db = await getDb();
+  const libraryId = await requireLocalLibraryId(db);
+  return { db, libraryId };
 }
 
 async function open(): Promise<AppDatabase> {

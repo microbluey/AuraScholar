@@ -1,6 +1,7 @@
 export type { SyncProvider, RemoteObject } from "./provider.js";
 export { WebDavProvider } from "./webdav.js";
 export type { WebDavOptions } from "./webdav.js";
+export { LibraryScopedSyncProvider } from "./scoped-provider.js";
 export { HlcClock, hlcToString, hlcFromString, hlcCompare } from "./hlc.js";
 export type { Hlc } from "./hlc.js";
 export { SyncEngine } from "./engine.js";

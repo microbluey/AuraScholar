@@ -1,15 +1,18 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
+import { requireLocalLibraryId } from "../local-first";
 import { SavedSearchInactiveError, SavedSearchesRepo } from "./saved-searches";
 
 let db: Database;
+let libraryId: string;
 let savedSearches: SavedSearchesRepo;
 
 beforeEach(async () => {
   db = await createNodeDatabase(":memory:");
   await runMigrations(db);
-  savedSearches = new SavedSearchesRepo(db);
+  libraryId = await requireLocalLibraryId(db);
+  savedSearches = new SavedSearchesRepo(db, libraryId);
 });
 
 describe("SavedSearchesRepo", () => {
@@ -83,11 +86,16 @@ describe("SavedSearchesRepo", () => {
     await savedSearches.softDelete(id);
 
     await expect(
-      savedSearches.recordRun(id, ["doi:10.1000/original", "doi:10.1000/stale"], 3, Date.now() + 3000),
+      savedSearches.recordRun(
+        id,
+        ["doi:10.1000/original", "doi:10.1000/stale"],
+        3,
+        Date.now() + 3000,
+      ),
     ).rejects.toThrow(SavedSearchInactiveError);
-    await expect(savedSearches.recordError(id, "OpenAlex returned 500", Date.now() + 3000)).rejects.toThrow(
-      SavedSearchInactiveError,
-    );
+    await expect(
+      savedSearches.recordError(id, "OpenAlex returned 500", Date.now() + 3000),
+    ).rejects.toThrow(SavedSearchInactiveError);
     await expect(savedSearches.clearNew(id)).rejects.toThrow(SavedSearchInactiveError);
     await expect(savedSearches.softDelete(id)).rejects.toThrow(
       `Saved search ${id} is missing or already removed`,

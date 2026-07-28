@@ -69,6 +69,7 @@ export interface WorkPatch extends RichBibFields {
 
 export interface WorkRow {
   id: string;
+  library_id: string;
   doi: string | null;
   title: string;
   abstract: string | null;
@@ -196,7 +197,12 @@ function isUniqueConstraint(error: unknown): boolean {
 }
 
 export class WorksRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly libraryId: string,
+  ) {
+    if (!libraryId.trim()) throw new Error("libraryId must be a non-empty string");
+  }
 
   private assertChanged(changed: number, message: string): void {
     if (changed === 0) throw new Error(message);
@@ -277,9 +283,19 @@ export class WorksRepo {
     }
 
     const id = newId();
-    const cols = ["id", "doi", "title", "type", "fingerprint", "csl_json", "keywords_json"];
+    const cols = [
+      "id",
+      "library_id",
+      "doi",
+      "title",
+      "type",
+      "fingerprint",
+      "csl_json",
+      "keywords_json",
+    ];
     const vals: unknown[] = [
       id,
+      this.libraryId,
       doi,
       input.title,
       input.type ?? "article",
@@ -335,8 +351,11 @@ export class WorksRepo {
     if (duplicates.length === 0) return { primaryId, merged: 0, movedAttachments: 0 };
 
     const primary = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-      [primaryId],
+      `SELECT id
+       FROM works
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [primaryId, this.libraryId],
     );
     if (primary.length === 0) throw new Error("主文献不存在或已删除");
 
@@ -347,10 +366,22 @@ export class WorksRepo {
     try {
       for (const duplicateId of duplicates) {
         const exists = await this.db.query<{ id: string }>(
-          `SELECT id FROM works WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
-          [duplicateId],
+          `SELECT id
+           FROM works
+           WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+           LIMIT 1`,
+          [duplicateId, this.libraryId],
         );
-        if (exists.length === 0) continue;
+        if (exists.length === 0) {
+          const owner = await this.db.query<{ library_id: string }>(
+            `SELECT library_id FROM works WHERE id = ? LIMIT 1`,
+            [duplicateId],
+          );
+          if (owner[0] && owner[0].library_id !== this.libraryId) {
+            throw new Error(`Work ${duplicateId} is outside library ${this.libraryId}`);
+          }
+          continue;
+        }
         movedAttachments += await this.mergeOneDuplicate(primaryId, duplicateId, now);
         merged++;
       }
@@ -391,10 +422,10 @@ export class WorksRepo {
   ): Promise<Array<{ id: string }>> {
     return this.db.query<{ id: string }>(
       `SELECT id FROM works
-       WHERE ${column} = ?
+       WHERE library_id = ? AND ${column} = ?
        ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, updated_at DESC
        LIMIT 1`,
-      [value],
+      [this.libraryId, value],
     );
   }
 
@@ -422,11 +453,13 @@ export class WorksRepo {
       sets.push(`keywords_json = COALESCE(keywords_json, ?)`);
       params.push(JSON.stringify(input.keywords));
     }
-    await this.db.run(`UPDATE works SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [
-      ...params,
-      now,
-      id,
-    ]);
+    const changed = await this.db.run(
+      `UPDATE works
+       SET ${sets.join(", ")}, updated_at = ?
+       WHERE id = ? AND library_id = ?`,
+      [...params, now, id, this.libraryId],
+    );
+    this.assertChanged(changed, `Work ${id} is outside library ${this.libraryId}`);
   }
 
   private async mergeOneDuplicate(
@@ -486,23 +519,33 @@ export class WorksRepo {
     await this.moveGraphCache(primaryId, duplicateId);
     await this.moveCanvasReferences(primaryId, duplicateId, now);
 
-    for (const table of ["annotations", "flashcards", "snippets", "sentinel_tasks", "ai_jobs"]) {
+    for (const table of ["annotations", "flashcards", "snippets"]) {
       await this.db.run(`UPDATE ${table} SET work_id = ?, updated_at = ? WHERE work_id = ?`, [
         primaryId,
         now,
         duplicateId,
       ]);
     }
+    for (const table of ["sentinel_tasks", "ai_jobs"]) {
+      await this.db.run(
+        `UPDATE ${table}
+         SET work_id = ?, updated_at = ?
+         WHERE work_id = ? AND library_id = ?`,
+        [primaryId, now, duplicateId, this.libraryId],
+      );
+    }
     await this.db.run(
       `UPDATE derived_artifacts SET source_id = ?, updated_at = ?
-       WHERE source_table = 'works' AND source_id = ?`,
-      [primaryId, now, duplicateId],
+       WHERE library_id = ? AND source_table = 'works' AND source_id = ?`,
+      [primaryId, now, this.libraryId, duplicateId],
     );
-    await this.db.run(`UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ?`, [
-      now,
-      now,
-      duplicateId,
-    ]);
+    const changed = await this.db.run(
+      `UPDATE works
+       SET deleted_at = ?, updated_at = ?
+       WHERE id = ? AND library_id = ?`,
+      [now, now, duplicateId, this.libraryId],
+    );
+    this.assertChanged(changed, `Work ${duplicateId} is outside library ${this.libraryId}`);
 
     return movedAttachments;
   }
@@ -549,14 +592,26 @@ export class WorksRepo {
       "keywords_json",
     ];
     const sets = columns.map(
-      (column) => `${column} = COALESCE(${column}, (SELECT ${column} FROM works WHERE id = ?))`,
+      (column) =>
+        `${column} = COALESCE(${column}, (
+          SELECT ${column} FROM works WHERE id = ? AND library_id = ?
+        ))`,
     );
     await this.db.run(
       `UPDATE works SET ${sets.join(", ")},
-         starred = CASE WHEN (SELECT starred FROM works WHERE id = ?) = 1 THEN 1 ELSE starred END,
+         starred = CASE WHEN (
+           SELECT starred FROM works WHERE id = ? AND library_id = ?
+         ) = 1 THEN 1 ELSE starred END,
          updated_at = ?
-       WHERE id = ?`,
-      [...columns.map(() => duplicateId), duplicateId, now, primaryId],
+       WHERE id = ? AND library_id = ?`,
+      [
+        ...columns.flatMap(() => [duplicateId, this.libraryId]),
+        duplicateId,
+        this.libraryId,
+        now,
+        primaryId,
+        this.libraryId,
+      ],
     );
   }
 
@@ -602,9 +657,16 @@ export class WorksRepo {
       cited_work_id: string;
       source: string;
     }>(
-      `SELECT citing_work_id, cited_work_id, source FROM citations
-       WHERE citing_work_id = ? OR cited_work_id = ?`,
-      [duplicateId, duplicateId],
+      `SELECT c.citing_work_id, c.cited_work_id, c.source
+       FROM citations c
+       JOIN works citing
+         ON citing.id = c.citing_work_id
+        AND citing.library_id = ?
+       JOIN works cited
+         ON cited.id = c.cited_work_id
+        AND cited.library_id = ?
+       WHERE c.citing_work_id = ? OR c.cited_work_id = ?`,
+      [this.libraryId, this.libraryId, duplicateId, duplicateId],
     );
     for (const row of rows) {
       const citing = row.citing_work_id === duplicateId ? primaryId : row.citing_work_id;
@@ -649,16 +711,26 @@ export class WorksRepo {
     await this.db.run(
       `UPDATE canvas_nodes
        SET work_id = ?, updated_at = ?
-       WHERE work_id = ?`,
-      [primaryId, now, duplicateId],
+       WHERE work_id = ?
+         AND EXISTS (
+           SELECT 1
+           FROM canvas_workspaces
+           WHERE id = canvas_nodes.workspace_id AND library_id = ?
+         )`,
+      [primaryId, now, duplicateId, this.libraryId],
     );
     await this.db.run(
       `UPDATE canvas_nodes
        SET data_json = json_set(data_json, '$.workId', ?), updated_at = ?
        WHERE type IN ('paper', 'excerpt')
          AND json_valid(data_json)
-         AND json_extract(data_json, '$.workId') = ?`,
-      [primaryId, now, duplicateId],
+         AND json_extract(data_json, '$.workId') = ?
+         AND EXISTS (
+           SELECT 1
+           FROM canvas_workspaces
+           WHERE id = canvas_nodes.workspace_id AND library_id = ?
+         )`,
+      [primaryId, now, duplicateId, this.libraryId],
     );
   }
 
@@ -701,8 +773,10 @@ export class WorksRepo {
     }
     if (needsFingerprint) {
       const currentRows = await this.db.query<WorkRow>(
-        `SELECT * FROM works WHERE id = ? AND deleted_at IS NULL`,
-        [id],
+        `SELECT *
+         FROM works
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [id, this.libraryId],
       );
       const current = currentRows[0];
       if (!current) throw new Error(`Work ${id} is missing or removed`);
@@ -725,8 +799,10 @@ export class WorksRepo {
     try {
       if (sets.length > 0) {
         const changed = await this.db.run(
-          `UPDATE works SET ${sets.join(", ")}, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-          [...params, now, id],
+          `UPDATE works
+           SET ${sets.join(", ")}, updated_at = ?
+           WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+          [...params, now, id, this.libraryId],
         );
         this.assertChanged(changed, `Work ${id} is missing or removed`);
       }
@@ -757,8 +833,8 @@ export class WorksRepo {
       const changed = await this.db.run(
         `UPDATE works
          SET reading_status = 'reading', updated_at = ?
-         WHERE id = ? AND deleted_at IS NULL AND reading_status = 'unread'`,
-        [Date.now(), id],
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL AND reading_status = 'unread'`,
+        [Date.now(), id, this.libraryId],
       );
       return changed > 0;
     });
@@ -769,8 +845,10 @@ export class WorksRepo {
       throw new Error("阅读状态无效");
     }
     const changed = await this.db.run(
-      `UPDATE works SET reading_status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [status, Date.now(), id],
+      `UPDATE works
+       SET reading_status = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [status, Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Work ${id} is missing or removed`);
   }
@@ -781,34 +859,42 @@ export class WorksRepo {
 
   private async setStarredUnlocked(id: string, starred: boolean): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE works SET starred = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [starred ? 1 : 0, Date.now(), id],
+      `UPDATE works
+       SET starred = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [starred ? 1 : 0, Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Work ${id} is missing or removed`);
   }
 
   private async upsertAuthor(displayName: string, orcid?: string): Promise<string> {
     if (orcid) {
-      const hit = await this.db.query<{ id: string }>(`SELECT id FROM authors WHERE orcid = ?`, [
-        orcid,
-      ]);
+      const hit = await this.db.query<{ id: string }>(
+        `SELECT id FROM authors WHERE library_id = ? AND orcid = ?`,
+        [this.libraryId, orcid],
+      );
       if (hit.length > 0) return hit[0]!.id;
       const id = newId();
       const now = Date.now();
       await this.db.run(
-        `INSERT OR IGNORE INTO authors (id, display_name, orcid, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-        [id, displayName, orcid, now, now],
+        `INSERT OR IGNORE INTO authors
+           (id, library_id, display_name, orcid, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [id, this.libraryId, displayName, orcid, now, now],
       );
-      const rows = await this.db.query<{ id: string }>(`SELECT id FROM authors WHERE orcid = ?`, [
-        orcid,
-      ]);
+      const rows = await this.db.query<{ id: string }>(
+        `SELECT id FROM authors WHERE library_id = ? AND orcid = ?`,
+        [this.libraryId, orcid],
+      );
       return rows[0]?.id ?? id;
     }
     const id = newId();
     const now = Date.now();
     await this.db.run(
-      `INSERT INTO authors (id, display_name, orcid, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      [id, displayName, orcid ?? null, now, now],
+      `INSERT INTO authors
+         (id, library_id, display_name, orcid, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, this.libraryId, displayName, orcid ?? null, now, now],
     );
     return id;
   }
@@ -821,7 +907,10 @@ export class WorksRepo {
     const limit = opts?.limit ?? 200;
     const collectionJoin = opts?.collectionId
       ? `JOIN collection_items ci ON ci.work_id = w.id AND ci.collection_id = ?
-         JOIN collections c ON c.id = ci.collection_id AND c.deleted_at IS NULL`
+         JOIN collections c
+           ON c.id = ci.collection_id
+          AND c.library_id = w.library_id
+          AND c.deleted_at IS NULL`
       : "";
     const collectionParams = opts?.collectionId ? [opts.collectionId] : [];
     let rows: WorkRow[];
@@ -832,17 +921,18 @@ export class WorksRepo {
             `SELECT w.* FROM works w
              JOIN works_fts f ON f.rowid = w.rowid
              ${collectionJoin}
-             WHERE works_fts MATCH ? AND w.deleted_at IS NULL
+             WHERE works_fts MATCH ? AND w.library_id = ? AND w.deleted_at IS NULL
              ORDER BY rank LIMIT ?`,
-            [...collectionParams, ftsQuery, limit],
+            [...collectionParams, ftsQuery, this.libraryId, limit],
           )
         : [];
     } else {
       rows = await this.db.query<WorkRow>(
         `SELECT w.* FROM works w
          ${collectionJoin}
-         WHERE w.deleted_at IS NULL ORDER BY w.created_at DESC LIMIT ?`,
-        [...collectionParams, limit],
+         WHERE w.library_id = ? AND w.deleted_at IS NULL
+         ORDER BY w.created_at DESC LIMIT ?`,
+        [...collectionParams, this.libraryId, limit],
       );
     }
     return this.attachAuthors(rows);
@@ -857,23 +947,27 @@ export class WorksRepo {
         ? await this.db.query<WorkRow>(
             `SELECT w.* FROM works w
              JOIN works_fts f ON f.rowid = w.rowid
-             WHERE works_fts MATCH ? AND w.deleted_at IS NOT NULL
+             WHERE works_fts MATCH ? AND w.library_id = ? AND w.deleted_at IS NOT NULL
              ORDER BY rank LIMIT ?`,
-            [ftsQuery, limit],
+            [ftsQuery, this.libraryId, limit],
           )
         : [];
     } else {
       rows = await this.db.query<WorkRow>(
         `SELECT w.* FROM works w
-         WHERE w.deleted_at IS NOT NULL ORDER BY w.deleted_at DESC, w.updated_at DESC LIMIT ?`,
-        [limit],
+         WHERE w.library_id = ? AND w.deleted_at IS NOT NULL
+         ORDER BY w.deleted_at DESC, w.updated_at DESC LIMIT ?`,
+        [this.libraryId, limit],
       );
     }
     return this.attachAuthors(rows);
   }
 
   async get(id: string): Promise<WorkWithAuthors | null> {
-    const rows = await this.db.query<WorkRow>(`SELECT * FROM works WHERE id = ?`, [id]);
+    const rows = await this.db.query<WorkRow>(
+      `SELECT * FROM works WHERE id = ? AND library_id = ?`,
+      [id, this.libraryId],
+    );
     if (rows.length === 0) return null;
     const [withAuthors] = await this.attachAuthors(rows);
     return withAuthors ?? null;
@@ -884,8 +978,11 @@ export class WorksRepo {
     const normalized = normalizeDoi(doi) ?? doi.trim().toLowerCase();
     if (!normalized) return null;
     const rows = await this.db.query<WorkRow>(
-      `SELECT * FROM works WHERE doi = ? AND deleted_at IS NULL LIMIT 1`,
-      [normalized],
+      `SELECT *
+       FROM works
+       WHERE library_id = ? AND doi = ? AND deleted_at IS NULL
+       LIMIT 1`,
+      [this.libraryId, normalized],
     );
     return rows[0] ?? null;
   }
@@ -901,8 +998,10 @@ export class WorksRepo {
   private async softDeleteUnlocked(id: string): Promise<void> {
     const now = Date.now();
     const changed = await this.db.run(
-      `UPDATE works SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
-      [now, now, id],
+      `UPDATE works
+       SET deleted_at = ?, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+      [now, now, id, this.libraryId],
     );
     this.assertChanged(changed, `Work ${id} is missing or already removed`);
   }
@@ -934,8 +1033,10 @@ export class WorksRepo {
 
   private async restoreUnlocked(id: string): Promise<void> {
     const changed = await this.db.run(
-      `UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL`,
-      [Date.now(), id],
+      `UPDATE works
+       SET deleted_at = NULL, updated_at = ?
+       WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+      [Date.now(), id, this.libraryId],
     );
     this.assertChanged(changed, `Work ${id} is missing or already active`);
   }
@@ -976,8 +1077,11 @@ export class WorksRepo {
     if (uniqueIds.length === 0) return 0;
     const placeholders = uniqueIds.map(() => "?").join(",");
     const targets = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id IN (${placeholders}) AND deleted_at IS NOT NULL ORDER BY id`,
-      uniqueIds,
+      `SELECT id
+       FROM works
+       WHERE library_id = ? AND id IN (${placeholders}) AND deleted_at IS NOT NULL
+       ORDER BY id`,
+      [this.libraryId, ...uniqueIds],
     );
     if (targets.length === 0) return 0;
 
@@ -985,7 +1089,10 @@ export class WorksRepo {
     try {
       for (const { id } of targets) {
         await this.purgeWorkArtifacts(id);
-        await this.db.run(`DELETE FROM works WHERE id = ?`, [id]);
+        await this.db.run(`DELETE FROM works WHERE id = ? AND library_id = ?`, [
+          id,
+          this.libraryId,
+        ]);
       }
       await this.db.exec("COMMIT");
     } catch (e) {
@@ -999,9 +1106,12 @@ export class WorksRepo {
   async authorsOf(workId: string): Promise<WorkAuthorDetail[]> {
     return this.db.query<WorkAuthorDetail>(
       `SELECT a.display_name AS displayName, a.orcid AS orcid, wa.position AS position, wa.role AS role
-       FROM work_authors wa JOIN authors a ON a.id = wa.author_id
-       WHERE wa.work_id = ? ORDER BY wa.position`,
-      [workId],
+       FROM work_authors wa
+       JOIN authors a ON a.id = wa.author_id AND a.library_id = ?
+       JOIN works w ON w.id = wa.work_id AND w.library_id = a.library_id
+       WHERE wa.work_id = ?
+       ORDER BY wa.position`,
+      [this.libraryId, workId],
     );
   }
 
@@ -1015,10 +1125,11 @@ export class WorksRepo {
       position: number;
     }>(
       `SELECT wa.work_id, a.display_name, wa.position
-       FROM work_authors wa JOIN authors a ON a.id = wa.author_id
+       FROM work_authors wa
+       JOIN authors a ON a.id = wa.author_id AND a.library_id = ?
        WHERE wa.work_id IN (${placeholders})
        ORDER BY wa.position`,
-      ids,
+      [this.libraryId, ...ids],
     );
     const byWork = new Map<string, string[]>();
     for (const ar of authorRows) {
@@ -1036,8 +1147,14 @@ export class WorksRepo {
         this.db.query<{ id: string }>(`SELECT id FROM annotations WHERE work_id = ?`, [workId]),
         this.db.query<{ id: string }>(`SELECT id FROM flashcards WHERE work_id = ?`, [workId]),
         this.db.query<{ id: string }>(`SELECT id FROM snippets WHERE work_id = ?`, [workId]),
-        this.db.query<{ id: string }>(`SELECT id FROM sentinel_tasks WHERE work_id = ?`, [workId]),
-        this.db.query<{ id: string }>(`SELECT id FROM ai_jobs WHERE work_id = ?`, [workId]),
+        this.db.query<{ id: string }>(
+          `SELECT id FROM sentinel_tasks WHERE work_id = ? AND library_id = ?`,
+          [workId, this.libraryId],
+        ),
+        this.db.query<{ id: string }>(
+          `SELECT id FROM ai_jobs WHERE work_id = ? AND library_id = ?`,
+          [workId, this.libraryId],
+        ),
       ]);
 
     const attachmentIds = attachmentRows.map((row) => row.id);
@@ -1080,16 +1197,23 @@ export class WorksRepo {
     await this.db.run(`DELETE FROM attachments WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM flashcards WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM snippets WHERE work_id = ?`, [workId]);
-    await this.db.run(`DELETE FROM sentinel_tasks WHERE work_id = ?`, [workId]);
-    await this.db.run(`DELETE FROM ai_jobs WHERE work_id = ?`, [workId]);
+    await this.db.run(`DELETE FROM sentinel_tasks WHERE work_id = ? AND library_id = ?`, [
+      workId,
+      this.libraryId,
+    ]);
+    await this.db.run(`DELETE FROM ai_jobs WHERE work_id = ? AND library_id = ?`, [
+      workId,
+      this.libraryId,
+    ]);
   }
 
   private async deleteDerivedArtifacts(sourceTable: string, ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => "?").join(",");
     await this.db.run(
-      `DELETE FROM derived_artifacts WHERE source_table = ? AND source_id IN (${placeholders})`,
-      [sourceTable, ...ids],
+      `DELETE FROM derived_artifacts
+       WHERE library_id = ? AND source_table = ? AND source_id IN (${placeholders})`,
+      [this.libraryId, sourceTable, ...ids],
     );
   }
 
@@ -1097,8 +1221,9 @@ export class WorksRepo {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => "?").join(",");
     await this.db.run(
-      `DELETE FROM sync_row_clocks WHERE table_name = ? AND row_id IN (${placeholders})`,
-      [tableName, ...ids],
+      `DELETE FROM sync_row_clocks
+       WHERE library_id = ? AND table_name = ? AND row_id IN (${placeholders})`,
+      [this.libraryId, tableName, ...ids],
     );
   }
 
