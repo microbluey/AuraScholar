@@ -20,19 +20,40 @@ function source(path: string): string {
 }
 
 describe("main-process data command architecture", () => {
-  it("keeps destructive Library mutations behind typed main-process commands", () => {
+  it("keeps Library work mutations behind the typed service gateway", () => {
     const libraryPage = source("src/pages/LibraryPage.tsx");
+    const gateway = source("src/services/library-work-actions.ts");
+    const commandNames = [
+      "library.mergeWorks",
+      "library.purgeDeletedWorks",
+      "library.restoreWorks",
+      "library.setWorkReadingStatus",
+      "library.setWorkStarred",
+      "library.trashWorks",
+    ];
 
-    expect(libraryPage).toContain('data.command("library.mergeWorks"');
-    expect(libraryPage).toContain('data.command("library.purgeDeletedWorks"');
-    expect(libraryPage).toContain('data.command("library.restoreWorks"');
-    expect(libraryPage).toContain('data.command("library.setWorkReadingStatus"');
-    expect(libraryPage).toContain('data.command("library.setWorkStarred"');
-    expect(libraryPage).toContain('data.command("library.trashWorks"');
+    for (const commandName of commandNames) {
+      expect(gateway).toContain(`data.command("${commandName}"`);
+    }
+    expect(libraryPage).not.toContain("data.command(");
+    expect(libraryPage).not.toContain("getLibraryDb");
     expect(libraryPage).not.toContain("WorksRepo");
     expect(libraryPage).not.toContain(".mergeInto(");
     expect(libraryPage).not.toContain(".purgeDeleted(");
     expect(libraryPage).not.toContain(".purgeDeletedMany(");
+  });
+
+  it("keeps Library page reads behind a scoped data service", () => {
+    const libraryPage = source("src/pages/LibraryPage.tsx");
+    const dataService = source("src/services/library-page-data.ts");
+
+    expect(libraryPage).toContain("loadLibraryPageData");
+    expect(libraryPage).toContain("loadLibraryWorkRuntimeMeta");
+    expect(libraryPage).not.toContain("getLibraryDb");
+    expect(libraryPage).not.toContain(".query<");
+    expect(libraryPage).not.toContain("citationCountsForWorks");
+    expect(dataService).toContain("getLibraryDb");
+    expect(dataService).toContain("citationCountsForWorks");
   });
 
   it("keeps migrated backup and sync transactions out of renderer SQL IPC", () => {

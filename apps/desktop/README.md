@@ -15,6 +15,12 @@ built with [electron-vite](https://electron-vite.org/).
 - **Platform layer** — `src/services/aura-platform.ts` / `aura-db.ts` adapt
   the `window.aura` preload bridge to the `@aurascholar/platform` interfaces
   (HTTP / FS / notifications) and the shared `Database` handle.
+- **Renderer data boundaries** — new and migrated pages consume typed services
+  instead of opening database sessions or embedding SQL. Read services own
+  active-Library scoping and row aggregation; durable multi-row mutations go
+  through typed `window.aura.data.command` gateways so transaction ownership
+  remains in the main process. Remaining legacy page-level boundaries are
+  frozen by the architecture-health ratchet and must decrease over time.
 - Domain logic lives in `packages/*` and is shell-agnostic (depends only on the
   `@aurascholar/platform` interfaces).
 

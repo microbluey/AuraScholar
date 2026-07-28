@@ -10,8 +10,8 @@
     "production": {
       "byExtension": {
         ".css": 16808,
-        ".ts": 30897,
-        ".tsx": 33341
+        ".ts": 31205,
+        ".tsx": 33139
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 221,
@@ -98,7 +98,7 @@
         "apps/desktop/src/pages/FlashcardsPage.tsx": 864,
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1149,
-        "apps/desktop/src/pages/LibraryPage.tsx": 5308,
+        "apps/desktop/src/pages/LibraryPage.tsx": 5106,
         "apps/desktop/src/pages/ReaderPage.tsx": 2183,
         "apps/desktop/src/pages/SentinelPage.tsx": 1361,
         "apps/desktop/src/pages/SettingsPage.tsx": 2067,
@@ -118,8 +118,10 @@
         "apps/desktop/src/services/library-actions.ts": 72,
         "apps/desktop/src/services/library-list.ts": 32,
         "apps/desktop/src/services/library-organization.ts": 130,
+        "apps/desktop/src/services/library-page-data.ts": 254,
         "apps/desktop/src/services/library-read.ts": 41,
         "apps/desktop/src/services/library-types.ts": 100,
+        "apps/desktop/src/services/library-work-actions.ts": 54,
         "apps/desktop/src/services/library.ts": 549,
         "apps/desktop/src/services/metadata.ts": 40,
         "apps/desktop/src/services/preview-library.ts": 70,
@@ -237,16 +239,16 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 81046
+      "totalLines": 81152
     },
     "tests": {
       "byExtension": {
-        ".ts": 36384,
+        ".ts": 36790,
         ".tsx": 104
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 129,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 150,
         "apps/desktop/electron/main/data-commands.test.ts": 1210,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
         "apps/desktop/electron/main/legacy-transaction-debt.test.ts": 258,
@@ -340,6 +342,8 @@
         "apps/desktop/src/features/reader/library-reader-session.test.ts": 225,
         "apps/desktop/src/services/citation-graph.test.ts": 198,
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
+        "apps/desktop/src/services/library-page-data.test.ts": 306,
+        "apps/desktop/src/services/library-work-actions.test.ts": 79,
         "apps/desktop/src/services/preview-library.test.ts": 18,
         "apps/desktop/src/services/sync-backup.test.ts": 1223,
         "packages/ai/src/anthropic.test.ts": 108,
@@ -390,18 +394,15 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 213
       },
-      "totalLines": 36488
+      "totalLines": 36894
     }
   },
   "uiDatabaseBoundary": {
-    "direct-data-helper|apps/desktop/src/pages/LibraryPage.tsx|citationCountsForWorks": 1,
     "direct-sql-method|apps/desktop/src/components/CitationGraphView.tsx|query": 1,
     "direct-sql-method|apps/desktop/src/pages/FlashcardsPage.tsx|query": 4,
-    "direct-sql-method|apps/desktop/src/pages/LibraryPage.tsx|query": 9,
     "direct-sql-method|apps/desktop/src/pages/SpatialCanvasPage.tsx|query": 1,
     "get-library-db|apps/desktop/src/components/CitationGraphView.tsx|call": 1,
     "get-library-db|apps/desktop/src/pages/FlashcardsPage.tsx|call": 4,
-    "get-library-db|apps/desktop/src/pages/LibraryPage.tsx|call": 10,
     "get-library-db|apps/desktop/src/pages/ReaderPage.tsx|call": 6,
     "get-library-db|apps/desktop/src/pages/SentinelPage.tsx|call": 5,
     "get-library-db|apps/desktop/src/pages/SpatialCanvasPage.tsx|call": 2,
@@ -412,7 +413,6 @@
     "repo-construction|apps/desktop/src/pages/SpatialCanvasPage.tsx|WorksRepo": 2,
     "runtime-db-gateway-import|apps/desktop/src/components/CitationGraphView.tsx|../services/aura-db": 1,
     "runtime-db-gateway-import|apps/desktop/src/pages/FlashcardsPage.tsx|../services/aura-db": 1,
-    "runtime-db-gateway-import|apps/desktop/src/pages/LibraryPage.tsx|../services/aura-db": 1,
     "runtime-db-gateway-import|apps/desktop/src/pages/ReaderPage.tsx|../services/aura-db": 1,
     "runtime-db-gateway-import|apps/desktop/src/pages/SentinelPage.tsx|../services/aura-db": 1,
     "runtime-db-gateway-import|apps/desktop/src/pages/SpatialCanvasPage.tsx|../services/aura-db": 1,
