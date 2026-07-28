@@ -23,6 +23,7 @@ export const CH = {
   dbRun: "db:run",
   dbExec: "db:exec",
   dbScalar: "db:scalar",
+  dataCommand: "data:command",
 
   appCloseHold: "app:close:hold",
   appCloseRespond: "app:close:respond",

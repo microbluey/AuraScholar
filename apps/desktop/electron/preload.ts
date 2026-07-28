@@ -11,6 +11,7 @@ import {
   type HttpResultDTO,
   type ResearchTab,
 } from "./shared";
+import type { DataCommandInput, DataCommandName, DataCommandOutput } from "./data-command-contract";
 import {
   AppCloseRequestCoordinator,
   type AppCloseRequestCallback,
@@ -124,6 +125,14 @@ const api = {
     },
     queryScalar(sql: string): Promise<unknown> {
       return ipcRenderer.invoke(CH.dbScalar, sql);
+    },
+  },
+  data: {
+    command<K extends DataCommandName>(
+      name: K,
+      input: DataCommandInput<K>,
+    ): Promise<DataCommandOutput<K>> {
+      return ipcRenderer.invoke(CH.dataCommand, { name, input });
     },
   },
   research: {

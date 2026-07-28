@@ -10,11 +10,12 @@ import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
 import { CH } from "../shared";
+import { DatabaseCoordinator, type DatabaseOperation } from "./database-coordinator";
 import { getStableDeviceId } from "./platform";
 
-let dbPromise: Promise<Database> | null = null;
+let databaseCoordinatorPromise: Promise<DatabaseCoordinator> | null = null;
 
-async function open(): Promise<Database> {
+async function open(): Promise<DatabaseCoordinator> {
   const file = join(app.getPath("userData"), "aurascholar.db");
   const db = await createNodeDatabase(file);
   await runMigrations(db);
@@ -23,25 +24,40 @@ async function open(): Promise<Database> {
     deviceName: app.name || "AuraScholar Desktop",
     platform: process.platform,
   });
-  return db;
+  return new DatabaseCoordinator(db);
+}
+
+export function getMainDatabaseCoordinator(): Promise<DatabaseCoordinator> {
+  databaseCoordinatorPromise ??= open();
+  return databaseCoordinatorPromise;
 }
 
 export function getMainDb(): Promise<Database> {
-  dbPromise ??= open();
-  return dbPromise;
+  return getMainDatabaseCoordinator();
+}
+
+export async function withMainDatabase<T>(operation: DatabaseOperation<T>): Promise<T> {
+  return (await getMainDatabaseCoordinator()).execute(operation);
+}
+
+export async function withMainDatabaseTransaction<T>(
+  commandName: string,
+  operation: DatabaseOperation<T>,
+): Promise<T> {
+  return (await getMainDatabaseCoordinator()).transaction(commandName, operation);
 }
 
 export function registerDbHandlers(): void {
   handle(CH.dbQuery, async (_e, sql: string, params: unknown[]) => {
-    return (await getMainDb()).query(sql, params);
+    return (await getMainDatabaseCoordinator()).query(sql, params);
   });
   handle(CH.dbRun, async (_e, sql: string, params: unknown[]) => {
-    return (await getMainDb()).run(sql, params);
+    return (await getMainDatabaseCoordinator()).run(sql, params);
   });
   handle(CH.dbExec, async (_e, sql: string) => {
-    await (await getMainDb()).exec(sql);
+    await (await getMainDatabaseCoordinator()).exec(sql);
   });
   handle(CH.dbScalar, async (_e, sql: string) => {
-    return (await getMainDb()).queryScalar(sql);
+    return (await getMainDatabaseCoordinator()).queryScalar(sql);
   });
 }

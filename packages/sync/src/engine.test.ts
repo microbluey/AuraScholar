@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SyncEngine } from "./engine";
-import type { MarkPushedOptions } from "./engine";
+import { applyRemoteSegment, SyncEngine } from "./engine";
+import type {
+  ApplyRemoteSegmentCommand,
+  ApplyRemoteSegmentResult,
+  MarkPushedOptions,
+} from "./engine";
 import { HlcClock } from "./hlc";
 import { MemorySyncProvider } from "./memory-provider";
 import { MemorySyncStorage } from "./memory-storage";
@@ -29,6 +33,40 @@ class FailingApplyStorage extends MemorySyncStorage {
       throw new Error(`forced apply failure for ${rowId}`);
     }
     await super.applyUpsert(table, rowId, values, columnHlcs);
+  }
+}
+
+class CommandApplyStorage extends MemorySyncStorage {
+  readonly commandCalls: ApplyRemoteSegmentCommand[] = [];
+
+  async applyRemoteSegment(command: ApplyRemoteSegmentCommand): Promise<ApplyRemoteSegmentResult> {
+    this.commandCalls.push(command);
+    return applyRemoteSegment(this, command);
+  }
+}
+
+class FailingCommandApplyStorage extends CommandApplyStorage {
+  failOnRowId: string | null = null;
+
+  override async applyUpsert(
+    table: string,
+    rowId: string,
+    values: Record<string, unknown>,
+    columnHlcs: Record<string, string>,
+  ): Promise<void> {
+    if (rowId === this.failOnRowId) {
+      throw new Error(`forced command failure for ${rowId}`);
+    }
+    await super.applyUpsert(table, rowId, values, columnHlcs);
+  }
+}
+
+class TrackingFallbackStorage extends MemorySyncStorage {
+  transactionCalls = 0;
+
+  override async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    this.transactionCalls++;
+    return super.withTransaction(fn);
   }
 }
 
@@ -116,6 +154,26 @@ class SchemaAwareStorage extends MemorySyncStorage {
   }
 }
 
+class SchemaAwareCommandStorage extends CommandApplyStorage {
+  constructor(
+    deviceId: string,
+    private readonly schema: Record<string, readonly string[]>,
+  ) {
+    super(deviceId);
+  }
+
+  supportsTable(table: string): boolean {
+    return Object.prototype.hasOwnProperty.call(this.schema, table);
+  }
+
+  supportsColumn(table: string, column: string): boolean {
+    const columns = Object.prototype.hasOwnProperty.call(this.schema, table)
+      ? this.schema[table]
+      : undefined;
+    return Boolean(columns?.includes(column));
+  }
+}
+
 describe("SyncEngine", () => {
   it("round-trips changes between two devices", async () => {
     const remote = new MemorySyncProvider();
@@ -159,6 +217,238 @@ describe("SyncEngine", () => {
     expect(b.storage.get("works", "w1")).toEqual({ title: "First remote row" });
     expect(b.storage.get("works", "w2")).toEqual({ title: "Second remote row" });
     expect(await b.storage.getCursor("dev-a")).toBe(2);
+  });
+
+  it("hands a complete remote segment to the optional command exactly once", async () => {
+    const remote = new MemorySyncProvider();
+    const a = makeDevice("dev-a", remote);
+    const storage = new CommandApplyStorage("dev-b");
+    const engine = new SyncEngine(remote, storage, "dev-b", new HlcClock("dev-b"));
+
+    a.storage.write("works", "w1", { title: "First" }, a.clock.tick());
+    a.storage.write("works", "w2", { title: "Second" }, a.clock.tick());
+    await a.engine.push();
+
+    const result = await engine.pull();
+
+    expect(storage.commandCalls).toHaveLength(1);
+    expect(storage.commandCalls[0]).toMatchObject({
+      deviceId: "dev-a",
+      startSeq: 1,
+      endSeq: 2,
+      expectedCursor: 0,
+    });
+    expect(storage.commandCalls[0]!.entries).toHaveLength(2);
+    expect(result).toEqual({ pulledEntries: 2, appliedEntries: 2, conflicts: 0 });
+    expect(await storage.getCursor("dev-a")).toBe(2);
+  });
+
+  it("does not advance the cursor when the atomic command fails", async () => {
+    const remote = new MemorySyncProvider();
+    const a = makeDevice("dev-a", remote);
+    const storage = new FailingCommandApplyStorage("dev-b");
+    const engine = new SyncEngine(remote, storage, "dev-b", new HlcClock("dev-b"));
+
+    a.storage.write("works", "w1", { title: "First" }, a.clock.tick());
+    a.storage.write("works", "w2", { title: "Second" }, a.clock.tick());
+    await a.engine.push();
+    storage.failOnRowId = "w2";
+
+    await expect(engine.pull()).rejects.toThrow("forced command failure for w2");
+
+    expect(storage.commandCalls).toHaveLength(1);
+    expect(storage.get("works", "w1")).toBeNull();
+    expect(storage.get("works", "w2")).toBeNull();
+    expect(await storage.getCursor("dev-a")).toBe(0);
+  });
+
+  it("fails closed when the command expected cursor is stale", async () => {
+    const storage = new MemorySyncStorage("dev-b");
+    const hlc = new HlcClock("dev-a").tick();
+    await storage.setCursor("dev-a", 1);
+    const command: ApplyRemoteSegmentCommand = {
+      path: "journal/dev-a/000000000001-000000000001.jsonl",
+      deviceId: "dev-a",
+      startSeq: 1,
+      endSeq: 1,
+      expectedCursor: 0,
+      entries: [
+        {
+          seq: 1,
+          table: "works",
+          rowId: "w1",
+          op: "upsert",
+          values: { title: "Must not apply" },
+          columnHlcs: { title: hlc },
+          hlc,
+          deviceId: "dev-a",
+        },
+      ],
+    };
+
+    await expect(applyRemoteSegment(storage, command)).rejects.toThrow(
+      "Remote sync cursor changed for dev-a: expected 0, got 1",
+    );
+
+    expect(storage.get("works", "w1")).toBeNull();
+    expect(await storage.getCursor("dev-a")).toBe(1);
+  });
+
+  it("revalidates segment identity inside the exported command helper", async () => {
+    const storage = new MemorySyncStorage("dev-b");
+    const hlc = new HlcClock("dev-a").tick();
+    const command: ApplyRemoteSegmentCommand = {
+      path: "journal/dev-a/000000000001-000000000001.jsonl",
+      deviceId: "dev-a",
+      startSeq: 1,
+      endSeq: 1,
+      expectedCursor: 0,
+      entries: [
+        {
+          seq: 1,
+          table: "works",
+          rowId: "w1",
+          op: "upsert",
+          values: { title: "Wrong device" },
+          columnHlcs: { title: hlc },
+          hlc,
+          deviceId: "dev-x",
+        },
+      ],
+    };
+
+    await expect(applyRemoteSegment(storage, command)).rejects.toThrow("belongs to dev-x");
+
+    expect(storage.get("works", "w1")).toBeNull();
+    expect(await storage.getCursor("dev-a")).toBe(0);
+  });
+
+  it("revalidates supported columns inside the exported command helper", async () => {
+    const storage = new SchemaAwareStorage("dev-b", { works: ["title"] });
+    const hlc = new HlcClock("dev-a").tick();
+    const command: ApplyRemoteSegmentCommand = {
+      path: "journal/dev-a/000000000001-000000000001.jsonl",
+      deviceId: "dev-a",
+      startSeq: 1,
+      endSeq: 1,
+      expectedCursor: 0,
+      entries: [
+        {
+          seq: 1,
+          table: "works",
+          rowId: "w1",
+          op: "upsert",
+          values: { future_column: "Unknown" },
+          columnHlcs: { future_column: hlc },
+          hlc,
+          deviceId: "dev-a",
+        },
+      ],
+    };
+
+    await expect(applyRemoteSegment(storage, command)).rejects.toThrow(
+      'Unsupported sync column "works.future_column"',
+    );
+
+    expect(storage.get("works", "w1")).toBeNull();
+    expect(await storage.getCursor("dev-a")).toBe(0);
+  });
+
+  it("rejects unsupported columns in the renderer before invoking the optional command", async () => {
+    const remote = new MemorySyncProvider();
+    const a = makeDevice("dev-a", remote);
+    const storage = new SchemaAwareCommandStorage("dev-b", { works: ["title"] });
+    const engine = new SyncEngine(remote, storage, "dev-b", new HlcClock("dev-b"));
+
+    a.storage.write("works", "w1", { future_column: "From a newer client" }, a.clock.tick());
+    await a.engine.push();
+
+    await expect(engine.pull()).rejects.toThrow('Unsupported sync column "works.future_column"');
+
+    expect(storage.commandCalls).toHaveLength(0);
+    expect(storage.get("works", "w1")).toBeNull();
+    expect(await storage.getCursor("dev-a")).toBe(0);
+  });
+
+  it("rejects a column HLC newer than its entry HLC before invoking the optional command", async () => {
+    const remote = new MemorySyncProvider();
+    const storage = new SchemaAwareCommandStorage("dev-b", { works: ["title"] });
+    const engine = new SyncEngine(remote, storage, "dev-b", new HlcClock("dev-b"));
+    const entryHlc = "000000000001000-000000-dev-a";
+    const futureColumnHlc = "000000000002000-000000-dev-a";
+    await remote.put(
+      "journal/dev-a/000000000001-000000000001.jsonl",
+      encodeSegment({
+        deviceId: "dev-a",
+        startSeq: 1,
+        endSeq: 1,
+        entries: [
+          {
+            seq: 1,
+            table: "works",
+            rowId: "w1",
+            op: "upsert",
+            values: { title: "Future clock" },
+            columnHlcs: { title: futureColumnHlc },
+            hlc: entryHlc,
+            deviceId: "dev-a",
+          },
+        ],
+      }),
+    );
+
+    await expect(engine.pull()).rejects.toThrow("column HLC exceeds entry HLC");
+
+    expect(storage.commandCalls).toHaveLength(0);
+    expect(storage.get("works", "w1")).toBeNull();
+    expect(await storage.getCursor("dev-a")).toBe(0);
+  });
+
+  it("revalidates the entry HLC envelope inside the exported command helper", async () => {
+    const storage = new SchemaAwareStorage("dev-b", { works: ["title"] });
+    const command: ApplyRemoteSegmentCommand = {
+      path: "journal/dev-a/000000000001-000000000001.jsonl",
+      deviceId: "dev-a",
+      startSeq: 1,
+      endSeq: 1,
+      expectedCursor: 0,
+      entries: [
+        {
+          seq: 1,
+          table: "works",
+          rowId: "w1",
+          op: "upsert",
+          values: { title: "Future clock" },
+          columnHlcs: { title: "000000000002000-000000-dev-a" },
+          hlc: "000000000001000-000000-dev-a",
+          deviceId: "dev-a",
+        },
+      ],
+    };
+
+    await expect(applyRemoteSegment(storage, command)).rejects.toThrow(
+      "column HLC exceeds entry HLC",
+    );
+
+    expect(storage.get("works", "w1")).toBeNull();
+    expect(await storage.getCursor("dev-a")).toBe(0);
+  });
+
+  it("keeps the in-process transaction fallback when no command is available", async () => {
+    const remote = new MemorySyncProvider();
+    const a = makeDevice("dev-a", remote);
+    const storage = new TrackingFallbackStorage("dev-b");
+    const engine = new SyncEngine(remote, storage, "dev-b", new HlcClock("dev-b"));
+
+    a.storage.write("works", "w1", { title: "Fallback" }, a.clock.tick());
+    await a.engine.push();
+
+    const result = await engine.pull();
+
+    expect(storage.transactionCalls).toBe(1);
+    expect(result).toEqual({ pulledEntries: 1, appliedEntries: 1, conflicts: 0 });
+    expect(storage.get("works", "w1")).toEqual({ title: "Fallback" });
+    expect(await storage.getCursor("dev-a")).toBe(1);
   });
 
   it("marks only the final pushed segment as a complete local snapshot", async () => {

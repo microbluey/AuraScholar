@@ -4,8 +4,17 @@ export type { WebDavOptions } from "./webdav.js";
 export { LibraryScopedSyncProvider } from "./scoped-provider.js";
 export { HlcClock, hlcToString, hlcFromString, hlcCompare } from "./hlc.js";
 export type { Hlc } from "./hlc.js";
-export { SyncEngine } from "./engine.js";
-export type { SyncStorage, SyncResult, ConflictRecord, MarkPushedOptions } from "./engine.js";
+export { applyRemoteSegment, SyncEngine } from "./engine.js";
+export type {
+  ApplyRemoteSegmentCommand,
+  ApplyRemoteSegmentOptions,
+  ApplyRemoteSegmentResult,
+  ConflictRecord,
+  MarkPushedOptions,
+  RemoteSegmentMergeStorage,
+  SyncResult,
+  SyncStorage,
+} from "./engine.js";
 export { MemorySyncProvider } from "./memory-provider.js";
 export { MemorySyncStorage } from "./memory-storage.js";
 export {

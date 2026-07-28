@@ -6,6 +6,7 @@ import { handle, setTrustedSender } from "./main/ipc";
 import { attachCloseLifecycle, registerCloseLifecycleHandlers } from "./main/close-lifecycle";
 import { openExternalUrl, registerPlatformHandlers } from "./main/platform";
 import { registerDbHandlers } from "./main/db";
+import { registerDataCommandHandlers } from "./main/data-commands";
 import { initResearchBrowser, registerResearchHandlers } from "./main/research-browser";
 import { startCitationBridge, citationBridgePort } from "./main/citation-bridge";
 
@@ -72,6 +73,7 @@ async function createWindow(): Promise<void> {
 app.whenReady().then(() => {
   registerPlatformHandlers();
   registerDbHandlers();
+  registerDataCommandHandlers();
   registerResearchHandlers();
   registerCloseLifecycleHandlers();
   handle(CH.citationBridgePort, () => citationBridgePort());
