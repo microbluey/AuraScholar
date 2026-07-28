@@ -27,9 +27,6 @@ import type {
   WorkPatch,
   WorkWithAuthors,
 } from "@aurascholar/db";
-import { citationCountsForWorks } from "@aurascholar/db/work-list";
-import { getLibraryDb } from "../services/aura-db";
-import { listDeletedWorks, listWorks } from "../services/library-list";
 import type { IngestDraft, PendingPdf } from "../services/library-types";
 import type { ExportFormat } from "../services/cite";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
@@ -62,6 +59,22 @@ import {
   restoreLibraryCollection,
   setWorksLibraryCollection,
 } from "../services/library-organization";
+import {
+  emptyWorkMeta,
+  loadLibraryPageData,
+  loadLibraryWorkRuntimeMeta,
+  type WorkNotePreview,
+  type WorkRuntimeMeta,
+  type WorkTableMeta,
+} from "../services/library-page-data";
+import {
+  mergeLibraryWorks,
+  purgeLibraryWorks,
+  restoreLibraryWorks,
+  setLibraryWorkReadingStatus,
+  setLibraryWorkStarred,
+  trashLibraryWorks,
+} from "../services/library-work-actions";
 
 const MetadataEditor = lazy(() =>
   import("../components/MetadataEditor").then((m) => ({ default: m.MetadataEditor })),
@@ -153,16 +166,6 @@ interface CreateCollectionEventDetail {
   parentId?: string | null;
 }
 
-interface WorkRuntimeMeta {
-  pdfCount: number;
-  annotationCount: number;
-  pdfPreview: AttachmentRow | null;
-  notePreviews: WorkNotePreview[];
-  sentinelTaskCount: number;
-  sentinelStatus: string | null;
-  sentinelState: string | null;
-}
-
 interface TrashUndoState {
   count: number;
   ids: string[];
@@ -175,38 +178,6 @@ interface CollectionDeleteUndoState {
   workIds: string[];
   wasActive: boolean;
   message: string;
-}
-
-interface WorkNotePreview {
-  id: string;
-  type: string;
-  page_index: number;
-  content_md: string | null;
-  updated_at: number;
-}
-
-interface WorkTableMeta {
-  tags: string[];
-  references: number;
-  citedBy: number;
-  annotations: number;
-  pdfs: number;
-  sentinelTaskCount: number;
-  sentinelStatus: string | null;
-  sentinelState: string | null;
-}
-
-function emptyWorkMeta(): WorkTableMeta {
-  return {
-    tags: [],
-    references: 0,
-    citedBy: 0,
-    annotations: 0,
-    pdfs: 0,
-    sentinelTaskCount: 0,
-    sentinelStatus: null,
-    sentinelState: null,
-  };
 }
 
 const PREVIEW_TIMESTAMP = Date.UTC(2026, 6, 1);
@@ -885,133 +856,19 @@ export function LibraryPage() {
     try {
       const smokeFailure = consumeLibrarySmokeReadFailure();
       if (smokeFailure) throw smokeFailure;
-      const { db, libraryId } = await getLibraryDb();
-      const [collectionRows, trashRows] = await Promise.all([
-        db.query<CollectionRow>(
-          `SELECT c.id, c.library_id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
-           FROM collections c
-           LEFT JOIN collection_items ci ON ci.collection_id = c.id
-           LEFT JOIN works w
-             ON w.id = ci.work_id
-            AND w.library_id = c.library_id
-            AND w.deleted_at IS NULL
-           WHERE c.library_id = ? AND c.deleted_at IS NULL
-           GROUP BY c.id, c.library_id, c.name, c.parent_id, c.sort_order
-           ORDER BY c.sort_order, c.name, c.id`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM works
-           WHERE library_id = ? AND deleted_at IS NOT NULL`,
-          [libraryId],
-        ),
-      ]);
-      const showTrash = activeFilter === "trash";
-      const works = showTrash
-        ? await listDeletedWorks(search || undefined, LIST_HARD_LIMIT)
-        : await listWorks(search || undefined, activeCollection ?? undefined, LIST_HARD_LIMIT);
-      if (works.length === 0) {
-        await waitForLibrarySmokeAfterReadDelay();
-        if (refreshSeqRef.current !== seq) return;
-        setCollections(collectionRows);
-        setTrashCount(trashRows[0]?.n ?? 0);
-        setItems(works);
-        setWorkMeta({});
-        if (pendingRequestedWorkIdRef.current) {
-          pendingRequestedWorkNeedsFreshRowsRef.current = false;
-        }
-        setLibraryLoadError(null);
-        setMessage((current) => (current?.startsWith("读取文献库失败") ? null : current));
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
-        return;
-      }
-
-      const ids = works.map((work) => work.id);
-      const placeholders = ids.map(() => "?").join(",");
-      const [tagRows, citationCounts, annotationRows, attachmentRows, sentinelRows] =
-        await Promise.all([
-          db.query<{ work_id: string; name: string }>(
-            `SELECT wt.work_id, t.name
-           FROM work_tags wt
-           JOIN tags t ON t.id = wt.tag_id
-           WHERE wt.work_id IN (${placeholders})
-             AND t.library_id = ?
-             AND t.deleted_at IS NULL
-          ORDER BY t.name`,
-            [...ids, libraryId],
-          ),
-          citationCountsForWorks(db, libraryId, ids),
-          db.query<{ work_id: string; count: number }>(
-            `SELECT work_id, COUNT(*) AS count
-           FROM annotations
-           WHERE work_id IN (${placeholders}) AND deleted_at IS NULL
-           GROUP BY work_id`,
-            ids,
-          ),
-          db.query<{ work_id: string; count: number }>(
-            `SELECT work_id, COUNT(*) AS count
-           FROM attachments
-           WHERE work_id IN (${placeholders}) AND deleted_at IS NULL AND kind = 'pdf'
-           GROUP BY work_id`,
-            ids,
-          ),
-          db.query<{
-            work_id: string;
-            status: string;
-            current_state: string | null;
-            task_count: number;
-          }>(
-            `SELECT st.work_id, st.status, st.current_state, latest.task_count
-           FROM sentinel_tasks st
-           JOIN (
-             SELECT work_id, MAX(created_at) AS created_at, COUNT(*) AS task_count
-             FROM sentinel_tasks
-             WHERE work_id IN (${placeholders})
-               AND library_id = ?
-               AND deleted_at IS NULL
-             GROUP BY work_id
-           ) latest ON latest.work_id = st.work_id AND latest.created_at = st.created_at
-           WHERE st.library_id = ? AND st.deleted_at IS NULL`,
-            [...ids, libraryId, libraryId],
-          ),
-        ]);
+      const snapshot = await loadLibraryPageData({
+        collectionId: activeCollection ?? undefined,
+        limit: LIST_HARD_LIMIT,
+        search: search || undefined,
+        showTrash: activeFilter === "trash",
+      });
       await waitForLibrarySmokeAfterReadDelay();
       if (refreshSeqRef.current !== seq) return;
 
-      const nextMeta = Object.fromEntries(
-        works.map((work) => [work.id, emptyWorkMeta()]),
-      ) as Record<string, WorkTableMeta>;
-      for (const row of tagRows) {
-        nextMeta[row.work_id]?.tags.push(row.name);
-      }
-      for (const [workId, counts] of citationCounts) {
-        const meta = nextMeta[workId];
-        if (meta) {
-          meta.references = counts.references;
-          meta.citedBy = counts.citedBy;
-        }
-      }
-      for (const row of annotationRows) {
-        const meta = nextMeta[row.work_id];
-        if (meta) meta.annotations = Number(row.count);
-      }
-      for (const row of attachmentRows) {
-        const meta = nextMeta[row.work_id];
-        if (meta) meta.pdfs = Number(row.count);
-      }
-      for (const row of sentinelRows) {
-        const meta = nextMeta[row.work_id];
-        if (meta) {
-          meta.sentinelTaskCount = Number(row.task_count);
-          meta.sentinelStatus = row.status;
-          meta.sentinelState = row.current_state;
-        }
-      }
-      setCollections(collectionRows);
-      setTrashCount(trashRows[0]?.n ?? 0);
-      setItems(works);
-      setWorkMeta(nextMeta);
+      setCollections(snapshot.collections);
+      setTrashCount(snapshot.trashCount);
+      setItems(snapshot.works);
+      setWorkMeta(snapshot.workMeta);
       if (pendingRequestedWorkIdRef.current) {
         pendingRequestedWorkNeedsFreshRowsRef.current = false;
       }
@@ -1871,12 +1728,7 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const { libraryId } = await getLibraryDb();
-        await window.aura.data.command("library.setWorkStarred", {
-          libraryId,
-          starred,
-          workId: work.id,
-        });
+        await setLibraryWorkStarred(work.id, starred);
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedWorkId(work.id);
@@ -1925,12 +1777,7 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const { libraryId } = await getLibraryDb();
-        await window.aura.data.command("library.setWorkReadingStatus", {
-          libraryId,
-          status,
-          workId: selectedWork.id,
-        });
+        await setLibraryWorkReadingStatus(selectedWork.id, status);
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
         setSelectedWorkId(selectedWork.id);
@@ -1991,13 +1838,12 @@ export function LibraryPage() {
     const undoMessage = `已将《${title}》移入回收站`;
     let trashCommitted = false;
     try {
-      const { libraryId } = await getLibraryDb();
       const smokeFailure = consumeLibrarySmokeTrashFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      await window.aura.data.command("library.trashWorks", { libraryId, workIds: [workId] });
+      await trashLibraryWorks([workId]);
       trashCommitted = true;
       const refreshFailure = await refresh();
       if (refreshFailure) throw refreshFailure;
@@ -2060,13 +1906,12 @@ export function LibraryPage() {
       count === 1 ? "已撤销移入回收站" : `已撤销移入回收站:${count} 篇文献已恢复`;
     let restoreCommitted = false;
     try {
-      const { libraryId } = await getLibraryDb();
       const smokeFailure = consumeLibrarySmokeTrashRestoreFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      await window.aura.data.command("library.restoreWorks", { libraryId, workIds: ids });
+      await restoreLibraryWorks(ids);
       restoreCommitted = true;
       const refreshFailure = await refresh();
       if (refreshFailure) throw refreshFailure;
@@ -2160,51 +2005,12 @@ export function LibraryPage() {
     selectedMetaSeqRef.current = seq;
     let cancelled = false;
     void (async () => {
-      const { db, libraryId } = await getLibraryDb();
-      const [attachments, notes, sentinelTasks] = await Promise.all([
-        db.query<AttachmentRow>(
-          `SELECT * FROM attachments
-           WHERE work_id = ?
-             AND deleted_at IS NULL
-             AND EXISTS (
-               SELECT 1 FROM works
-               WHERE id = ? AND library_id = ?
-             )
-           ORDER BY created_at DESC`,
-          [selectedWork.id, selectedWork.id, libraryId],
-        ),
-        db.query<WorkNotePreview>(
-          `SELECT id, type, page_index, content_md, updated_at
-           FROM annotations
-           WHERE work_id = ?
-             AND deleted_at IS NULL
-             AND EXISTS (
-               SELECT 1 FROM works
-               WHERE id = ? AND library_id = ?
-             )
-           ORDER BY updated_at DESC
-           LIMIT 3`,
-          [selectedWork.id, selectedWork.id, libraryId],
-        ),
-        db.query<{ status: string; current_state: string }>(
-          `SELECT status, current_state
-           FROM sentinel_tasks
-           WHERE work_id = ? AND library_id = ? AND deleted_at IS NULL
-           ORDER BY created_at DESC`,
-          [selectedWork.id, libraryId],
-        ),
-      ]);
+      const runtimeMeta = await loadLibraryWorkRuntimeMeta(
+        selectedWork.id,
+        workMeta[selectedWork.id]?.annotations ?? 0,
+      );
       if (cancelled || selectedMetaSeqRef.current !== seq) return;
-      const pdfPreview = attachments.find((a) => a.kind === "pdf") ?? null;
-      setSelectedMeta({
-        pdfCount: attachments.filter((a) => a.kind === "pdf").length,
-        annotationCount: workMeta[selectedWork.id]?.annotations ?? 0,
-        pdfPreview,
-        notePreviews: notes,
-        sentinelTaskCount: sentinelTasks.length,
-        sentinelStatus: sentinelTasks[0]?.status ?? null,
-        sentinelState: sentinelTasks[0]?.current_state ?? null,
-      });
+      setSelectedMeta(runtimeMeta);
     })().catch(() => {
       if (!cancelled && selectedMetaSeqRef.current === seq) setSelectedMeta(null);
     });
@@ -2577,8 +2383,7 @@ export function LibraryPage() {
     const undoMessage = `已将 ${workIds.length} 篇文献移入回收站`;
     let trashCommitted = false;
     try {
-      const { libraryId } = await getLibraryDb();
-      await window.aura.data.command("library.trashWorks", { libraryId, workIds });
+      await trashLibraryWorks(workIds);
       trashCommitted = true;
       const refreshFailure = await refresh();
       if (refreshFailure) throw refreshFailure;
@@ -2631,8 +2436,7 @@ export function LibraryPage() {
       const successMessage = `已恢复 ${workIds.length} 篇文献`;
       let restoreCommitted = false;
       try {
-        const { libraryId } = await getLibraryDb();
-        await window.aura.data.command("library.restoreWorks", { libraryId, workIds });
+        await restoreLibraryWorks(workIds);
         restoreCommitted = true;
         const refreshFailure = await refresh();
         if (refreshFailure) throw refreshFailure;
@@ -2684,8 +2488,7 @@ export function LibraryPage() {
       const successMessage = `已永久删除 ${workIds.length} 篇文献`;
       let purgeCommitted = false;
       try {
-        const { libraryId } = await getLibraryDb();
-        await window.aura.data.command("library.purgeDeletedWorks", { libraryId, workIds });
+        await purgeLibraryWorks(workIds);
         purgeCommitted = true;
         const refreshFailure = await refresh();
         if (refreshFailure) throw refreshFailure;
@@ -2739,12 +2542,7 @@ export function LibraryPage() {
     setWorkActionBusy("merge");
     setMessage(`正在合并 ${duplicates.length} 篇重复文献到《${selectedWork.title}》...`);
     try {
-      const { libraryId } = await getLibraryDb();
-      const result = await window.aura.data.command("library.mergeWorks", {
-        libraryId,
-        primaryId: selectedWork.id,
-        duplicateIds: duplicates,
-      });
+      const result = await mergeLibraryWorks(selectedWork.id, duplicates);
       await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
       const successMessage = `已合并 ${result.merged} 篇重复文献到《${selectedWork.title}》${
         result.movedAttachments ? `，迁移 ${result.movedAttachments} 个附件` : ""
