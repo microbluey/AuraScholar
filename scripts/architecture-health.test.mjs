@@ -46,6 +46,13 @@ test("classifies production, test, smoke, and generated sources", () => {
     category: "tests",
     extension: ".ts",
   });
+  assert.deepEqual(
+    classifySourcePath("apps/desktop/electron/main/smoke/fragments/library-base.ts"),
+    {
+      category: "tests",
+      extension: ".ts",
+    },
+  );
   assert.equal(classifySourcePath("packages/tokens/src/generated.ts"), null);
   assert.equal(classifySourcePath("apps/desktop/out/main.js"), null);
 });

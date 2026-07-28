@@ -35,9 +35,10 @@ export function classifySourcePath(path) {
     /^packages\/[^/]+\/src\//.test(normalized) ||
     normalized.startsWith("apps/desktop/electron/");
   if (!inSource) return null;
-  const test =
-    /\.(?:test|spec)\.[^.]+$/.test(normalized) ||
-    normalized === "apps/desktop/electron/main/smoke.ts";
+  const electronSmoke =
+    normalized === "apps/desktop/electron/main/smoke.ts" ||
+    normalized.startsWith("apps/desktop/electron/main/smoke/");
+  const test = /\.(?:test|spec)\.[^.]+$/.test(normalized) || electronSmoke;
   return { category: test ? "tests" : "production", extension };
 }
 
