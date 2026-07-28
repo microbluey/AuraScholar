@@ -9,6 +9,9 @@ import type {
   ImportLibraryBackupCommandInput,
   MergeWorksCommandInput,
   PurgeDeletedWorksCommandInput,
+  SetWorkReadingStatusCommandInput,
+  SetWorkStarredCommandInput,
+  WorkIdsCommandInput,
 } from "../data-command-contract";
 import {
   importParsedLibraryBackupIntoDatabase,
@@ -21,7 +24,7 @@ import { getStableDeviceId } from "./platform";
 
 const MAX_BACKUP_TEXT_LENGTH = 64 * 1024 * 1024;
 const MAX_MERGE_DUPLICATE_IDS = 500;
-const MAX_PURGE_WORK_IDS = 500;
+const MAX_WORK_IDS_PER_COMMAND = 500;
 const MAX_RECORD_ID_LENGTH = 512;
 const MAX_REMOTE_SEGMENT_ENTRIES = 500;
 const PROVIDER_SCOPE_PATTERN = /^webdav-[a-z0-9]{14}$/;
@@ -67,6 +70,51 @@ export async function executeDataCommand(
           throw new Error("Merge did not retire every requested duplicate work");
         }
         return result;
+      });
+    }
+    case "library.restoreWorks": {
+      const input = parseWorkIdsCommandInput(envelope.input, envelope.name);
+      return dependencies.transaction(envelope.name, async (database) => {
+        await assertActiveLocalLibrary(database, input.libraryId);
+        await assertDeletedWorksBelongToLibrary(database, input.libraryId, input.workIds);
+        const updated = await new WorksRepo(database, input.libraryId).restoreMany(input.workIds);
+        if (updated !== input.workIds.length) {
+          throw new Error("Restore did not update every requested work");
+        }
+        return { updated };
+      });
+    }
+    case "library.setWorkReadingStatus": {
+      const input = parseSetWorkReadingStatusInput(envelope.input);
+      return dependencies.transaction(envelope.name, async (database) => {
+        await assertActiveLocalLibrary(database, input.libraryId);
+        await assertActiveWorksBelongToLibrary(database, input.libraryId, [input.workId]);
+        await new WorksRepo(database, input.libraryId).setReadingStatus(
+          input.workId,
+          input.status,
+        );
+        return { updated: 1 };
+      });
+    }
+    case "library.setWorkStarred": {
+      const input = parseSetWorkStarredInput(envelope.input);
+      return dependencies.transaction(envelope.name, async (database) => {
+        await assertActiveLocalLibrary(database, input.libraryId);
+        await assertActiveWorksBelongToLibrary(database, input.libraryId, [input.workId]);
+        await new WorksRepo(database, input.libraryId).setStarred(input.workId, input.starred);
+        return { updated: 1 };
+      });
+    }
+    case "library.trashWorks": {
+      const input = parseWorkIdsCommandInput(envelope.input, envelope.name);
+      return dependencies.transaction(envelope.name, async (database) => {
+        await assertActiveLocalLibrary(database, input.libraryId);
+        await assertActiveWorksBelongToLibrary(database, input.libraryId, input.workIds);
+        const updated = await new WorksRepo(database, input.libraryId).softDeleteMany(input.workIds);
+        if (updated !== input.workIds.length) {
+          throw new Error("Trash did not update every requested work");
+        }
+        return { updated };
       });
     }
     case "library.purgeDeletedWorks": {
@@ -118,6 +166,10 @@ function parseEnvelope(value: unknown): DataCommandRequest {
   }
   if (
     value.name !== "library.mergeWorks" &&
+    value.name !== "library.restoreWorks" &&
+    value.name !== "library.setWorkReadingStatus" &&
+    value.name !== "library.setWorkStarred" &&
+    value.name !== "library.trashWorks" &&
     value.name !== "library.purgeDeletedWorks" &&
     value.name !== "library.importBackup" &&
     value.name !== "sync.applyRemoteSegment"
@@ -150,13 +202,20 @@ function parseMergeWorksInput(value: unknown): MergeWorksCommandInput {
 }
 
 function parsePurgeDeletedWorksInput(value: unknown): PurgeDeletedWorksCommandInput {
-  if (!isRecord(value)) throw new Error("Invalid library.purgeDeletedWorks input");
+  return parseWorkIdsCommandInput(value, "library.purgeDeletedWorks");
+}
+
+function parseWorkIdsCommandInput(
+  value: unknown,
+  commandName: "library.purgeDeletedWorks" | "library.restoreWorks" | "library.trashWorks",
+): WorkIdsCommandInput {
+  if (!isRecord(value)) throw new Error(`Invalid ${commandName} input`);
   const libraryId = requireRecordId(value.libraryId, "Library id");
   if (!Array.isArray(value.workIds) || value.workIds.length === 0) {
     throw new Error("At least one work id is required");
   }
-  if (value.workIds.length > MAX_PURGE_WORK_IDS) {
-    throw new Error(`Permanent deletion is limited to ${MAX_PURGE_WORK_IDS} works at a time`);
+  if (value.workIds.length > MAX_WORK_IDS_PER_COMMAND) {
+    throw new Error(`Library work updates are limited to ${MAX_WORK_IDS_PER_COMMAND} at a time`);
   }
   const workIds = Array.from(value.workIds, (workId, index) =>
     requireRecordId(workId, `Work id at index ${index}`),
@@ -165,6 +224,26 @@ function parsePurgeDeletedWorksInput(value: unknown): PurgeDeletedWorksCommandIn
     throw new Error("Work ids must be unique");
   }
   return { libraryId, workIds };
+}
+
+function parseSetWorkReadingStatusInput(value: unknown): SetWorkReadingStatusCommandInput {
+  if (!isRecord(value)) throw new Error("Invalid library.setWorkReadingStatus input");
+  const libraryId = requireRecordId(value.libraryId, "Library id");
+  const workId = requireRecordId(value.workId, "Work id");
+  if (value.status !== "unread" && value.status !== "reading" && value.status !== "read") {
+    throw new Error("Reading status is invalid");
+  }
+  return { libraryId, status: value.status, workId };
+}
+
+function parseSetWorkStarredInput(value: unknown): SetWorkStarredCommandInput {
+  if (!isRecord(value)) throw new Error("Invalid library.setWorkStarred input");
+  const libraryId = requireRecordId(value.libraryId, "Library id");
+  const workId = requireRecordId(value.workId, "Work id");
+  if (typeof value.starred !== "boolean") {
+    throw new Error("Starred state must be a boolean");
+  }
+  return { libraryId, starred: value.starred, workId };
 }
 
 function parseImportLibraryBackupInput(value: unknown): ImportLibraryBackupCommandInput {
@@ -233,6 +312,25 @@ async function assertDeletedWorksBelongToLibrary(
   );
   if (rows.length !== workIds.length) {
     throw new Error("Every work must belong to the active Library recycle bin");
+  }
+}
+
+async function assertActiveWorksBelongToLibrary(
+  database: Database,
+  libraryId: string,
+  workIds: string[],
+): Promise<void> {
+  const placeholders = workIds.map(() => "?").join(",");
+  const rows = await database.query<{ id: string }>(
+    `SELECT id
+     FROM works
+     WHERE library_id = ?
+       AND deleted_at IS NULL
+       AND id IN (${placeholders})`,
+    [libraryId, ...workIds],
+  );
+  if (rows.length !== workIds.length) {
+    throw new Error("Every work must be active and belong to the active Library");
   }
 }
 

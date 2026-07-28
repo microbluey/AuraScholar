@@ -47,7 +47,13 @@ const legacyRepoTransactionFiles = [
   "../../packages/db/src/repos/works.ts",
 ];
 
-const migratedRendererTransactionMethods = ["mergeInto", "purgeDeleted", "purgeDeletedMany"];
+const migratedRendererTransactionMethods = [
+  "mergeInto",
+  "purgeDeleted",
+  "purgeDeletedMany",
+  "restoreMany",
+  "softDeleteMany",
+];
 
 describe("legacy repository transaction debt", () => {
   it("keeps the repository transaction entrypoint inventory explicit", () => {

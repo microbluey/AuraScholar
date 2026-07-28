@@ -370,6 +370,299 @@ describe("main-process data commands", () => {
     ]);
   });
 
+  it("rejects malformed work-state input before acquiring a database lease", async () => {
+    let transactionCalls = 0;
+    const dependencies: DataCommandDependencies = {
+      async transaction() {
+        transactionCalls += 1;
+        throw new Error("must not run");
+      },
+    };
+    const requests = [
+      {
+        name: "library.trashWorks",
+        input: { libraryId: "library", workIds: ["duplicate", "duplicate"] },
+      },
+      {
+        name: "library.restoreWorks",
+        input: { libraryId: "library", workIds: Array.from({ length: 501 }, (_, i) => `w-${i}`) },
+      },
+      {
+        name: "library.setWorkReadingStatus",
+        input: { libraryId: "library", status: "finished", workId: "work" },
+      },
+      {
+        name: "library.setWorkStarred",
+        input: { libraryId: "library", starred: 1, workId: "work" },
+      },
+      {
+        name: "library.setWorkStarred",
+        input: { libraryId: "library", starred: true, workId: " " },
+      },
+    ];
+
+    for (const request of requests) {
+      await expect(executeDataCommand(request, dependencies)).rejects.toThrow();
+    }
+    expect(transactionCalls).toBe(0);
+  });
+
+  it("updates active work reading and starred state through typed commands", async () => {
+    const target = await createLibraryDatabase("work-state-target-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const work = await works.upsert({ title: "Mutable work state" });
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.setWorkReadingStatus",
+          input: { libraryId: target.libraryId, status: "read", workId: work.id },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).resolves.toEqual({ updated: 1 });
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.setWorkStarred",
+          input: { libraryId: target.libraryId, starred: true, workId: work.id },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).resolves.toEqual({ updated: 1 });
+
+    await expect(works.get(work.id)).resolves.toMatchObject({
+      reading_status: "read",
+      starred: 1,
+    });
+  });
+
+  it("atomically moves active works to the recycle bin and restores them", async () => {
+    const target = await createLibraryDatabase("work-lifecycle-target-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const first = await works.upsert({ title: "Lifecycle first" });
+    const second = await works.upsert({ title: "Lifecycle second" });
+    const coordinator = new DatabaseCoordinator(target.database);
+    const workIds = [first.id, second.id];
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.trashWorks",
+          input: { libraryId: target.libraryId, workIds },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).resolves.toEqual({ updated: 2 });
+    await expect(works.get(first.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+    });
+    await expect(works.get(second.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+    });
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.restoreWorks",
+          input: { libraryId: target.libraryId, workIds },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).resolves.toEqual({ updated: 2 });
+    await expect(works.get(first.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(works.get(second.id)).resolves.toMatchObject({ deleted_at: null });
+  });
+
+  it("rejects stale or mixed-state work mutations without changing valid targets", async () => {
+    const target = await createLibraryDatabase("work-state-guard-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const deleted = await works.upsert({ title: "Already deleted" });
+    const active = await works.upsert({ title: "Still active" });
+    await works.softDelete(deleted.id);
+    const now = Date.now();
+    await target.database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at, deleted_at)
+       VALUES ('foreign-work-state-library', 'Foreign', 'personal', ?, ?, NULL)`,
+      [now, now],
+    );
+    await target.database.run(
+      `INSERT INTO works
+         (id, library_id, title, type, reading_status, starred, created_at, updated_at, deleted_at)
+       VALUES ('foreign-work-state-target', 'foreign-work-state-library', 'Foreign work state',
+               'article', 'unread', 0, ?, ?, NULL)`,
+      [now, now],
+    );
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.trashWorks",
+          input: { libraryId: target.libraryId, workIds: [active.id, deleted.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every work must be active and belong to the active Library");
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.restoreWorks",
+          input: { libraryId: target.libraryId, workIds: [deleted.id, active.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every work must belong to the active Library recycle bin");
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.setWorkStarred",
+          input: { libraryId: target.libraryId, starred: true, workId: deleted.id },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every work must be active and belong to the active Library");
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.trashWorks",
+          input: {
+            libraryId: target.libraryId,
+            workIds: [active.id, "foreign-work-state-target"],
+          },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every work must be active and belong to the active Library");
+
+    await expect(works.get(deleted.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+      starred: 0,
+    });
+    await expect(works.get(active.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(
+      target.database.query<{ deleted_at: number | null }>(
+        `SELECT deleted_at FROM works WHERE id = 'foreign-work-state-target'`,
+      ),
+    ).resolves.toEqual([{ deleted_at: null }]);
+  });
+
+  it("rolls back a batch trash command when a later work update fails", async () => {
+    const target = await createLibraryDatabase("work-trash-rollback-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const first = await works.upsert({ title: "Trash rollback first" });
+    const second = await works.upsert({ title: "Trash rollback second" });
+    const coordinator = new DatabaseCoordinator(target.database);
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER fail_second_main_trash
+      BEFORE UPDATE OF deleted_at ON works
+      WHEN OLD.id = '${second.id}' AND NEW.deleted_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(FAIL, 'injected main trash failure');
+      END
+    `);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.trashWorks",
+          input: { libraryId: target.libraryId, workIds: [first.id, second.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("injected main trash failure");
+    await expect(works.get(first.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(works.get(second.id)).resolves.toMatchObject({ deleted_at: null });
+  });
+
+  it("rolls back a batch restore command when a later work update fails", async () => {
+    const target = await createLibraryDatabase("work-restore-rollback-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const first = await works.upsert({ title: "Restore rollback first" });
+    const second = await works.upsert({ title: "Restore rollback second" });
+    await works.softDeleteMany([first.id, second.id]);
+    const coordinator = new DatabaseCoordinator(target.database);
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER fail_second_main_restore
+      BEFORE UPDATE OF deleted_at ON works
+      WHEN OLD.id = '${second.id}' AND NEW.deleted_at IS NULL
+      BEGIN
+        SELECT RAISE(FAIL, 'injected main restore failure');
+      END
+    `);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.restoreWorks",
+          input: { libraryId: target.libraryId, workIds: [first.id, second.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("injected main restore failure");
+    await expect(works.get(first.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+    });
+    await expect(works.get(second.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+    });
+  });
+
+  it("rolls back batch trash and restore when SQLite ignores a required update", async () => {
+    const target = await createLibraryDatabase("work-ignore-rollback-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const first = await works.upsert({ title: "Ignored lifecycle first" });
+    const second = await works.upsert({ title: "Ignored lifecycle second" });
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER ignore_second_main_trash
+      BEFORE UPDATE OF deleted_at ON works
+      WHEN OLD.id = '${second.id}' AND NEW.deleted_at IS NOT NULL
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.trashWorks",
+          input: { libraryId: target.libraryId, workIds: [first.id, second.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow(`Work ${second.id} is missing or already removed`);
+    await expect(works.get(first.id)).resolves.toMatchObject({ deleted_at: null });
+    await expect(works.get(second.id)).resolves.toMatchObject({ deleted_at: null });
+
+    await coordinator.exec("DROP TRIGGER ignore_second_main_trash");
+    await works.softDeleteMany([first.id, second.id]);
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER ignore_second_main_restore
+      BEFORE UPDATE OF deleted_at ON works
+      WHEN OLD.id = '${second.id}' AND NEW.deleted_at IS NULL
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.restoreWorks",
+          input: { libraryId: target.libraryId, workIds: [first.id, second.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow(`Work ${second.id} is missing or already active`);
+    await expect(works.get(first.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+    });
+    await expect(works.get(second.id)).resolves.toMatchObject({
+      deleted_at: expect.any(Number),
+    });
+  });
+
   it("rejects malformed permanent-deletion input before acquiring a database lease", async () => {
     let transactionCalls = 0;
     const dependencies: DataCommandDependencies = {

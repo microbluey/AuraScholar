@@ -3757,30 +3757,39 @@ export function setupSmokeHarness(win: BrowserWindow): void {
               const dialog = document.querySelector('[role="dialog"]');
               return dialog?.textContent?.includes("批量移入回收站？") ? dialog : null;
             }, 3_000);
-            window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TRASH_AFTER_FIRST__ =
-              BULK_TRASH_FAILURE_SMOKE.error;
+            await window.aura.db.exec(
+              "DROP TRIGGER IF EXISTS aurascholar_smoke_bulk_trash_failure"
+            );
+            await window.aura.db.exec(
+              "CREATE TEMP TRIGGER aurascholar_smoke_bulk_trash_failure BEFORE UPDATE OF deleted_at ON works WHEN OLD.id = 'smoke-work-bulk-trash-failure-b' AND NEW.deleted_at IS NOT NULL BEGIN SELECT RAISE(FAIL, 'Smoke library bulk trash rollback failure'); END;"
+            );
             const bulkTrashFailureConfirmButton = Array.from(
               bulkTrashFailureDialog?.querySelectorAll("button") ?? []
             ).find((button) => button.textContent?.replace(/\s+/g, " ").trim() === "移入 2 篇");
-            bulkTrashFailureConfirmButton?.click();
-            libraryBulkTrashFailureBusyVisible = Boolean(
-              await waitFor(() => {
-                const button = bulkTrashFailureButton();
-                return button?.disabled &&
-                  button.getAttribute("aria-busy") === "true" &&
-                  button.textContent?.includes("移入中") &&
-                  bodyIncludes("正在将 2 篇文献移入回收站")
-                  ? button
-                  : null;
-              }, 1_000)
-            );
-            await waitFor(
-              () =>
-                bodyIncludes("批量移入回收站失败，所选文献仍保留，可重新移入回收站") &&
-                bodyIncludes(BULK_TRASH_FAILURE_SMOKE.error),
-              3_000
-            );
-            delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TRASH_AFTER_FIRST__;
+            try {
+              bulkTrashFailureConfirmButton?.click();
+              libraryBulkTrashFailureBusyVisible = Boolean(
+                await waitFor(() => {
+                  const button = bulkTrashFailureButton();
+                  return button?.disabled &&
+                    button.getAttribute("aria-busy") === "true" &&
+                    button.textContent?.includes("移入中") &&
+                    bodyIncludes("正在将 2 篇文献移入回收站")
+                    ? button
+                    : null;
+                }, 1_000)
+              );
+              await waitFor(
+                () =>
+                  bodyIncludes("批量移入回收站失败，所选文献仍保留，可重新移入回收站") &&
+                  bodyIncludes(BULK_TRASH_FAILURE_SMOKE.error),
+                3_000
+              );
+            } finally {
+              await window.aura.db.exec(
+                "DROP TRIGGER IF EXISTS aurascholar_smoke_bulk_trash_failure"
+              );
+            }
             const bulkTrashFailureRowsAfter = await window.aura.db.query(
               "SELECT id, deleted_at FROM works WHERE id IN (?, ?) AND works.library_id = ? ORDER BY id",
               [...BULK_TRASH_FAILURE_SMOKE.works.map((work) => work.workId), libraryId]
@@ -4114,27 +4123,36 @@ export function setupSmokeHarness(win: BrowserWindow): void {
                 TRASH_RESTORE_FAILURE_SMOKE.works[1].workId
               , libraryId]
             );
-            window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE_AFTER_FIRST__ =
-              TRASH_RESTORE_FAILURE_SMOKE.error;
-            trashRestoreFailureButton()?.click();
-            libraryTrashRestoreFailureBusyVisible = Boolean(
-              await waitFor(() => {
-                const button = trashRestoreFailureButton();
-                return button?.disabled &&
-                  button.getAttribute("aria-busy") === "true" &&
-                  button.textContent?.includes("恢复中") &&
-                  bodyIncludes("正在恢复 2 篇文献")
-                  ? button
-                  : null;
-              }, 1_000)
+            await window.aura.db.exec(
+              "DROP TRIGGER IF EXISTS aurascholar_smoke_trash_restore_failure"
             );
-            await waitFor(
-              () =>
-                bodyIncludes("恢复文献失败，所选文献仍保留在回收站，可重新恢复") &&
-                bodyIncludes(TRASH_RESTORE_FAILURE_SMOKE.error),
-              3_000
+            await window.aura.db.exec(
+              "CREATE TEMP TRIGGER aurascholar_smoke_trash_restore_failure BEFORE UPDATE OF deleted_at ON works WHEN OLD.id = 'smoke-work-trash-restore-failure-b' AND OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL BEGIN SELECT RAISE(FAIL, 'Smoke library trash restore rollback failure'); END;"
             );
-            delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE_AFTER_FIRST__;
+            try {
+              trashRestoreFailureButton()?.click();
+              libraryTrashRestoreFailureBusyVisible = Boolean(
+                await waitFor(() => {
+                  const button = trashRestoreFailureButton();
+                  return button?.disabled &&
+                    button.getAttribute("aria-busy") === "true" &&
+                    button.textContent?.includes("恢复中") &&
+                    bodyIncludes("正在恢复 2 篇文献")
+                    ? button
+                    : null;
+                }, 1_000)
+              );
+              await waitFor(
+                () =>
+                  bodyIncludes("恢复文献失败，所选文献仍保留在回收站，可重新恢复") &&
+                  bodyIncludes(TRASH_RESTORE_FAILURE_SMOKE.error),
+                3_000
+              );
+            } finally {
+              await window.aura.db.exec(
+                "DROP TRIGGER IF EXISTS aurascholar_smoke_trash_restore_failure"
+              );
+            }
             const restoreFailureRowsAfter = await window.aura.db.query(
               "SELECT COUNT(*) AS n FROM works WHERE id IN (?, ?) AND deleted_at IS NOT NULL AND works.library_id = ?",
               [
@@ -11464,7 +11482,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
             backupExportDerivedArtifactId,
             libraryId,
             "works",
-            "smoke-backup-export-work",
+            SAMPLE.workId,
             "reader-digest",
             "smoke-model",
             "smoke-prompt",

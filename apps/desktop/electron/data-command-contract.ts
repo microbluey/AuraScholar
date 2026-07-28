@@ -1,6 +1,27 @@
-import type { MergeWorksResult } from "@aurascholar/db/repos/works";
+import type { MergeWorksResult, ReadingStatus } from "@aurascholar/db/repos/works";
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
+
+export interface SetWorkReadingStatusCommandInput {
+  libraryId: string;
+  status: ReadingStatus;
+  workId: string;
+}
+
+export interface SetWorkStarredCommandInput {
+  libraryId: string;
+  starred: boolean;
+  workId: string;
+}
+
+export interface WorkIdsCommandInput {
+  libraryId: string;
+  workIds: string[];
+}
+
+export interface WorkMutationCountResult {
+  updated: number;
+}
 
 export interface PurgeDeletedWorksCommandInput {
   libraryId: string;
@@ -34,6 +55,22 @@ export interface DataCommandMap {
   "library.mergeWorks": {
     input: MergeWorksCommandInput;
     output: MergeWorksCommandResult;
+  };
+  "library.restoreWorks": {
+    input: WorkIdsCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "library.setWorkReadingStatus": {
+    input: SetWorkReadingStatusCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "library.setWorkStarred": {
+    input: SetWorkStarredCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "library.trashWorks": {
+    input: WorkIdsCommandInput;
+    output: WorkMutationCountResult;
   };
   "library.purgeDeletedWorks": {
     input: PurgeDeletedWorksCommandInput;
