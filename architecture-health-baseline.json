@@ -10,8 +10,8 @@
     "production": {
       "byExtension": {
         ".css": 16808,
-        ".ts": 31773,
-        ".tsx": 32793
+        ".ts": 31867,
+        ".tsx": 32657
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 221,
@@ -31,7 +31,7 @@
         "apps/desktop/electron/preload.ts": 225,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/shared.ts": 144,
-        "apps/desktop/src/App.tsx": 2043,
+        "apps/desktop/src/App.tsx": 1907,
         "apps/desktop/src/app.css": 12442,
         "apps/desktop/src/clipboard.ts": 56,
         "apps/desktop/src/components/AppErrorBoundary.tsx": 168,
@@ -109,6 +109,7 @@
         "apps/desktop/src/pages/SnippetsPage.tsx": 1130,
         "apps/desktop/src/pages/SpatialCanvasPage.tsx": 1193,
         "apps/desktop/src/services/ai.ts": 277,
+        "apps/desktop/src/services/app-shell-data.ts": 94,
         "apps/desktop/src/services/aura-db.ts": 39,
         "apps/desktop/src/services/aura-platform.ts": 114,
         "apps/desktop/src/services/canvas-ai.ts": 41,
@@ -243,16 +244,16 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 81374
+      "totalLines": 81332
     },
     "tests": {
       "byExtension": {
-        ".ts": 37013,
+        ".ts": 37182,
         ".tsx": 104
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 189,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 206,
         "apps/desktop/electron/main/data-commands.test.ts": 1210,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
         "apps/desktop/electron/main/legacy-transaction-debt.test.ts": 258,
@@ -345,6 +346,7 @@
         "apps/desktop/src/features/canvas/workspace-load.test.ts": 290,
         "apps/desktop/src/features/library/library-collection-model.test.ts": 147,
         "apps/desktop/src/features/reader/library-reader-session.test.ts": 225,
+        "apps/desktop/src/services/app-shell-data.test.ts": 152,
         "apps/desktop/src/services/citation-graph.test.ts": 198,
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
         "apps/desktop/src/services/library-page-data.test.ts": 306,
@@ -399,7 +401,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 213
       },
-      "totalLines": 37117
+      "totalLines": 37286
     }
   },
   "uiDatabaseBoundary": {
