@@ -1,14 +1,27 @@
+import type { Database } from "@aurascholar/db";
 import { createNodeDatabase } from "@aurascholar/db/node";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { describe, expect, it } from "vitest";
+import { exportLibraryJsonFromDatabase, previewLibraryBackupJson, SqliteSyncStorage } from "./sync";
 import {
-  exportLibraryJsonFromDatabase,
-  importLibraryBackupJsonIntoDatabase,
-  previewLibraryBackupJson,
-  SqliteSyncStorage,
-} from "./sync";
+  importParsedLibraryBackupIntoDatabase,
+  parseLibraryBackupJson,
+} from "../shared/library-backup";
 
 type TestDatabase = Awaited<ReturnType<typeof createNodeDatabase>>;
+
+async function importLibraryBackupJsonIntoDatabase(text: string, db: Database, libraryId: string) {
+  const backup = parseLibraryBackupJson(text);
+  await db.exec("BEGIN");
+  try {
+    const summary = await importParsedLibraryBackupIntoDatabase(db, backup, libraryId);
+    await db.exec("COMMIT");
+    return summary;
+  } catch (error) {
+    await db.exec("ROLLBACK");
+    throw error;
+  }
+}
 
 async function addLibrary(db: TestDatabase, id: string): Promise<void> {
   await db.run(
@@ -56,7 +69,32 @@ async function addLoggedWorkChange(
 }
 
 describe("Library-scoped sync storage", () => {
-  it("injects legacy owners and rejects foreign owners and cross-Library ids", async () => {
+  it("exposes an optional process-boundary segment command without changing legacy construction", async () => {
+    const db = await createNodeDatabase(":memory:");
+    await runMigrations(db);
+    await addLibrary(db, "library-a");
+
+    const legacy = new SqliteSyncStorage(db, "device-a", "library-a", "test-provider");
+    expect(legacy.applyRemoteSegment).toBeUndefined();
+
+    const applyRemoteSegment = async () => ({
+      appliedEntries: 1,
+      conflicts: 0,
+      cursor: 1,
+      pulledEntries: 1,
+    });
+    const delegated = new SqliteSyncStorage(
+      db,
+      "device-a",
+      "library-a",
+      "test-provider",
+      "remote:test-provider",
+      { applyRemoteSegment },
+    );
+    expect(delegated.applyRemoteSegment).toBe(applyRemoteSegment);
+  });
+
+  it("requires explicit remote owners and rejects foreign owners and cross-Library ids", async () => {
     const db = await createNodeDatabase(":memory:");
     await runMigrations(db);
     await addLibrary(db, "library-a");
@@ -67,14 +105,26 @@ describe("Library-scoped sync storage", () => {
     const storage = new SqliteSyncStorage(db, "device-a", "library-a", "test-provider");
     const hlc = "000000000000020-000000-device-b";
 
+    await expect(
+      storage.applyUpsert(
+        "works",
+        "unowned-work",
+        { title: "Unowned", created_at: 20, updated_at: 20 },
+        { title: hlc, created_at: hlc, updated_at: hlc },
+      ),
+    ).rejects.toThrow(/cross-library sync owner/);
+    await expect(
+      db.query<{ id: string }>(`SELECT id FROM works WHERE id = 'unowned-work'`),
+    ).resolves.toEqual([]);
+
     await storage.applyUpsert(
       "works",
-      "legacy-work",
-      { title: "Legacy", created_at: 20, updated_at: 20 },
-      { title: hlc, created_at: hlc, updated_at: hlc },
+      "owned-work",
+      { library_id: "library-a", title: "Owned", created_at: 20, updated_at: 20 },
+      { library_id: hlc, title: hlc, created_at: hlc, updated_at: hlc },
     );
     await expect(
-      db.query<{ library_id: string }>(`SELECT library_id FROM works WHERE id = 'legacy-work'`),
+      db.query<{ library_id: string }>(`SELECT library_id FROM works WHERE id = 'owned-work'`),
     ).resolves.toEqual([{ library_id: "library-a" }]);
 
     await expect(
@@ -87,15 +137,15 @@ describe("Library-scoped sync storage", () => {
           created_at: 20,
           updated_at: 20,
         },
-        { title: hlc, created_at: hlc, updated_at: hlc },
+        { library_id: hlc, title: hlc, created_at: hlc, updated_at: hlc },
       ),
     ).rejects.toThrow(/cross-library sync owner/);
     await expect(
       storage.applyUpsert(
         "works",
         "work-b",
-        { title: "Attempted overwrite", updated_at: 20 },
-        { title: hlc, updated_at: hlc },
+        { library_id: "library-a", title: "Attempted overwrite", updated_at: 20 },
+        { library_id: hlc, title: hlc, updated_at: hlc },
       ),
     ).rejects.toThrow(/cross-library sync row/);
     await expect(storage.applyDelete("works", "work-b", hlc)).rejects.toThrow(
@@ -109,8 +159,8 @@ describe("Library-scoped sync storage", () => {
     await storage.applyUpsert(
       "sentinel_tasks",
       "task-a",
-      { title: "Updated Task A", updated_at: 20 },
-      { title: hlc, updated_at: hlc },
+      { library_id: "library-a", title: "Updated Task A", updated_at: 20 },
+      { library_id: hlc, title: hlc, updated_at: hlc },
     );
     await expect(
       db.query<{ title: string }>(`SELECT title FROM sentinel_tasks WHERE id = 'task-a'`),
@@ -119,8 +169,8 @@ describe("Library-scoped sync storage", () => {
       storage.applyUpsert(
         "sentinel_tasks",
         "task-a",
-        { work_id: "work-b", updated_at: 20 },
-        { work_id: hlc, updated_at: hlc },
+        { library_id: "library-a", work_id: "work-b", updated_at: 20 },
+        { library_id: hlc, work_id: hlc, updated_at: hlc },
       ),
     ).rejects.toThrow(/cross-library sentinel_tasks\.work_id/);
     await expect(
@@ -128,6 +178,7 @@ describe("Library-scoped sync storage", () => {
         "sentinel_tasks",
         "foreign-task",
         {
+          library_id: "library-a",
           work_id: "work-b",
           title: "Foreign Task",
           next_poll_at: 20,
@@ -135,6 +186,7 @@ describe("Library-scoped sync storage", () => {
           updated_at: 20,
         },
         {
+          library_id: hlc,
           work_id: hlc,
           title: hlc,
           next_poll_at: hlc,
@@ -146,7 +198,8 @@ describe("Library-scoped sync storage", () => {
 
     const changes = await storage.unsyncedChanges(0);
     expect(changes.map((entry) => entry.rowId)).toContain("work-a");
-    expect(changes.map((entry) => entry.rowId)).toContain("legacy-work");
+    expect(changes.map((entry) => entry.rowId)).toContain("owned-work");
+    expect(changes.map((entry) => entry.rowId)).not.toContain("unowned-work");
     expect(changes.map((entry) => entry.rowId)).not.toContain("work-b");
     expect(changes.every((entry) => entry.values.library_id === "library-a")).toBe(true);
     await expect(
@@ -300,7 +353,7 @@ describe("Library-scoped sync storage", () => {
     expect(retry[0]?.seq).toBe(publishedSeq + 1);
   });
 
-  it("maps different local owners through one stable transport scope with contiguous sequences", async () => {
+  it("injects one transport owner into local logged and snapshot upserts across devices", async () => {
     const dbA = await createNodeDatabase(":memory:");
     const dbB = await createNodeDatabase(":memory:");
     await runMigrations(dbA);

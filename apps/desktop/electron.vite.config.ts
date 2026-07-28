@@ -7,7 +7,16 @@ export default defineConfig({
     // Externalize node_modules deps, but BUNDLE the @aurascholar/* workspace
     // packages: their compiled ESM uses extensionless imports that raw Node
     // ESM can't resolve, so they must be bundled into the main output.
-    plugins: [externalizeDepsPlugin({ exclude: ["@aurascholar/db", "@aurascholar/cite"] })],
+    plugins: [
+      externalizeDepsPlugin({
+        exclude: [
+          "@aurascholar/cite",
+          "@aurascholar/db",
+          "@aurascholar/platform",
+          "@aurascholar/sync",
+        ],
+      }),
+    ],
     build: {
       outDir: "out/main",
       lib: { entry: resolve(__dirname, "electron/main.ts") },
