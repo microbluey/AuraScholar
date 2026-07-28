@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Database } from "@aurascholar/db";
-import { WorksRepo } from "@aurascholar/db";
+import { AttachmentsRepo, WorksRepo } from "@aurascholar/db";
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
@@ -92,6 +92,253 @@ describe("main-process data commands", () => {
       authors: [{ displayName: "Ada Boundary", position: 0 }],
     });
     backupText = await exportLibraryBackupJsonFromDatabase(source.database, source.libraryId);
+  });
+
+  it("rejects malformed permanent-deletion input before acquiring a database lease", async () => {
+    let transactionCalls = 0;
+    const dependencies: DataCommandDependencies = {
+      async transaction() {
+        transactionCalls += 1;
+        throw new Error("must not run");
+      },
+    };
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.purgeDeletedWorks",
+          input: { libraryId: "library", workIds: ["duplicate", "duplicate"] },
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow("Work ids must be unique");
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.purgeDeletedWorks",
+          input: { libraryId: "library", workIds: new Array(1) },
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow("Work id at index 0 is required");
+    expect(transactionCalls).toBe(0);
+  });
+
+  it("permanently deletes only requested recycle-bin works", async () => {
+    const target = await createLibraryDatabase("purge-target-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const deleted = await works.upsert({ title: "Deleted target" });
+    const active = await works.upsert({ title: "Active work" });
+    await works.softDelete(deleted.id);
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.purgeDeletedWorks",
+          input: { libraryId: target.libraryId, workIds: [deleted.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).resolves.toEqual({ purged: 1 });
+
+    await expect(works.get(deleted.id)).resolves.toBeNull();
+    await expect(works.get(active.id)).resolves.toMatchObject({ id: active.id, deleted_at: null });
+  });
+
+  it("rejects a non-recycle-bin target without deleting any requested work", async () => {
+    const target = await createLibraryDatabase("purge-target-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const deleted = await works.upsert({ title: "Deleted target" });
+    const active = await works.upsert({ title: "Active target" });
+    await works.softDelete(deleted.id);
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.purgeDeletedWorks",
+          input: { libraryId: target.libraryId, workIds: [deleted.id, active.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every work must belong to the active Library recycle bin");
+
+    await expect(works.get(deleted.id)).resolves.toMatchObject({
+      id: deleted.id,
+      deleted_at: expect.any(Number),
+    });
+    await expect(works.get(active.id)).resolves.toMatchObject({ id: active.id, deleted_at: null });
+  });
+
+  it("rejects permanent deletion for a stale or foreign Library scope", async () => {
+    const target = await createLibraryDatabase("purge-target-device");
+    const now = Date.now();
+    await target.database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at, deleted_at)
+       VALUES ('foreign-library', 'Foreign', 'personal', ?, ?, NULL)`,
+      [now, now],
+    );
+    await target.database.run(
+      `INSERT INTO works
+         (id, library_id, title, type, reading_status, starred, created_at, updated_at, deleted_at)
+       VALUES ('foreign-deleted-work', 'foreign-library', 'Foreign deleted work',
+               'article', 'unread', 0, ?, ?, ?)`,
+      [now, now, now],
+    );
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.purgeDeletedWorks",
+          input: { libraryId: "foreign-library", workIds: ["foreign-deleted-work"] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.purgeDeletedWorks",
+          input: { libraryId: target.libraryId, workIds: ["foreign-deleted-work"] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Every work must belong to the active Library recycle bin");
+    await expect(
+      target.database.query<{ id: string }>(
+        `SELECT id FROM works WHERE id = 'foreign-deleted-work'`,
+      ),
+    ).resolves.toEqual([{ id: "foreign-deleted-work" }]);
+  });
+
+  it("rolls back a failed permanent deletion before allowing a queued unrelated write", async () => {
+    const target = await createLibraryDatabase("purge-target-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const attachments = new AttachmentsRepo(target.database, target.libraryId);
+    const first = await works.upsert({ title: "Purge rollback first" });
+    const second = await works.upsert({ title: "Purge rollback second" });
+    const firstAttachment = await attachments.create({
+      workId: first.id,
+      sha256: "purge-rollback-first",
+      byteSize: 101,
+    });
+    const secondAttachment = await attachments.create({
+      workId: second.id,
+      sha256: "purge-rollback-second",
+      byteSize: 102,
+    });
+    await works.softDeleteMany([first.id, second.id]);
+    const [firstTarget, failingTarget] = [first, second].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+
+    const firstDeleted = deferred();
+    const releasePurge = deferred();
+    const gatedDatabase: Database = {
+      query: target.database.query.bind(target.database),
+      queryScalar: target.database.queryScalar.bind(target.database),
+      exec: target.database.exec.bind(target.database),
+      async run(sql, params = []) {
+        const changes = await target.database.run(sql, params);
+        if (sql.includes("DELETE FROM works WHERE id = ?") && params[0] === firstTarget!.id) {
+          firstDeleted.resolve();
+          await releasePurge.promise;
+        }
+        return changes;
+      },
+    };
+    const coordinator = new DatabaseCoordinator(gatedDatabase);
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER fail_second_main_purge
+      BEFORE DELETE ON works
+      WHEN OLD.id = '${failingTarget!.id}'
+      BEGIN
+        SELECT RAISE(FAIL, 'injected main purge failure');
+      END
+    `);
+    const purgeResult = executeDataCommand(
+      {
+        name: "library.purgeDeletedWorks",
+        input: {
+          libraryId: target.libraryId,
+          workIds: [firstTarget!.id, failingTarget!.id],
+        },
+      },
+      dependenciesFor(coordinator),
+    );
+    await firstDeleted.promise;
+
+    const queuedWrite = coordinator.run(
+      `INSERT INTO settings (key, value_json, scope, updated_at)
+       VALUES ('uow.purge-concurrent-write', '"preserved"', 'local', ?)`,
+      [Date.now()],
+    );
+    releasePurge.resolve();
+
+    await expect(purgeResult).rejects.toThrow("injected main purge failure");
+    await expect(queuedWrite).resolves.toBe(1);
+    await expect(
+      target.database.query<{ id: string; deleted_at: number | null }>(
+        `SELECT id, deleted_at FROM works WHERE id IN (?, ?) ORDER BY id`,
+        [first.id, second.id],
+      ),
+    ).resolves.toEqual(
+      [first.id, second.id].sort().map((id) => ({ id, deleted_at: expect.any(Number) })),
+    );
+    await expect(
+      target.database.query<{ id: string }>(
+        `SELECT id FROM attachments WHERE id IN (?, ?) ORDER BY id`,
+        [firstAttachment.id, secondAttachment.id],
+      ),
+    ).resolves.toEqual([firstAttachment.id, secondAttachment.id].sort().map((id) => ({ id })));
+    await expect(
+      target.database.query<{ key: string }>(
+        `SELECT key FROM settings WHERE key = 'uow.purge-concurrent-write'`,
+      ),
+    ).resolves.toEqual([{ key: "uow.purge-concurrent-write" }]);
+  });
+
+  it("rolls back dependent cleanup when SQLite ignores the root work delete", async () => {
+    const target = await createLibraryDatabase("purge-ignore-target-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    const attachments = new AttachmentsRepo(target.database, target.libraryId);
+    const work = await works.upsert({ title: "Ignored root deletion" });
+    const attachment = await attachments.create({
+      workId: work.id,
+      sha256: "purge-ignore-attachment",
+      byteSize: 103,
+    });
+    await works.softDelete(work.id);
+    const coordinator = new DatabaseCoordinator(target.database);
+    await coordinator.exec(`
+      CREATE TEMP TRIGGER ignore_main_purge
+      BEFORE DELETE ON works
+      WHEN OLD.id = '${work.id}'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "library.purgeDeletedWorks",
+          input: { libraryId: target.libraryId, workIds: [work.id] },
+        },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow(`Work ${work.id} could not be permanently removed`);
+    await expect(works.get(work.id)).resolves.toMatchObject({
+      id: work.id,
+      deleted_at: expect.any(Number),
+    });
+    await expect(
+      target.database.query<{ id: string }>(`SELECT id FROM attachments WHERE id = ?`, [
+        attachment.id,
+      ]),
+    ).resolves.toEqual([{ id: attachment.id }]);
   });
 
   it("rejects malformed input before acquiring a database lease", async () => {
