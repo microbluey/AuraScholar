@@ -2,6 +2,11 @@
 // enforced by delete-then-insert even though the join table allows many.
 import type { Database } from "../database.js";
 import { newId } from "../ids.js";
+import {
+  restoreCollectionMemberships,
+  type RestoreCollectionMembershipResult,
+} from "./collection-membership.js";
+import { withDatabaseWriteLock } from "./write-lock.js";
 
 export interface CollectionRow {
   id: string;
@@ -12,11 +17,11 @@ export interface CollectionRow {
   count: number;
 }
 
-export interface SetWorksCollectionOptions {
-  afterEach?: (workId: string, index: number) => void | Promise<void>;
+export interface DeleteCollectionResult {
+  workIds: string[];
 }
 
-const collectionWriteQueues = new WeakMap<Database, Promise<void>>();
+export type RestoreCollectionResult = RestoreCollectionMembershipResult;
 
 export class CollectionsRepo {
   constructor(
@@ -52,16 +57,7 @@ export class CollectionsRepo {
   }
 
   private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = collectionWriteQueues.get(this.db) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(fn);
-    collectionWriteQueues.set(
-      this.db,
-      next.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return next;
+    return withDatabaseWriteLock(this.db, fn);
   }
 
   private async assertActiveWork(workId: string): Promise<void> {
@@ -102,12 +98,13 @@ export class CollectionsRepo {
        WHERE library_id = ? AND deleted_at IS NULL AND parent_id IS ?`,
       [this.libraryId, parentId ?? null],
     );
-    await this.db.run(
+    const changed = await this.db.run(
       `INSERT INTO collections
          (id, library_id, name, parent_id, sort_order, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [id, this.libraryId, trimmed, parentId ?? null, nextOrderRows[0]?.next_order ?? 0, now, now],
     );
+    this.assertChanged(changed, `Collection "${trimmed}" was not created`);
     return id;
   }
 
@@ -179,20 +176,22 @@ export class CollectionsRepo {
           : rows.filter((row) => row.id !== id && row.parent_id === moving.parent_id);
       const now = Date.now();
       for (const [index, row] of previousSiblings.entries()) {
-        await this.db.run(
+        const changed = await this.db.run(
           `UPDATE collections
            SET sort_order = ?, updated_at = ?
            WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
           [index, now, row.id, this.libraryId],
         );
+        this.assertChanged(changed, `Collection ${row.id} was not reordered`);
       }
       for (const [index, row] of targetSiblings.entries()) {
-        await this.db.run(
+        const changed = await this.db.run(
           `UPDATE collections
            SET parent_id = ?, sort_order = ?, updated_at = ?
            WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
           [parentId, index, now, row.id, this.libraryId],
         );
+        this.assertChanged(changed, `Collection ${row.id} was not moved`);
       }
     });
   }
@@ -214,12 +213,45 @@ export class CollectionsRepo {
   }
 
   /** Folder is removed; its works fall back to 全部文献 (items cleared). */
-  async softDelete(id: string): Promise<void> {
+  async softDelete(id: string): Promise<DeleteCollectionResult> {
     return this.withWriteLock(() => this.softDeleteUnlocked(id));
   }
 
-  private async softDeleteUnlocked(id: string): Promise<void> {
-    await this.withSavepoint(`collections_soft_delete_${newId().replace(/-/g, "_")}`, async () => {
+  private async softDeleteUnlocked(id: string): Promise<DeleteCollectionResult> {
+    return this.withSavepoint(`collections_soft_delete_${newId().replace(/-/g, "_")}`, async () => {
+      const targetRows = await this.db.query<{ parent_id: string | null }>(
+        `SELECT parent_id
+           FROM collections
+           WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+           LIMIT 1`,
+        [id, this.libraryId],
+      );
+      const target = targetRows[0];
+      if (!target) throw new Error(`Collection ${id} is missing or already removed`);
+      const children = await this.db.query<{ id: string }>(
+        `SELECT id
+           FROM collections
+           WHERE library_id = ? AND parent_id = ? AND deleted_at IS NULL
+           ORDER BY sort_order, name, id`,
+        [this.libraryId, id],
+      );
+      if (children.length > 0) {
+        throw new Error("请先移动或删除此文件夹中的子文件夹");
+      }
+      const workRows = await this.db.query<{ work_id: string }>(
+        `SELECT ci.work_id
+           FROM collection_items ci
+           JOIN collections c
+             ON c.id = ci.collection_id
+            AND c.library_id = ?
+            AND c.deleted_at IS NULL
+           JOIN works w
+             ON w.id = ci.work_id
+            AND w.library_id = c.library_id
+           WHERE ci.collection_id = ?
+           ORDER BY ci.work_id`,
+        [this.libraryId, id],
+      );
       const changed = await this.db.run(
         `UPDATE collections SET deleted_at = ?, updated_at = ?
          WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
@@ -235,6 +267,31 @@ export class CollectionsRepo {
            )`,
         [id, id, this.libraryId],
       );
+      const remainingItems = await this.db.query<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM collection_items WHERE collection_id = ?`,
+        [id],
+      );
+      if ((remainingItems[0]?.n ?? 0) !== 0) {
+        throw new Error("Collection deletion did not remove every work association");
+      }
+      const remainingSiblings = await this.db.query<{ id: string }>(
+        `SELECT id
+           FROM collections
+           WHERE library_id = ? AND deleted_at IS NULL AND parent_id IS ?
+           ORDER BY sort_order, name, id`,
+        [this.libraryId, target.parent_id],
+      );
+      const now = Date.now();
+      for (const [index, sibling] of remainingSiblings.entries()) {
+        const reordered = await this.db.run(
+          `UPDATE collections
+             SET sort_order = ?, updated_at = ?
+             WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+          [index, now, sibling.id, this.libraryId],
+        );
+        this.assertChanged(reordered, `Collection ${sibling.id} was not reordered after deletion`);
+      }
+      return { workIds: workRows.map((row) => row.work_id) };
     });
   }
 
@@ -257,26 +314,48 @@ export class CollectionsRepo {
     return rows.map((row) => row.work_id);
   }
 
-  async restore(id: string, workIds: string[] = []): Promise<void> {
+  async restore(id: string, workIds: string[] = []): Promise<RestoreCollectionResult> {
     return this.withWriteLock(() => this.restoreUnlocked(id, workIds));
   }
 
-  private async restoreUnlocked(id: string, workIds: string[] = []): Promise<void> {
-    await this.withSavepoint(`collections_restore_${newId().replace(/-/g, "_")}`, async () => {
+  private async restoreUnlocked(
+    id: string,
+    workIds: string[] = [],
+  ): Promise<RestoreCollectionResult> {
+    return this.withSavepoint(`collections_restore_${newId().replace(/-/g, "_")}`, async () => {
+      const targetRows = await this.db.query<{ parent_id: string | null }>(
+        `SELECT parent_id
+         FROM collections
+         WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL
+         LIMIT 1`,
+        [id, this.libraryId],
+      );
+      const target = targetRows[0];
+      if (!target) throw new Error(`Collection ${id} is missing or already active`);
+      const parentRows = target.parent_id
+        ? await this.db.query<{ id: string }>(
+            `SELECT id
+             FROM collections
+             WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+             LIMIT 1`,
+            [target.parent_id, this.libraryId],
+          )
+        : [];
+      const parentId = parentRows[0] ? target.parent_id : null;
+      const nextOrderRows = await this.db.query<{ next_order: number }>(
+        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+         FROM collections
+         WHERE library_id = ? AND deleted_at IS NULL AND parent_id IS ?`,
+        [this.libraryId, parentId],
+      );
       const changed = await this.db.run(
-        `UPDATE collections SET deleted_at = NULL, updated_at = ?
+        `UPDATE collections
+         SET deleted_at = NULL, parent_id = ?, sort_order = ?, updated_at = ?
          WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
-        [Date.now(), id, this.libraryId],
+        [parentId, nextOrderRows[0]?.next_order ?? 0, Date.now(), id, this.libraryId],
       );
       this.assertChanged(changed, `Collection ${id} is missing or already active`);
-      for (const workId of new Set(workIds)) {
-        await this.assertActiveWork(workId);
-        await this.db.run(`DELETE FROM collection_items WHERE work_id = ?`, [workId]);
-        await this.db.run(
-          `INSERT OR IGNORE INTO collection_items (collection_id, work_id) VALUES (?, ?)`,
-          [id, workId],
-        );
-      }
+      return restoreCollectionMemberships(this.db, this.libraryId, id, workIds);
     });
   }
 
@@ -285,29 +364,20 @@ export class CollectionsRepo {
     return this.withWriteLock(() => this.setWorkCollectionInSavepoint(workId, collectionId));
   }
 
-  async setWorksCollection(
-    workIds: string[],
-    collectionId: string | null,
-    options: SetWorksCollectionOptions = {},
-  ): Promise<number> {
-    return this.withWriteLock(() =>
-      this.setWorksCollectionUnlocked(workIds, collectionId, options),
-    );
+  async setWorksCollection(workIds: string[], collectionId: string | null): Promise<number> {
+    return this.withWriteLock(() => this.setWorksCollectionUnlocked(workIds, collectionId));
   }
 
   private async setWorksCollectionUnlocked(
     workIds: string[],
     collectionId: string | null,
-    options: SetWorksCollectionOptions = {},
   ): Promise<number> {
     const uniqueWorkIds = [...new Set(workIds)];
     if (uniqueWorkIds.length === 0) return 0;
     await this.withSavepoint(`collections_set_works_${newId().replace(/-/g, "_")}`, async () => {
       if (collectionId) await this.assertActiveCollection(collectionId);
-      for (let index = 0; index < uniqueWorkIds.length; index += 1) {
-        const workId = uniqueWorkIds[index]!;
+      for (const workId of uniqueWorkIds) {
         await this.setWorkCollectionUnlocked(workId, collectionId, { collectionChecked: true });
-        await options.afterEach?.(workId, index);
       }
     });
     return uniqueWorkIds.length;
@@ -335,6 +405,20 @@ export class CollectionsRepo {
         collectionId,
         workId,
       ]);
+    }
+    const assignments = await this.db.query<{ collection_id: string }>(
+      `SELECT collection_id
+       FROM collection_items
+       WHERE work_id = ?
+       ORDER BY collection_id`,
+      [workId],
+    );
+    const expected = collectionId ? [collectionId] : [];
+    if (
+      assignments.length !== expected.length ||
+      assignments.some((row, index) => row.collection_id !== expected[index])
+    ) {
+      throw new Error(`Work ${workId} did not reach the requested collection state`);
     }
   }
 

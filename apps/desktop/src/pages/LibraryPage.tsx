@@ -8,11 +8,10 @@ import {
   useRef,
   useState,
   type DragEvent,
-  type FormEvent,
   type KeyboardEvent,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Badge, Button, Input } from "@aurascholar/ui";
+import { Badge, Button } from "@aurascholar/ui";
 import {
   formatBibliography,
   toBibTeX,
@@ -25,7 +24,6 @@ import type {
   AttachmentRow,
   CollectionRow,
   ReadingStatus,
-  TagRow,
   WorkPatch,
   WorkWithAuthors,
 } from "@aurascholar/db";
@@ -51,6 +49,18 @@ import {
 } from "../services/preview-library";
 import { describeSafeError } from "../services/sensitive-text";
 import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
+import { CollectionManager } from "../features/library/CollectionManager";
+import { TagManager } from "../features/library/TagManager";
+import { TextPromptDialog, type TextPromptConfig } from "../features/library/TextPromptDialog";
+import {
+  addLibraryTagToWorks,
+  createLibraryCollection,
+  deleteLibraryCollection,
+  moveLibraryCollection,
+  renameLibraryCollection,
+  restoreLibraryCollection,
+  setWorksLibraryCollection,
+} from "../services/library-organization";
 
 const MetadataEditor = lazy(() =>
   import("../components/MetadataEditor").then((m) => ({ default: m.MetadataEditor })),
@@ -78,9 +88,6 @@ interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READ__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READING_STATUS__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_STAR__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_DELETE__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RENAME__?: string;
-  __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RESTORE__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__?: string;
 }
@@ -107,7 +114,6 @@ const MIN_COLLECTION_ACTION_BUSY_MS = 250;
 const MIN_BULK_TAG_BUSY_MS = 250;
 const MIN_MOVE_ACTION_BUSY_MS = 250;
 const MIN_REFERENCE_IMPORT_BUSY_MS = 250;
-const MIN_TAG_ACTION_BUSY_MS = 450;
 const MIN_WORK_ACTION_BUSY_MS = 350;
 const REFERENCE_FILE_EXTENSIONS = new Set(["bib", "ris", "nbib", "enw", "json"]);
 const REFERENCE_IMPORT_ACCEPT = ".bib,.ris,.nbib,.enw,.json,application/json,text/plain";
@@ -146,28 +152,6 @@ interface CreateCollectionEventDetail {
   parentId?: string | null;
 }
 
-interface TextPromptConfig {
-  title: string;
-  label: string;
-  initialValue?: string;
-  placeholder?: string;
-  confirmLabel: string;
-  pendingLabel?: string;
-  description?: string;
-  allowEmpty?: boolean;
-  inputKind?: "text" | "color";
-  onSubmit: (value: string) => Promise<void>;
-}
-
-const TAG_COLOR_OPTIONS = [
-  { label: "紫罗兰", value: "#7566f0" },
-  { label: "薄荷绿", value: "#25bfae" },
-  { label: "湖水蓝", value: "#42a5d5" },
-  { label: "珊瑚橙", value: "#ff8a5b" },
-  { label: "莓果红", value: "#df5d83" },
-  { label: "琥珀黄", value: "#d89b38" },
-] as const;
-
 interface WorkRuntimeMeta {
   pdfCount: number;
   annotationCount: number;
@@ -189,13 +173,6 @@ interface CollectionDeleteUndoState {
   name: string;
   workIds: string[];
   wasActive: boolean;
-  message: string;
-}
-
-interface TagDeleteUndoState {
-  id: string;
-  name: string;
-  workIds: string[];
   message: string;
 }
 
@@ -743,30 +720,6 @@ function consumeLibrarySmokeStarFailure(): Error | null {
   return new Error(message);
 }
 
-function consumeLibrarySmokeTagRenameFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RENAME__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RENAME__;
-  return new Error(message);
-}
-
-function consumeLibrarySmokeTagDeleteFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_DELETE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_DELETE__;
-  return new Error(message);
-}
-
-function consumeLibrarySmokeTagRestoreFailure(): Error | null {
-  const smokeWindow = window as LibrarySmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RESTORE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TAG_RESTORE__;
-  return new Error(message);
-}
-
 function consumeLibrarySmokeTrashFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH__;
@@ -1073,6 +1026,21 @@ export function LibraryPage() {
     }
   }, [search, activeCollection, activeFilter, previewItems, previewTrashItems, previewWorkMeta]);
 
+  const finishCommittedCollectionAction = useCallback(
+    async (successMessage: string, reportInManager = true): Promise<void> => {
+      const refreshFailure = await refresh();
+      if (!refreshFailure) return;
+      const detail = describeSafeError(refreshFailure);
+      setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${detail}`);
+      if (reportInManager) {
+        setCollectionManagerStatus(successMessage);
+        setCollectionManagerError(`操作已保存，但文件夹列表刷新失败:${detail}`);
+      }
+      window.dispatchEvent(new Event("aurascholar:library-updated"));
+    },
+    [refresh],
+  );
+
   useEffect(() => {
     const t = setTimeout(() => void refresh(), search ? 250 : 0);
     return () => {
@@ -1317,9 +1285,7 @@ export function LibraryPage() {
               await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
               throw smokeFailure;
             }
-            const { db, libraryId } = await getLibraryDb();
-            const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-            const id = await new CollectionsRepo(db, libraryId).create(name, parent?.id);
+            const id = await createLibraryCollection(name, parent?.id ?? null);
             await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
             setActiveFilter("all");
             setActiveCollection(id);
@@ -1330,7 +1296,7 @@ export function LibraryPage() {
               : `已新建文件夹「${name}」`;
             setMessage(successMessage);
             setCollectionManagerStatus(successMessage);
-            await refresh();
+            await finishCommittedCollectionAction(successMessage);
           } catch (e) {
             const message = describeSafeError(e);
             const error = new Error(`创建文件夹失败，名称仍保留，可重新创建:${message}`);
@@ -1343,7 +1309,7 @@ export function LibraryPage() {
         },
       });
     },
-    [collectionAction, collections, refresh],
+    [collectionAction, collections, finishCommittedCollectionAction],
   );
 
   const handleRenameFolder = useCallback(
@@ -1372,13 +1338,12 @@ export function LibraryPage() {
               await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
               throw smokeFailure;
             }
-            const { db, libraryId } = await getLibraryDb();
-            const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-            await new CollectionsRepo(db, libraryId).rename(id, next);
+            await renameLibraryCollection(id, next);
             await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-            setMessage(`已重命名为「${next}」`);
-            setCollectionManagerStatus(`已重命名为「${next}」`);
-            await refresh();
+            const successMessage = `已重命名为「${next}」`;
+            setMessage(successMessage);
+            setCollectionManagerStatus(successMessage);
+            await finishCommittedCollectionAction(successMessage);
           } catch (e) {
             const message = describeSafeError(e);
             const error = new Error(`重命名文件夹失败，名称仍保留，可重新保存:${message}`);
@@ -1391,7 +1356,7 @@ export function LibraryPage() {
         },
       });
     },
-    [collectionAction, refresh],
+    [collectionAction, finishCommittedCollectionAction],
   );
 
   const handleDeleteFolder = useCallback(
@@ -1399,6 +1364,13 @@ export function LibraryPage() {
       if (collectionAction) return;
       if (!isDesktopRuntime()) {
         setMessage("预览模式下不会写入本地数据库");
+        return;
+      }
+      const childCount = collections.filter((collection) => collection.parent_id === id).length;
+      if (childCount > 0) {
+        const errorMessage = `无法删除「${name}」：请先移动或删除其中的 ${childCount} 个子文件夹`;
+        setMessage(errorMessage);
+        setCollectionManagerError(errorMessage);
         return;
       }
       const confirmed = await confirm({
@@ -1422,11 +1394,7 @@ export function LibraryPage() {
           await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
           throw smokeFailure;
         }
-        const { db, libraryId } = await getLibraryDb();
-        const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-        const repo = new CollectionsRepo(db, libraryId);
-        const workIds = await repo.workIds(id);
-        await repo.softDelete(id);
+        const { workIds } = await deleteLibraryCollection(id);
         await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
         if (activeCollection === id) setActiveCollection(null);
         const undoMessage = `已删除文件夹「${name}」`;
@@ -1439,7 +1407,7 @@ export function LibraryPage() {
         });
         setMessage(undoMessage);
         setCollectionManagerStatus(undoMessage);
-        await refresh();
+        await finishCommittedCollectionAction(undoMessage);
       } catch (e) {
         const errorMessage = `删除文件夹失败，文件夹仍保留，可重新删除:${describeSafeError(e)}`;
         setMessage(errorMessage);
@@ -1449,7 +1417,7 @@ export function LibraryPage() {
         setCollectionAction(null);
       }
     },
-    [activeCollection, collectionAction, confirm, refresh],
+    [activeCollection, collectionAction, collections, confirm, finishCommittedCollectionAction],
   );
 
   const undoCollectionDelete = useCallback(async () => {
@@ -1469,11 +1437,12 @@ export function LibraryPage() {
         await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
         throw smokeFailure;
       }
-      const { db, libraryId } = await getLibraryDb();
-      const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-      await new CollectionsRepo(db, libraryId).restore(id, workIds);
+      const { skippedWorkIds } = await restoreLibraryCollection(id, workIds);
       await waitForMinimumElapsed(startedAt, MIN_COLLECTION_ACTION_BUSY_MS);
-      const restoredMessage = `已恢复文件夹「${name}」`;
+      const restoredMessage =
+        skippedWorkIds.length > 0
+          ? `已恢复文件夹「${name}」；${skippedWorkIds.length} 篇文献因已永久删除或后来改放其他文件夹而未恢复原归属`
+          : `已恢复文件夹「${name}」`;
       setCollectionDeleteUndo(null);
       setMessage(restoredMessage);
       setCollectionManagerStatus(restoredMessage);
@@ -1485,7 +1454,7 @@ export function LibraryPage() {
         setExtraFilter(null);
         setSelectedIds(new Set());
       }
-      await refresh();
+      await finishCommittedCollectionAction(restoredMessage);
     } catch (e) {
       const errorMessage = `恢复文件夹失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`;
       setMessage(errorMessage);
@@ -1494,7 +1463,7 @@ export function LibraryPage() {
     } finally {
       setCollectionAction(null);
     }
-  }, [collectionAction, collectionDeleteUndo, refresh]);
+  }, [collectionAction, collectionDeleteUndo, finishCommittedCollectionAction]);
 
   const handleMoveFolder = useCallback(
     async ({ id, parentId, position }: MoveCollectionEventDetail) => {
@@ -1506,18 +1475,17 @@ export function LibraryPage() {
         return;
       }
       try {
-        const { db, libraryId } = await getLibraryDb();
-        const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-        await new CollectionsRepo(db, libraryId).move(id, parentId, position);
-        setMessage(`已移动文件夹「${folder.name}」`);
-        await refresh();
+        await moveLibraryCollection(id, parentId, position);
+        const successMessage = `已移动文件夹「${folder.name}」`;
+        setMessage(successMessage);
+        await finishCommittedCollectionAction(successMessage, false);
         window.dispatchEvent(new Event("aurascholar:library-updated"));
       } catch (error) {
         setMessage(`移动文件夹失败，原有层级未改变:${describeSafeError(error)}`);
         window.dispatchEvent(new Event("aurascholar:library-updated"));
       }
     },
-    [collections, refresh],
+    [collections, finishCommittedCollectionAction],
   );
 
   useEffect(() => {
@@ -2492,15 +2460,9 @@ export function LibraryPage() {
         const successMessage = `已为 ${workIds.length} 篇文献添加标签「${name}」`;
         let tagCommitted = false;
         try {
-          const { db, libraryId } = await getLibraryDb();
-          const { TagsRepo } = await import("@aurascholar/db/repos/tags");
-          const tagsRepo = new TagsRepo(db, libraryId);
           const smokeFailureAfterFirst = consumeLibrarySmokeBulkTagAfterFirstFailure();
-          await tagsRepo.addToWorks(workIds, name, {
-            afterEach: (_workId, index) => {
-              if (index === 0 && smokeFailureAfterFirst) throw smokeFailureAfterFirst;
-            },
-          });
+          if (smokeFailureAfterFirst) throw smokeFailureAfterFirst;
+          await addLibraryTagToWorks(workIds, name);
           tagCommitted = true;
           await waitForMinimumElapsed(startedAt, MIN_BULK_TAG_BUSY_MS);
           setMessage(successMessage);
@@ -2545,15 +2507,9 @@ export function LibraryPage() {
         : `已将 ${workIds.length} 篇文献移出所有文件夹`;
       let moveCommitted = false;
       try {
-        const { db, libraryId } = await getLibraryDb();
-        const { CollectionsRepo } = await import("@aurascholar/db/repos/collections");
-        const colRepo = new CollectionsRepo(db, libraryId);
         const smokeFailureAfterFirst = consumeLibrarySmokeMoveAfterFirstFailure();
-        await colRepo.setWorksCollection(workIds, target, {
-          afterEach: (_workId, index) => {
-            if (index === 0 && smokeFailureAfterFirst) throw smokeFailureAfterFirst;
-          },
-        });
+        if (smokeFailureAfterFirst) throw smokeFailureAfterFirst;
+        await setWorksLibraryCollection(workIds, target);
         moveCommitted = true;
         await waitForMinimumElapsed(startedAt, MIN_MOVE_ACTION_BUSY_MS);
         setMessage(successMessage);
@@ -4312,163 +4268,6 @@ function OnboardingStep({ index, title, text }: { index: string; title: string; 
   );
 }
 
-function TextPromptDialog({ config, onClose }: { config: TextPromptConfig; onClose: () => void }) {
-  const [value, setValue] = useState(config.initialValue ?? "");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLFormElement | null>(null);
-  const titleId = useId();
-  const trimmed = value.trim();
-  const canSubmit = config.allowEmpty || Boolean(trimmed);
-  const isColorPicker = config.inputKind === "color";
-  const nativeColorValue = /^#[0-9a-f]{6}$/i.test(trimmed) ? trimmed : TAG_COLOR_OPTIONS[0].value;
-
-  const requestClose = useCallback(() => {
-    if (!submitting) onClose();
-  }, [onClose, submitting]);
-
-  useModalFocusTrap(dialogRef, {
-    initialFocusSelector: "[data-autofocus]",
-    onEscape: requestClose,
-  });
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!canSubmit) {
-      setError("请输入内容");
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    try {
-      await config.onSubmit(config.allowEmpty ? trimmed : trimmed);
-      onClose();
-    } catch (e) {
-      setError(describeSafeError(e));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="library-modal-overlay" role="presentation" onMouseDown={requestClose}>
-      <form
-        ref={dialogRef}
-        aria-labelledby={titleId}
-        aria-busy={submitting}
-        aria-modal="true"
-        className="library-modal library-prompt-modal"
-        data-modal-root="true"
-        onSubmit={submit}
-        onMouseDown={(e) => e.stopPropagation()}
-        role="dialog"
-        tabIndex={-1}
-      >
-        <div className="library-modal__head">
-          <h2 id={titleId}>{config.title}</h2>
-          <button
-            type="button"
-            className="library-modal__close"
-            onClick={requestClose}
-            aria-label={`关闭${config.title}`}
-            title={`关闭${config.title}`}
-            disabled={submitting}
-          >
-            ×
-          </button>
-        </div>
-        {config.description && (
-          <p className="library-prompt-modal__description">{config.description}</p>
-        )}
-        {submitting && (
-          <p className="library-prompt-modal__status" role="status" aria-live="polite">
-            {config.pendingLabel ?? "处理中..."}
-          </p>
-        )}
-        {isColorPicker ? (
-          <fieldset className="library-color-picker" disabled={submitting}>
-            <legend>{config.label}</legend>
-            <div
-              className="library-color-picker__swatches"
-              role="radiogroup"
-              aria-label={config.label}
-            >
-              {TAG_COLOR_OPTIONS.map((option, index) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={
-                    trimmed.toLowerCase() === option.value
-                      ? "library-color-picker__swatch--active"
-                      : ""
-                  }
-                  data-autofocus={index === 0 ? "true" : undefined}
-                  aria-label={option.label}
-                  aria-pressed={trimmed.toLowerCase() === option.value}
-                  title={option.label}
-                  style={{ background: option.value }}
-                  onClick={() => {
-                    setValue(option.value);
-                    setError(null);
-                  }}
-                />
-              ))}
-            </div>
-            <div className="library-color-picker__custom">
-              <label>
-                <span>自定义颜色</span>
-                <input
-                  type="color"
-                  value={nativeColorValue}
-                  onChange={(event) => {
-                    setValue(event.target.value);
-                    setError(null);
-                  }}
-                />
-              </label>
-              <button
-                type="button"
-                className={!trimmed ? "library-color-picker__auto--active" : ""}
-                aria-pressed={!trimmed}
-                onClick={() => {
-                  setValue("");
-                  setError(null);
-                }}
-              >
-                使用自动配色
-              </button>
-            </div>
-          </fieldset>
-        ) : (
-          <label className="library-prompt-field">
-            <span>{config.label}</span>
-            <Input
-              autoFocus
-              data-autofocus="true"
-              placeholder={config.placeholder}
-              value={value}
-              onChange={(event) => {
-                setValue(event.target.value);
-                setError(null);
-              }}
-              disabled={submitting}
-            />
-          </label>
-        )}
-        {error && <p className="library-prompt-modal__error">{error}</p>}
-        <div className="library-modal-actions">
-          <Button type="submit" disabled={submitting || !canSubmit} aria-busy={submitting}>
-            {submitting ? (config.pendingLabel ?? "处理中...") : config.confirmLabel}
-          </Button>
-          <Button type="button" variant="secondary" onClick={requestClose} disabled={submitting}>
-            取消
-          </Button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 function MoveToCollectionDialog({
   collections,
   selectedCount,
@@ -4727,616 +4526,6 @@ function AdvancedFilterDialog({
         </div>
       </section>
     </div>
-  );
-}
-
-function CollectionManager({
-  collections,
-  activeCollection,
-  action,
-  status,
-  statusAction,
-  error,
-  trashCount,
-  isTrashView,
-  onClose,
-  onSelectAll,
-  onSelectTrash,
-  onSelectCollection,
-  onCreate,
-  onRename,
-  onDelete,
-}: {
-  collections: CollectionRow[];
-  activeCollection: string | null;
-  action: { id: string; kind: "create" | "delete" | "rename" | "restore" } | null;
-  status: string | null;
-  statusAction: {
-    ariaLabel: string;
-    busy: boolean;
-    label: string;
-    onClick: () => void;
-  } | null;
-  error: string | null;
-  trashCount: number;
-  isTrashView: boolean;
-  onClose: () => void;
-  onSelectAll: () => void;
-  onSelectTrash: () => void;
-  onSelectCollection: (collectionId: string) => void;
-  onCreate: (parentId?: string) => void;
-  onRename: (collection: CollectionRow) => void;
-  onDelete: (collection: CollectionRow) => void;
-}) {
-  const dialogRef = useRef<HTMLElement | null>(null);
-  const titleId = useId();
-  const busy = action !== null;
-  const requestClose = useCallback(() => {
-    if (!busy) onClose();
-  }, [busy, onClose]);
-
-  useModalFocusTrap(dialogRef, {
-    initialFocusSelector: "[data-autofocus]",
-    onEscape: requestClose,
-  });
-
-  return (
-    <div className="library-modal-overlay" role="presentation" onMouseDown={requestClose}>
-      <section
-        ref={dialogRef}
-        aria-labelledby={titleId}
-        aria-busy={busy}
-        aria-modal="true"
-        className="library-modal library-collection-modal"
-        data-modal-root="true"
-        onMouseDown={(e) => e.stopPropagation()}
-        role="dialog"
-        tabIndex={-1}
-      >
-        <div className="library-modal__head">
-          <div>
-            <h2 id={titleId}>管理文件夹</h2>
-            <p className="library-modal__subhead">选择当前视图，或整理自定义文件夹。</p>
-          </div>
-          <button
-            type="button"
-            className="library-modal__close"
-            onClick={requestClose}
-            aria-label="关闭管理文件夹"
-            title="关闭管理文件夹"
-            disabled={busy}
-          >
-            ×
-          </button>
-        </div>
-
-        {status && (
-          <p className="library-collection-manager__status" role="status" aria-live="polite">
-            <span>{status}</span>
-            {statusAction ? (
-              <button
-                type="button"
-                className="library-collection-manager__status-action"
-                onClick={statusAction.onClick}
-                disabled={busy || statusAction.busy}
-                aria-busy={statusAction.busy ? "true" : undefined}
-                aria-label={statusAction.ariaLabel}
-              >
-                {statusAction.label}
-              </button>
-            ) : null}
-          </p>
-        )}
-        {error && (
-          <p className="library-collection-manager__error" role="alert">
-            {error}
-          </p>
-        )}
-
-        <div className="library-collection-manager__section">
-          <button
-            type="button"
-            className={`library-collection-manager__system ${
-              !activeCollection && !isTrashView ? "library-collection-manager__system--active" : ""
-            }`}
-            data-autofocus={!activeCollection && !isTrashView ? "true" : undefined}
-            onClick={onSelectAll}
-            disabled={busy}
-            aria-current={!activeCollection && !isTrashView ? "page" : undefined}
-            aria-label={`全部文献，主视图${!activeCollection && !isTrashView ? "，当前视图" : ""}`}
-            aria-pressed={!activeCollection && !isTrashView}
-          >
-            <span>全部文献</span>
-            <small>主视图</small>
-          </button>
-          <button
-            type="button"
-            className={`library-collection-manager__system ${
-              isTrashView ? "library-collection-manager__system--active" : ""
-            }`}
-            data-autofocus={isTrashView ? "true" : undefined}
-            onClick={onSelectTrash}
-            disabled={busy}
-            aria-current={isTrashView ? "page" : undefined}
-            aria-label={`回收站，${trashCount.toLocaleString("zh-CN")} 篇${isTrashView ? "，当前视图" : ""}`}
-            aria-pressed={isTrashView}
-          >
-            <span>回收站</span>
-            <small>{trashCount.toLocaleString("zh-CN")} 篇</small>
-          </button>
-        </div>
-
-        <div className="library-collection-manager__head">
-          <span>自定义文件夹</span>
-          <button
-            type="button"
-            onClick={() => onCreate()}
-            disabled={busy}
-            aria-busy={action?.kind === "create" ? "true" : undefined}
-            aria-label="新建文件夹"
-          >
-            {action?.kind === "create" ? "创建中..." : "新建"}
-          </button>
-        </div>
-
-        {collections.length === 0 ? (
-          <p className="library-panel-empty">还没有文件夹。新建后会同时出现在左侧文件夹树里。</p>
-        ) : (
-          <ul className="library-collection-manager">
-            {collections.map((collection) => {
-              const activeAction = action?.id === collection.id ? action.kind : null;
-              const parent = collection.parent_id
-                ? collections.find((candidate) => candidate.id === collection.parent_id)
-                : null;
-              return (
-                <li
-                  key={collection.id}
-                  className={`library-collection-manager__row ${
-                    activeCollection === collection.id
-                      ? "library-collection-manager__row--active"
-                      : ""
-                  }`}
-                  aria-busy={activeAction ? "true" : undefined}
-                >
-                  <button
-                    type="button"
-                    className="library-collection-manager__select"
-                    data-autofocus={activeCollection === collection.id ? "true" : undefined}
-                    onClick={() => onSelectCollection(collection.id)}
-                    disabled={busy}
-                    aria-current={activeCollection === collection.id ? "page" : undefined}
-                    aria-label={`${collection.name}，${collection.count.toLocaleString("zh-CN")} 篇${
-                      activeCollection === collection.id ? "，当前视图" : ""
-                    }`}
-                    title={collection.name}
-                  >
-                    <span>{collection.name}</span>
-                    <small>
-                      {parent ? `${parent.name} / ` : ""}
-                      {collection.count.toLocaleString("zh-CN")} 篇
-                    </small>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onCreate(collection.id)}
-                    disabled={busy}
-                    aria-label={`在 ${collection.name} 中新建子文件夹`}
-                    title={`在 ${collection.name} 中新建子文件夹`}
-                  >
-                    子文件夹
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onRename(collection)}
-                    disabled={busy}
-                    aria-busy={activeAction === "rename" ? "true" : undefined}
-                    aria-label={`重命名文件夹 ${collection.name}`}
-                    title={`重命名 ${collection.name}`}
-                  >
-                    {activeAction === "rename" ? "保存中..." : "重命名"}
-                  </button>
-                  <button
-                    type="button"
-                    className="library-collection-manager__delete"
-                    onClick={() => onDelete(collection)}
-                    disabled={busy}
-                    aria-busy={activeAction === "delete" ? "true" : undefined}
-                    aria-label={`删除文件夹 ${collection.name}`}
-                    title={`删除 ${collection.name}`}
-                  >
-                    {activeAction === "delete" ? "删除中..." : "删除"}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function TagManager({
-  initialCreate,
-  onClose,
-  onChanged,
-}: {
-  initialCreate?: boolean;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const [tags, setTags] = useState<TagRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [tagPrompt, setTagPrompt] = useState<TextPromptConfig | null>(null);
-  const [tagAction, setTagAction] = useState<{
-    id: string;
-    kind: "color" | "create" | "delete" | "rename" | "restore";
-  } | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [tagDeleteUndo, setTagDeleteUndo] = useState<TagDeleteUndoState | null>(null);
-  const { confirm, confirmDialog } = useConfirmDialog();
-  const dialogRef = useRef<HTMLElement | null>(null);
-  const initialCreateOpenedRef = useRef(false);
-  const titleId = useId();
-  const tagBusy = tagAction !== null;
-  const requestClose = useCallback(() => {
-    if (!tagBusy) onClose();
-  }, [onClose, tagBusy]);
-
-  useModalFocusTrap(dialogRef, {
-    initialFocusSelector: "[data-autofocus]",
-    onEscape: requestClose,
-  });
-
-  const load = useCallback(async (isCurrent: () => boolean = () => true) => {
-    if (!isDesktopRuntime()) {
-      if (!isCurrent()) return;
-      setTags([]);
-      setLoading(false);
-      return;
-    }
-    const { db, libraryId } = await getLibraryDb();
-    const { TagsRepo } = await import("@aurascholar/db/repos/tags");
-    const nextTags = await new TagsRepo(db, libraryId).list();
-    if (!isCurrent()) return;
-    setTags(nextTags);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadId = window.setTimeout(() => {
-      void load(() => !cancelled);
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(loadId);
-    };
-  }, [load]);
-
-  const repo = useCallback(async () => {
-    const { TagsRepo } = await import("@aurascholar/db/repos/tags");
-    const { db, libraryId } = await getLibraryDb();
-    return new TagsRepo(db, libraryId);
-  }, []);
-
-  const create = useCallback(() => {
-    if (tagBusy) return;
-    setTagPrompt({
-      title: "新建标签",
-      label: "标签名称",
-      placeholder: "例如：方法论、待读、实验复现",
-      confirmLabel: "创建标签",
-      onSubmit: async (value) => {
-        const next = value.trim();
-        const startedAt = Date.now();
-        setTagAction({ id: "new", kind: "create" });
-        setStatus(`正在创建标签「${next}」...`);
-        setError(null);
-        setTagDeleteUndo(null);
-        try {
-          await (await repo()).ensure(next);
-          await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-          await load();
-          setStatus(`已创建标签「${next}」`);
-          onChanged();
-        } catch (e) {
-          const createError = new Error(`创建标签失败:${describeSafeError(e)}`);
-          setStatus(null);
-          setError(createError.message);
-          throw createError;
-        } finally {
-          setTagAction(null);
-        }
-      },
-    });
-  }, [load, onChanged, repo, tagBusy]);
-
-  useEffect(() => {
-    if (!initialCreate || loading || initialCreateOpenedRef.current) return;
-    initialCreateOpenedRef.current = true;
-    create();
-  }, [create, initialCreate, loading]);
-
-  const rename = useCallback(
-    async (tag: TagRow) => {
-      if (tagBusy) return;
-      setTagPrompt({
-        title: "重命名标签",
-        label: "标签名称",
-        initialValue: tag.name,
-        confirmLabel: "保存",
-        onSubmit: async (value) => {
-          const next = value.trim();
-          if (next === tag.name) return;
-          const startedAt = Date.now();
-          setTagAction({ id: tag.id, kind: "rename" });
-          setStatus(`正在重命名标签「${tag.name}」...`);
-          setError(null);
-          setTagDeleteUndo(null);
-          try {
-            const smokeFailure = consumeLibrarySmokeTagRenameFailure();
-            if (smokeFailure) {
-              await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-              throw smokeFailure;
-            }
-            await (await repo()).rename(tag.id, next);
-            await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-            await load();
-            setStatus(`已重命名为「${next}」`);
-            onChanged();
-          } catch (e) {
-            const message = describeSafeError(e);
-            const error = new Error(`重命名标签失败，名称仍保留，可重新保存:${message}`);
-            setStatus(null);
-            setError(error.message);
-            throw error;
-          } finally {
-            setTagAction(null);
-          }
-        },
-      });
-    },
-    [tagBusy, repo, load, onChanged],
-  );
-
-  const recolor = useCallback(
-    async (tag: TagRow) => {
-      if (tagBusy) return;
-      setTagPrompt({
-        title: "设置标签颜色",
-        label: "选择标签颜色",
-        initialValue: tag.color ?? "",
-        confirmLabel: "保存",
-        description: "选择一种预设颜色，或使用系统取色器创建自己的颜色。",
-        allowEmpty: true,
-        inputKind: "color",
-        onSubmit: async (value) => {
-          const next = value.trim();
-          const startedAt = Date.now();
-          setTagAction({ id: tag.id, kind: "color" });
-          setStatus(`正在更新标签「${tag.name}」的颜色...`);
-          setError(null);
-          setTagDeleteUndo(null);
-          try {
-            await (await repo()).setColor(tag.id, next || null);
-            await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-            await load();
-            setStatus(next ? `已更新标签「${tag.name}」的颜色` : `已清除标签「${tag.name}」的颜色`);
-            onChanged();
-          } catch (e) {
-            const message = describeSafeError(e);
-            setError(`更新标签颜色失败:${message}`);
-            throw e;
-          } finally {
-            setTagAction(null);
-          }
-        },
-      });
-    },
-    [tagBusy, repo, load, onChanged],
-  );
-
-  const remove = useCallback(
-    async (tag: TagRow) => {
-      if (tagBusy) return;
-      const confirmed = await confirm({
-        title: "删除标签？",
-        description: `「${tag.name}」会从 ${tag.count} 篇文献上移除。`,
-        details: ["文献本身不会被删除。", "后续可重新创建同名标签并重新标注。"],
-        confirmLabel: "删除标签",
-        tone: "warning",
-      });
-      if (!confirmed) return;
-      const startedAt = Date.now();
-      setTagAction({ id: tag.id, kind: "delete" });
-      setStatus(`正在删除标签「${tag.name}」...`);
-      setError(null);
-      try {
-        const smokeFailure = consumeLibrarySmokeTagDeleteFailure();
-        if (smokeFailure) {
-          await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-          throw smokeFailure;
-        }
-        const tagsRepo = await repo();
-        const workIds = await tagsRepo.workIds(tag.id);
-        await tagsRepo.softDelete(tag.id);
-        await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-        await load();
-        const undoMessage = `已删除标签「${tag.name}」`;
-        setTagDeleteUndo({ id: tag.id, name: tag.name, workIds, message: undoMessage });
-        setStatus(undoMessage);
-        onChanged();
-      } catch (e) {
-        setStatus(null);
-        setError(`删除标签失败，标签仍保留，可重新删除:${describeSafeError(e)}`);
-      } finally {
-        setTagAction(null);
-      }
-    },
-    [tagBusy, confirm, repo, load, onChanged],
-  );
-
-  const undoTagDelete = useCallback(async () => {
-    if (!tagDeleteUndo || tagBusy) return;
-    const { id, name, workIds } = tagDeleteUndo;
-    const startedAt = Date.now();
-    setTagAction({ id, kind: "restore" });
-    setStatus(`正在恢复标签「${name}」...`);
-    setError(null);
-    try {
-      const smokeFailure = consumeLibrarySmokeTagRestoreFailure();
-      if (smokeFailure) {
-        await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-        throw smokeFailure;
-      }
-      await (await repo()).restore(id, workIds);
-      await waitForMinimumElapsed(startedAt, MIN_TAG_ACTION_BUSY_MS);
-      await load();
-      const restoredMessage = `已恢复标签「${name}」`;
-      setTagDeleteUndo(null);
-      setStatus(restoredMessage);
-      onChanged();
-    } catch (e) {
-      setStatus(tagDeleteUndo.message);
-      setError(`恢复标签失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
-    } finally {
-      setTagAction(null);
-    }
-  }, [tagBusy, tagDeleteUndo, load, onChanged, repo]);
-
-  return (
-    <>
-      <div className="library-modal-overlay" role="presentation" onMouseDown={requestClose}>
-        <section
-          ref={dialogRef}
-          aria-labelledby={titleId}
-          aria-busy={tagBusy}
-          aria-modal="true"
-          className="library-modal"
-          data-modal-root="true"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          tabIndex={-1}
-        >
-          <div className="library-modal__head">
-            <h2 id={titleId}>管理标签</h2>
-            <div className="library-modal__head-actions">
-              <Button
-                variant="secondary"
-                onClick={create}
-                disabled={tagBusy}
-                aria-busy={tagAction?.kind === "create" ? "true" : undefined}
-              >
-                {tagAction?.kind === "create" ? "创建中..." : "新建标签"}
-              </Button>
-              <button
-                type="button"
-                className="library-modal__close"
-                data-autofocus={loading || tags.length === 0 ? "true" : undefined}
-                onClick={requestClose}
-                aria-label="关闭管理标签"
-                title="关闭管理标签"
-                disabled={tagBusy}
-              >
-                ×
-              </button>
-            </div>
-          </div>
-          {status && (
-            <p className="library-tag-manager__status" role="status" aria-live="polite">
-              <span>{status}</span>
-              {tagDeleteUndo &&
-              (status === tagDeleteUndo.message || tagAction?.kind === "restore") ? (
-                <button
-                  type="button"
-                  className="library-tag-manager__status-action"
-                  onClick={() => void undoTagDelete()}
-                  disabled={tagBusy}
-                  aria-busy={tagAction?.kind === "restore" ? "true" : undefined}
-                  aria-label="撤销删除标签"
-                >
-                  {tagAction?.kind === "restore" ? "撤销中..." : "撤销"}
-                </button>
-              ) : null}
-            </p>
-          )}
-          {error && (
-            <p className="library-tag-manager__error" role="alert">
-              {error}
-            </p>
-          )}
-          {loading ? (
-            <p className="au-text-muted">读取中…</p>
-          ) : tags.length === 0 ? (
-            <p className="au-text-muted">还没有标签。点击“新建标签”建立第一套整理规则。</p>
-          ) : (
-            <ul className="library-tag-manager">
-              {tags.map((tag) => {
-                const activeAction = tagAction?.id === tag.id ? tagAction.kind : null;
-                return (
-                  <li
-                    key={tag.id}
-                    className="library-tag-manager__row"
-                    aria-busy={activeAction ? "true" : undefined}
-                  >
-                    <span
-                      className="library-tag-manager__dot"
-                      aria-hidden="true"
-                      style={tag.color ? { background: tag.color } : undefined}
-                    />
-                    <span className="library-tag-manager__name" title={tag.name}>
-                      {tag.name}
-                    </span>
-                    <small
-                      className="library-tag-manager__count"
-                      aria-label={`${tag.count.toLocaleString("zh-CN")} 篇文献`}
-                    >
-                      {tag.count}
-                    </small>
-                    <button
-                      type="button"
-                      data-autofocus={tag === tags[0] ? "true" : undefined}
-                      onClick={() => void rename(tag)}
-                      disabled={tagBusy}
-                      aria-busy={activeAction === "rename" ? "true" : undefined}
-                      aria-label={`重命名标签 ${tag.name}`}
-                      title={`重命名 ${tag.name}`}
-                    >
-                      {activeAction === "rename" ? "保存中..." : "重命名"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void recolor(tag)}
-                      disabled={tagBusy}
-                      aria-busy={activeAction === "color" ? "true" : undefined}
-                      aria-label={`设置标签 ${tag.name} 的颜色`}
-                      title={`设置 ${tag.name} 的颜色`}
-                    >
-                      {activeAction === "color" ? "保存中..." : "颜色"}
-                    </button>
-                    <button
-                      type="button"
-                      className="library-tag-manager__delete"
-                      onClick={() => void remove(tag)}
-                      disabled={tagBusy}
-                      aria-busy={activeAction === "delete" ? "true" : undefined}
-                      aria-label={`删除标签 ${tag.name}`}
-                      title={`删除 ${tag.name}`}
-                    >
-                      {activeAction === "delete" ? "删除中..." : "删除"}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {tagPrompt && <TextPromptDialog config={tagPrompt} onClose={() => setTagPrompt(null)} />}
-        </section>
-      </div>
-      {confirmDialog}
-    </>
   );
 }
 

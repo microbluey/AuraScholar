@@ -88,32 +88,6 @@ describe("TagsRepo", () => {
     expect(linkRows[0]!.n).toBe(0);
   });
 
-  it("rolls back addToWorks when a caller hook fails after a partial assignment", async () => {
-    const w1 = await makeWork("Paper 1");
-    const w2 = await makeWork("Paper 2");
-
-    await expect(
-      tags.addToWorks([w1, w2], "hooked", {
-        afterEach: (_workId, index) => {
-          if (index === 0) throw new Error("forced tag hook failure");
-        },
-      }),
-    ).rejects.toThrow("forced tag hook failure");
-
-    const tagRows = await db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM tags WHERE name = ?`, [
-      "hooked",
-    ]);
-    const linkRows = await db.query<{ n: number }>(
-      `SELECT COUNT(*) AS n
-       FROM work_tags wt
-       JOIN tags t ON t.id = wt.tag_id
-       WHERE t.name = ?`,
-      ["hooked"],
-    );
-    expect(tagRows[0]!.n).toBe(0);
-    expect(linkRows[0]!.n).toBe(0);
-  });
-
   it("addToWorks is idempotent", async () => {
     const w1 = await makeWork("Paper 1");
     await tags.addToWorks([w1], "x");
@@ -122,7 +96,7 @@ describe("TagsRepo", () => {
     expect(tag?.count).toBe(1);
   });
 
-  it("rejects missing or removed works when assigning, restoring, or removing tag links", async () => {
+  it("rejects missing or removed works when assigning or removing tag links", async () => {
     const active = await makeWork("Active Tagged Paper");
     const removed = await makeWork("Removed Tagged Paper");
     await works.softDelete(removed);
@@ -134,24 +108,6 @@ describe("TagsRepo", () => {
 
     const id = await tags.ensure("recoverable");
     await db.run(`INSERT INTO work_tags (work_id, tag_id) VALUES (?, ?)`, [active, id]);
-    await tags.softDelete(id);
-    await expect(tags.restore(id, [active, removed])).rejects.toThrow(
-      `Work ${removed} is missing or removed`,
-    );
-
-    const deletedState = await db.query<{ deleted_at: number | null }>(
-      `SELECT deleted_at FROM tags WHERE id = ?`,
-      [id],
-    );
-    const rolledBackLinks = await db.query<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM work_tags WHERE tag_id = ?`,
-      [id],
-    );
-    expect(deletedState[0]!.deleted_at).not.toBeNull();
-    expect(rolledBackLinks[0]!.n).toBe(0);
-
-    await tags.restore(id, [active]);
-    expect(await tags.workIds(id)).toEqual([active]);
 
     await expect(tags.addToWorks(["missing-work"], "missing-target")).rejects.toThrow(
       "Work missing-work is missing or removed",
@@ -274,6 +230,184 @@ describe("TagsRepo", () => {
     const list = await tags.list();
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ name: "new", count: 2 });
+  });
+
+  it("serializes concurrent ensure calls and returns one durable tag id", async () => {
+    const anotherRepo = new TagsRepo(db, libraryId);
+
+    const [first, second] = await Promise.all([
+      tags.ensure("concurrent"),
+      anotherRepo.ensure("concurrent"),
+    ]);
+
+    expect(first).toBe(second);
+    expect((await tags.list()).filter((tag) => tag.name === "concurrent")).toHaveLength(1);
+  });
+
+  it("rejects a silently ignored tag insert instead of returning a phantom id", async () => {
+    await db.exec(`
+      CREATE TEMP TRIGGER ignore_tag_insert
+      BEFORE INSERT ON tags
+      WHEN NEW.name = 'ignored'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END;
+    `);
+
+    try {
+      await expect(tags.ensure("ignored")).rejects.toThrow('Tag "ignored" was not created');
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS ignore_tag_insert");
+    }
+
+    expect((await tags.list()).find((tag) => tag.name === "ignored")).toBeUndefined();
+  });
+
+  it("rolls back bulk tagging when SQLite silently ignores one association", async () => {
+    const first = await makeWork("Ignore Alpha");
+    const second = await makeWork("Ignore Beta");
+    await db.exec(`
+      CREATE TEMP TRIGGER ignore_second_tag_assignment
+      BEFORE INSERT ON work_tags
+      WHEN NEW.work_id = '${second}'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END;
+    `);
+
+    try {
+      await expect(tags.addToWorks([first, second], "ignored-link")).rejects.toThrow(
+        `was not assigned to work ${second}`,
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS ignore_second_tag_assignment");
+    }
+
+    expect((await tags.list()).find((tag) => tag.name === "ignored-link")).toBeUndefined();
+    expect(
+      await db.query(`SELECT * FROM work_tags WHERE work_id IN (?, ?)`, [first, second]),
+    ).toHaveLength(0);
+  });
+
+  it("preserves tag membership for recycle-bin works when merging names", async () => {
+    const active = await makeWork("Active Merge Member");
+    const removed = await makeWork("Removed Merge Member");
+    const targetMember = await makeWork("Existing Target Member");
+    await tags.addToWorks([active, removed], "source");
+    await tags.addToWorks([targetMember], "target");
+    const sourceId = (await tags.list()).find((tag) => tag.name === "source")!.id;
+    const targetId = (await tags.list()).find((tag) => tag.name === "target")!.id;
+    await works.softDelete(removed);
+
+    await expect(tags.rename(sourceId, "target")).resolves.toBe(targetId);
+
+    const hiddenLink = await db.query<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM work_tags WHERE work_id = ? AND tag_id = ?`,
+      [removed, targetId],
+    );
+    expect(hiddenLink[0]!.n).toBe(1);
+    await works.restoreMany([removed]);
+    expect(await tags.workIds(targetId)).toEqual([active, removed, targetMember].sort());
+  });
+
+  it("captures and restores active and recycle-bin memberships atomically", async () => {
+    const active = await makeWork("Active Undo Member");
+    const removed = await makeWork("Removed Undo Member");
+    await tags.addToWorks([active, removed], "undo-complete");
+    const tagId = (await tags.list()).find((tag) => tag.name === "undo-complete")!.id;
+    await works.softDelete(removed);
+
+    const snapshot = await tags.softDelete(tagId);
+    expect(snapshot).toEqual([active, removed].sort());
+    expect(await db.query(`SELECT * FROM work_tags WHERE tag_id = ?`, [tagId])).toHaveLength(0);
+
+    await expect(tags.restore(tagId, snapshot)).resolves.toBe(2);
+    await works.restoreMany([removed]);
+    expect(await tags.workIds(tagId)).toEqual([active, removed].sort());
+  });
+
+  it("restores surviving memberships and skips work purged after deletion", async () => {
+    const surviving = await makeWork("Surviving Tag Member");
+    const purged = await makeWork("Purged Tag Member");
+    await tags.addToWorks([surviving, purged], "purge-safe-undo");
+    const tagId = (await tags.list()).find((tag) => tag.name === "purge-safe-undo")!.id;
+    await works.softDelete(purged);
+    const snapshot = await tags.softDelete(tagId);
+    await works.purgeDeleted(purged);
+
+    await expect(tags.restore(tagId, snapshot)).resolves.toBe(1);
+    expect(await tags.workIds(tagId)).toEqual([surviving]);
+  });
+
+  it("rejects foreign work during restore and rolls back surviving memberships", async () => {
+    const surviving = await makeWork("Owned Tag Restore Member");
+    await tags.addToWorks([surviving], "scoped-undo");
+    const tagId = (await tags.list()).find((tag) => tag.name === "scoped-undo")!.id;
+    const snapshot = await tags.softDelete(tagId);
+    const foreignLibraryId = "library:tag-restore-foreign";
+    const now = Date.now();
+    await db.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Foreign Tag Restore Library', 'personal', ?, ?)`,
+      [foreignLibraryId, now, now],
+    );
+    const foreignWork = await new WorksRepo(db, foreignLibraryId).upsert({
+      title: "Foreign Tag Restore Member",
+    });
+
+    await expect(tags.restore(tagId, [...snapshot, foreignWork.id])).rejects.toThrow(
+      `Work ${foreignWork.id} belongs to another Library`,
+    );
+
+    expect((await tags.list()).some((tag) => tag.id === tagId)).toBe(false);
+    expect(await db.query(`SELECT * FROM work_tags WHERE tag_id = ?`, [tagId])).toHaveLength(0);
+  });
+
+  it("rejects silently ignored restore and remove operations", async () => {
+    const workId = await makeWork("Ignore Restore Member");
+    await tags.addToWorks([workId], "ignore-roundtrip");
+    const tagId = (await tags.list()).find((tag) => tag.name === "ignore-roundtrip")!.id;
+    const snapshot = await tags.softDelete(tagId);
+    await db.exec(`
+      CREATE TEMP TRIGGER ignore_tag_restore
+      BEFORE INSERT ON work_tags
+      WHEN NEW.tag_id = '${tagId}'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END;
+    `);
+
+    try {
+      await expect(tags.restore(tagId, snapshot)).rejects.toThrow(
+        `Tag ${tagId} was not restored to work ${workId}`,
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS ignore_tag_restore");
+    }
+
+    const deleted = await db.query<{ deleted_at: number | null }>(
+      `SELECT deleted_at FROM tags WHERE id = ?`,
+      [tagId],
+    );
+    expect(deleted[0]!.deleted_at).not.toBeNull();
+    await tags.restore(tagId, snapshot);
+    await db.exec(`
+      CREATE TEMP TRIGGER ignore_tag_remove
+      BEFORE DELETE ON work_tags
+      WHEN OLD.tag_id = '${tagId}'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END;
+    `);
+
+    try {
+      await expect(tags.removeFromWork(workId, tagId)).rejects.toThrow(
+        `Tag ${tagId} was not removed from work ${workId}`,
+      );
+    } finally {
+      await db.exec("DROP TRIGGER IF EXISTS ignore_tag_remove");
+    }
+    expect(await tags.workIds(tagId)).toEqual([workId]);
   });
 
   it("softDelete removes the tag and its work associations", async () => {

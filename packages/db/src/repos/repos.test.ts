@@ -244,42 +244,6 @@ describe("WorksRepo", () => {
     expect(await works.listDeleted()).toHaveLength(0);
   });
 
-  it("rolls back bulk soft delete when a caller hook fails", async () => {
-    const first = await works.upsert({ title: "Bulk Delete Alpha", doi: "10.9/bulk-delete-a" });
-    const second = await works.upsert({ title: "Bulk Delete Beta", doi: "10.9/bulk-delete-b" });
-
-    await expect(
-      works.softDeleteMany([first.id, second.id], {
-        afterEach: (_workId, index) => {
-          if (index === 0) throw new Error("forced bulk delete hook failure");
-        },
-      }),
-    ).rejects.toThrow("forced bulk delete hook failure");
-
-    expect(await works.listDeleted()).toHaveLength(0);
-    expect((await works.get(first.id))?.deleted_at).toBeNull();
-    expect((await works.get(second.id))?.deleted_at).toBeNull();
-  });
-
-  it("rolls back bulk restore when a caller hook fails", async () => {
-    const first = await works.upsert({ title: "Bulk Restore Alpha", doi: "10.9/bulk-restore-a" });
-    const second = await works.upsert({ title: "Bulk Restore Beta", doi: "10.9/bulk-restore-b" });
-    await works.softDeleteMany([first.id, second.id]);
-
-    await expect(
-      works.restoreMany([first.id, second.id], {
-        afterEach: (_workId, index) => {
-          if (index === 0) throw new Error("forced bulk restore hook failure");
-        },
-      }),
-    ).rejects.toThrow("forced bulk restore hook failure");
-
-    const deletedIds = (await works.listDeleted()).map((work) => work.id).sort();
-    expect(deletedIds).toEqual([first.id, second.id].sort());
-    expect((await works.get(first.id))?.deleted_at).not.toBeNull();
-    expect((await works.get(second.id))?.deleted_at).not.toBeNull();
-  });
-
   it("purges a deleted work and its direct library artifacts", async () => {
     const { id: workId } = await works.upsert(ATTENTION);
     const attachment = await attachments.create({
@@ -1195,43 +1159,6 @@ describe("CollectionsRepo", () => {
     }
 
     expect(await collections.collectionOf(workId)).toBe(currentCollectionId);
-  });
-
-  it("rolls back bulk collection moves when a caller hook fails", async () => {
-    const first = await works.upsert({ title: "Bulk Move Alpha", doi: "10.9/bulk-move-a" });
-    const second = await works.upsert({ title: "Bulk Move Beta", doi: "10.9/bulk-move-b" });
-    const currentCollectionId = await collections.create("批量移动当前文件夹");
-    const targetCollectionId = await collections.create("批量移动目标文件夹");
-    await collections.setWorksCollection([first.id, second.id], currentCollectionId);
-
-    await expect(
-      collections.setWorksCollection([first.id, second.id], targetCollectionId, {
-        afterEach: (_workId, index) => {
-          if (index === 0) throw new Error("forced bulk collection move hook failure");
-        },
-      }),
-    ).rejects.toThrow("forced bulk collection move hook failure");
-
-    expect(await collections.collectionOf(first.id)).toBe(currentCollectionId);
-    expect(await collections.collectionOf(second.id)).toBe(currentCollectionId);
-  });
-
-  it("rolls back bulk collection clears when a caller hook fails", async () => {
-    const first = await works.upsert({ title: "Bulk Clear Alpha", doi: "10.9/bulk-clear-a" });
-    const second = await works.upsert({ title: "Bulk Clear Beta", doi: "10.9/bulk-clear-b" });
-    const collectionId = await collections.create("批量移出文件夹");
-    await collections.setWorksCollection([first.id, second.id], collectionId);
-
-    await expect(
-      collections.setWorksCollection([first.id, second.id], null, {
-        afterEach: (_workId, index) => {
-          if (index === 0) throw new Error("forced bulk collection clear hook failure");
-        },
-      }),
-    ).rejects.toThrow("forced bulk collection clear hook failure");
-
-    expect(await collections.collectionOf(first.id)).toBe(collectionId);
-    expect(await collections.collectionOf(second.id)).toBe(collectionId);
   });
 
   it("can move a work inside an existing outer transaction", async () => {
