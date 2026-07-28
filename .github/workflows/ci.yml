@@ -30,12 +30,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Check architecture health against pull request base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git cat-file -e "${BASE_REF}:scripts/architecture-health.mjs" 2>/dev/null; then
+            git show "${BASE_REF}:scripts/architecture-health.mjs" > "${RUNNER_TEMP}/architecture-health.mjs"
+            node "${RUNNER_TEMP}/architecture-health.mjs" check \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base "${BASE_REF}"
+          else
+            node scripts/architecture-health.mjs check --base "${BASE_REF}"
+          fi
+      - name: Check architecture health on main
+        if: github.event_name != 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.before }}
+        run: |
+          if [[ -n "${BASE_REF}" ]] \
+            && [[ "${BASE_REF}" != "0000000000000000000000000000000000000000" ]] \
+            && git cat-file -e "${BASE_REF}:scripts/architecture-health.mjs" 2>/dev/null; then
+            git show "${BASE_REF}:scripts/architecture-health.mjs" > "${RUNNER_TEMP}/architecture-health.mjs"
+            node "${RUNNER_TEMP}/architecture-health.mjs" check \
+              --repo "${GITHUB_WORKSPACE}" \
+              --base "${BASE_REF}"
+          elif [[ -n "${BASE_REF}" ]] \
+            && [[ "${BASE_REF}" != "0000000000000000000000000000000000000000" ]]; then
+            node scripts/architecture-health.mjs check --base "${BASE_REF}"
+          else
+            pnpm health:ci
+          fi
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint

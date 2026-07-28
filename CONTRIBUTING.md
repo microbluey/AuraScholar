@@ -26,18 +26,18 @@ pnpm --filter @aurascholar/desktop dev
 
 ## 项目结构速览
 
-| 包 | 职责 |
-|---|---|
-| `packages/tokens` | 双主题设计令牌(改样式先看这里) |
-| `packages/db` | SQLite schema、迁移、Repository 层 |
-| `packages/platform` | 平台能力抽象接口(HTTP/FS/通知/密钥/调度) |
-| `packages/connectors` | Crossref / OpenAlex / Unpaywall / arXiv 客户端 |
-| `packages/core` | 领域逻辑:入库管线、哨兵状态机、引文图谱 |
-| `packages/reader` | PDF 阅读器与批注锚定引擎 |
-| `packages/ai` | AIProvider 抽象 + BYOK 实现 |
-| `packages/sync` | SyncProvider 抽象 + 同步引擎(HLC + LWW) |
-| `packages/homepage` | 学术主页模板与渲染 |
-| `apps/desktop` | Electron 桌面应用(`electron/` 主进程 + `src/` 渲染进程) |
+| 包                    | 职责                                                    |
+| --------------------- | ------------------------------------------------------- |
+| `packages/tokens`     | 双主题设计令牌(改样式先看这里)                          |
+| `packages/db`         | SQLite schema、迁移、Repository 层                      |
+| `packages/platform`   | 平台能力抽象接口(HTTP/FS/通知/密钥/调度)                |
+| `packages/connectors` | Crossref / OpenAlex / Unpaywall / arXiv 客户端          |
+| `packages/core`       | 领域逻辑:入库管线、哨兵状态机、引文图谱                 |
+| `packages/reader`     | PDF 阅读器与批注锚定引擎                                |
+| `packages/ai`         | AIProvider 抽象 + BYOK 实现                             |
+| `packages/sync`       | SyncProvider 抽象 + 同步引擎(HLC + LWW)                 |
+| `packages/homepage`   | 学术主页模板与渲染                                      |
+| `apps/desktop`        | Electron 桌面应用(`electron/` 主进程 + `src/` 渲染进程) |
 
 架构铁律:
 
@@ -46,9 +46,49 @@ pnpm --filter @aurascholar/desktop dev
 3. **批注锚定的文本空间是冻结接口**(`packages/reader/src/document.ts`),改动它必须升 anchor version 并跑回归语料。
 4. 所有表的写操作走软删(`deleted_at`),同步引擎依赖墓碑。
 
+## 工程架构健康
+
+工程架构健康是功能开发的准入条件，而不是发布前集中清理的附加工作。仓库使用
+`architecture-health-baseline.json` 记录当前债务，并通过 CI 执行“只降不升”的
+棘轮检查。
+
+```bash
+pnpm health:report    # 查看规模、Hooks 警告和 UI 数据边界债务
+pnpm health:ci        # 验证工作区与已提交基线一致
+pnpm health:baseline  # 在确实降低债务后刷新确定性基线
+pnpm health:test      # 运行护栏自身的回归测试
+```
+
+当前规则:
+
+1. 新增生产 `.tsx` 文件不超过 400 行,`.ts` / `.css` 不超过 500 行;
+   新增测试或 Smoke 场景文件不超过 800 行。
+2. 已超过阈值的历史文件以目标分支行数为上限,只能持平或缩小;把巨型文件改名
+   不能绕过新文件阈值。
+3. `pages`、`components` 和非网关 `features` 代码不得新增运行时 Repository
+   导入、`getLibraryDb` 调用、原始 SQL 或 Renderer DB bridge。类型专用导入不计入。
+4. ESLint warning 按“文件 + 规则”建立预算;已有 warning 可以修复,不得新增或转移
+   到其他文件。
+5. 当前指标必须与提交的基线完全一致。修复债务后需运行 `pnpm health:baseline`;
+   Pull Request 会从目标分支读取旧基线,并优先执行目标分支的检测器与 ESLint
+   策略,拒绝同一 PR 通过弱化规则或向上改写基线来自我放行。
+
+如果一个独立的架构策略 PR 需要修改 `eslint.config.mjs`,请使用目标分支策略重建
+候选基线,例如
+`node scripts/architecture-health.mjs baseline --base <target-commit-sha>`，确保本地
+结果与 CI 使用的 policy 一致。
+
+这些阈值用于阻止新的巨石代码,不能代替职责设计。不要为了通过行数检查机械拆文件,
+也不要把页面逻辑整体搬进一个巨型 Hook。推荐的依赖方向是
+`Page → feature controller → query/command gateway → pure view-model → View`。
+
+每完成约 4 个功能 PR,应安排 1 个小型工程健康 PR。任何触碰历史超大文件的功能改动
+至少必须做到不增加该文件的债务;架构策略或检测器调整应放在独立 PR 中说明原因。
+
 ## 提交规范
 
-- 提交前确保 `pnpm build && pnpm test` 全绿。
+- 提交前确保 `pnpm health:ci && pnpm build && pnpm typecheck && pnpm lint && pnpm test`
+  全绿。
 - 新功能请附测试;修 bug 请附能复现该 bug 的测试。
 - PR 描述写清楚"为什么",不只是"做了什么"。
 
