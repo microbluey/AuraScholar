@@ -30,6 +30,7 @@ import { readLocalStorageJson } from "./storage";
 import { isDesktopRuntime } from "./services/aura-platform";
 import { cancelExitBarriers, runExitBarriers } from "./services/exit-barriers";
 import { describeSafeError } from "./services/sensitive-text";
+import type { LibraryShellStats } from "./services/app-shell-data";
 
 // 阅读器从文献库进入；/graph 仅保留给深链。
 const NAV = [
@@ -42,31 +43,9 @@ const NAV = [
   { to: "/settings", icon: "settings", label: "设置" },
 ] as const;
 
-interface LibraryShellStats {
-  total: number;
-  trash: number;
-  reading: number;
-  unread: number;
-  starred: number;
-  annotations: number;
-  canvasNodes: number;
-  snippets: number;
-  collections: Array<{
-    id: string;
-    name: string;
-    count: number;
-    parentId: string | null;
-    sortOrder: number;
-  }>;
-  tags: Array<{ name: string; color: string | null; count: number }>;
-}
-
 const PREVIEW_LIBRARY_STATS: LibraryShellStats = {
   total: 4,
   trash: 0,
-  reading: 2,
-  unread: 1,
-  starred: 1,
   annotations: 13,
   canvasNodes: 18,
   snippets: 5,
@@ -80,12 +59,6 @@ const PREVIEW_LIBRARY_STATS: LibraryShellStats = {
       sortOrder: 0,
     },
     { id: "preview-life-science", name: "生命科学", count: 1, parentId: null, sortOrder: 1 },
-  ],
-  tags: [
-    { name: "Transformer", color: "#7566f0", count: 1 },
-    { name: "深度学习", color: "#ff8a5b", count: 1 },
-    { name: "LLM", color: "#42b8d5", count: 1 },
-    { name: "待阅读", color: "#d89b38", count: 1 },
   ],
 };
 
@@ -509,120 +482,11 @@ export function App() {
       return;
     }
     try {
-      const { getLibraryDb } = await import("./services/aura-db");
-      const { db, libraryId } = await getLibraryDb();
-      const [
-        totalRows,
-        trashRows,
-        readingRows,
-        unreadRows,
-        starredRows,
-        annotationRows,
-        canvasNodeRows,
-        snippetRows,
-        collections,
-        tags,
-      ] = await Promise.all([
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM works WHERE library_id = ? AND deleted_at IS NULL`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM works WHERE library_id = ? AND deleted_at IS NOT NULL`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM works
-           WHERE library_id = ? AND deleted_at IS NULL AND reading_status = 'reading'`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM works
-           WHERE library_id = ? AND deleted_at IS NULL AND reading_status = 'unread'`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM works
-           WHERE library_id = ? AND deleted_at IS NULL AND starred = 1`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM annotations a
-           JOIN works w ON w.id = a.work_id AND w.deleted_at IS NULL
-           WHERE w.library_id = ? AND a.deleted_at IS NULL`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM canvas_nodes n
-           JOIN canvas_workspaces cw ON cw.id = n.workspace_id
-           WHERE cw.library_id = ?`,
-          [libraryId],
-        ),
-        db.query<{ n: number }>(
-          `SELECT COUNT(*) AS n
-           FROM snippets s
-           JOIN works w ON w.id = s.work_id AND w.deleted_at IS NULL
-           WHERE w.library_id = ? AND s.deleted_at IS NULL`,
-          [libraryId],
-        ),
-        db.query<{
-          id: string;
-          name: string;
-          parent_id: string | null;
-          sort_order: number;
-          count: number;
-        }>(
-          `SELECT c.id, c.name, c.parent_id, c.sort_order, COUNT(w.id) AS count
-           FROM collections c
-           LEFT JOIN collection_items ci ON ci.collection_id = c.id
-           LEFT JOIN works w
-             ON w.id = ci.work_id
-            AND w.library_id = c.library_id
-            AND w.deleted_at IS NULL
-           WHERE c.library_id = ? AND c.deleted_at IS NULL
-           GROUP BY c.id, c.name, c.parent_id, c.sort_order
-           ORDER BY c.sort_order, c.name, c.id`,
-          [libraryId],
-        ),
-        db.query<{ name: string; color: string | null; count: number }>(
-          `SELECT t.name, t.color, COUNT(DISTINCT w.id) AS count
-           FROM tags t
-           LEFT JOIN work_tags wt ON wt.tag_id = t.id
-           LEFT JOIN works w
-             ON w.id = wt.work_id
-            AND w.library_id = t.library_id
-            AND w.deleted_at IS NULL
-           WHERE t.library_id = ? AND t.deleted_at IS NULL
-           GROUP BY t.id, t.name, t.color
-           ORDER BY count DESC, t.name`,
-          [libraryId],
-        ),
-      ]);
+      const { loadLibraryShellStats } = await import("./services/app-shell-data");
+      const stats = await loadLibraryShellStats();
       await waitForAppStatsSmokeAfterReadDelay();
       if (libraryStatsRefreshSeqRef.current !== seq) return;
-      setLibraryStats({
-        total: totalRows[0]?.n ?? 0,
-        trash: trashRows[0]?.n ?? 0,
-        reading: readingRows[0]?.n ?? 0,
-        unread: unreadRows[0]?.n ?? 0,
-        starred: starredRows[0]?.n ?? 0,
-        annotations: annotationRows[0]?.n ?? 0,
-        canvasNodes: canvasNodeRows[0]?.n ?? 0,
-        snippets: snippetRows[0]?.n ?? 0,
-        collections: collections.map((collection) => ({
-          id: collection.id,
-          name: collection.name,
-          count: collection.count,
-          parentId: collection.parent_id,
-          sortOrder: collection.sort_order,
-        })),
-        tags,
-      });
+      setLibraryStats(stats);
     } catch {
       if (libraryStatsRefreshSeqRef.current !== seq) return;
       setLibraryStats(null);

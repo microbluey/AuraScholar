@@ -56,6 +56,23 @@ describe("main-process data command architecture", () => {
     expect(dataService).toContain("citationCountsForWorks");
   });
 
+  it("keeps App Shell reads behind a scoped data service", () => {
+    const appShell = source("src/App.tsx");
+    const dataService = source("src/services/app-shell-data.ts");
+
+    expect(appShell).toContain("loadLibraryShellStats");
+    expect(appShell).not.toContain("getLibraryDb");
+    expect(appShell).not.toContain("services/aura-db");
+    expect(appShell).not.toMatch(
+      /\b(?:db|database)\s*\.\s*(?:query|queryScalar|run|exec|prepare)\b/,
+    );
+    expect(appShell).not.toContain("window.aura.db");
+    expect(appShell).not.toContain("@aurascholar/db/repos/");
+    expect(appShell).not.toMatch(/\bnew\s+(?:[A-Za-z_$][\w$]*\.)?[A-Za-z_$][\w$]*Repo\s*\(/);
+    expect(dataService).toContain("getLibraryDb");
+    expect(dataService).toContain("libraryId");
+  });
+
   it("keeps migrated backup and sync transactions out of renderer SQL IPC", () => {
     const syncService = source("src/services/sync.ts");
     const sharedBackup = source("src/shared/library-backup.ts");
