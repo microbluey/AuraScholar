@@ -1,4 +1,9 @@
 import type { MergeWorksResult, ReadingStatus } from "@aurascholar/db/repos/works";
+import type {
+  SentinelCheckUpdate,
+  SentinelCreateInput,
+  SentinelCreateResult,
+} from "@aurascholar/db/repos/sentinel";
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
 
@@ -126,6 +131,38 @@ export interface ApplyRemoteSyncSegmentCommandInput {
   segment: ApplyRemoteSegmentCommand;
 }
 
+export interface CreateOrRestoreSentinelCommandInput
+  extends LibraryScopedCommandInput, SentinelCreateInput {}
+
+export interface SentinelTaskCommandInput extends LibraryScopedCommandInput {
+  taskId: string;
+}
+
+export interface SetSentinelTaskStatusCommandInput extends SentinelTaskCommandInput {
+  status: "active" | "paused" | "done";
+}
+
+export interface LinkSentinelWorkCommandInput extends SentinelTaskCommandInput {
+  expectedUpdatedAt: number;
+  workId: string;
+}
+
+export interface SentinelCommitCommandResult {
+  committed: boolean;
+}
+
+export interface RecordSentinelCheckCommandInput extends SentinelTaskCommandInput {
+  update: Omit<SentinelCheckUpdate, "expectedUpdatedAt"> & {
+    expectedUpdatedAt: number;
+  };
+}
+
+export interface RecordSentinelCheckCommandResult {
+  committed: boolean;
+  eventIds: string[];
+  updatedAt: number | null;
+}
+
 export interface DataCommandMap {
   "library.addTagToWorks": {
     input: AddTagToWorksCommandInput;
@@ -193,6 +230,30 @@ export interface DataCommandMap {
   };
   "library.trashWorks": {
     input: WorkIdsCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "sentinel.createOrRestore": {
+    input: CreateOrRestoreSentinelCommandInput;
+    output: SentinelCreateResult;
+  };
+  "sentinel.delete": {
+    input: SentinelTaskCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "sentinel.linkWork": {
+    input: LinkSentinelWorkCommandInput;
+    output: SentinelCommitCommandResult;
+  };
+  "sentinel.recordCheck": {
+    input: RecordSentinelCheckCommandInput;
+    output: RecordSentinelCheckCommandResult;
+  };
+  "sentinel.restore": {
+    input: SentinelTaskCommandInput;
+    output: WorkMutationCountResult;
+  };
+  "sentinel.setStatus": {
+    input: SetSentinelTaskStatusCommandInput;
     output: WorkMutationCountResult;
   };
   "library.purgeDeletedWorks": {

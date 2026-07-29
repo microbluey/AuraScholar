@@ -3,7 +3,7 @@
 // notifications, and auto-import the work once formally published.
 import {
   SentinelRepo,
-  SentinelTaskInactiveError,
+  type SentinelCheckUpdate,
   type SentinelEventInput,
   type SentinelTaskRow,
 } from "@aurascholar/db/repos/sentinel";
@@ -46,7 +46,7 @@ export async function runDuePollsDetailed(): Promise<SentinelPollSummary> {
   const { db, libraryId } = await getLibraryDb();
   const repo = new SentinelRepo(db, libraryId);
   const due = await repo.duePolls();
-  const summary = await pollTasks(repo, due);
+  const summary = await pollTasks(repo, libraryId, due);
   notifySentinelUpdated();
   return summary;
 }
@@ -57,7 +57,7 @@ export async function runSentinelTaskNow(taskId: string): Promise<SentinelPollSu
   const task = await repo.get(taskId);
   if (!task || task.deleted_at) throw new Error("监控任务不存在或已删除");
   if (task.status !== "active") throw new Error("只能检查监控中的任务");
-  const summary = await pollTasks(repo, [task]);
+  const summary = await pollTasks(repo, libraryId, [task]);
   notifySentinelUpdated();
   return summary;
 }
@@ -85,13 +85,14 @@ function isSentinelState(value: unknown): value is SentinelState {
 
 async function pollTasks(
   repo: SentinelRepo,
+  libraryId: string,
   tasks: SentinelTaskRow[],
 ): Promise<SentinelPollSummary> {
   let changes = 0;
   const failures: SentinelPollFailure[] = [];
 
   for (const task of tasks) {
-    const result = await pollTask(repo, task);
+    const result = await pollTask(repo, libraryId, task);
     changes += result.changes;
     if (result.failure) failures.push(result.failure);
   }
@@ -100,6 +101,7 @@ async function pollTasks(
 
 async function pollTask(
   repo: SentinelRepo,
+  libraryId: string,
   task: SentinelTaskRow,
 ): Promise<{ changes: number; failure?: SentinelPollFailure }> {
   const previousState = task.current_state as SentinelState;
@@ -120,10 +122,12 @@ async function pollTask(
         author: task.hint_author ?? undefined,
       });
       if (!match || match.confidence < TITLE_MATCH_THRESHOLD) {
-        await repo.recordCheck(task.id, {
+        const commit = await commitSentinelCheck(libraryId, task.id, {
+          expectedUpdatedAt: task.updated_at,
           nextPollS: nextPollInterval("accepted", 0),
           errored: false,
         });
+        if (!commit.committed) return { changes: 0 };
         return { changes: 0 };
       }
       doi = match.doi;
@@ -156,7 +160,8 @@ async function pollTask(
     }
 
     const done = isTerminal(result.highestState, targets);
-    await repo.recordCheckWithEvents(task.id, {
+    const commit = await commitSentinelCheck(libraryId, task.id, {
+      expectedUpdatedAt: task.updated_at,
       doi: task.doi ? undefined : doi,
       events: pendingEvents,
       newState: result.highestState !== previousState ? result.highestState : undefined,
@@ -164,6 +169,7 @@ async function pollTask(
       errored: false,
       done,
     });
+    if (!commit.committed || commit.updatedAt === null) return { changes: 0 };
     for (const notification of notifications) {
       await notifyBestEffort(notification);
     }
@@ -176,7 +182,12 @@ async function pollTask(
       const { ingestFromInput } = await import("./library");
       const imported = await ingestFromInput(doi).catch(() => null);
       if (imported) {
-        await repo.linkWork(task.id, imported.workId);
+        await window.aura.data.command("sentinel.linkWork", {
+          expectedUpdatedAt: commit.updatedAt,
+          libraryId,
+          taskId: task.id,
+          workId: imported.workId,
+        });
         await notifyBestEffort({
           title: "📚 已自动导入文献库",
           body: task.title,
@@ -187,24 +198,24 @@ async function pollTask(
 
     return { changes: pendingEvents.length };
   } catch (error) {
-    if (error instanceof SentinelTaskInactiveError) {
-      return { changes: 0 };
-    }
     const message = describeSafeError(error);
-    try {
-      await repo.recordCheck(task.id, {
-        nextPollS: nextPollInterval(previousState, task.error_count + 1),
-        errored: true,
-        error: message,
-      });
-    } catch (recordError) {
-      if (recordError instanceof SentinelTaskInactiveError) {
-        return { changes: 0 };
-      }
-      throw recordError;
-    }
+    const commit = await commitSentinelCheck(libraryId, task.id, {
+      expectedUpdatedAt: task.updated_at,
+      nextPollS: nextPollInterval(previousState, task.error_count + 1),
+      errored: true,
+      error: message,
+    });
+    if (!commit.committed) return { changes: 0 };
     return { changes: 0, failure: { taskId: task.id, title: task.title, error: message } };
   }
+}
+
+function commitSentinelCheck(
+  libraryId: string,
+  taskId: string,
+  update: SentinelCheckUpdate & { expectedUpdatedAt: number },
+): Promise<{ committed: boolean; eventIds: string[]; updatedAt: number | null }> {
+  return window.aura.data.command("sentinel.recordCheck", { libraryId, taskId, update });
 }
 
 async function notifyBestEffort(notification: {

@@ -1,6 +1,8 @@
 import type { Database } from "../database.js";
 import { summarizePersistedError } from "../error-summary.js";
-import { newId, normalizeDoi } from "../ids.js";
+import { newId } from "../ids.js";
+import { findMatchingSentinelTask, prepareCreateInput } from "./sentinel-create.js";
+import { withDatabaseWriteLock } from "./write-lock.js";
 
 export interface SentinelCreateInput {
   doi?: string | null;
@@ -58,6 +60,7 @@ export interface SentinelEventInput {
 }
 
 export interface SentinelCheckUpdate {
+  expectedUpdatedAt?: number;
   newState?: string;
   nextPollS: number;
   errored: boolean;
@@ -84,6 +87,10 @@ export class SentinelRepo {
 
   private assertChanged(changed: number, error: Error): void {
     if (changed === 0) throw error;
+  }
+
+  private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    return withDatabaseWriteLock(this.db, fn);
   }
 
   private async assertActiveWork(workId: string): Promise<void> {
@@ -119,6 +126,10 @@ export class SentinelRepo {
 
   /** Either doi or title monitoring; title mode accepts venue/author hints. */
   async create(input: SentinelCreateInput): Promise<string> {
+    return this.withWriteLock(() => this.createUnlocked(input));
+  }
+
+  private async createUnlocked(input: SentinelCreateInput): Promise<string> {
     const prepared = prepareCreateInput(input);
     if (prepared.workId) await this.assertActiveWork(prepared.workId);
     const id = newId();
@@ -146,15 +157,19 @@ export class SentinelRepo {
   }
 
   async createOrRestore(input: SentinelCreateInput): Promise<SentinelCreateResult> {
+    return this.withWriteLock(() => this.createOrRestoreUnlocked(input));
+  }
+
+  private async createOrRestoreUnlocked(input: SentinelCreateInput): Promise<SentinelCreateResult> {
     const prepared = prepareCreateInput(input);
     if (prepared.workId) await this.assertActiveWork(prepared.workId);
-    const existing = await this.findMatchingTask(prepared);
+    const existing = await findMatchingSentinelTask(this.db, this.libraryId, prepared);
 
     if (existing && existing.deleted_at == null) {
       if (prepared.workId && !existing.work_id) {
         await this.db.run(
           `UPDATE sentinel_tasks
-           SET work_id = ?, updated_at = ?
+           SET work_id = ?, updated_at = MAX(updated_at + 1, ?)
            WHERE id = ? AND library_id = ?`,
           [prepared.workId, Date.now(), existing.id, this.libraryId],
         );
@@ -177,7 +192,7 @@ export class SentinelRepo {
            next_poll_at = ?,
            status = 'active',
            deleted_at = NULL,
-           updated_at = ?
+           updated_at = MAX(updated_at + 1, ?)
          WHERE id = ? AND library_id = ?`,
         [
           prepared.workId ?? null,
@@ -197,7 +212,7 @@ export class SentinelRepo {
       return { id: restored.id, status: "restored", task: restored };
     }
 
-    const id = await this.create(prepared);
+    const id = await this.createUnlocked(prepared);
     const task = await this.get(id);
     if (!task) throw new Error("创建哨兵任务失败");
     return { id, status: "created", task };
@@ -216,13 +231,15 @@ export class SentinelRepo {
 
   /** Called when title monitoring discovers the DOI. */
   async setDoi(taskId: string, doi: string): Promise<void> {
-    const changed = await this.db.run(
-      `UPDATE sentinel_tasks
-       SET doi = ?, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [doi, Date.now(), taskId, this.libraryId],
-    );
-    this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
+    await this.withWriteLock(async () => {
+      const changed = await this.db.run(
+        `UPDATE sentinel_tasks
+         SET doi = ?, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [doi, Date.now(), taskId, this.libraryId],
+      );
+      this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
+    });
   }
 
   async list(): Promise<SentinelTaskRow[]> {
@@ -249,18 +266,29 @@ export class SentinelRepo {
   }
 
   async recordCheck(taskId: string, update: SentinelCheckUpdate): Promise<void> {
-    await this.recordCheckWithEvents(taskId, update);
+    await this.withWriteLock(async () => {
+      await this.recordCheckWithEventsUnlocked(taskId, update);
+    });
   }
 
   async recordCheckWithEvents(taskId: string, update: SentinelCheckUpdate): Promise<string[]> {
+    return this.withWriteLock(() => this.recordCheckWithEventsUnlocked(taskId, update));
+  }
+
+  private async recordCheckWithEventsUnlocked(
+    taskId: string,
+    update: SentinelCheckUpdate,
+  ): Promise<string[]> {
     const now = Date.now();
+    const expectedUpdatedAt = update.expectedUpdatedAt ?? null;
     const eventIds: string[] = [];
     await this.withSavepoint("sentinel_record_check", async () => {
       const writable = await this.db.query<{ id: string }>(
         `SELECT id FROM sentinel_tasks
          WHERE id = ? AND library_id = ? AND status = 'active' AND deleted_at IS NULL
+           AND (? IS NULL OR updated_at = ?)
          LIMIT 1`,
-        [taskId, this.libraryId],
+        [taskId, this.libraryId, expectedUpdatedAt, expectedUpdatedAt],
       );
       if (!writable[0]) throw new SentinelTaskInactiveError(taskId);
 
@@ -291,8 +319,9 @@ export class SentinelRepo {
            error_count = CASE WHEN ? THEN error_count + 1 ELSE 0 END,
            last_error = CASE WHEN ? THEN ? ELSE NULL END,
            status = CASE WHEN ? THEN 'done' ELSE status END,
-           updated_at = ?
-         WHERE id = ? AND library_id = ? AND status = 'active' AND deleted_at IS NULL`,
+           updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND status = 'active' AND deleted_at IS NULL
+           AND (? IS NULL OR updated_at = ?)`,
         [
           update.doi ?? null,
           update.newState ?? null,
@@ -306,6 +335,8 @@ export class SentinelRepo {
           now,
           taskId,
           this.libraryId,
+          expectedUpdatedAt,
+          expectedUpdatedAt,
         ],
       );
       this.assertChanged(changed, new SentinelTaskInactiveError(taskId));
@@ -319,28 +350,30 @@ export class SentinelRepo {
     toState: string,
     evidence: unknown,
   ): Promise<string> {
-    const id = newId();
-    const changed = await this.db.run(
-      `INSERT INTO sentinel_events (id, task_id, from_state, to_state, evidence_json, detected_at)
-       SELECT ?, ?, ?, ?, ?, ?
-       WHERE EXISTS (
-         SELECT 1
-         FROM sentinel_tasks
-         WHERE id = ? AND library_id = ?
-       )`,
-      [
-        id,
-        taskId,
-        fromState,
-        toState,
-        evidence ? JSON.stringify(evidence) : null,
-        Date.now(),
-        taskId,
-        this.libraryId,
-      ],
-    );
-    this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing`));
-    return id;
+    return this.withWriteLock(async () => {
+      const id = newId();
+      const changed = await this.db.run(
+        `INSERT INTO sentinel_events (id, task_id, from_state, to_state, evidence_json, detected_at)
+         SELECT ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1
+           FROM sentinel_tasks
+           WHERE id = ? AND library_id = ?
+         )`,
+        [
+          id,
+          taskId,
+          fromState,
+          toState,
+          evidence ? JSON.stringify(evidence) : null,
+          Date.now(),
+          taskId,
+          this.libraryId,
+        ],
+      );
+      this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing`));
+      return id;
+    });
   }
 
   async events(taskId: string): Promise<SentinelEventRow[]> {
@@ -367,124 +400,97 @@ export class SentinelRepo {
   }
 
   async markNotified(eventId: string): Promise<void> {
-    const changed = await this.db.run(
-      `UPDATE sentinel_events
-       SET notified_at = ?
-       WHERE id = ?
-         AND notified_at IS NULL
-         AND EXISTS (
-           SELECT 1
-           FROM sentinel_tasks
-           WHERE id = sentinel_events.task_id AND library_id = ?
-         )`,
-      [Date.now(), eventId, this.libraryId],
-    );
-    this.assertChanged(
-      changed,
-      new Error(`Sentinel event ${eventId} is missing or already notified`),
-    );
+    await this.withWriteLock(async () => {
+      const changed = await this.db.run(
+        `UPDATE sentinel_events
+         SET notified_at = ?
+         WHERE id = ?
+           AND notified_at IS NULL
+           AND EXISTS (
+             SELECT 1
+             FROM sentinel_tasks
+             WHERE id = sentinel_events.task_id AND library_id = ?
+           )`,
+        [Date.now(), eventId, this.libraryId],
+      );
+      this.assertChanged(
+        changed,
+        new Error(`Sentinel event ${eventId} is missing or already notified`),
+      );
+    });
   }
 
   async setStatus(taskId: string, status: "active" | "paused" | "done"): Promise<void> {
-    const changed = await this.db.run(
-      `UPDATE sentinel_tasks
-       SET status = ?, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [status, Date.now(), taskId, this.libraryId],
-    );
-    this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
+    await this.withWriteLock(async () => {
+      const changed = await this.db.run(
+        `UPDATE sentinel_tasks
+         SET status = ?, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [status, Date.now(), taskId, this.libraryId],
+      );
+      this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
+    });
   }
 
   async linkWork(taskId: string, workId: string): Promise<void> {
-    await this.assertActiveWork(workId);
-    const changed = await this.db.run(
-      `UPDATE sentinel_tasks
-       SET work_id = ?, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [workId, Date.now(), taskId, this.libraryId],
-    );
-    this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
+    await this.withWriteLock(async () => {
+      await this.assertActiveWork(workId);
+      const changed = await this.db.run(
+        `UPDATE sentinel_tasks
+         SET work_id = ?, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [workId, Date.now(), taskId, this.libraryId],
+      );
+      this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or removed`));
+    });
+  }
+
+  async linkWorkIfCurrent(
+    taskId: string,
+    workId: string,
+    expectedUpdatedAt: number,
+  ): Promise<boolean> {
+    return this.withWriteLock(async () => {
+      await this.assertActiveWork(workId);
+      const changed = await this.db.run(
+        `UPDATE sentinel_tasks
+         SET work_id = ?, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL
+           AND work_id IS NULL AND updated_at = ?`,
+        [workId, Date.now(), taskId, this.libraryId, expectedUpdatedAt],
+      );
+      return changed > 0;
+    });
   }
 
   async softDelete(taskId: string): Promise<void> {
-    const now = Date.now();
-    const changed = await this.db.run(
-      `UPDATE sentinel_tasks
-       SET deleted_at = ?, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [now, now, taskId, this.libraryId],
-    );
-    this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or already removed`));
+    await this.withWriteLock(async () => {
+      const now = Date.now();
+      const changed = await this.db.run(
+        `UPDATE sentinel_tasks
+         SET deleted_at = ?, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [now, now, taskId, this.libraryId],
+      );
+      this.assertChanged(
+        changed,
+        new Error(`Sentinel task ${taskId} is missing or already removed`),
+      );
+    });
   }
 
   async restore(taskId: string): Promise<void> {
-    const changed = await this.db.run(
-      `UPDATE sentinel_tasks
-       SET deleted_at = NULL, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
-      [Date.now(), taskId, this.libraryId],
-    );
-    this.assertChanged(changed, new Error(`Sentinel task ${taskId} is missing or already active`));
-  }
-
-  private async findMatchingTask(
-    input: PreparedSentinelCreateInput,
-  ): Promise<SentinelTaskRow | null> {
-    if (input.doi) {
-      const rows = await this.db.query<SentinelTaskRow>(
-        `SELECT * FROM sentinel_tasks
-         WHERE library_id = ? AND doi = ?
-         ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, created_at DESC
-         LIMIT 1`,
-        [this.libraryId, input.doi],
+    await this.withWriteLock(async () => {
+      const changed = await this.db.run(
+        `UPDATE sentinel_tasks
+         SET deleted_at = NULL, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+        [Date.now(), taskId, this.libraryId],
       );
-      return rows[0] ?? null;
-    }
-
-    const targetTitle = normalizeSentinelTitle(input.title);
-    const rows = await this.db.query<SentinelTaskRow>(
-      `SELECT * FROM sentinel_tasks WHERE library_id = ? AND doi IS NULL`,
-      [this.libraryId],
-    );
-    return (
-      rows
-        .filter((task) => normalizeSentinelTitle(task.title) === targetTitle)
-        .sort(
-          (a, b) =>
-            Number(a.deleted_at !== null) - Number(b.deleted_at !== null) ||
-            b.created_at - a.created_at,
-        )[0] ?? null
-    );
+      this.assertChanged(
+        changed,
+        new Error(`Sentinel task ${taskId} is missing or already active`),
+      );
+    });
   }
-}
-
-interface PreparedSentinelCreateInput {
-  doi: string | null;
-  title: string;
-  workId?: string;
-  targets?: string[];
-  hintVenue?: string;
-  hintAuthor?: string;
-}
-
-function prepareCreateInput(input: SentinelCreateInput): PreparedSentinelCreateInput {
-  const doi = input.doi ? (normalizeDoi(input.doi) ?? input.doi.trim().toLowerCase()) : null;
-  return {
-    doi,
-    title: input.title.trim(),
-    workId: input.workId,
-    targets: input.targets,
-    hintVenue: input.hintVenue?.trim() || undefined,
-    hintAuthor: input.hintAuthor?.trim() || undefined,
-  };
-}
-
-function normalizeSentinelTitle(value: string): string {
-  return value
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9一-鿿]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
 }
