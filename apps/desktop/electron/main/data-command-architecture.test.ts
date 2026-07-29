@@ -138,6 +138,32 @@ describe("main-process data command architecture", () => {
     expect(commands).toContain("new SentinelRepo");
   });
 
+  it("keeps Saved Search writes behind typed, network-free main-process commands", () => {
+    const discoveryPage = source("src/pages/DiscoveryPage.tsx");
+    const gateway = source("src/services/saved-searches.ts");
+    const commands = source("electron/main/saved-search-commands.ts");
+    const commandNames = [
+      "savedSearch.clearNew",
+      "savedSearch.create",
+      "savedSearch.delete",
+      "savedSearch.recordError",
+      "savedSearch.recordRun",
+      "savedSearch.restore",
+    ];
+
+    for (const commandName of commandNames) {
+      expect(gateway).toContain(`data.command("${commandName}"`);
+    }
+    expect(discoveryPage).not.toContain("data.command(");
+    expect(discoveryPage).not.toContain("SavedSearchesRepo");
+    expect(commands).toContain("assertActiveLocalLibrary");
+    expect(commands).toContain("commitRunIfCurrent");
+    expect(commands).toContain("recordErrorIfCurrent");
+    expect(commands).not.toContain("searchDiscoveryDetailed");
+    expect(commands).not.toContain("auraHttp");
+    expect(commands).not.toMatch(/\bfetch\s*\(/);
+  });
+
   it("keeps Canvas and Citation Graph reads behind scoped data services", () => {
     const canvasPage = source("src/pages/SpatialCanvasPage.tsx");
     const canvasGateway = source("src/services/canvas-page-data.ts");
@@ -227,12 +253,14 @@ describe("main-process data command architecture", () => {
     const dispatcher = source("electron/main/data-commands.ts");
     const tagCommands = source("electron/main/library-tag-commands.ts");
     const collectionCommands = source("electron/main/library-collection-commands.ts");
+    const savedSearchCommands = source("electron/main/saved-search-commands.ts");
     const sentinelCommands = source("electron/main/sentinel-commands.ts");
 
     expect(runtime).toContain("DataCommandOutput<NoInfer<K>>");
     expect(dispatcher).not.toContain("): Promise<unknown>");
     expect(tagCommands).not.toContain("): Promise<unknown>");
     expect(collectionCommands).not.toContain("): Promise<unknown>");
+    expect(savedSearchCommands).not.toContain("): Promise<unknown>");
     expect(sentinelCommands).not.toContain("): Promise<unknown>");
   });
 

@@ -24,6 +24,7 @@ import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
 import { executeLibraryCollectionCommand } from "./library-collection-commands";
 import { executeLibraryTagCommand } from "./library-tag-commands";
+import { executeSavedSearchCommand } from "./saved-search-commands";
 import { executeSentinelCommand } from "./sentinel-commands";
 import {
   assertActiveLocalLibrary,
@@ -70,6 +71,13 @@ export async function executeDataCommand(
     case "library.restoreCollection":
     case "library.setWorksCollection":
       return executeLibraryCollectionCommand(envelope, dependencies);
+    case "savedSearch.clearNew":
+    case "savedSearch.create":
+    case "savedSearch.delete":
+    case "savedSearch.recordError":
+    case "savedSearch.recordRun":
+    case "savedSearch.restore":
+      return executeSavedSearchCommand(envelope, dependencies);
     case "sentinel.createOrRestore":
     case "sentinel.delete":
     case "sentinel.linkWork":
@@ -208,6 +216,12 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     value.name !== "library.trashWorks" &&
     value.name !== "library.purgeDeletedWorks" &&
     value.name !== "library.importBackup" &&
+    value.name !== "savedSearch.clearNew" &&
+    value.name !== "savedSearch.create" &&
+    value.name !== "savedSearch.delete" &&
+    value.name !== "savedSearch.recordError" &&
+    value.name !== "savedSearch.recordRun" &&
+    value.name !== "savedSearch.restore" &&
     value.name !== "sentinel.createOrRestore" &&
     value.name !== "sentinel.delete" &&
     value.name !== "sentinel.linkWork" &&

@@ -10,17 +10,17 @@
     "production": {
       "byExtension": {
         ".css": 16398,
-        ".ts": 33094,
+        ".ts": 33951,
         ".tsx": 31984
       },
       "files": {
-        "apps/desktop/electron/data-command-contract.ts": 282,
-        "apps/desktop/electron/main.ts": 115,
+        "apps/desktop/electron/data-command-contract.ts": 348,
+        "apps/desktop/electron/main.ts": 135,
         "apps/desktop/electron/main/citation-bridge.ts": 108,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
         "apps/desktop/electron/main/data-command-runtime.ts": 76,
-        "apps/desktop/electron/main/data-commands.ts": 384,
+        "apps/desktop/electron/main/data-commands.ts": 398,
         "apps/desktop/electron/main/database-coordinator.ts": 78,
         "apps/desktop/electron/main/db.ts": 63,
         "apps/desktop/electron/main/ipc.ts": 28,
@@ -28,6 +28,7 @@
         "apps/desktop/electron/main/library-tag-commands.ts": 189,
         "apps/desktop/electron/main/platform.ts": 245,
         "apps/desktop/electron/main/research-browser.ts": 505,
+        "apps/desktop/electron/main/saved-search-commands.ts": 240,
         "apps/desktop/electron/main/sentinel-commands.ts": 299,
         "apps/desktop/electron/preload.ts": 225,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
@@ -139,7 +140,10 @@
         "apps/desktop/src/services/preview-library.ts": 70,
         "apps/desktop/src/services/research-browser.ts": 90,
         "apps/desktop/src/services/research-downloads.ts": 117,
-        "apps/desktop/src/services/saved-searches.ts": 292,
+        "apps/desktop/src/services/saved-search-model.ts": 123,
+        "apps/desktop/src/services/saved-search-polling.ts": 29,
+        "apps/desktop/src/services/saved-search-service-contract.ts": 70,
+        "apps/desktop/src/services/saved-searches.ts": 440,
         "apps/desktop/src/services/scholar.ts": 14,
         "apps/desktop/src/services/secrets.ts": 110,
         "apps/desktop/src/services/sensitive-text.ts": 7,
@@ -202,7 +206,7 @@
         "packages/db/src/repos/collection-membership.ts": 78,
         "packages/db/src/repos/collections.ts": 464,
         "packages/db/src/repos/flashcards.ts": 292,
-        "packages/db/src/repos/saved-searches.ts": 155,
+        "packages/db/src/repos/saved-searches.ts": 302,
         "packages/db/src/repos/sentinel-create.ts": 66,
         "packages/db/src/repos/sentinel.ts": 496,
         "packages/db/src/repos/snippets.ts": 155,
@@ -253,21 +257,23 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 81476
+      "totalLines": 82333
     },
     "tests": {
       "byExtension": {
-        ".ts": 39095,
+        ".ts": 40310,
         ".tsx": 104
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 265,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 293,
         "apps/desktop/electron/main/data-commands.test.ts": 1210,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
         "apps/desktop/electron/main/legacy-transaction-debt.test.ts": 258,
         "apps/desktop/electron/main/library-organization-commands.test.ts": 433,
+        "apps/desktop/electron/main/saved-search-commands.test.ts": 336,
         "apps/desktop/electron/main/sentinel-commands.test.ts": 510,
+        "apps/desktop/electron/main/single-instance-guard.test.ts": 21,
         "apps/desktop/electron/main/smoke.ts": 184,
         "apps/desktop/electron/main/smoke/checks.ts": 35,
         "apps/desktop/electron/main/smoke/checks/base.ts": 97,
@@ -369,6 +375,7 @@
         "apps/desktop/src/services/library-page-data.test.ts": 306,
         "apps/desktop/src/services/library-work-actions.test.ts": 79,
         "apps/desktop/src/services/preview-library.test.ts": 18,
+        "apps/desktop/src/services/saved-searches.test.ts": 595,
         "apps/desktop/src/services/sentinel-page-data.test.ts": 213,
         "apps/desktop/src/services/sync-backup.test.ts": 1223,
         "packages/ai/src/anthropic.test.ts": 108,
@@ -399,7 +406,7 @@
         "packages/db/src/repos/flashcards.test.ts": 304,
         "packages/db/src/repos/repos.test.ts": 1185,
         "packages/db/src/repos/root-library-scope.test.ts": 170,
-        "packages/db/src/repos/saved-searches.test.ts": 127,
+        "packages/db/src/repos/saved-searches.test.ts": 362,
         "packages/db/src/repos/sentinel.test.ts": 578,
         "packages/db/src/repos/snippets.test.ts": 149,
         "packages/db/src/repos/tags.test.ts": 499,
@@ -419,7 +426,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 39199
+      "totalLines": 40414
     }
   },
   "uiDatabaseBoundary": {}

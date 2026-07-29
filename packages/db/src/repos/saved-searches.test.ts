@@ -58,6 +58,50 @@ describe("SavedSearchesRepo", () => {
     expect(failed?.last_error).not.toContain("user:pass");
   });
 
+  it("keeps the first successful conditional run as the baseline after an initial failure", async () => {
+    const id = await savedSearches.create({
+      query: "failure before first baseline",
+      sources: ["openalex"],
+    });
+    const initial = (await savedSearches.get(id))!;
+
+    const failedCommit = await savedSearches.recordErrorIfCurrent(id, {
+      expectedUpdatedAt: initial.updated_at,
+      error: "OpenAlex temporarily unavailable",
+      nextRunAt: Date.now() + 1000,
+    });
+    expect(failedCommit.committed).toBe(true);
+
+    const failed = (await savedSearches.get(id))!;
+    expect(failed).toMatchObject({
+      last_run_at: null,
+      last_error: "OpenAlex temporarily unavailable",
+      seen_ids_json: "[]",
+      new_count: 0,
+      updated_at: failedCommit.updatedAt,
+    });
+
+    const recoveredCommit = await savedSearches.commitRunIfCurrent(id, {
+      expectedUpdatedAt: failed.updated_at,
+      observedIds: ["doi:10.1000/first", "doi:10.1000/second", "doi:10.1000/first"],
+      nextRunAt: Date.now() + 2000,
+    });
+    expect(recoveredCommit).toMatchObject({
+      committed: true,
+      freshCount: 0,
+    });
+
+    const recovered = (await savedSearches.get(id))!;
+    expect(recovered.last_run_at).not.toBeNull();
+    expect(recovered.last_error).toBeNull();
+    expect(recovered.new_count).toBe(0);
+    expect(JSON.parse(recovered.seen_ids_json)).toEqual([
+      "doi:10.1000/first",
+      "doi:10.1000/second",
+    ]);
+    expect(recovered.updated_at).toBe(recoveredCommit.updatedAt);
+  });
+
   it("restores a deleted saved search without resetting polling state", async () => {
     const id = await savedSearches.create({
       query: "human centered retrieval",
@@ -123,5 +167,196 @@ describe("SavedSearchesRepo", () => {
     await savedSearches.clearNew(id);
     const [restored] = await savedSearches.list();
     expect(restored?.new_count).toBe(0);
+  });
+
+  it("accepts only one observed-result commit for the same revision", async () => {
+    const id = await savedSearches.create({
+      query: "concurrent saved search",
+      sources: ["openalex"],
+    });
+    await savedSearches.recordRun(id, ["doi:10.1000/baseline"], 0, Date.now() + 1000);
+    const snapshot = await savedSearches.get(id);
+    expect(snapshot).not.toBeNull();
+
+    const input = {
+      expectedUpdatedAt: snapshot!.updated_at,
+      observedIds: ["doi:10.1000/baseline", "doi:10.1000/new"],
+      nextRunAt: Date.now() + 2000,
+    };
+    const commits = await Promise.all([
+      savedSearches.commitRunIfCurrent(id, input),
+      savedSearches.commitRunIfCurrent(id, input),
+    ]);
+
+    expect(commits.filter((commit) => commit.committed)).toHaveLength(1);
+    expect(commits.filter((commit) => !commit.committed)).toHaveLength(1);
+    expect(commits.find((commit) => commit.committed)).toMatchObject({
+      freshCount: 1,
+    });
+    const current = await savedSearches.get(id);
+    expect(current?.new_count).toBe(1);
+    expect(JSON.parse(current?.seen_ids_json ?? "[]")).toEqual([
+      "doi:10.1000/baseline",
+      "doi:10.1000/new",
+    ]);
+    expect(current!.updated_at).toBeGreaterThan(snapshot!.updated_at);
+  });
+
+  it("prevents a stale error from overwriting a successful run", async () => {
+    const id = await savedSearches.create({
+      query: "success wins over stale error",
+      sources: ["crossref"],
+    });
+    await savedSearches.recordRun(id, ["doi:10.1000/baseline"], 0, Date.now() + 1000);
+    const snapshot = (await savedSearches.get(id))!;
+
+    const [success, staleError] = await Promise.all([
+      savedSearches.commitRunIfCurrent(id, {
+        expectedUpdatedAt: snapshot.updated_at,
+        observedIds: ["doi:10.1000/baseline", "doi:10.1000/success"],
+        nextRunAt: Date.now() + 2000,
+      }),
+      savedSearches.recordErrorIfCurrent(id, {
+        expectedUpdatedAt: snapshot.updated_at,
+        error: "stale connector failure",
+        nextRunAt: Date.now() + 3000,
+      }),
+    ]);
+
+    expect(success).toMatchObject({ committed: true, freshCount: 1 });
+    expect(staleError).toEqual({ committed: false, updatedAt: null });
+    expect(await savedSearches.get(id)).toMatchObject({
+      last_error: null,
+      new_count: 1,
+      updated_at: success.updatedAt,
+    });
+  });
+
+  it("prevents a stale success from clearing a committed error", async () => {
+    const id = await savedSearches.create({
+      query: "error wins over stale success",
+      sources: ["s2"],
+    });
+    await savedSearches.recordRun(id, ["doi:10.1000/baseline"], 0, Date.now() + 1000);
+    const snapshot = (await savedSearches.get(id))!;
+
+    const [errorCommit, staleSuccess] = await Promise.all([
+      savedSearches.recordErrorIfCurrent(id, {
+        expectedUpdatedAt: snapshot.updated_at,
+        error: "Semantic Scholar returned 503",
+        nextRunAt: Date.now() + 2000,
+      }),
+      savedSearches.commitRunIfCurrent(id, {
+        expectedUpdatedAt: snapshot.updated_at,
+        observedIds: ["doi:10.1000/baseline", "doi:10.1000/stale-success"],
+        nextRunAt: Date.now() + 3000,
+      }),
+    ]);
+
+    expect(errorCommit.committed).toBe(true);
+    expect(staleSuccess).toEqual({
+      committed: false,
+      freshCount: 0,
+      updatedAt: null,
+    });
+    expect(await savedSearches.get(id)).toMatchObject({
+      last_error: "Semantic Scholar returned 503",
+      new_count: 0,
+      updated_at: errorCommit.updatedAt,
+    });
+  });
+
+  it("invalidates an in-flight run across a delete and restore cycle", async () => {
+    const id = await savedSearches.create({
+      query: "delete restore revision guard",
+      sources: ["arxiv"],
+    });
+    await savedSearches.recordRun(id, ["arxiv:baseline"], 2, Date.now() + 1000);
+    const snapshot = (await savedSearches.get(id))!;
+
+    await savedSearches.softDelete(id);
+    const deleted = (await savedSearches.get(id))!;
+    await savedSearches.restore(id);
+    const restored = (await savedSearches.get(id))!;
+
+    expect(deleted.updated_at).toBeGreaterThan(snapshot.updated_at);
+    expect(restored.updated_at).toBeGreaterThan(deleted.updated_at);
+    expect(
+      await savedSearches.commitRunIfCurrent(id, {
+        expectedUpdatedAt: snapshot.updated_at,
+        observedIds: ["arxiv:baseline", "arxiv:stale"],
+        nextRunAt: Date.now() + 2000,
+      }),
+    ).toEqual({ committed: false, freshCount: 0, updatedAt: null });
+    expect(await savedSearches.get(id)).toMatchObject({
+      new_count: 2,
+      seen_ids_json: '["arxiv:baseline"]',
+      updated_at: restored.updated_at,
+    });
+  });
+
+  it("invalidates an in-flight run when the unread badge is cleared", async () => {
+    const id = await savedSearches.create({
+      query: "badge revision guard",
+      sources: ["openalex"],
+    });
+    await savedSearches.recordRun(id, ["openalex:baseline"], 3, Date.now() + 1000);
+    const snapshot = (await savedSearches.get(id))!;
+
+    await savedSearches.clearNew(id);
+    const cleared = (await savedSearches.get(id))!;
+    expect(cleared.updated_at).toBeGreaterThan(snapshot.updated_at);
+
+    expect(
+      await savedSearches.commitRunIfCurrent(id, {
+        expectedUpdatedAt: snapshot.updated_at,
+        observedIds: ["openalex:baseline", "openalex:stale"],
+        nextRunAt: Date.now() + 2000,
+      }),
+    ).toEqual({ committed: false, freshCount: 0, updatedAt: null });
+    expect(await savedSearches.get(id)).toMatchObject({
+      new_count: 0,
+      seen_ids_json: '["openalex:baseline"]',
+      updated_at: cleared.updated_at,
+    });
+  });
+
+  it("keeps reads and conditional writes inside their Library", async () => {
+    const now = Date.now();
+    const foreignLibraryId = "foreign-saved-search-library";
+    await db.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Foreign Library', 'personal', ?, ?)`,
+      [foreignLibraryId, now, now],
+    );
+    const foreignRepo = new SavedSearchesRepo(db, foreignLibraryId);
+    const foreignId = await foreignRepo.create({
+      query: "foreign saved search",
+      sources: ["crossref"],
+    });
+    await foreignRepo.recordRun(foreignId, ["doi:10.1000/foreign"], 4, now + 1000);
+    const foreignSnapshot = (await foreignRepo.get(foreignId))!;
+
+    expect(await savedSearches.get(foreignId)).toBeNull();
+    expect(
+      await savedSearches.commitRunIfCurrent(foreignId, {
+        expectedUpdatedAt: foreignSnapshot.updated_at,
+        observedIds: ["doi:10.1000/foreign", "doi:10.1000/cross-library"],
+        nextRunAt: now + 2000,
+      }),
+    ).toEqual({ committed: false, freshCount: 0, updatedAt: null });
+    expect(
+      await savedSearches.recordErrorIfCurrent(foreignId, {
+        expectedUpdatedAt: foreignSnapshot.updated_at,
+        error: "cross-library error",
+        nextRunAt: now + 3000,
+      }),
+    ).toEqual({ committed: false, updatedAt: null });
+    expect(await foreignRepo.get(foreignId)).toMatchObject({
+      last_error: null,
+      new_count: 4,
+      seen_ids_json: '["doi:10.1000/foreign"]',
+      updated_at: foreignSnapshot.updated_at,
+    });
   });
 });
