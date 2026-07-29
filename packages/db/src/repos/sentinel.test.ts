@@ -109,6 +109,52 @@ describe("SentinelRepo", () => {
     expect(await sentinel.list()).toHaveLength(1);
   });
 
+  it("does not replace a work that was linked manually", async () => {
+    await insertActiveWork("manual-sentinel-work", "Manually Linked Work");
+    await insertActiveWork("automatic-sentinel-work", "Automatically Imported Work");
+    const created = await sentinel.createOrRestore({
+      title: "Manual Link Wins Sentinel Paper",
+    });
+
+    await sentinel.linkWork(created.id, "manual-sentinel-work");
+    const manuallyLinked = (await sentinel.get(created.id))!;
+    const linked = await sentinel.linkWorkIfCurrent(
+      created.id,
+      "automatic-sentinel-work",
+      manuallyLinked.updated_at,
+    );
+    const preserved = (await sentinel.get(created.id))!;
+
+    expect(linked).toBe(false);
+    expect(preserved.work_id).toBe("manual-sentinel-work");
+    expect(preserved.updated_at).toBe(manuallyLinked.updated_at);
+  });
+
+  it("links only when the task revision still matches", async () => {
+    await insertActiveWork("revision-sentinel-work", "Revision Guard Imported Work");
+    const created = await sentinel.createOrRestore({
+      title: "Conditional Link Sentinel Paper",
+    });
+    const original = (await sentinel.get(created.id))!;
+
+    await sentinel.setStatus(created.id, "paused");
+    await sentinel.setStatus(created.id, "active");
+    const resumed = (await sentinel.get(created.id))!;
+    expect(resumed.updated_at).toBeGreaterThan(original.updated_at);
+
+    expect(
+      await sentinel.linkWorkIfCurrent(created.id, "revision-sentinel-work", original.updated_at),
+    ).toBe(false);
+    expect((await sentinel.get(created.id))?.work_id).toBeNull();
+
+    expect(
+      await sentinel.linkWorkIfCurrent(created.id, "revision-sentinel-work", resumed.updated_at),
+    ).toBe(true);
+    const linked = (await sentinel.get(created.id))!;
+    expect(linked.work_id).toBe("revision-sentinel-work");
+    expect(linked.updated_at).toBeGreaterThan(resumed.updated_at);
+  });
+
   it("rejects missing or removed works when creating, restoring, or linking monitors", async () => {
     const now = Date.now();
     await db.run(
@@ -299,6 +345,109 @@ describe("SentinelRepo", () => {
     });
   });
 
+  it("accepts only one concurrent check for the same task revision", async () => {
+    const created = await sentinel.createOrRestore({
+      title: "Concurrent Sentinel Paper",
+    });
+    const snapshot = await sentinel.get(created.id);
+    expect(snapshot).not.toBeNull();
+
+    const results = await Promise.allSettled([
+      sentinel.recordCheckWithEvents(created.id, {
+        expectedUpdatedAt: snapshot!.updated_at,
+        doi: "10.4242/aurascholar.sentinel-concurrent-a",
+        events: [
+          {
+            fromState: "accepted",
+            toState: "registered",
+            evidence: { source: "first" },
+          },
+        ],
+        newState: "registered",
+        nextPollS: 120,
+        errored: false,
+      }),
+      sentinel.recordCheckWithEvents(created.id, {
+        expectedUpdatedAt: snapshot!.updated_at,
+        doi: "10.4242/aurascholar.sentinel-concurrent-b",
+        events: [
+          {
+            fromState: "accepted",
+            toState: "registered",
+            evidence: { source: "second" },
+          },
+        ],
+        newState: "registered",
+        nextPollS: 120,
+        errored: false,
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    expect(rejected?.reason).toBeInstanceOf(SentinelTaskInactiveError);
+    const events = await sentinel.events(created.id);
+    expect(events).toHaveLength(1);
+    expect((await sentinel.get(created.id))!.updated_at).toBeGreaterThan(snapshot!.updated_at);
+  });
+
+  it("rejects stale checks after pause/resume and delete/restore cycles", async () => {
+    const created = await sentinel.createOrRestore({
+      title: "Revision Guard Sentinel Paper",
+    });
+    const original = (await sentinel.get(created.id))!;
+
+    await sentinel.setStatus(created.id, "paused");
+    await sentinel.setStatus(created.id, "active");
+    const resumed = (await sentinel.get(created.id))!;
+    expect(resumed.updated_at).toBeGreaterThan(original.updated_at);
+
+    await expect(
+      sentinel.recordCheckWithEvents(created.id, {
+        expectedUpdatedAt: original.updated_at,
+        events: [
+          {
+            fromState: "accepted",
+            toState: "registered",
+            evidence: { source: "stale-after-resume" },
+          },
+        ],
+        newState: "registered",
+        nextPollS: 120,
+        errored: false,
+      }),
+    ).rejects.toThrow(SentinelTaskInactiveError);
+
+    await sentinel.softDelete(created.id);
+    await sentinel.restore(created.id);
+    const restored = (await sentinel.get(created.id))!;
+    expect(restored.updated_at).toBeGreaterThan(resumed.updated_at);
+
+    await expect(
+      sentinel.recordCheckWithEvents(created.id, {
+        expectedUpdatedAt: resumed.updated_at,
+        events: [
+          {
+            fromState: "accepted",
+            toState: "published_online",
+            evidence: { source: "stale-after-restore" },
+          },
+        ],
+        newState: "published_online",
+        nextPollS: 120,
+        errored: false,
+      }),
+    ).rejects.toThrow(SentinelTaskInactiveError);
+
+    expect(await sentinel.events(created.id)).toHaveLength(0);
+    expect(await sentinel.get(created.id)).toMatchObject({
+      current_state: "accepted",
+      status: "active",
+    });
+  });
+
   it("rolls back milestone events and DOI when the task update fails", async () => {
     const created = await sentinel.createOrRestore({
       title: "Rollback Sentinel Paper",
@@ -417,3 +566,13 @@ describe("SentinelRepo", () => {
     );
   });
 });
+
+async function insertActiveWork(id: string, title: string): Promise<void> {
+  const now = Date.now();
+  await db.run(
+    `INSERT INTO works
+       (id, library_id, title, type, created_at, updated_at)
+     VALUES (?, ?, ?, 'article', ?, ?)`,
+    [id, libraryId, title, now, now],
+  );
+}

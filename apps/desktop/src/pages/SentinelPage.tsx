@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
 import { useNavigate } from "react-router-dom";
 import { normalizeDoi } from "@aurascholar/db/ids";
-import {
-  SentinelRepo,
-  type SentinelEventRow,
-  type SentinelTaskRow,
-} from "@aurascholar/db/repos/sentinel";
 import { STATE_LABEL, SENTINEL_STATES, stateRank, type SentinelState } from "@aurascholar/core";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
-import { getLibraryDb } from "../services/aura-db";
 import {
   runDuePollsDetailed,
   runSentinelTaskNow,
@@ -18,14 +12,31 @@ import { useConfirmDialog } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { downloadBlob } from "../download";
 import { isImeComposing } from "../keyboard";
+import {
+  createPreviewSentinelTask,
+  PREVIEW_SENTINEL_SCOPE_MESSAGE,
+  previewSentinelEvents,
+  previewSentinelTasks,
+  simulatePreviewPoll,
+} from "../features/sentinel/sentinel-preview";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { describeSafeError } from "../services/sensitive-text";
+import {
+  createOrRestoreSentinelTask,
+  deleteSentinelTask,
+  loadSentinelPageSnapshot,
+  restoreSentinelTask,
+  setSentinelTaskStatus,
+  type SentinelEventRow,
+  type SentinelTaskRow,
+} from "../services/sentinel-page-data";
 
 type CreateMode = "doi" | "title";
 type SentinelView = "all" | "active" | "due" | "changed" | "title";
 type GlobalAction = "add" | "check-all" | null;
 type TaskActionType = "check" | "status" | "delete";
 type TaskAction = { id: string; type: TaskActionType } | null;
+type SentinelRefreshOutcome = "applied" | "failed" | "stale";
 
 const PIPELINE_STATES = SENTINEL_STATES;
 const MIN_SENTINEL_ACTION_BUSY_MS = 250;
@@ -85,256 +96,6 @@ function consumeSentinelSmokeRestoreFailure(): Error | null {
   return new Error(message);
 }
 
-function safeSentinelTask(task: SentinelTaskRow): SentinelTaskRow {
-  if (!task.last_error) return task;
-  return { ...task, last_error: describeSafeError(task.last_error) };
-}
-
-const PREVIEW_SENTINEL_NOW = Date.now();
-const PREVIEW_DAY = 24 * 60 * 60 * 1000;
-const PREVIEW_SENTINEL_LIBRARY_ID = "library:preview-sentinel";
-const PREVIEW_SENTINEL_SCOPE_MESSAGE =
-  "浏览器预览使用可重置的哨兵样例；新增、检查、暂停、删除和撤销会在本页模拟生效，真实检查和证据快照会在桌面应用中保存。";
-
-function previewTask(input: {
-  currentState: SentinelState;
-  doi?: string | null;
-  hintAuthor?: string | null;
-  hintVenue?: string | null;
-  id: string;
-  nextOffsetDays: number;
-  polledOffsetDays: number;
-  status?: string;
-  title: string;
-  workId?: string | null;
-}): SentinelTaskRow {
-  const createdAt = PREVIEW_SENTINEL_NOW - PREVIEW_DAY * 21;
-  return {
-    id: input.id,
-    library_id: PREVIEW_SENTINEL_LIBRARY_ID,
-    work_id: input.workId ?? null,
-    doi: input.doi ?? null,
-    title: input.title,
-    hint_venue: input.hintVenue ?? null,
-    hint_author: input.hintAuthor ?? null,
-    current_state: input.currentState,
-    target_flags: "registered,online,in_issue,indexed_openalex,indexed_pubmed",
-    poll_interval_s: 86_400,
-    next_poll_at: PREVIEW_SENTINEL_NOW + PREVIEW_DAY * input.nextOffsetDays,
-    last_polled_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * input.polledOffsetDays,
-    error_count: 0,
-    last_error: null,
-    status: input.status ?? "active",
-    created_at: createdAt,
-    updated_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * input.polledOffsetDays,
-    deleted_at: null,
-  };
-}
-
-function previewEvent(
-  taskId: string,
-  fromState: SentinelState,
-  toState: SentinelState,
-  offsetDays: number,
-  source: string,
-): SentinelEventRow {
-  return {
-    id: `${taskId}-${toState}`,
-    task_id: taskId,
-    from_state: fromState,
-    to_state: toState,
-    evidence_json: JSON.stringify(
-      {
-        preview: true,
-        source,
-        detectedAt: new Date(PREVIEW_SENTINEL_NOW - PREVIEW_DAY * offsetDays).toISOString(),
-        note: "浏览器预览样例证据；真实证据会在桌面应用中保存原始 API 快照。",
-      },
-      null,
-      2,
-    ),
-    detected_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * offsetDays,
-    notified_at: PREVIEW_SENTINEL_NOW - PREVIEW_DAY * offsetDays,
-  };
-}
-
-const PREVIEW_SENTINEL_TASKS: SentinelTaskRow[] = [
-  previewTask({
-    id: "preview-sentinel-attention",
-    workId: "preview-attention",
-    doi: "10.48550/arXiv.1706.03762",
-    title: "Attention Is All You Need",
-    currentState: "indexed_openalex",
-    nextOffsetDays: 2,
-    polledOffsetDays: 1,
-  }),
-  previewTask({
-    id: "preview-sentinel-alphafold",
-    workId: "preview-alphafold",
-    doi: "10.1038/s41586-021-03819-2",
-    title: "Highly accurate protein structure prediction with AlphaFold",
-    currentState: "indexed_pubmed",
-    nextOffsetDays: 14,
-    polledOffsetDays: 3,
-    status: "done",
-  }),
-  previewTask({
-    id: "preview-sentinel-sam",
-    workId: "preview-sam",
-    title: "Segment Anything",
-    hintVenue: "ICCV",
-    hintAuthor: "Kirillov",
-    currentState: "accepted",
-    nextOffsetDays: -1,
-    polledOffsetDays: 5,
-  }),
-];
-
-const PREVIEW_SENTINEL_EVENTS = new Map<string, SentinelEventRow[]>([
-  [
-    "preview-sentinel-attention",
-    [
-      previewEvent("preview-sentinel-attention", "accepted", "registered", 18, "Crossref"),
-      previewEvent("preview-sentinel-attention", "registered", "online", 16, "Crossref"),
-      previewEvent("preview-sentinel-attention", "online", "in_issue", 9, "Crossref"),
-      previewEvent("preview-sentinel-attention", "in_issue", "indexed_openalex", 1, "OpenAlex"),
-    ],
-  ],
-  [
-    "preview-sentinel-alphafold",
-    [
-      previewEvent("preview-sentinel-alphafold", "accepted", "registered", 20, "Crossref"),
-      previewEvent("preview-sentinel-alphafold", "registered", "online", 17, "Crossref"),
-      previewEvent("preview-sentinel-alphafold", "online", "in_issue", 12, "Crossref"),
-      previewEvent("preview-sentinel-alphafold", "in_issue", "indexed_pubmed", 3, "PubMed"),
-    ],
-  ],
-  ["preview-sentinel-sam", []],
-]);
-
-function previewSentinelTasks(): SentinelTaskRow[] {
-  return PREVIEW_SENTINEL_TASKS.map((task) => ({ ...task }));
-}
-
-function previewSentinelEvents(): Map<string, SentinelEventRow[]> {
-  return new Map(
-    Array.from(PREVIEW_SENTINEL_EVENTS, ([taskId, events]) => [
-      taskId,
-      events.map((event) => ({ ...event })),
-    ]),
-  );
-}
-
-function createPreviewSentinelTask(input: {
-  mode: CreateMode;
-  doi: string;
-  title: string;
-  hintVenue: string;
-  hintAuthor: string;
-}): SentinelTaskRow {
-  const now = Date.now();
-  const normalizedDoi = input.mode === "doi" ? normalizeDoi(input.doi) : null;
-  return {
-    id: `preview-sentinel-custom-${now}`,
-    library_id: PREVIEW_SENTINEL_LIBRARY_ID,
-    work_id: null,
-    doi: normalizedDoi,
-    title: input.title.trim() || normalizedDoi || "新的预览监控",
-    hint_venue: input.mode === "title" ? input.hintVenue.trim() || null : null,
-    hint_author: input.mode === "title" ? input.hintAuthor.trim() || null : null,
-    current_state: "accepted",
-    target_flags: "registered,online,in_issue,indexed_openalex,indexed_pubmed",
-    poll_interval_s: 86_400,
-    next_poll_at: now,
-    last_polled_at: null,
-    error_count: 0,
-    last_error: null,
-    status: "active",
-    created_at: now,
-    updated_at: now,
-    deleted_at: null,
-  };
-}
-
-function nextPreviewState(state: SentinelState): SentinelState | null {
-  if (state === "accepted") return "registered";
-  if (state === "registered") return "online";
-  if (state === "online") return "in_issue";
-  if (state === "in_issue") return "indexed_openalex";
-  return null;
-}
-
-function previewCheckEvent(
-  taskId: string,
-  fromState: SentinelState,
-  toState: SentinelState,
-  detectedAt: number,
-): SentinelEventRow {
-  return {
-    id: `${taskId}-preview-check-${detectedAt}`,
-    task_id: taskId,
-    from_state: fromState,
-    to_state: toState,
-    evidence_json: JSON.stringify(
-      {
-        preview: true,
-        source: "Preview check",
-        detectedAt: new Date(detectedAt).toISOString(),
-        note: "浏览器预览模拟检查结果；真实证据会在桌面应用中保存原始 API 快照。",
-      },
-      null,
-      2,
-    ),
-    detected_at: detectedAt,
-    notified_at: detectedAt,
-  };
-}
-
-function simulatePreviewPoll(
-  tasks: SentinelTaskRow[],
-  eventsByTask: Map<string, SentinelEventRow[]>,
-  taskIds: string[],
-): {
-  changes: number;
-  checked: number;
-  eventsByTask: Map<string, SentinelEventRow[]>;
-  tasks: SentinelTaskRow[];
-} {
-  const ids = new Set(taskIds);
-  const now = Date.now();
-  let checked = 0;
-  let changes = 0;
-  const nextEvents = new Map(
-    Array.from(eventsByTask, ([taskId, events]) => [taskId, events.map((event) => ({ ...event }))]),
-  );
-  const nextTasks = tasks.map((task) => {
-    if (!ids.has(task.id) || task.status !== "active") return task;
-    checked += 1;
-    const currentState = task.current_state as SentinelState;
-    const nextState = nextPreviewState(currentState);
-    const nextTask = {
-      ...task,
-      last_polled_at: now,
-      next_poll_at: now + task.poll_interval_s * 1000,
-      error_count: 0,
-      last_error: null,
-      updated_at: now,
-    };
-    if (!nextState) return nextTask;
-    changes += 1;
-    nextEvents.set(task.id, [
-      ...(nextEvents.get(task.id) ?? []),
-      previewCheckEvent(task.id, currentState, nextState, now),
-    ]);
-    return {
-      ...nextTask,
-      current_state: nextState,
-      status: nextState.startsWith("indexed_") ? "done" : nextTask.status,
-    };
-  });
-  return { changes, checked, eventsByTask: nextEvents, tasks: nextTasks };
-}
-
 export function SentinelPage() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<CreateMode>("doi");
@@ -354,55 +115,61 @@ export function SentinelPage() {
   const [sentinelUndo, setSentinelUndo] = useState<SentinelUndoState | null>(null);
   const [sentinelUndoBusy, setSentinelUndoBusy] = useState(false);
   const [viewNow, setViewNow] = useState(() => Date.now());
-  const { confirm, confirmDialog } = useConfirmDialog();
+  const { cancelConfirm, confirm, confirmDialog } = useConfirmDialog();
   const refreshSeqRef = useRef(0);
+  const refreshAbortRef = useRef<AbortController | null>(null);
+  const pageAbortRef = useRef<AbortController | null>(null);
+  const backgroundPollSeqRef = useRef(0);
   const allViewButtonRef = useRef<HTMLButtonElement>(null);
   const globalBusy = globalAction !== null || sentinelUndoBusy;
   const taskBusy = taskAction !== null;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<SentinelRefreshOutcome> => {
+    refreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
     const seq = refreshSeqRef.current + 1;
     refreshSeqRef.current = seq;
     if (!isDesktopRuntime()) {
-      if (refreshSeqRef.current !== seq) return;
+      if (refreshSeqRef.current !== seq || controller.signal.aborted) return "stale";
       setViewNow(Date.now());
       setTasks(previewSentinelTasks());
       setEventsByTask(previewSentinelEvents());
       setLoading(false);
       setLoadError(null);
       setMessage((current) => current ?? PREVIEW_SENTINEL_SCOPE_MESSAGE);
-      return;
+      return "applied";
     }
     setLoading(true);
     setLoadError(null);
     try {
       const smokeFailure = consumeSentinelSmokeReadFailure();
       if (smokeFailure) throw smokeFailure;
-      const { db, libraryId } = await getLibraryDb();
-      const repo = new SentinelRepo(db, libraryId);
-      const list = await repo.list();
-      const eventPairs = await Promise.all(
-        list.map(async (task) => [task.id, await repo.events(task.id)] as const),
-      );
+      const snapshot = await loadSentinelPageSnapshot(controller.signal);
       await waitForSentinelSmokeAfterReadDelay();
-      if (refreshSeqRef.current !== seq) return;
+      if (refreshSeqRef.current !== seq || controller.signal.aborted) return "stale";
       setViewNow(Date.now());
-      setTasks(list.map(safeSentinelTask));
-      setEventsByTask(new Map(eventPairs));
+      setTasks(snapshot.tasks);
+      setEventsByTask(snapshot.eventsByTask);
       setLoadError(null);
       setMessage((current) => (current?.startsWith("读取哨兵任务失败") ? null : current));
+      return "applied";
     } catch (e) {
-      if (refreshSeqRef.current !== seq) return;
+      if (refreshSeqRef.current !== seq || controller.signal.aborted) return "stale";
       setViewNow(Date.now());
       const detail = describeSafeError(e);
       setLoadError(detail);
       setMessage(`读取哨兵任务失败:${detail}`);
+      return "failed";
     } finally {
-      if (refreshSeqRef.current === seq) setLoading(false);
+      if (refreshSeqRef.current === seq && !controller.signal.aborted) setLoading(false);
+      if (refreshAbortRef.current === controller) refreshAbortRef.current = null;
     }
   }, []);
 
   useEffect(() => {
+    const pageController = new AbortController();
+    pageAbortRef.current = pageController;
     const initialRefreshId = window.setTimeout(() => {
       void refresh();
     }, 0);
@@ -410,10 +177,15 @@ export function SentinelPage() {
     window.addEventListener("aurascholar:sentinel-updated", onUpdated);
     return () => {
       window.clearTimeout(initialRefreshId);
+      pageController.abort();
+      refreshAbortRef.current?.abort();
       refreshSeqRef.current += 1;
+      backgroundPollSeqRef.current += 1;
+      cancelConfirm();
+      if (pageAbortRef.current === pageController) pageAbortRef.current = null;
       window.removeEventListener("aurascholar:sentinel-updated", onUpdated);
     };
-  }, [refresh]);
+  }, [cancelConfirm, refresh]);
 
   useEffect(() => {
     const clockId = window.setInterval(() => {
@@ -446,6 +218,9 @@ export function SentinelPage() {
 
   const handleAdd = useCallback(async () => {
     if (globalAction || taskAction) return;
+    const pageSignal = pageAbortRef.current?.signal;
+    if (!pageSignal || pageSignal.aborted) return;
+    backgroundPollSeqRef.current += 1;
     if (mode === "doi" && !normalizeDoi(doi)) {
       setMessage("DOI 格式不正确");
       return;
@@ -456,11 +231,13 @@ export function SentinelPage() {
     }
     const startedAt = Date.now();
     let finalMessage: string | null = null;
+    let firstCheckTaskId: string | null = null;
     setGlobalAction("add");
     setSentinelUndo(null);
     setMessage("正在创建监控...");
     if (!isDesktopRuntime()) {
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      if (pageSignal.aborted) return;
       const task = createPreviewSentinelTask({ doi, hintAuthor, hintVenue, mode, title });
       setTasks((current) => [task, ...current]);
       setEventsByTask((current) => new Map(current).set(task.id, []));
@@ -479,22 +256,18 @@ export function SentinelPage() {
       return;
     }
     try {
-      const { db, libraryId } = await getLibraryDb();
-      const repo = new SentinelRepo(db, libraryId);
-      let result: Awaited<ReturnType<SentinelRepo["createOrRestore"]>>;
-      if (mode === "doi") {
-        const normalized = normalizeDoi(doi)!;
-        result = await repo.createOrRestore({
-          doi: normalized,
-          title: title.trim() || normalized,
-        });
-      } else {
-        result = await repo.createOrRestore({
-          title: title.trim(),
-          hintVenue: hintVenue.trim() || undefined,
-          hintAuthor: hintAuthor.trim() || undefined,
-        });
-      }
+      const normalized = normalizeDoi(doi);
+      const result = await createOrRestoreSentinelTask(
+        mode === "doi"
+          ? { doi: normalized!, title: title.trim() || normalized! }
+          : {
+              title: title.trim(),
+              hintVenue: hintVenue.trim() || undefined,
+              hintAuthor: hintAuthor.trim() || undefined,
+            },
+        pageSignal,
+      );
+      if (pageSignal.aborted) return;
       setDoi("");
       setTitle("");
       setHintVenue("");
@@ -502,28 +275,54 @@ export function SentinelPage() {
       setExpanded(result.id);
       setView("all");
       finalMessage = sentinelCreateMessage(result.status, result.task.title, mode);
-      await refresh();
-      if (result.status === "created") {
-        void runSentinelTaskNow(result.id)
-          .then((summary) => {
-            void refresh();
-            if (summary.failures.length > 0) {
-              setMessage(sentinelPollMessage(summary, "首次检查", "已添加监控，暂无新进展"));
-            }
-          })
-          .catch((e) => setMessage(`监控已创建，首次检查失败:${describeSafeError(e)}`));
-      }
+      const refreshOutcome = await refresh();
+      if (pageSignal.aborted) return;
+      if (refreshOutcome === "failed") finalMessage = `${finalMessage}，但列表刷新失败，请重试。`;
+      if (result.status === "created") firstCheckTaskId = result.id;
     } catch (e) {
+      if (pageSignal.aborted) return;
       finalMessage = `创建监控失败:${describeSafeError(e)}`;
     } finally {
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
-      if (finalMessage) setMessage(finalMessage);
-      setGlobalAction(null);
+      if (!pageSignal.aborted) {
+        if (finalMessage) setMessage(finalMessage);
+        setGlobalAction(null);
+      }
     }
+    if (!firstCheckTaskId || pageSignal.aborted) return;
+    const pollSeq = ++backgroundPollSeqRef.current;
+    void runSentinelTaskNow(firstCheckTaskId)
+      .then(async (summary) => {
+        if (pageSignal.aborted || backgroundPollSeqRef.current !== pollSeq) return;
+        const refreshOutcome = await refresh();
+        if (
+          pageSignal.aborted ||
+          backgroundPollSeqRef.current !== pollSeq ||
+          refreshOutcome === "failed"
+        )
+          return;
+        if (summary.failures.length > 0) {
+          setMessage(sentinelPollMessage(summary, "首次检查", "已添加监控，暂无新进展"));
+        }
+      })
+      .catch(async (e) => {
+        if (pageSignal.aborted || backgroundPollSeqRef.current !== pollSeq) return;
+        const refreshOutcome = await refresh();
+        if (
+          pageSignal.aborted ||
+          backgroundPollSeqRef.current !== pollSeq ||
+          refreshOutcome === "failed"
+        )
+          return;
+        setMessage(`监控已创建，首次检查失败:${describeSafeError(e)}`);
+      });
   }, [doi, globalAction, hintAuthor, hintVenue, mode, refresh, taskAction, title]);
 
   const handleCheckNow = useCallback(async () => {
     if (globalAction || taskAction) return;
+    const pageSignal = pageAbortRef.current?.signal;
+    if (!pageSignal || pageSignal.aborted) return;
+    backgroundPollSeqRef.current += 1;
     const startedAt = Date.now();
     let finalMessage: string | null = null;
     setGlobalAction("check-all");
@@ -531,6 +330,7 @@ export function SentinelPage() {
     if (!isDesktopRuntime()) {
       const dueIds = tasks.filter((task) => isTaskDue(task)).map((task) => task.id);
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      if (pageSignal.aborted) return;
       if (dueIds.length === 0) {
         setMessage("当前没有待检查的预览监控任务。");
         setGlobalAction(null);
@@ -549,26 +349,44 @@ export function SentinelPage() {
     }
     try {
       const summary = await runDuePollsDetailed();
-      finalMessage = sentinelPollMessage(summary, "检查", "已检查，暂无新进展");
-      await refresh();
+      if (pageSignal.aborted) return;
+      const refreshOutcome = await refresh();
+      if (pageSignal.aborted) return;
+      finalMessage =
+        refreshOutcome === "failed"
+          ? "检查已完成，但列表刷新失败，请重试。"
+          : sentinelPollMessage(summary, "检查", "已检查，暂无新进展");
     } catch (e) {
-      finalMessage = `检查失败:${describeSafeError(e)}`;
+      if (pageSignal.aborted) return;
+      const detail = describeSafeError(e);
+      const refreshOutcome = await refresh();
+      if (pageSignal.aborted) return;
+      finalMessage =
+        refreshOutcome === "failed"
+          ? `检查可能已部分完成，且列表刷新失败:${detail}`
+          : `检查失败:${detail}`;
     } finally {
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
-      if (finalMessage) setMessage(finalMessage);
-      setGlobalAction(null);
+      if (!pageSignal.aborted) {
+        if (finalMessage) setMessage(finalMessage);
+        setGlobalAction(null);
+      }
     }
   }, [eventsByTask, globalAction, refresh, taskAction, tasks]);
 
   const handleForceCheck = useCallback(
     async (taskId: string) => {
       if (globalAction || taskAction) return;
+      const pageSignal = pageAbortRef.current?.signal;
+      if (!pageSignal || pageSignal.aborted) return;
+      backgroundPollSeqRef.current += 1;
       const startedAt = Date.now();
       let finalMessage: string | null = null;
       setTaskAction({ id: taskId, type: "check" });
       setMessage("正在检查该监控...");
       if (!isDesktopRuntime()) {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        if (pageSignal.aborted) return;
         const simulated = simulatePreviewPoll(tasks, eventsByTask, [taskId]);
         setTasks(simulated.tasks);
         setEventsByTask(simulated.eventsByTask);
@@ -584,14 +402,28 @@ export function SentinelPage() {
       }
       try {
         const summary = await runSentinelTaskNow(taskId);
-        finalMessage = sentinelPollMessage(summary, "单篇检查", "单篇检查完成，暂无新进展");
-        await refresh();
+        if (pageSignal.aborted) return;
+        const refreshOutcome = await refresh();
+        if (pageSignal.aborted) return;
+        finalMessage =
+          refreshOutcome === "failed"
+            ? "单篇检查已完成，但列表刷新失败，请重试。"
+            : sentinelPollMessage(summary, "单篇检查", "单篇检查完成，暂无新进展");
       } catch (e) {
-        finalMessage = `单篇检查失败:${describeSafeError(e)}`;
+        if (pageSignal.aborted) return;
+        const detail = describeSafeError(e);
+        const refreshOutcome = await refresh();
+        if (pageSignal.aborted) return;
+        finalMessage =
+          refreshOutcome === "failed"
+            ? `单篇检查可能已完成，且列表刷新失败:${detail}`
+            : `单篇检查失败:${detail}`;
       } finally {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
-        if (finalMessage) setMessage(finalMessage);
-        setTaskAction(null);
+        if (!pageSignal.aborted) {
+          if (finalMessage) setMessage(finalMessage);
+          setTaskAction(null);
+        }
       }
     },
     [eventsByTask, globalAction, refresh, taskAction, tasks],
@@ -600,6 +432,9 @@ export function SentinelPage() {
   const handleToggleStatus = useCallback(
     async (task: SentinelTaskRow) => {
       if (globalAction || taskAction) return;
+      const pageSignal = pageAbortRef.current?.signal;
+      if (!pageSignal || pageSignal.aborted) return;
+      backgroundPollSeqRef.current += 1;
       const nextStatus = task.status === "paused" ? "active" : "paused";
       const startedAt = Date.now();
       let finalMessage: string | null = null;
@@ -607,6 +442,7 @@ export function SentinelPage() {
       setSentinelUndo(null);
       if (!isDesktopRuntime()) {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        if (pageSignal.aborted) return;
         setTasks((current) =>
           current.map((item) =>
             item.id === task.id
@@ -628,16 +464,24 @@ export function SentinelPage() {
         return;
       }
       try {
-        const { db, libraryId } = await getLibraryDb();
-        await new SentinelRepo(db, libraryId).setStatus(task.id, nextStatus);
-        finalMessage = nextStatus === "active" ? "已恢复监控" : "已暂停监控";
-        await refresh();
+        await setSentinelTaskStatus(task.id, nextStatus, pageSignal);
+        if (pageSignal.aborted) return;
+        const refreshOutcome = await refresh();
+        if (pageSignal.aborted) return;
+        const successMessage = nextStatus === "active" ? "已恢复监控" : "已暂停监控";
+        finalMessage =
+          refreshOutcome === "failed"
+            ? `${successMessage}，但列表刷新失败，请重试。`
+            : successMessage;
       } catch (e) {
+        if (pageSignal.aborted) return;
         finalMessage = `更新监控状态失败:${describeSafeError(e)}`;
       } finally {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
-        if (finalMessage) setMessage(finalMessage);
-        setTaskAction(null);
+        if (!pageSignal.aborted) {
+          if (finalMessage) setMessage(finalMessage);
+          setTaskAction(null);
+        }
       }
     },
     [globalAction, refresh, taskAction],
@@ -646,6 +490,8 @@ export function SentinelPage() {
   const handleDelete = useCallback(
     async (task: SentinelTaskRow) => {
       if (globalAction || taskAction) return;
+      const pageSignal = pageAbortRef.current?.signal;
+      if (!pageSignal || pageSignal.aborted) return;
       const confirmed = await confirm({
         title: "删除哨兵监控？",
         description: `《${task.title}》会从监控列表移除。`,
@@ -653,18 +499,24 @@ export function SentinelPage() {
         confirmLabel: "删除监控",
         tone: "warning",
       });
-      if (!confirmed) return;
+      if (!confirmed || pageSignal.aborted) return;
+      backgroundPollSeqRef.current += 1;
       const startedAt = Date.now();
       let finalMessage: string | null = null;
-      let deleteUndo: SentinelUndoState | null = null;
       setTaskAction({ id: task.id, type: "delete" });
       setSentinelUndo(null);
       setMessage("正在删除监控任务...");
       if (!isDesktopRuntime()) {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        if (pageSignal.aborted) return;
         const taskEvents = (eventsByTask.get(task.id) ?? []).map((event) => ({ ...event }));
         finalMessage = `已从预览哨兵移除:《${task.title}》`;
-        deleteUndo = { id: task.id, message: finalMessage, task: { ...task }, events: taskEvents };
+        const deleteUndo = {
+          id: task.id,
+          message: finalMessage,
+          task: { ...task },
+          events: taskEvents,
+        };
         setTasks((current) => current.filter((item) => item.id !== task.id));
         setEventsByTask((current) => {
           const next = new Map(current);
@@ -678,30 +530,42 @@ export function SentinelPage() {
         return;
       }
       try {
-        const { db, libraryId } = await getLibraryDb();
         const smokeFailure = consumeSentinelSmokeDeleteFailure();
         if (smokeFailure) {
           await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+          if (pageSignal.aborted) return;
           throw smokeFailure;
         }
-        await new SentinelRepo(db, libraryId).softDelete(task.id);
+        await deleteSentinelTask(task.id, pageSignal);
+        if (pageSignal.aborted) return;
         finalMessage = `已删除监控任务:《${task.title}》`;
-        deleteUndo = { id: task.id, message: finalMessage };
+        const deleteUndo = { id: task.id, message: finalMessage };
+        setTasks((current) => current.filter((item) => item.id !== task.id));
+        setEventsByTask((current) => {
+          const next = new Map(current);
+          next.delete(task.id);
+          return next;
+        });
         if (expanded === task.id) setExpanded(null);
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        if (pageSignal.aborted) return;
         setSentinelUndo(deleteUndo);
-        await refresh();
-      } catch (e) {
-        await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
-        if (deleteUndo) {
-          setSentinelUndo(deleteUndo);
-          finalMessage = `删除监控后刷新失败，撤销入口已保留:${describeSafeError(e)}`;
-        } else {
-          finalMessage = `删除监控失败，监控任务仍保留，可重新删除:${describeSafeError(e)}`;
+        const refreshOutcome = await refresh();
+        if (pageSignal.aborted) return;
+        if (refreshOutcome === "failed") {
+          finalMessage = `已删除监控任务，列表刷新失败；撤销入口已保留。`;
+          setSentinelUndo({ ...deleteUndo, message: finalMessage });
         }
+      } catch (e) {
+        if (pageSignal.aborted) return;
+        await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        if (pageSignal.aborted) return;
+        finalMessage = `删除监控失败，监控任务仍保留，可重新删除:${describeSafeError(e)}`;
       } finally {
-        if (finalMessage) setMessage(finalMessage);
-        setTaskAction(null);
+        if (!pageSignal.aborted) {
+          if (finalMessage) setMessage(finalMessage);
+          setTaskAction(null);
+        }
       }
     },
     [confirm, eventsByTask, expanded, globalAction, refresh, taskAction],
@@ -709,11 +573,15 @@ export function SentinelPage() {
 
   const undoDelete = useCallback(async () => {
     if (!sentinelUndo || sentinelUndoBusy) return;
+    const pageSignal = pageAbortRef.current?.signal;
+    if (!pageSignal || pageSignal.aborted) return;
+    backgroundPollSeqRef.current += 1;
     const startedAt = Date.now();
     setSentinelUndoBusy(true);
     setMessage("正在撤销删除监控任务...");
     if (!isDesktopRuntime()) {
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      if (pageSignal.aborted) return;
       if (!sentinelUndo.task) {
         setMessage("预览撤销信息不完整，刷新页面可重置演示任务。");
         setSentinelUndoBusy(false);
@@ -734,24 +602,33 @@ export function SentinelPage() {
       return;
     }
     try {
-      const { db, libraryId } = await getLibraryDb();
       const smokeFailure = consumeSentinelSmokeRestoreFailure();
       if (smokeFailure) {
         await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+        if (pageSignal.aborted) return;
         throw smokeFailure;
       }
-      await new SentinelRepo(db, libraryId).restore(sentinelUndo.id);
+      await restoreSentinelTask(sentinelUndo.id, pageSignal);
+      if (pageSignal.aborted) return;
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
-      await refresh();
+      if (pageSignal.aborted) return;
+      const refreshOutcome = await refresh();
+      if (pageSignal.aborted) return;
       setExpanded(sentinelUndo.id);
       setView("all");
       setSentinelUndo(null);
-      setMessage("已撤销删除监控任务");
+      setMessage(
+        refreshOutcome === "failed"
+          ? "已撤销删除监控任务，但列表刷新失败，请重试。"
+          : "已撤销删除监控任务",
+      );
     } catch (e) {
+      if (pageSignal.aborted) return;
       await waitForMinimumElapsed(startedAt, MIN_SENTINEL_ACTION_BUSY_MS);
+      if (pageSignal.aborted) return;
       setMessage(`撤销删除监控失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
     } finally {
-      setSentinelUndoBusy(false);
+      if (!pageSignal.aborted) setSentinelUndoBusy(false);
     }
   }, [refresh, sentinelUndo, sentinelUndoBusy]);
 
@@ -883,7 +760,6 @@ export function SentinelPage() {
         {sentinelUndo &&
         (message === sentinelUndo.message ||
           sentinelUndoBusy ||
-          message?.startsWith("删除监控后刷新失败，撤销入口已保留") ||
           message?.startsWith("撤销删除监控失败，撤销入口仍保留")) ? (
           <InlineNotice className="sentinel-message" message={message}>
             <span className="library-command__message-text">{message}</span>

@@ -113,6 +113,31 @@ describe("main-process data command architecture", () => {
     }
   });
 
+  it("keeps Sentinel mutations behind the typed service and main-process command boundary", () => {
+    const sentinelPage = source("src/pages/SentinelPage.tsx");
+    const gateway = source("src/services/sentinel-page-data.ts");
+    const pollingService = source("src/services/sentinel.ts");
+    const commands = source("electron/main/sentinel-commands.ts");
+    const pageCommandNames = [
+      "sentinel.createOrRestore",
+      "sentinel.delete",
+      "sentinel.restore",
+      "sentinel.setStatus",
+    ];
+
+    for (const commandName of pageCommandNames) {
+      expect(gateway).toContain(`data.command("${commandName}"`);
+    }
+    for (const commandName of ["sentinel.linkWork", "sentinel.recordCheck"]) {
+      expect(pollingService).toContain(`data.command("${commandName}"`);
+    }
+    expect(sentinelPage).not.toContain("data.command(");
+    expect(sentinelPage).not.toContain("getLibraryDb");
+    expect(sentinelPage).not.toContain("SentinelRepo");
+    expect(commands).toContain("assertActiveLocalLibrary");
+    expect(commands).toContain("new SentinelRepo");
+  });
+
   it("keeps Library collection workflows inside the feature controller", () => {
     const appShell = source("src/App.tsx");
     const libraryPage = source("src/pages/LibraryPage.tsx");
@@ -170,11 +195,13 @@ describe("main-process data command architecture", () => {
     const dispatcher = source("electron/main/data-commands.ts");
     const tagCommands = source("electron/main/library-tag-commands.ts");
     const collectionCommands = source("electron/main/library-collection-commands.ts");
+    const sentinelCommands = source("electron/main/sentinel-commands.ts");
 
     expect(runtime).toContain("DataCommandOutput<NoInfer<K>>");
     expect(dispatcher).not.toContain("): Promise<unknown>");
     expect(tagCommands).not.toContain("): Promise<unknown>");
     expect(collectionCommands).not.toContain("): Promise<unknown>");
+    expect(sentinelCommands).not.toContain("): Promise<unknown>");
   });
 
   it("routes every raw database IPC method through the connection coordinator", () => {

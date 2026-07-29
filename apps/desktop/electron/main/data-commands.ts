@@ -24,6 +24,7 @@ import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
 import { executeLibraryCollectionCommand } from "./library-collection-commands";
 import { executeLibraryTagCommand } from "./library-tag-commands";
+import { executeSentinelCommand } from "./sentinel-commands";
 import {
   assertActiveLocalLibrary,
   isRecord,
@@ -69,6 +70,13 @@ export async function executeDataCommand(
     case "library.restoreCollection":
     case "library.setWorksCollection":
       return executeLibraryCollectionCommand(envelope, dependencies);
+    case "sentinel.createOrRestore":
+    case "sentinel.delete":
+    case "sentinel.linkWork":
+    case "sentinel.recordCheck":
+    case "sentinel.restore":
+    case "sentinel.setStatus":
+      return executeSentinelCommand(envelope, dependencies);
     case "library.mergeWorks": {
       const input = parseMergeWorksInput(envelope.input);
       return dependencies.transaction(envelope.name, async (database) => {
@@ -200,6 +208,12 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     value.name !== "library.trashWorks" &&
     value.name !== "library.purgeDeletedWorks" &&
     value.name !== "library.importBackup" &&
+    value.name !== "sentinel.createOrRestore" &&
+    value.name !== "sentinel.delete" &&
+    value.name !== "sentinel.linkWork" &&
+    value.name !== "sentinel.recordCheck" &&
+    value.name !== "sentinel.restore" &&
+    value.name !== "sentinel.setStatus" &&
     value.name !== "sync.applyRemoteSegment"
   ) {
     throw new Error(`Unsupported data command "${value.name}"`);

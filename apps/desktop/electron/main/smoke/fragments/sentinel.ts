@@ -274,6 +274,8 @@ export const smokeSentinel = String.raw`        location.hash = "#/sentinel";
           !document.querySelector('button[aria-label="撤销删除监控任务"]');
 
         sentinelDeleteUndoButtonAfterFailure?.click();
+        window.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_READ__ =
+          "Smoke sentinel post-delete refresh failure";
         await clickConfirmSentinelDelete();
         await waitFor(
           () => {
@@ -299,7 +301,10 @@ export const smokeSentinel = String.raw`        location.hash = "#/sentinel";
         const sentinelDeleteUndoAction = document.querySelector(
           'button[aria-label="撤销删除监控任务"]'
         );
-        sentinelDeleteUndoVisible = Boolean(sentinelDeleteUndoAction);
+        sentinelDeleteUndoVisible =
+          Boolean(sentinelDeleteUndoAction) &&
+          bodyIncludes("已删除监控任务，列表刷新失败") &&
+          bodyIncludes("Smoke sentinel post-delete refresh failure");
         window.__AURASCHOLAR_SMOKE_SENTINEL_FAIL_NEXT_RESTORE__ =
           SENTINEL_RESTORE_FAILURE_SMOKE.error;
         sentinelDeleteUndoAction?.click();
