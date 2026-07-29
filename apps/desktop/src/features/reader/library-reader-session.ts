@@ -22,6 +22,7 @@ export interface LibraryReaderSessionDataSource {
     session: Pick<LibraryReaderSession, "attachment" | "work">,
     annotation: Omit<ReaderAnnotation, "id">,
   ) => Promise<string>;
+  deleteAnnotation: (annotationId: string) => Promise<void>;
   listAnnotations: (attachmentId: string) => Promise<AnnotationRow[]>;
   listAttachments: (workId: string) => Promise<AttachmentRow[]>;
   loadDocument: (data: Uint8Array) => Promise<PdfDocument>;
@@ -30,6 +31,9 @@ export interface LibraryReaderSessionDataSource {
     attachmentId?: string,
   ) => Promise<{ attachmentId: string; data: Uint8Array } | null>;
   loadWork: (workId: string) => Promise<WorkWithAuthors | null>;
+  markReadingStarted: (workId: string) => Promise<boolean>;
+  restoreAnnotation: (annotationId: string) => Promise<void>;
+  updateAnnotationContent: (annotationId: string, contentMd: string) => Promise<void>;
 }
 
 export class LibraryReaderSessionError extends Error {
@@ -41,6 +45,7 @@ export class LibraryReaderSessionError extends Error {
       | "work-archived"
       | "work-missing",
     message: string,
+    readonly work?: WorkWithAuthors,
   ) {
     super(message);
     this.name = "LibraryReaderSessionError";
@@ -60,6 +65,10 @@ const defaultDataSource: LibraryReaderSessionDataSource = {
       contentMd: annotation.contentMd,
     });
   },
+  async deleteAnnotation(annotationId) {
+    const { db, libraryId } = await getLibraryDb();
+    await new AnnotationsRepo(db, libraryId).softDelete(annotationId);
+  },
   async listAnnotations(attachmentId) {
     const { db, libraryId } = await getLibraryDb();
     return new AnnotationsRepo(db, libraryId).listForAttachment(attachmentId);
@@ -73,6 +82,18 @@ const defaultDataSource: LibraryReaderSessionDataSource = {
   async loadWork(workId) {
     const { db, libraryId } = await getLibraryDb();
     return new WorksRepo(db, libraryId).get(workId);
+  },
+  async markReadingStarted(workId) {
+    const { db, libraryId } = await getLibraryDb();
+    return new WorksRepo(db, libraryId).markReadingStarted(workId);
+  },
+  async restoreAnnotation(annotationId) {
+    const { db, libraryId } = await getLibraryDb();
+    await new AnnotationsRepo(db, libraryId).restore(annotationId);
+  },
+  async updateAnnotationContent(annotationId, contentMd) {
+    const { db, libraryId } = await getLibraryDb();
+    await new AnnotationsRepo(db, libraryId).updateContent(annotationId, contentMd);
   },
 };
 
@@ -114,6 +135,7 @@ export async function loadLibraryReaderSession(
     throw new LibraryReaderSessionError(
       "work-archived",
       "这篇文献已在回收站，请先恢复后再打开 PDF。",
+      work,
     );
   }
 
@@ -125,11 +147,16 @@ export async function loadLibraryReaderSession(
     throw new LibraryReaderSessionError(
       "attachment-unavailable",
       "PDF 附件记录存在，但本地文件无法读取。",
+      work,
     );
   }
   throwIfAborted(signal);
   if (!pdf) {
-    throw new LibraryReaderSessionError("attachment-missing", "这篇文献还没有可阅读的 PDF 附件。");
+    throw new LibraryReaderSessionError(
+      "attachment-missing",
+      "这篇文献还没有可阅读的 PDF 附件。",
+      work,
+    );
   }
 
   const attachments = await dataSource.listAttachments(workId);
@@ -139,6 +166,7 @@ export async function loadLibraryReaderSession(
     throw new LibraryReaderSessionError(
       "attachment-missing",
       "所选 PDF 附件已被移除，请重新打开文献。",
+      work,
     );
   }
 
@@ -147,7 +175,11 @@ export async function loadLibraryReaderSession(
     doc = await dataSource.loadDocument(pdf.data);
   } catch {
     throwIfAborted(signal);
-    throw new LibraryReaderSessionError("pdf-invalid", "PDF 文件无法解析，请尝试重新附加文件。");
+    throw new LibraryReaderSessionError(
+      "pdf-invalid",
+      "PDF 文件无法解析，请尝试重新附加文件。",
+      work,
+    );
   }
 
   try {
@@ -175,4 +207,41 @@ export async function createLibraryReaderAnnotation(
   throwIfAborted(signal);
   const id = await dataSource.createAnnotation(session, annotation);
   return { ...annotation, id };
+}
+
+export async function deleteLibraryReaderAnnotation(
+  annotationId: string,
+  signal?: AbortSignal,
+  dataSource: LibraryReaderSessionDataSource = defaultDataSource,
+): Promise<void> {
+  throwIfAborted(signal);
+  await dataSource.deleteAnnotation(annotationId);
+}
+
+export async function restoreLibraryReaderAnnotation(
+  annotationId: string,
+  signal?: AbortSignal,
+  dataSource: LibraryReaderSessionDataSource = defaultDataSource,
+): Promise<void> {
+  throwIfAborted(signal);
+  await dataSource.restoreAnnotation(annotationId);
+}
+
+export async function updateLibraryReaderAnnotationContent(
+  annotationId: string,
+  contentMd: string,
+  signal?: AbortSignal,
+  dataSource: LibraryReaderSessionDataSource = defaultDataSource,
+): Promise<void> {
+  throwIfAborted(signal);
+  await dataSource.updateAnnotationContent(annotationId, contentMd);
+}
+
+export async function markLibraryReaderWorkStarted(
+  workId: string,
+  signal?: AbortSignal,
+  dataSource: LibraryReaderSessionDataSource = defaultDataSource,
+): Promise<boolean> {
+  throwIfAborted(signal);
+  return dataSource.markReadingStarted(workId);
 }

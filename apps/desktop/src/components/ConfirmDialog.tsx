@@ -21,6 +21,7 @@ interface ConfirmDialogState extends ConfirmDialogOptions {
 }
 
 export function useConfirmDialog(): {
+  cancelConfirm: () => void;
   confirm: ConfirmFunction;
   confirmDialog: ReactNode;
 } {
@@ -40,6 +41,7 @@ export function useConfirmDialog(): {
       setState({ ...options, id: Date.now() });
     });
   }, []);
+  const cancelConfirm = useCallback(() => resolve(false), [resolve]);
 
   useEffect(() => {
     return () => {
@@ -49,6 +51,7 @@ export function useConfirmDialog(): {
   }, []);
 
   return {
+    cancelConfirm,
     confirm,
     confirmDialog: state ? (
       <ConfirmDialog key={state.id} options={state} onResolve={resolve} />

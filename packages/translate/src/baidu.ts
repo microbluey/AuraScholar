@@ -39,7 +39,7 @@ export class BaiduTranslator implements Translator {
     this.fixedSalt = opts.salt;
   }
 
-  async translate(input: TranslateInput, _opts?: TranslateOptions): Promise<TranslateResult> {
+  async translate(input: TranslateInput, opts?: TranslateOptions): Promise<TranslateResult> {
     const q = input.text.trim();
     if (!q) return { text: "", engine: this.id };
 
@@ -59,6 +59,7 @@ export class BaiduTranslator implements Translator {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: form.toString(),
+      signal: opts?.signal,
       timeoutMs: 60_000,
     });
     if (res.status !== 200) {
@@ -70,7 +71,9 @@ export class BaiduTranslator implements Translator {
       trans_result?: Array<{ src: string; dst: string }>;
     };
     if (data.error_code) {
-      throw new Error(`百度翻译错误 ${data.error_code}: ${redactSensitiveText(data.error_msg ?? "")}`);
+      throw new Error(
+        `百度翻译错误 ${data.error_code}: ${redactSensitiveText(data.error_msg ?? "")}`,
+      );
     }
     // Baidu splits on newlines into separate segments; rejoin in order.
     const text = (data.trans_result ?? []).map((r) => r.dst).join("\n");

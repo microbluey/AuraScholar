@@ -4,39 +4,65 @@ import {
   lazy,
   useCallback,
   useEffect,
-  useMemo,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
   type Dispatch,
-  type RefObject,
   type SetStateAction,
 } from "react";
-import { useBlocker, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AnnotationSidebar,
   PdfDocument,
   PdfReader,
   annotationsToMarkdown,
   configureWorker,
-  parseAnnotationAnchorJson,
   type ReaderAnnotation,
   type ReaderTextSelection,
 } from "@aurascholar/reader";
 import { newId } from "@aurascholar/db/ids";
-import { AnnotationsRepo, type AnnotationRow } from "@aurascholar/db/repos/annotations";
-import { WorksRepo } from "@aurascholar/db/repos/works";
 import { Badge, Button } from "@aurascholar/ui";
 import "@aurascholar/reader/reader.css";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { writeClipboardText } from "../clipboard";
-import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
+import { useConfirmDialog } from "../components/ConfirmDialog";
 import { downloadBlob } from "../download";
-import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
-import { getLibraryDb } from "../services/aura-db";
+import { useCanvasIngress, type CanvasIngressRequest } from "../features/canvas/useCanvasIngress";
+import {
+  ReaderCommentDraftNavigationGuard,
+  ReaderEmptyState,
+  ReaderPageNavigator,
+  type ReaderWorkContext,
+} from "../features/reader/ReaderPageChrome";
+import {
+  createLibraryReaderAnnotation,
+  deleteLibraryReaderAnnotation,
+  isLibraryReaderAbort,
+  LibraryReaderSessionError,
+  loadLibraryReaderSession,
+  markLibraryReaderWorkStarted,
+  restoreLibraryReaderAnnotation,
+  updateLibraryReaderAnnotationContent,
+  type LibraryReaderSession,
+} from "../features/reader/library-reader-session";
+import {
+  applyReaderSessionCompletion,
+  createReaderSessionCoordinator,
+  libraryReaderRouteRequestKey,
+  withReaderAttachmentSearchParam,
+  type ReaderSessionGeneration,
+  type ReaderSessionLease,
+  type ReaderSessionScope,
+} from "../features/reader/reader-session-coordinator";
+import {
+  readReaderSessionOwnedValue,
+  rollbackReaderAnnotationContent,
+  updateReaderSessionOwnedValue,
+  type ReaderSessionOwnedValue,
+} from "../features/reader/reader-session-state";
 import { fulltextLandingUrl } from "../services/fulltext";
 import { isDesktopRuntime } from "../services/aura-platform";
-import { loadPdfForWork } from "../services/library-read";
 import { describeSafeError } from "../services/sensitive-text";
 import { resolveTranslator, loadTranslateConfig } from "../services/translate";
 import { langLabel, splitForTranslation, type TranslateConfig } from "@aurascholar/translate";
@@ -51,6 +77,23 @@ configureWorker(workerSrc);
 type PageFilter = "none" | "sepia" | "invert";
 type PanelTab = "annotations" | "translate" | "graph";
 type TranslationMode = "selection" | "split" | "inline";
+interface TranslatedSegment {
+  source: string;
+  result: string | null;
+  error?: string;
+}
+
+interface PendingAttachmentRepair {
+  attachmentId: string;
+  message: string;
+  workId: string;
+}
+type TranslatedPages = Record<number, TranslatedSegment[]>;
+const EMPTY_TRANSLATED_PAGES: TranslatedPages = {};
+const EMPTY_SESSION_TRANSLATED_PAGES: ReaderSessionOwnedValue<TranslatedPages> = {
+  generation: null,
+  value: EMPTY_TRANSLATED_PAGES,
+};
 const PANEL_TABS = new Set<PanelTab>(["annotations", "translate", "graph"]);
 
 interface ReaderSmokeWindow extends Window {
@@ -88,124 +131,6 @@ const PAGE_FILTERS: Array<{ value: PageFilter; label: string; title: string }> =
   { value: "sepia", label: "护眼", title: "降低长时间阅读的视觉刺激" },
   { value: "invert", label: "反色", title: "适合夜间阅读扫描清晰的页面" },
 ];
-
-function ReaderPageThumbnail({ doc, pageIndex }: { doc: PdfDocument; pageIndex: number }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [shouldRender, setShouldRender] = useState(false);
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    if (!("IntersectionObserver" in window)) {
-      setShouldRender(true);
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        setShouldRender(true);
-        observer.disconnect();
-      },
-      { rootMargin: "260px 0px" },
-    );
-    observer.observe(host);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!shouldRender || !canvasRef.current) return;
-    let cancelled = false;
-    let renderTask: { cancel: () => void; promise: Promise<unknown> } | null = null;
-    void doc.getPage(pageIndex).then((page) => {
-      if (cancelled || !canvasRef.current) return;
-      const baseViewport = page.getViewport({ scale: 1 });
-      const cssWidth = 126;
-      const cssScale = cssWidth / baseViewport.width;
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const viewport = page.getViewport({ scale: cssScale * dpr });
-      const canvas = canvasRef.current;
-      canvas.width = Math.round(viewport.width);
-      canvas.height = Math.round(viewport.height);
-      canvas.style.width = `${Math.round(viewport.width / dpr)}px`;
-      canvas.style.height = `${Math.round(viewport.height / dpr)}px`;
-      const context = canvas.getContext("2d");
-      if (!context) return;
-      renderTask = page.render({ canvasContext: context, viewport });
-      renderTask.promise.catch(() => {});
-    });
-    return () => {
-      cancelled = true;
-      renderTask?.cancel();
-    };
-  }, [doc, pageIndex, shouldRender]);
-
-  return (
-    <div ref={hostRef} className="reader-page-thumbnail" aria-hidden="true">
-      <canvas ref={canvasRef} />
-    </div>
-  );
-}
-
-function ReaderPageNavigator({
-  annotations,
-  currentPage,
-  doc,
-  onSelect,
-}: {
-  annotations: ReaderAnnotation[];
-  currentPage: number;
-  doc: PdfDocument;
-  onSelect: (pageIndex: number) => void;
-}) {
-  const annotationCounts = useMemo(() => {
-    const counts = new Map<number, number>();
-    annotations.forEach((annotation) => {
-      counts.set(annotation.pageIndex, (counts.get(annotation.pageIndex) ?? 0) + 1);
-    });
-    return counts;
-  }, [annotations]);
-
-  return (
-    <aside className="reader-page-nav" aria-label="PDF 页面导航">
-      <div className="reader-page-nav__head">
-        <div>
-          <strong>页面</strong>
-          <span>{doc.pageCount} 页</span>
-        </div>
-        <small>
-          {currentPage + 1} / {doc.pageCount}
-        </small>
-      </div>
-      <div className="reader-page-nav__list">
-        {Array.from({ length: doc.pageCount }, (_, pageIndex) => {
-          const isCurrent = currentPage === pageIndex;
-          const annotationCount = annotationCounts.get(pageIndex) ?? 0;
-          return (
-            <button
-              key={pageIndex}
-              type="button"
-              className={
-                isCurrent
-                  ? "reader-page-nav__item reader-page-nav__item--active"
-                  : "reader-page-nav__item"
-              }
-              aria-current={isCurrent ? "page" : undefined}
-              aria-label={`第 ${pageIndex + 1} 页${annotationCount ? `，${annotationCount} 条批注` : ""}`}
-              onClick={() => onSelect(pageIndex)}
-            >
-              <ReaderPageThumbnail doc={doc} pageIndex={pageIndex} />
-              <span>
-                {pageIndex + 1}
-                {annotationCount > 0 && <small>{annotationCount}</small>}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </aside>
-  );
-}
 
 const MIN_READER_WRITE_BUSY_MS = 250;
 
@@ -330,6 +255,9 @@ function consumeReaderSmokeSnippetSaveFailure(): Error | null {
 interface OpenContext {
   doc: PdfDocument;
   fileName: string;
+  sessionGeneration: ReaderSessionGeneration;
+  routeRequestKey?: string;
+  librarySession?: LibraryReaderSession;
   workId?: string;
   attachmentId?: string;
   workTitle?: string;
@@ -338,22 +266,13 @@ interface OpenContext {
   workDoi?: string;
 }
 
-interface MissingWorkContext {
-  id: string;
-  title: string;
-  authors: string[];
-  year?: number;
-  doi?: string;
-  arxivId?: string;
-}
+type MissingWorkContext = ReaderWorkContext;
 
-interface LibraryPdfContext {
-  annotations: ReaderAnnotation[];
+interface LibraryReaderLoadFailure {
   archivedWork: MissingWorkContext | null;
   archivedWorkId: string | null;
   allowRetry: boolean;
-  ctx: OpenContext | null;
-  error?: string;
+  error: string;
   missingWork: MissingWorkContext | null;
 }
 
@@ -361,24 +280,12 @@ interface AnnotationDeleteUndoState {
   annotation: ReaderAnnotation;
   index: number;
   message: string;
-}
-
-function rowToAnnotation(row: AnnotationRow): ReaderAnnotation {
-  const parsedAnchor = parseAnnotationAnchorJson(row.anchor_json, row.page_index);
-  return {
-    id: row.id,
-    type: row.type as ReaderAnnotation["type"],
-    color: row.color ?? "#ffd866",
-    pageIndex: row.page_index,
-    anchor: parsedAnchor.anchor,
-    contentMd: row.content_md ?? undefined,
-    orphaned: row.orphaned === 1 || parsedAnchor.recovered,
-  };
+  sessionGeneration: ReaderSessionGeneration;
 }
 
 function workToMissingContext(
   workId: string,
-  work: Awaited<ReturnType<WorksRepo["get"]>>,
+  work: LibraryReaderSession["work"] | null | undefined,
 ): MissingWorkContext {
   return {
     id: workId,
@@ -390,91 +297,77 @@ function workToMissingContext(
   };
 }
 
-function fullTextLanding(work: MissingWorkContext): string {
-  return fulltextLandingUrl(work);
+function librarySessionToOpenContext(
+  session: LibraryReaderSession,
+  sessionGeneration: ReaderSessionGeneration,
+  routeRequestKey: string,
+): OpenContext {
+  return {
+    doc: session.doc,
+    fileName: session.work.title ?? "文献库文档",
+    sessionGeneration,
+    routeRequestKey,
+    librarySession: session,
+    workId: session.work.id,
+    attachmentId: session.attachment.id,
+    workTitle: session.work.title,
+    workAuthors: session.work.authorNames,
+    workYear: session.work.year ?? undefined,
+    workDoi: session.work.doi ?? undefined,
+  };
 }
 
-async function loadLibraryPdfContext(
+function libraryReaderLoadFailure(
   workId: string,
-  preferredAttachmentId?: string,
-): Promise<LibraryPdfContext> {
-  const { db, libraryId } = await getLibraryDb();
-  const work = await new WorksRepo(db, libraryId).get(workId);
-  if (work?.deleted_at != null) {
-    return {
-      annotations: [],
-      archivedWork: workToMissingContext(workId, work),
-      archivedWorkId: workId,
-      allowRetry: false,
-      ctx: null,
-      error: "这篇文献已在回收站。请先在文献库恢复后再阅读、补 PDF 或编辑批注。",
-      missingWork: null,
-    };
+  error: LibraryReaderSessionError,
+): LibraryReaderLoadFailure {
+  const work = workToMissingContext(workId, error.work);
+  switch (error.code) {
+    case "work-archived":
+      return {
+        archivedWork: work,
+        archivedWorkId: workId,
+        allowRetry: false,
+        error: "这篇文献已在回收站。请先在文献库恢复后再阅读、补 PDF 或编辑批注。",
+        missingWork: null,
+      };
+    case "attachment-unavailable":
+      return {
+        archivedWork: null,
+        archivedWorkId: null,
+        allowRetry: true,
+        error: "已找到 PDF 附件记录，但本地文件无法读取。可以重新选择 PDF 修复这篇文献。",
+        missingWork: work,
+      };
+    case "attachment-missing":
+      return {
+        archivedWork: null,
+        archivedWorkId: null,
+        allowRetry: false,
+        error: "这篇文献还没有 PDF 附件。可以上传本地文件，或去检索全文后自动挂回这篇文献。",
+        missingWork: work,
+      };
+    case "pdf-invalid":
+      return {
+        archivedWork: null,
+        archivedWorkId: null,
+        allowRetry: true,
+        error: "PDF 附件文件无法解析。可以重新选择 PDF 修复这篇文献。",
+        missingWork: work,
+      };
+    case "work-missing":
+      return {
+        archivedWork: null,
+        archivedWorkId: null,
+        allowRetry: false,
+        error: error.message,
+        missingWork: null,
+      };
   }
-  let pdf: Awaited<ReturnType<typeof loadPdfForWork>>;
-  try {
-    pdf = await loadPdfForWork(workId, preferredAttachmentId);
-  } catch (error) {
-    return {
-      annotations: [],
-      archivedWork: null,
-      archivedWorkId: null,
-      allowRetry: true,
-      ctx: null,
-      error: "已找到 PDF 附件记录，但本地文件无法读取。可以重新选择 PDF 修复这篇文献。",
-      missingWork: workToMissingContext(workId, work),
-    };
-  }
-  if (!pdf) {
-    return {
-      annotations: [],
-      archivedWork: null,
-      archivedWorkId: null,
-      allowRetry: false,
-      ctx: null,
-      error: "这篇文献还没有 PDF 附件。可以上传本地文件，或去检索全文后自动挂回这篇文献。",
-      missingWork: workToMissingContext(workId, work),
-    };
-  }
+}
 
-  let doc: PdfDocument;
-  try {
-    doc = await PdfDocument.load(pdf.data);
-  } catch {
-    return {
-      annotations: [],
-      archivedWork: null,
-      archivedWorkId: null,
-      allowRetry: true,
-      ctx: null,
-      error: "PDF 附件文件无法解析。可以重新选择 PDF 修复这篇文献。",
-      missingWork: workToMissingContext(workId, work),
-    };
-  }
-  try {
-    const rows = await new AnnotationsRepo(db, libraryId).listForAttachment(pdf.attachmentId);
-    return {
-      annotations: rows.map(rowToAnnotation),
-      archivedWork: null,
-      archivedWorkId: null,
-      allowRetry: false,
-      ctx: {
-        doc,
-        fileName: work?.title ?? "文献库文档",
-        workId,
-        attachmentId: pdf.attachmentId,
-        workTitle: work?.title,
-        workAuthors: work?.authorNames,
-        workYear: work?.year ?? undefined,
-        workDoi: work?.doi ?? undefined,
-      },
-      error: undefined,
-      missingWork: null,
-    };
-  } catch (error) {
-    doc.destroy();
-    throw error;
-  }
+function fullTextLanding(work: MissingWorkContext): string {
+  return fulltextLandingUrl(work);
 }
 
 export function ReaderPage() {
@@ -501,12 +394,15 @@ export function ReaderPage() {
   const [tab, setTab] = useState<PanelTab>(tabParam ?? "annotations");
   const [panelOpen, setPanelOpen] = useState(true);
   const [translationMode, setTranslationMode] = useState<TranslationMode>("selection");
-  const [translatedPages, setTranslatedPages] = useState<TranslatedPages>({});
+  const [translatedPagesState, setTranslatedPagesState] = useState<
+    ReaderSessionOwnedValue<TranslatedPages>
+  >(EMPTY_SESSION_TRANSLATED_PAGES);
   const [currentReaderPage, setCurrentReaderPage] = useState(0);
   const [translationJumpPage, setTranslationJumpPage] = useState<number | null>(null);
   const [selectionTranslation, setSelectionTranslation] = useState<{
     selection: ReaderTextSelection;
     seq: number;
+    sessionGeneration: ReaderSessionGeneration;
   } | null>(null);
   const [snippetToast, setSnippetToast] = useState<string | null>(null);
   const [graphMounted, setGraphMounted] = useState(tabParam === "graph");
@@ -516,15 +412,82 @@ export function ReaderPage() {
   const [annotationDeleteUndo, setAnnotationDeleteUndo] =
     useState<AnnotationDeleteUndoState | null>(null);
   const [annotationDeleteUndoBusy, setAnnotationDeleteUndoBusy] = useState(false);
-  const { confirm, confirmDialog } = useConfirmDialog();
-  const reportCanvasIngressError = useCallback((error: string) => setSnippetToast(error), []);
-  const { openInCanvas, targetPicker } = useCanvasIngress(reportCanvasIngressError);
+  const readerRouteRequestKey = libraryReaderRouteRequestKey(
+    workIdParam,
+    attachmentIdParam,
+    readerReloadSeq,
+  );
+  const { cancelConfirm, confirm, confirmDialog } = useConfirmDialog();
+  const reportCanvasIngressError = useCallback(
+    (error: string) => setSnippetToast(error),
+    [setSnippetToast],
+  );
+  const { cancelCanvasIngress, openInCanvas, targetPicker } =
+    useCanvasIngress(reportCanvasIngressError);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const savingSnippetRef = useRef(false);
-  const deletingAnnotationIdRef = useRef<string | null>(null);
+  const savingSnippetRef = useRef<ReaderSessionGeneration | null>(null);
+  const deletingAnnotationIdRef = useRef<{
+    id: string;
+    sessionGeneration: ReaderSessionGeneration;
+  } | null>(null);
+  const annotationDeleteUndoBusyRef = useRef<ReaderSessionGeneration | null>(null);
+  const pendingAttachmentRepairRef = useRef<PendingAttachmentRepair | null>(null);
+  const readerSessionCoordinatorRef = useRef(createReaderSessionCoordinator());
+  const activeReaderSessionLeaseRef = useRef<ReaderSessionLease | null>(null);
   const tabWorkIdRef = useRef<string | null>(workIdParam);
   const appliedDeepLinkRef = useRef<string | null>(null);
   const canShowGraphTab = Boolean(ctx?.workDoi);
+  const translatedPages = readReaderSessionOwnedValue(
+    translatedPagesState,
+    ctx?.sessionGeneration,
+    EMPTY_TRANSLATED_PAGES,
+  );
+
+  const beginReaderSession = useCallback(
+    (scope: ReaderSessionScope): ReaderSessionLease => {
+      cancelCanvasIngress();
+      cancelConfirm();
+      const lease = readerSessionCoordinatorRef.current.begin(scope);
+      activeReaderSessionLeaseRef.current = lease;
+      savingSnippetRef.current = null;
+      deletingAnnotationIdRef.current = null;
+      annotationDeleteUndoBusyRef.current = null;
+      return lease;
+    },
+    [cancelCanvasIngress, cancelConfirm],
+  );
+
+  const invalidateReaderSession = useCallback(() => {
+    cancelCanvasIngress();
+    cancelConfirm();
+    readerSessionCoordinatorRef.current.invalidate();
+    activeReaderSessionLeaseRef.current = null;
+    savingSnippetRef.current = null;
+    deletingAnnotationIdRef.current = null;
+    annotationDeleteUndoBusyRef.current = null;
+  }, [cancelCanvasIngress, cancelConfirm]);
+
+  const activeLeaseForContext = useCallback(
+    (context: OpenContext | null): ReaderSessionLease | null => {
+      const lease = activeReaderSessionLeaseRef.current;
+      if (!context || !lease || context.sessionGeneration !== lease.generation) return null;
+      if (
+        context.workId &&
+        (!readerRouteRequestKey || context.routeRequestKey !== readerRouteRequestKey)
+      ) {
+        return null;
+      }
+      if (!context.workId && lease.scope.kind !== "local") return null;
+      return lease.isCurrent() ? lease : null;
+    },
+    [readerRouteRequestKey],
+  );
+
+  useLayoutEffect(() => {
+    activeReaderSessionLeaseRef.current?.abort();
+    cancelCanvasIngress();
+    cancelConfirm();
+  }, [cancelCanvasIngress, cancelConfirm, readerRouteRequestKey]);
 
   useEffect(() => {
     if (!snippetToast) return;
@@ -547,11 +510,20 @@ export function ReaderPage() {
   useEffect(() => {
     const resetId = window.setTimeout(() => {
       setAnnotationDeleteUndo(null);
+      setAnnotationDeleteUndoBusy(false);
+      setDeletingAnnotationId(null);
     }, 0);
     return () => window.clearTimeout(resetId);
   }, [ctx?.attachmentId, ctx?.workId]);
 
   useEffect(() => () => ctx?.doc.destroy(), [ctx]);
+
+  useEffect(
+    () => () => {
+      invalidateReaderSession();
+    },
+    [invalidateReaderSession],
+  );
 
   useEffect(() => {
     if (tab !== "graph") return;
@@ -583,7 +555,9 @@ export function ReaderPage() {
 
   useEffect(() => {
     if (!ctx) return;
-    const key = `${ctx.workId ?? "local"}:${annotationIdParam ?? ""}:${pageParam ?? ""}`;
+    const lease = activeLeaseForContext(ctx);
+    if (!lease) return;
+    const key = `${ctx.sessionGeneration}:${ctx.workId ?? "local"}:${annotationIdParam ?? ""}:${pageParam ?? ""}`;
     if (appliedDeepLinkRef.current === key) return;
     const targetAnnotation = annotationIdParam
       ? annotations.find((annotation) => annotation.id === annotationIdParam)
@@ -595,6 +569,7 @@ export function ReaderPage() {
     if (pageIndex === null) return;
     appliedDeepLinkRef.current = key;
     const applyId = window.setTimeout(() => {
+      if (!lease.isCurrent()) return;
       setJumpPage(pageIndex);
       setCurrentReaderPage(pageIndex);
       if (targetAnnotation) {
@@ -604,7 +579,7 @@ export function ReaderPage() {
       }
     }, 0);
     return () => window.clearTimeout(applyId);
-  }, [annotationIdParam, annotations, ctx, pageParam]);
+  }, [activeLeaseForContext, annotationIdParam, annotations, ctx, pageParam]);
 
   useEffect(() => {
     if (!commentDraftDirty) return;
@@ -618,6 +593,8 @@ export function ReaderPage() {
 
   useEffect(() => {
     if (!workIdParam) {
+      pendingAttachmentRepairRef.current = null;
+      invalidateReaderSession();
       const resetId = window.setTimeout(() => {
         setReaderLoading(false);
         setLoadError(null);
@@ -628,10 +605,27 @@ export function ReaderPage() {
         setCtx(null);
         setAnnotations([]);
         setActiveId(null);
+        setJumpPage(null);
+        setCurrentReaderPage(0);
+        setTranslationJumpPage(null);
+        setSelectionTranslation(null);
+        setTranslatedPagesState(EMPTY_SESSION_TRANSLATED_PAGES);
+        setAnnotationDeleteUndo(null);
+        setAnnotationDeleteUndoBusy(false);
+        setDeletingAnnotationId(null);
+        setSnippetToast(null);
+        setFileActionBusy(false);
       }, 0);
       return () => window.clearTimeout(resetId);
     }
-    let cancelled = false;
+    if (pendingAttachmentRepairRef.current?.workId !== workIdParam) {
+      pendingAttachmentRepairRef.current = null;
+    }
+    const lease = beginReaderSession({
+      kind: "library",
+      workId: workIdParam,
+      attachmentId: attachmentIdParam ?? null,
+    });
     void (async () => {
       setReaderLoading(true);
       setLoadError(null);
@@ -642,51 +636,68 @@ export function ReaderPage() {
       setCtx(null);
       setAnnotations([]);
       setActiveId(null);
+      setJumpPage(null);
+      setCurrentReaderPage(0);
+      setTranslationJumpPage(null);
+      setSelectionTranslation(null);
+      setTranslatedPagesState(EMPTY_SESSION_TRANSLATED_PAGES);
+      setAnnotationDeleteUndo(null);
+      setAnnotationDeleteUndoBusy(false);
+      setDeletingAnnotationId(null);
+      setSnippetToast(null);
+      setFileActionBusy(false);
       if (!isDesktopRuntime()) {
-        setMissingWork(readerPreviewWorkContext(workIdParam));
+        if (lease.isCurrent()) setMissingWork(readerPreviewWorkContext(workIdParam));
         return;
       }
       const smokeFailure = consumeReaderSmokeOpenFailure();
       if (smokeFailure) throw smokeFailure;
-      const next = await loadLibraryPdfContext(workIdParam, attachmentIdParam);
-      if (cancelled) {
-        next.ctx?.doc.destroy();
+      const session = await loadLibraryReaderSession(workIdParam, {
+        attachmentId: attachmentIdParam,
+        signal: lease.signal,
+      });
+      const applied = applyReaderSessionCompletion(lease, () => {
+        setAnnotations(session.annotations);
+        setMissingWork(null);
+        setArchivedWork(null);
+        setArchivedWorkId(null);
+        setAllowRetryOpen(false);
+        setCtx(librarySessionToOpenContext(session, lease.generation, readerRouteRequestKey!));
+        const pendingRepair = pendingAttachmentRepairRef.current;
+        if (
+          pendingRepair?.workId === workIdParam &&
+          pendingRepair.attachmentId === session.attachment.id
+        ) {
+          pendingAttachmentRepairRef.current = null;
+          setSnippetToast(pendingRepair.message);
+        }
+      });
+      if (!applied) {
+        session.doc.destroy();
         return;
       }
-      if (!next.ctx) {
-        setMissingWork(next.missingWork);
-        setArchivedWork(next.archivedWork);
-        setArchivedWorkId(next.archivedWorkId);
-        setAllowRetryOpen(next.allowRetry);
-        setLoadError(next.error ?? "这篇文献暂时无法打开 PDF。");
-        return;
-      }
-      let readingStatusError: string | null = null;
-      try {
-        const { db, libraryId } = await getLibraryDb();
-        const changed = await new WorksRepo(db, libraryId).markReadingStarted(workIdParam);
-        if (changed) window.dispatchEvent(new Event("aurascholar:library-updated"));
-      } catch (error) {
-        readingStatusError = describeSafeError(error);
-      }
-      if (cancelled) {
-        next.ctx.doc.destroy();
-        return;
-      }
-      setAnnotations(next.annotations);
-      setMissingWork(null);
-      setArchivedWork(null);
-      setArchivedWorkId(null);
-      setAllowRetryOpen(false);
-      setCtx(next.ctx);
-      if (readingStatusError) {
-        setSnippetToast(
-          `文献已打开，但阅读状态未自动更新，可在文献库中手动设置:${readingStatusError}`,
-        );
-      }
+
+      void markLibraryReaderWorkStarted(workIdParam, lease.signal)
+        .then((changed) => {
+          if (changed) window.dispatchEvent(new Event("aurascholar:library-updated"));
+        })
+        .catch((error) => {
+          if (isLibraryReaderAbort(error) || !lease.isCurrent()) return;
+          setSnippetToast(
+            `文献已打开，但阅读状态未自动更新，可在文献库中手动设置:${describeSafeError(error)}`,
+          );
+        });
     })()
       .catch((e) => {
-        if (!cancelled) {
+        if (isLibraryReaderAbort(e) || !lease.isCurrent()) return;
+        if (e instanceof LibraryReaderSessionError) {
+          const failure = libraryReaderLoadFailure(workIdParam, e);
+          setMissingWork(failure.missingWork);
+          setArchivedWork(failure.archivedWork);
+          setArchivedWorkId(failure.archivedWorkId);
+          setAllowRetryOpen(failure.allowRetry);
+          setLoadError(failure.error);
+        } else {
           setMissingWork(null);
           setArchivedWork(null);
           setArchivedWorkId(null);
@@ -695,19 +706,26 @@ export function ReaderPage() {
         }
       })
       .finally(() => {
-        if (!cancelled) setReaderLoading(false);
+        if (lease.isCurrent()) setReaderLoading(false);
       });
     return () => {
-      cancelled = true;
+      lease.abort();
     };
-  }, [attachmentIdParam, readerReloadSeq, workIdParam]);
+  }, [
+    attachmentIdParam,
+    beginReaderSession,
+    invalidateReaderSession,
+    readerRouteRequestKey,
+    readerReloadSeq,
+    workIdParam,
+  ]);
 
-  const retryOpenWork = useCallback(() => {
+  const retryOpenWork = () => {
     if (!workIdParam || readerLoading) return;
     setReaderReloadSeq((value) => value + 1);
-  }, [readerLoading, workIdParam]);
+  };
 
-  const handleFindFulltext = useCallback(() => {
+  const handleFindFulltext = () => {
     if (!missingWork) return;
     const params = new URLSearchParams({
       pendingWorkId: missingWork.id,
@@ -715,206 +733,296 @@ export function ReaderPage() {
       url: fullTextLanding(missingWork),
     });
     navigate(`/discovery?${params.toString()}`);
-  }, [missingWork, navigate]);
+  };
 
-  const handleTranslate = useCallback((selection: ReaderTextSelection) => {
+  const handleTranslate = (selection: ReaderTextSelection) => {
+    const lease = activeLeaseForContext(ctx);
+    if (!lease) return;
     setSelectionTranslation((current) => ({
       selection,
       seq: (current?.seq ?? 0) + 1,
+      sessionGeneration: lease.generation,
     }));
-  }, []);
+  };
 
-  const handleTranslatedDocumentPageChange = useCallback((pageIndex: number) => {
+  const handleTranslatedDocumentPageChange = (pageIndex: number) => {
+    const lease = activeLeaseForContext(ctx);
+    if (!lease) return;
     setCurrentReaderPage(pageIndex);
     setTranslationJumpPage(pageIndex);
     window.setTimeout(() => {
+      if (!lease.isCurrent()) return;
       setTranslationJumpPage((current) => (current === pageIndex ? null : current));
     }, 120);
-  }, []);
+  };
 
-  const handlePageNavigate = useCallback((pageIndex: number) => {
+  const handlePageNavigate = (pageIndex: number) => {
+    const lease = activeLeaseForContext(ctx);
+    if (!lease) return;
     setCurrentReaderPage(pageIndex);
     setJumpPage(pageIndex);
     window.setTimeout(() => {
+      if (!lease.isCurrent()) return;
       setJumpPage((current) => (current === pageIndex ? null : current));
     }, 160);
-  }, []);
+  };
 
-  useEffect(() => {
-    setTranslatedPages({});
-    setCurrentReaderPage(0);
-    setTranslationJumpPage(null);
-    setSelectionTranslation(null);
-  }, [ctx?.attachmentId, ctx?.fileName]);
+  const handleVisibleReaderPageChange = (pageIndex: number) => {
+    if (activeLeaseForContext(ctx)) setCurrentReaderPage(pageIndex);
+  };
+
+  const setTranslatedPagesForActiveSession = useCallback<Dispatch<SetStateAction<TranslatedPages>>>(
+    (update) => {
+      const lease = activeLeaseForContext(ctx);
+      if (!lease) return;
+      applyReaderSessionCompletion(lease, () => {
+        setTranslatedPagesState((current) =>
+          updateReaderSessionOwnedValue(current, lease.generation, EMPTY_TRANSLATED_PAGES, update),
+        );
+      });
+    },
+    [activeLeaseForContext, ctx, setTranslatedPagesState],
+  );
+
+  const openActiveReaderItemInCanvas = async (request: CanvasIngressRequest): Promise<void> => {
+    const lease = activeLeaseForContext(ctx);
+    if (!lease) return;
+    await openInCanvas(request, { signal: lease.signal });
+  };
 
   // Selecting text + tapping ✦ saves a writing snippet (only when the doc is a
   // library work — a bare local file has no work to attach it to).
-  const handleSaveSnippet = useCallback(
-    async (text: string, pageIndex: number): Promise<boolean> => {
-      if (savingSnippetRef.current) return false;
-      savingSnippetRef.current = true;
-      const startedAt = Date.now();
-      let message = "请先入库，素材会关联到对应文献";
-      let saved = false;
-      try {
-        if (ctx?.workId) {
-          setSnippetToast("正在保存为写作素材...");
-          const smokeFailure = consumeReaderSmokeSnippetSaveFailure();
-          if (smokeFailure) throw smokeFailure;
-          await addSnippet({ workId: ctx.workId, pageIndex, quote: text });
-          message = "已存为写作素材";
-          saved = true;
-        }
-      } catch (e) {
-        message = `保存写作素材失败，选中文本仍保留，可重新保存:${describeSafeError(e)}`;
-        saved = false;
-      } finally {
-        await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-        setSnippetToast(message);
-        savingSnippetRef.current = false;
+  const handleSaveSnippet = async (text: string, pageIndex: number): Promise<boolean> => {
+    const context = ctx;
+    const lease = activeLeaseForContext(context);
+    if (!lease || savingSnippetRef.current === lease.generation) return false;
+    savingSnippetRef.current = lease.generation;
+    const startedAt = Date.now();
+    let message = "请先入库，素材会关联到对应文献";
+    let saved = false;
+    try {
+      if (context?.workId) {
+        setSnippetToast("正在保存为写作素材...");
+        const smokeFailure = consumeReaderSmokeSnippetSaveFailure();
+        if (smokeFailure) throw smokeFailure;
+        await addSnippet({ workId: context.workId, pageIndex, quote: text });
+        message = "已存为写作素材";
+        saved = true;
       }
-      return saved;
-    },
-    [ctx],
-  );
+    } catch (e) {
+      message = `保存写作素材失败，选中文本仍保留，可重新保存:${describeSafeError(e)}`;
+      saved = false;
+    } finally {
+      await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
+      if (lease.isCurrent()) setSnippetToast(message);
+      if (savingSnippetRef.current === lease.generation) savingSnippetRef.current = null;
+    }
+    return saved;
+  };
 
-  const openFile = useCallback(
-    async (file: File) => {
-      if (fileActionBusy) return;
-      const startedAt = Date.now();
-      setFileActionBusy(true);
-      try {
-        setLoadError(null);
-        const data = new Uint8Array(await file.arrayBuffer());
-        if (missingWork && isDesktopRuntime()) {
-          const { attachPdfToWork } = await import("../services/library");
-          const result = await attachPdfToWork(missingWork.id, file.name, data);
-          const next = await loadLibraryPdfContext(missingWork.id);
-          if (!next.ctx) {
-            throw new Error("PDF 已写入，但未能重新读取附件");
+  const openFile = async (file: File) => {
+    if (fileActionBusy) return;
+    const missingWorkSnapshot = missingWork;
+    const repairingLibraryWork = Boolean(missingWorkSnapshot && isDesktopRuntime());
+    if (
+      repairingLibraryWork &&
+      (!workIdParam || missingWorkSnapshot?.id !== workIdParam || !readerRouteRequestKey)
+    ) {
+      setLoadError("当前文献已经切换，请在目标文献上重新选择 PDF。");
+      return;
+    }
+    const lease = beginReaderSession(
+      repairingLibraryWork && missingWorkSnapshot
+        ? {
+            kind: "library",
+            workId: missingWorkSnapshot.id,
+            attachmentId: null,
           }
-          await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-          setAnnotations(next.annotations);
-          setMissingWork(null);
-          setCtx(next.ctx);
-          const annotationMessage =
-            result.restoredAnnotationCount > 0
-              ? `，已恢复 ${result.restoredAnnotationCount} 条备份批注`
-              : "";
-          setSnippetToast(
-            result.deduped
-              ? `这份 PDF 已经附加在《${missingWork.title}》上${annotationMessage}`
-              : `已为《${missingWork.title}》补上 PDF(${result.pageCount} 页)${annotationMessage}`,
-          );
-          window.dispatchEvent(new Event("aurascholar:library-updated"));
-          return;
-        }
-        const loaded = await PdfDocument.load(data);
+        : { kind: "local", replacementId: newId() },
+    );
+    const startedAt = Date.now();
+    setFileActionBusy(true);
+    setAnnotationDeleteUndo(null);
+    setAnnotationDeleteUndoBusy(false);
+    setDeletingAnnotationId(null);
+    setJumpPage(null);
+    setCurrentReaderPage(0);
+    setTranslationJumpPage(null);
+    setSelectionTranslation(null);
+    setTranslatedPagesState(EMPTY_SESSION_TRANSLATED_PAGES);
+    try {
+      setLoadError(null);
+      const data = new Uint8Array(await file.arrayBuffer());
+      if (!lease.isCurrent()) return;
+      if (missingWorkSnapshot && isDesktopRuntime()) {
+        const { attachPdfToWork } = await import("../services/library");
+        const result = await attachPdfToWork(missingWorkSnapshot.id, file.name, data);
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+        if (!lease.isCurrent()) return;
         await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-        setAnnotations([]);
-        setMissingWork(null);
-        setCtx({ doc: loaded, fileName: file.name });
-        setSnippetToast("已打开本地 PDF。未入库文件的批注只保存在本次会话。");
-      } catch (e) {
-        setLoadError(`打开 PDF 失败:${describeSafeError(e)}`);
-      } finally {
-        setFileActionBusy(false);
-      }
-    },
-    [fileActionBusy, missingWork],
-  );
-
-  const handleCreate = useCallback(
-    async (a: Omit<ReaderAnnotation, "id">): Promise<boolean> => {
-      setAnnotationDeleteUndo(null);
-      if (ctx?.workId && ctx.attachmentId) {
-        const startedAt = Date.now();
-        setSnippetToast("正在保存批注...");
-        try {
-          const smokeFailure = consumeReaderSmokeAnnotationCreateFailure();
-          if (smokeFailure) throw smokeFailure;
-          const { db, libraryId } = await getLibraryDb();
-          const id = await new AnnotationsRepo(db, libraryId).create({
-            attachmentId: ctx.attachmentId,
-            workId: ctx.workId,
-            type: a.type,
-            color: a.color,
-            pageIndex: a.pageIndex,
-            anchor: a.anchor,
-            contentMd: a.contentMd,
-          });
-          await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-          setAnnotations((prev) => [...prev, { ...a, id }]);
-          setSnippetToast("批注已保存");
-          return true;
-        } catch (e) {
-          await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-          setSnippetToast(`保存批注失败，选区仍保留，可重新保存:${describeSafeError(e)}`);
-          return false;
+        if (!lease.isCurrent()) return;
+        const annotationMessage =
+          result.restoredAnnotationCount > 0
+            ? `，已恢复 ${result.restoredAnnotationCount} 条备份批注`
+            : "";
+        pendingAttachmentRepairRef.current = {
+          attachmentId: result.attachmentId,
+          message: result.deduped
+            ? `这份 PDF 已经附加在《${missingWorkSnapshot.title}》上${annotationMessage}`
+            : `已为《${missingWorkSnapshot.title}》补上 PDF(${result.pageCount} 页)${annotationMessage}`,
+          workId: missingWorkSnapshot.id,
+        };
+        if (attachmentIdParam === result.attachmentId) {
+          setReaderReloadSeq((value) => value + 1);
+        } else {
+          const nextParams = withReaderAttachmentSearchParam(params, result.attachmentId);
+          navigate({ search: nextParams.toString() }, { replace: true });
         }
-      }
-      setAnnotations((prev) => [...prev, { ...a, id: newId() }]);
-      setSnippetToast("批注已加入本次会话");
-      return true;
-    },
-    [ctx],
-  );
-
-  const handleDelete = useCallback(
-    async (id: string) => {
-      if (deletingAnnotationIdRef.current || annotationDeleteUndoBusy) return;
-      const targetIndex = annotations.findIndex((annotation) => annotation.id === id);
-      const target = annotations[targetIndex];
-      if (!target) {
-        setSnippetToast("没有找到要删除的批注。");
         return;
       }
-      const confirmed = await confirm({
-        title: "删除这条批注？",
-        description: target.anchor.quote?.exact
-          ? `将删除第 ${target.pageIndex + 1} 页的批注：“${target.anchor.quote.exact.slice(0, 80)}”`
-          : `将删除第 ${target.pageIndex + 1} 页的批注。`,
-        details: [
-          "删除后不会影响原始 PDF 或写作素材。",
-          ctx?.workId ? "已入库批注会从文献库中移除。" : "本地 PDF 会话中的批注会立即移除。",
-        ],
-        confirmLabel: "删除批注",
-        tone: "warning",
+      const loaded = await PdfDocument.load(data);
+      await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
+      const applied = applyReaderSessionCompletion(lease, () => {
+        setAnnotations([]);
+        setMissingWork(null);
+        setArchivedWork(null);
+        setArchivedWorkId(null);
+        setAllowRetryOpen(false);
+        setCtx({
+          doc: loaded,
+          fileName: file.name,
+          sessionGeneration: lease.generation,
+        });
+        setSnippetToast("已打开本地 PDF。未入库文件的批注只保存在本次会话。");
       });
-      if (!confirmed) return;
+      if (!applied) {
+        loaded.destroy();
+        return;
+      }
+    } catch (e) {
+      if (!isLibraryReaderAbort(e) && lease.isCurrent()) {
+        setLoadError(`打开 PDF 失败:${describeSafeError(e)}`);
+      }
+    } finally {
+      if (lease.isCurrent()) setFileActionBusy(false);
+    }
+  };
+
+  const handleCreate = async (a: Omit<ReaderAnnotation, "id">): Promise<boolean> => {
+    const context = ctx;
+    const lease = activeLeaseForContext(context);
+    if (!lease) return false;
+    setAnnotationDeleteUndo(null);
+    if (context?.librarySession) {
       const startedAt = Date.now();
-      deletingAnnotationIdRef.current = id;
-      setDeletingAnnotationId(id);
-      setSnippetToast("正在删除批注...");
+      setSnippetToast("正在保存批注...");
       try {
-        const smokeFailure = consumeReaderSmokeAnnotationDeleteFailure();
-        if (smokeFailure) {
-          await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-          throw smokeFailure;
-        }
-        if (ctx?.workId) {
-          const { db, libraryId } = await getLibraryDb();
-          await new AnnotationsRepo(db, libraryId).softDelete(id);
-        }
+        const smokeFailure = consumeReaderSmokeAnnotationCreateFailure();
+        if (smokeFailure) throw smokeFailure;
+        const annotation = await createLibraryReaderAnnotation(
+          context.librarySession,
+          a,
+          lease.signal,
+        );
         await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-        setAnnotationDeleteUndo({ annotation: target, index: targetIndex, message: "已删除批注" });
-        setAnnotations((prev) => prev.filter((x) => x.id !== id));
-        setSnippetToast("已删除批注");
+        applyReaderSessionCompletion(lease, () => {
+          setAnnotations((prev) => [...prev, annotation]);
+          setSnippetToast("批注已保存");
+        });
+        return true;
       } catch (e) {
         await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-        setSnippetToast(`删除批注失败，批注仍保留，可重新删除:${describeSafeError(e)}`);
-      } finally {
-        deletingAnnotationIdRef.current = null;
-        setDeletingAnnotationId(null);
+        if (lease.isCurrent() && !isLibraryReaderAbort(e)) {
+          setSnippetToast(`保存批注失败，选区仍保留，可重新保存:${describeSafeError(e)}`);
+        }
+        return false;
       }
-    },
-    [annotationDeleteUndoBusy, annotations, confirm, ctx],
-  );
+    }
+    if (!lease.isCurrent()) return false;
+    setAnnotations((prev) => [...prev, { ...a, id: newId() }]);
+    setSnippetToast("批注已加入本次会话");
+    return true;
+  };
 
-  const undoAnnotationDelete = useCallback(async () => {
-    if (!annotationDeleteUndo || annotationDeleteUndoBusy) return;
+  const handleDelete = async (id: string) => {
+    const context = ctx;
+    const lease = activeLeaseForContext(context);
+    if (!lease) return;
+    if (
+      deletingAnnotationIdRef.current?.sessionGeneration === lease.generation ||
+      annotationDeleteUndoBusyRef.current === lease.generation
+    ) {
+      return;
+    }
+    const targetIndex = annotations.findIndex((annotation) => annotation.id === id);
+    const target = annotations[targetIndex];
+    if (!target) {
+      setSnippetToast("没有找到要删除的批注。");
+      return;
+    }
+    const confirmed = await confirm({
+      title: "删除这条批注？",
+      description: target.anchor.quote?.exact
+        ? `将删除第 ${target.pageIndex + 1} 页的批注：“${target.anchor.quote.exact.slice(0, 80)}”`
+        : `将删除第 ${target.pageIndex + 1} 页的批注。`,
+      details: [
+        "删除后不会影响原始 PDF 或写作素材。",
+        context?.workId ? "已入库批注会从文献库中移除。" : "本地 PDF 会话中的批注会立即移除。",
+      ],
+      confirmLabel: "删除批注",
+      tone: "warning",
+    });
+    if (!confirmed || !lease.isCurrent()) return;
+    const startedAt = Date.now();
+    const operation = { id, sessionGeneration: lease.generation };
+    deletingAnnotationIdRef.current = operation;
+    setDeletingAnnotationId(id);
+    setSnippetToast("正在删除批注...");
+    try {
+      const smokeFailure = consumeReaderSmokeAnnotationDeleteFailure();
+      if (smokeFailure) {
+        await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
+        throw smokeFailure;
+      }
+      if (context?.librarySession) {
+        await deleteLibraryReaderAnnotation(id, lease.signal);
+      }
+      await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
+      applyReaderSessionCompletion(lease, () => {
+        setAnnotationDeleteUndo({
+          annotation: target,
+          index: targetIndex,
+          message: "已删除批注",
+          sessionGeneration: lease.generation,
+        });
+        setAnnotations((prev) => prev.filter((x) => x.id !== id));
+        setSnippetToast("已删除批注");
+      });
+    } catch (e) {
+      await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
+      if (lease.isCurrent() && !isLibraryReaderAbort(e)) {
+        setSnippetToast(`删除批注失败，批注仍保留，可重新删除:${describeSafeError(e)}`);
+      }
+    } finally {
+      if (deletingAnnotationIdRef.current === operation) deletingAnnotationIdRef.current = null;
+      if (lease.isCurrent()) setDeletingAnnotationId(null);
+    }
+  };
+
+  const undoAnnotationDelete = async () => {
+    const context = ctx;
+    const lease = activeLeaseForContext(context);
+    if (
+      !annotationDeleteUndo ||
+      !lease ||
+      annotationDeleteUndo.sessionGeneration !== lease.generation ||
+      annotationDeleteUndoBusyRef.current === lease.generation
+    ) {
+      return;
+    }
     const { annotation, index } = annotationDeleteUndo;
     const startedAt = Date.now();
+    annotationDeleteUndoBusyRef.current = lease.generation;
     setAnnotationDeleteUndoBusy(true);
     setSnippetToast("正在撤销删除批注...");
     try {
@@ -923,28 +1031,39 @@ export function ReaderPage() {
         await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
         throw smokeFailure;
       }
-      if (ctx?.workId) {
-        const { db, libraryId } = await getLibraryDb();
-        await new AnnotationsRepo(db, libraryId).restore(annotation.id);
+      if (context?.librarySession) {
+        await restoreLibraryReaderAnnotation(annotation.id, lease.signal);
       }
-      setAnnotations((prev) => {
-        if (prev.some((item) => item.id === annotation.id)) return prev;
-        const next = [...prev];
-        next.splice(Math.min(Math.max(index, 0), next.length), 0, annotation);
-        return next;
-      });
-      setActiveId(annotation.id);
-      setTab("annotations");
+      if (
+        !applyReaderSessionCompletion(lease, () => {
+          setAnnotations((prev) => {
+            if (prev.some((item) => item.id === annotation.id)) return prev;
+            const next = [...prev];
+            next.splice(Math.min(Math.max(index, 0), next.length), 0, annotation);
+            return next;
+          });
+          setActiveId(annotation.id);
+          setTab("annotations");
+        })
+      ) {
+        return;
+      }
       await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
+      if (!lease.isCurrent()) return;
       setAnnotationDeleteUndo(null);
       setSnippetToast("已撤销删除批注");
     } catch (e) {
       await waitForMinimumElapsed(startedAt, MIN_READER_WRITE_BUSY_MS);
-      setSnippetToast(`撤销删除批注失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
+      if (lease.isCurrent() && !isLibraryReaderAbort(e)) {
+        setSnippetToast(`撤销删除批注失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
+      }
     } finally {
-      setAnnotationDeleteUndoBusy(false);
+      if (annotationDeleteUndoBusyRef.current === lease.generation) {
+        annotationDeleteUndoBusyRef.current = null;
+      }
+      if (lease.isCurrent()) setAnnotationDeleteUndoBusy(false);
     }
-  }, [annotationDeleteUndo, annotationDeleteUndoBusy, ctx]);
+  };
 
   const confirmDiscardCommentDraft = useCallback(
     (annotation: ReaderAnnotation) =>
@@ -965,29 +1084,32 @@ export function ReaderPage() {
     [confirm],
   );
 
-  const handleSaveComment = useCallback(
-    async (id: string, contentMd: string) => {
-      const previous = annotations;
-      setAnnotations((prev) => prev.map((x) => (x.id === id ? { ...x, contentMd } : x)));
-      try {
-        if (ctx?.workId) {
-          const smokeFailure = consumeReaderSmokeCommentSaveFailure();
-          if (smokeFailure) throw smokeFailure;
-          const { db, libraryId } = await getLibraryDb();
-          await new AnnotationsRepo(db, libraryId).updateContent(id, contentMd);
-        }
-        setSnippetToast("批注评论已保存");
-        return true;
-      } catch (e) {
-        setAnnotations(previous);
-        setSnippetToast(`保存评论失败，草稿仍保留，可重新保存:${describeSafeError(e)}`);
-        return false;
+  const handleSaveComment = async (id: string, contentMd: string) => {
+    const context = ctx;
+    const lease = activeLeaseForContext(context);
+    if (!lease) return false;
+    const previousContent = annotations.find((annotation) => annotation.id === id)?.contentMd;
+    setAnnotations((prev) => prev.map((x) => (x.id === id ? { ...x, contentMd } : x)));
+    try {
+      if (context?.librarySession) {
+        const smokeFailure = consumeReaderSmokeCommentSaveFailure();
+        if (smokeFailure) throw smokeFailure;
+        await updateLibraryReaderAnnotationContent(id, contentMd, lease.signal);
       }
-    },
-    [annotations, ctx],
-  );
+      if (lease.isCurrent()) setSnippetToast("批注评论已保存");
+      return true;
+    } catch (e) {
+      if (lease.isCurrent() && !isLibraryReaderAbort(e)) {
+        setAnnotations((current) =>
+          rollbackReaderAnnotationContent(current, id, contentMd, previousContent),
+        );
+        setSnippetToast(`保存评论失败，草稿仍保留，可重新保存:${describeSafeError(e)}`);
+      }
+      return false;
+    }
+  };
 
-  const handleExport = useCallback(() => {
+  const handleExport = () => {
     if (!ctx) return;
     if (commentDraftDirty) {
       setSnippetToast("请先保存批注评论草稿，再导出笔记。");
@@ -1005,7 +1127,7 @@ export function ReaderPage() {
     const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
     downloadBlob(blob, `${(ctx.workTitle ?? ctx.fileName).slice(0, 60)}-笔记.md`);
     setSnippetToast(`已导出 ${annotations.length} 条批注`);
-  }, [annotations, commentDraftDirty, ctx]);
+  };
 
   if (!ctx) {
     return (
@@ -1043,6 +1165,8 @@ export function ReaderPage() {
       title: ctx.workDoi ? undefined : "无 DOI,无法构建图谱",
     },
   ];
+  const visibleAnnotationDeleteUndo =
+    annotationDeleteUndo?.sessionGeneration === ctx.sessionGeneration ? annotationDeleteUndo : null;
   const renderSourceReader = () => (
     <PdfReader
       doc={ctx.doc}
@@ -1057,7 +1181,7 @@ export function ReaderPage() {
       onSaveSnippet={handleSaveSnippet}
       pageFilter={pageFilter}
       scrollToPage={jumpPage ?? translationJumpPage}
-      onVisiblePageChange={setCurrentReaderPage}
+      onVisiblePageChange={handleVisibleReaderPageChange}
     />
   );
 
@@ -1071,8 +1195,8 @@ export function ReaderPage() {
           aria-busy={annotationDeleteUndoBusy ? "true" : undefined}
         >
           <span className="reader-toast__text">{snippetToast}</span>
-          {annotationDeleteUndo &&
-          (snippetToast === annotationDeleteUndo.message ||
+          {visibleAnnotationDeleteUndo &&
+          (snippetToast === visibleAnnotationDeleteUndo.message ||
             annotationDeleteUndoBusy ||
             snippetToast.startsWith("撤销删除批注失败，撤销入口仍保留")) ? (
             <button
@@ -1147,7 +1271,7 @@ export function ReaderPage() {
               variant="ghost"
               style={{ fontSize: 13 }}
               onClick={() =>
-                void openInCanvas({
+                void openActiveReaderItemInCanvas({
                   workId: ctx.workId!,
                   sourceLabel: ctx.workTitle ?? ctx.fileName,
                 })
@@ -1261,14 +1385,13 @@ export function ReaderPage() {
                   onDraftDirtyChange={setCommentDraftDirty}
                   onJump={(ann) => {
                     setActiveId(ann.id);
-                    setJumpPage(ann.pageIndex);
-                    setTimeout(() => setJumpPage(null), 100);
+                    handlePageNavigate(ann.pageIndex);
                   }}
                   onSaveComment={handleSaveComment}
                   onAddToCanvas={
                     ctx.workId
                       ? (annotation) =>
-                          void openInCanvas({
+                          void openActiveReaderItemInCanvas({
                             workId: ctx.workId!,
                             annotationId: annotation.id,
                             sourceLabel: `${ctx.workTitle ?? ctx.fileName} · 第 ${annotation.pageIndex + 1} 页批注`,
@@ -1287,12 +1410,13 @@ export function ReaderPage() {
                 style={{ height: "100%", display: tab === "translate" ? "block" : "none" }}
               >
                 <TranslatePanel
+                  key={ctx.sessionGeneration}
                   doc={ctx.doc}
                   mode={translationMode}
                   onModeChange={setTranslationMode}
                   currentPage={currentReaderPage}
                   pages={translatedPages}
-                  onPagesChange={setTranslatedPages}
+                  onPagesChange={setTranslatedPagesForActiveSession}
                 />
               </div>
               {ctx.workDoi && graphMounted && (
@@ -1312,9 +1436,9 @@ export function ReaderPage() {
           </div>
         )}
       </div>
-      {selectionTranslation && (
+      {selectionTranslation && selectionTranslation.sessionGeneration === ctx.sessionGeneration && (
         <SelectionTranslationPopover
-          key={selectionTranslation.seq}
+          key={`${selectionTranslation.sessionGeneration}:${selectionTranslation.seq}`}
           selection={selectionTranslation.selection}
           onClose={() => setSelectionTranslation(null)}
         />
@@ -1322,193 +1446,6 @@ export function ReaderPage() {
     </div>
   );
 }
-
-function ReaderCommentDraftNavigationGuard({ confirm }: { confirm: ConfirmFunction }) {
-  const blockerDialogOpenRef = useRef(false);
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      currentLocation.pathname !== nextLocation.pathname ||
-      currentLocation.search !== nextLocation.search,
-  );
-
-  useEffect(() => {
-    if (blocker.state === "unblocked") {
-      blockerDialogOpenRef.current = false;
-    }
-  }, [blocker.state]);
-
-  useEffect(() => {
-    if (blocker.state !== "blocked" || blockerDialogOpenRef.current) return;
-    blockerDialogOpenRef.current = true;
-    void confirm({
-      cancelLabel: "继续编辑",
-      confirmLabel: "离开页面",
-      description: "离开阅读器会丢失尚未保存的批注评论草稿。",
-      details: ["保存评论后，它才会进入批注导出、文献库同步和后续写作流程。"],
-      eyebrow: "未保存",
-      title: "要离开阅读器吗？",
-      tone: "warning",
-    }).then((confirmed) => {
-      blockerDialogOpenRef.current = false;
-      if (confirmed) {
-        blocker.proceed();
-      } else {
-        blocker.reset();
-      }
-    });
-  }, [blocker, confirm]);
-
-  return null;
-}
-
-function ReaderEmptyState({
-  loading,
-  loadError,
-  archivedWork,
-  archivedWorkId,
-  missingWork,
-  fileInputRef,
-  fileActionBusy,
-  onOpenFile,
-  onBackToLibrary,
-  onFindFulltext,
-  onRetryOpen,
-}: {
-  loading: boolean;
-  loadError: string | null;
-  archivedWork: MissingWorkContext | null;
-  archivedWorkId: string | null;
-  missingWork: MissingWorkContext | null;
-  fileInputRef: RefObject<HTMLInputElement | null>;
-  fileActionBusy: boolean;
-  onOpenFile: (file: File) => void | Promise<void>;
-  onBackToLibrary: () => void;
-  onFindFulltext?: () => void;
-  onRetryOpen?: () => void;
-}) {
-  const archived = Boolean(archivedWorkId);
-  const previewMode = !isDesktopRuntime();
-  const contextualWork = archived ? archivedWork : missingWork;
-  const authors = contextualWork?.authors.slice(0, 3).join(", ");
-  const primaryActionLabel = loading
-    ? "正在打开..."
-    : fileActionBusy
-      ? missingWork && !previewMode
-        ? "正在补上..."
-        : "打开中..."
-      : missingWork && !previewMode
-        ? "补上 PDF 并打开"
-        : "打开本地 PDF";
-
-  return (
-    <div className="reader-empty-page">
-      <div className="reader-empty-hero">
-        <div className="reader-empty-hero__copy">
-          <h1>
-            {loading
-              ? "正在打开文献"
-              : archived
-                ? "文献在回收站"
-                : missingWork
-                  ? "PDF 未就绪"
-                  : "阅读器"}
-          </h1>
-          <p>
-            {loading
-              ? "正在读取文献库里的 PDF、题录和批注。大文件会多等一会儿。"
-              : archived
-                ? "先在文献库恢复这篇文献，再继续阅读、补全文或编辑批注。"
-                : missingWork
-                  ? "这篇文献已经在库里，补上 PDF 后就能进入批注、翻译、重点和素材链路。"
-                  : "等待一篇 PDF。入库文献会保留批注与素材，本地文件适合快速查看。"}
-          </p>
-          {contextualWork && (
-            <div className="reader-empty-work">
-              <span>{archived ? "待恢复文献" : "待补全文"}</span>
-              <strong>{contextualWork.title}</strong>
-              <small>
-                {[
-                  authors,
-                  contextualWork.year,
-                  contextualWork.doi ? `DOI ${contextualWork.doi}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || (archived ? "回收站中" : "题录已定位")}
-              </small>
-            </div>
-          )}
-          {loadError && <p className="reader-empty-hero__error">{loadError}</p>}
-          <div className="reader-empty-hero__actions">
-            {!archived && (
-              <>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="application/pdf"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f && !fileActionBusy) void onOpenFile(f);
-                    e.target.value = "";
-                  }}
-                />
-                <Button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={loading || fileActionBusy}
-                  aria-busy={loading || fileActionBusy ? "true" : undefined}
-                >
-                  {primaryActionLabel}
-                </Button>
-              </>
-            )}
-            {onRetryOpen && (
-              <Button
-                variant="secondary"
-                onClick={onRetryOpen}
-                disabled={loading || fileActionBusy}
-              >
-                重试打开
-              </Button>
-            )}
-            {onFindFulltext && (
-              <Button variant="secondary" onClick={onFindFulltext} disabled={fileActionBusy}>
-                去找全文
-              </Button>
-            )}
-            <Button variant="secondary" onClick={onBackToLibrary} disabled={fileActionBusy}>
-              {archived ? "去文献库恢复" : missingWork ? "回文献库定位" : "返回文献库"}
-            </Button>
-          </div>
-        </div>
-        <div className="reader-empty-hero__workflow" aria-label="阅读工作流">
-          <div>
-            <strong>01</strong>
-            <span>深读队列</span>
-            <small>{loading ? "正在定位 PDF" : "PDF 尚未打开"}</small>
-          </div>
-          <div>
-            <strong>02</strong>
-            <span>译文状态</span>
-            <small>等待正文</small>
-          </div>
-          <div>
-            <strong>03</strong>
-            <span>素材归档</span>
-            <small>等待关联论文</small>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface TranslatedSegment {
-  source: string;
-  result: string | null;
-  error?: string;
-}
-
-type TranslatedPages = Record<number, TranslatedSegment[]>;
 
 interface TranslationSmokeSegmentsEventDetail {
   engine?: string;
@@ -1521,8 +1458,11 @@ type TranslateAction = "full" | "page";
 async function pageParagraphsForTranslation(
   doc: PdfDocument,
   pageIndex: number,
+  signal?: AbortSignal,
 ): Promise<string[]> {
+  signal?.throwIfAborted();
   const lines = await doc.getPageTextLines(pageIndex);
+  signal?.throwIfAborted();
   const paragraphs: string[] = [];
   let buffer = "";
   const flush = () => {
@@ -1547,6 +1487,7 @@ async function pageParagraphsForTranslation(
     else if (buffer.length >= 1200) flush();
   }
   flush();
+  signal?.throwIfAborted();
   return paragraphs;
 }
 
@@ -1854,8 +1795,23 @@ function TranslatePanel({
   const copyingAllRef = useRef(false);
   const [config, setConfig] = useState<TranslateConfig>({ engine: "llm", targetLang: "zh" });
   useEffect(() => {
-    void loadTranslateConfig().then(setConfig);
+    let cancelled = false;
+    void loadTranslateConfig().then((next) => {
+      if (!cancelled) setConfig(next);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(
+    () => () => {
+      cancelRef.current?.abort();
+      cancelRef.current = null;
+      copyingAllRef.current = false;
+    },
+    [doc],
+  );
 
   useEffect(() => {
     const onSmokeSegments = (event: Event) => {
@@ -1884,23 +1840,27 @@ function TranslatePanel({
 
   useEffect(() => {
     if (mode === "selection" || pages[currentPage]) return;
-    let cancelled = false;
-    void pageParagraphsForTranslation(doc, currentPage).then((paragraphs) => {
-      if (cancelled || paragraphs.length === 0) return;
-      onPagesChange((current) =>
-        current[currentPage]
-          ? current
-          : {
-              ...current,
-              [currentPage]: paragraphs.map((source) => ({
-                source,
-                result: null,
-              })),
-            },
-      );
-    });
+    const controller = new AbortController();
+    void pageParagraphsForTranslation(doc, currentPage, controller.signal)
+      .then((paragraphs) => {
+        if (controller.signal.aborted || paragraphs.length === 0) return;
+        onPagesChange((current) =>
+          current[currentPage]
+            ? current
+            : {
+                ...current,
+                [currentPage]: paragraphs.map((source) => ({
+                  source,
+                  result: null,
+                })),
+              },
+        );
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setError(describeSafeError(error));
+      });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [currentPage, doc, mode, onPagesChange, pages]);
 
@@ -1938,7 +1898,7 @@ function TranslatePanel({
       try {
         for (const pageIndex of pageIndexes) {
           if (controller.signal.aborted) return;
-          const chunks = await pageParagraphsForTranslation(doc, pageIndex);
+          const chunks = await pageParagraphsForTranslation(doc, pageIndex, controller.signal);
           if (chunks.length > 0) pageSources.push({ pageIndex, chunks });
         }
         const total = pageSources.reduce((sum, page) => sum + page.chunks.length, 0);
