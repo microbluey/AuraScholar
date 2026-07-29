@@ -1,7 +1,5 @@
 import { type CanvasWorkspaceDocument } from "@aurascholar/core";
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
 import type { CanvasWorkspaceSummary } from "@aurascholar/db/repos/canvas";
-import { WorksRepo } from "@aurascholar/db/repos/works";
 import { CircleNotch, Warning } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -74,7 +72,10 @@ import {
   planCanvasWorkspaceDeletion,
 } from "../features/canvas/workspace-controls";
 import { libraryReaderRowToAnnotation } from "../features/reader/library-reader-session";
-import { getLibraryDb } from "../services/aura-db";
+import {
+  loadCanvasActiveWork,
+  loadCanvasAnnotationIngressSource,
+} from "../services/canvas-page-data";
 import { registerExitBarrier } from "../services/exit-barriers";
 import { synthesizeCanvasSelection as desktopSynthesizeCanvasSelection } from "../services/canvas-ai";
 import { isDesktopRuntime } from "../services/aura-platform";
@@ -944,35 +945,15 @@ export function SpatialCanvasPage() {
       };
     }
 
-    let cancelled = false;
-    void getLibraryDb()
-      .then(async ({ db, libraryId }) => {
-        const rows = await db.query<AnnotationRow>(
-          `SELECT an.*
-           FROM annotations an
-           JOIN works w ON w.id = an.work_id AND w.deleted_at IS NULL
-           JOIN attachments at
-             ON at.id = an.attachment_id
-            AND at.work_id = an.work_id
-            AND at.deleted_at IS NULL
-           WHERE an.id = ?
-             AND an.work_id = ?
-             AND w.library_id = ?
-             AND an.deleted_at IS NULL
-           LIMIT 1`,
-          [requestedAnnotationId, requestedWorkId, libraryId],
-        );
-        const row = rows[0];
-        if (!row) throw new Error("没有找到属于这篇文献的批注，可能已被移除");
-        if (requestedWorkId !== row.work_id) throw new Error("这条批注不属于请求加入的文献");
-        const sourceWork = await new WorksRepo(db, libraryId).get(row.work_id);
-        if (!sourceWork || sourceWork.deleted_at !== null) {
-          throw new Error("批注的来源文献已不存在或位于回收站");
-        }
-        return { row, work: canvasLibraryWork(sourceWork) };
-      })
-      .then(({ row, work }) => {
-        if (cancelled) return;
+    const controller = new AbortController();
+    void loadCanvasAnnotationIngressSource(
+      requestedAnnotationId,
+      requestedWorkId,
+      controller.signal,
+    )
+      .then(({ annotation, work: sourceWork }) => {
+        if (controller.signal.aborted) return;
+        const work = canvasLibraryWork(sourceWork);
         let updaterRan = false;
         let changed = false;
         let ingressResult: ReturnType<typeof applyCanvasAnnotationIngress> | undefined;
@@ -981,10 +962,10 @@ export function SpatialCanvasPage() {
           (current) => {
             updaterRan = true;
             ingressResult = applyCanvasAnnotationIngress(current, {
-              annotation: libraryReaderRowToAnnotation(row),
-              attachmentId: row.attachment_id,
+              annotation: libraryReaderRowToAnnotation(annotation),
+              attachmentId: annotation.attachment_id,
               expectedWorkId: requestedWorkId || undefined,
-              workId: row.work_id,
+              workId: annotation.work_id,
               work,
               workspaceId,
             });
@@ -1017,12 +998,12 @@ export function SpatialCanvasPage() {
         navigate(canvasWorkspacePath(workspaceId), { replace: true });
       })
       .catch((error) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         inFlightIngress.delete(ingressKey);
         setPersistenceLabel(`添加摘录失败：${error instanceof Error ? error.message : "未知错误"}`);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
       inFlightIngress.delete(ingressKey);
     };
   }, [
@@ -1044,20 +1025,19 @@ export function SpatialCanvasPage() {
     if (inFlightIngress.has(ingressKey)) return;
     inFlightIngress.add(ingressKey);
 
-    let cancelled = false;
+    const controller = new AbortController();
     const listed = works.find((candidate) => candidate.id === requestedWorkId);
     const resolveWork = listed
       ? Promise.resolve(listed)
       : desktopRuntime
-        ? getLibraryDb().then(async ({ db, libraryId }) => {
-            const row = await new WorksRepo(db, libraryId).get(requestedWorkId);
-            return row && row.deleted_at === null ? canvasLibraryWork(row) : null;
-          })
+        ? loadCanvasActiveWork(requestedWorkId, controller.signal).then((row) =>
+            row ? canvasLibraryWork(row) : null,
+          )
         : Promise.resolve(null);
 
     void resolveWork
       .then((work) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         if (!work) throw new Error("未在文献库中找到请求添加的文献");
         let alreadyPresent = false;
         const applied = applyActiveDocumentUpdate(
@@ -1081,13 +1061,13 @@ export function SpatialCanvasPage() {
         navigate(canvasWorkspacePath(workspaceId), { replace: true });
       })
       .catch((error) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         inFlightIngress.delete(ingressKey);
         setPersistenceLabel(error instanceof Error ? error.message : "添加文献失败");
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
       inFlightIngress.delete(ingressKey);
     };
   }, [

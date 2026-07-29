@@ -9,9 +9,9 @@
   "source": {
     "production": {
       "byExtension": {
-        ".css": 16808,
-        ".ts": 32923,
-        ".tsx": 32880
+        ".css": 16398,
+        ".ts": 33094,
+        ".tsx": 31984
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 282,
@@ -33,10 +33,10 @@
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/shared.ts": 144,
         "apps/desktop/src/App.tsx": 1907,
-        "apps/desktop/src/app.css": 12442,
+        "apps/desktop/src/app.css": 12032,
         "apps/desktop/src/clipboard.ts": 56,
         "apps/desktop/src/components/AppErrorBoundary.tsx": 168,
-        "apps/desktop/src/components/CitationGraphView.tsx": 746,
+        "apps/desktop/src/components/CitationGraphView.tsx": 734,
         "apps/desktop/src/components/ConfirmDialog.tsx": 163,
         "apps/desktop/src/components/ImportConfirmDialog.tsx": 490,
         "apps/desktop/src/components/InlineNotice.tsx": 61,
@@ -105,7 +105,6 @@
         "apps/desktop/src/keyboard.ts": 7,
         "apps/desktop/src/main.tsx": 106,
         "apps/desktop/src/pages/DiscoveryPage.tsx": 3275,
-        "apps/desktop/src/pages/FlashcardsPage.tsx": 864,
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1149,
         "apps/desktop/src/pages/LibraryPage.tsx": 4708,
@@ -113,12 +112,14 @@
         "apps/desktop/src/pages/SentinelPage.tsx": 1237,
         "apps/desktop/src/pages/SettingsPage.tsx": 2067,
         "apps/desktop/src/pages/SnippetsPage.tsx": 1130,
-        "apps/desktop/src/pages/SpatialCanvasPage.tsx": 1193,
+        "apps/desktop/src/pages/SpatialCanvasPage.tsx": 1173,
         "apps/desktop/src/services/ai.ts": 277,
         "apps/desktop/src/services/app-shell-data.ts": 94,
         "apps/desktop/src/services/aura-db.ts": 39,
         "apps/desktop/src/services/aura-platform.ts": 114,
         "apps/desktop/src/services/canvas-ai.ts": 41,
+        "apps/desktop/src/services/canvas-page-data.ts": 103,
+        "apps/desktop/src/services/citation-graph-page-data.ts": 68,
         "apps/desktop/src/services/citation-graph.ts": 171,
         "apps/desktop/src/services/cite.ts": 144,
         "apps/desktop/src/services/discovery-sites.ts": 343,
@@ -252,16 +253,16 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 82611
+      "totalLines": 81476
     },
     "tests": {
       "byExtension": {
-        ".ts": 38707,
+        ".ts": 39095,
         ".tsx": 104
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 233,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 265,
         "apps/desktop/electron/main/data-commands.test.ts": 1210,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
         "apps/desktop/electron/main/legacy-transaction-debt.test.ts": 258,
@@ -361,6 +362,8 @@
         "apps/desktop/src/features/reader/reader-session-state.test.ts": 63,
         "apps/desktop/src/features/sentinel/sentinel-preview.test.ts": 87,
         "apps/desktop/src/services/app-shell-data.test.ts": 152,
+        "apps/desktop/src/services/canvas-page-data.test.ts": 189,
+        "apps/desktop/src/services/citation-graph-page-data.test.ts": 167,
         "apps/desktop/src/services/citation-graph.test.ts": 198,
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
         "apps/desktop/src/services/library-page-data.test.ts": 306,
@@ -416,22 +419,8 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 38811
+      "totalLines": 39199
     }
   },
-  "uiDatabaseBoundary": {
-    "direct-sql-method|apps/desktop/src/components/CitationGraphView.tsx|query": 1,
-    "direct-sql-method|apps/desktop/src/pages/FlashcardsPage.tsx|query": 4,
-    "direct-sql-method|apps/desktop/src/pages/SpatialCanvasPage.tsx|query": 1,
-    "get-library-db|apps/desktop/src/components/CitationGraphView.tsx|call": 1,
-    "get-library-db|apps/desktop/src/pages/FlashcardsPage.tsx|call": 4,
-    "get-library-db|apps/desktop/src/pages/SpatialCanvasPage.tsx|call": 2,
-    "repo-construction|apps/desktop/src/pages/FlashcardsPage.tsx|FlashcardsRepo": 4,
-    "repo-construction|apps/desktop/src/pages/SpatialCanvasPage.tsx|WorksRepo": 2,
-    "runtime-db-gateway-import|apps/desktop/src/components/CitationGraphView.tsx|../services/aura-db": 1,
-    "runtime-db-gateway-import|apps/desktop/src/pages/FlashcardsPage.tsx|../services/aura-db": 1,
-    "runtime-db-gateway-import|apps/desktop/src/pages/SpatialCanvasPage.tsx|../services/aura-db": 1,
-    "runtime-repo-import|apps/desktop/src/pages/FlashcardsPage.tsx|@aurascholar/db/repos/flashcards": 1,
-    "runtime-repo-import|apps/desktop/src/pages/SpatialCanvasPage.tsx|@aurascholar/db/repos/works": 1
-  }
+  "uiDatabaseBoundary": {}
 }

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DataCommandDependencies } from "./data-command-runtime";
@@ -136,6 +136,38 @@ describe("main-process data command architecture", () => {
     expect(sentinelPage).not.toContain("SentinelRepo");
     expect(commands).toContain("assertActiveLocalLibrary");
     expect(commands).toContain("new SentinelRepo");
+  });
+
+  it("keeps Canvas and Citation Graph reads behind scoped data services", () => {
+    const canvasPage = source("src/pages/SpatialCanvasPage.tsx");
+    const canvasGateway = source("src/services/canvas-page-data.ts");
+    const citationGraph = source("src/components/CitationGraphView.tsx");
+    const citationGateway = source("src/services/citation-graph-page-data.ts");
+    const router = source("src/main.tsx");
+    const libraryBackup = source("src/shared/library-backup.ts");
+    const syncStorage = source("src/shared/sqlite-sync-storage.ts");
+
+    for (const renderer of [canvasPage, citationGraph]) {
+      expect(renderer).not.toContain("getLibraryDb");
+      expect(renderer).not.toContain("services/aura-db");
+      expect(renderer).not.toMatch(/\.\s*(?:query|run|exec|queryScalar)\s*(?:<[^;{}]*>)?\s*\(/);
+      expect(renderer).not.toMatch(/\bnew\s+[A-Za-z_$][\w$]*Repo\s*\(/);
+    }
+    expect(canvasPage).toContain("loadCanvasAnnotationIngressSource");
+    expect(canvasPage).toContain("loadCanvasActiveWork");
+    expect(canvasGateway).toContain("getLibraryDb");
+    expect(canvasGateway).toContain("libraryId");
+    expect(citationGraph).toContain("loadCitationGraphPageSnapshot");
+    expect(citationGateway).toContain("getLibraryDb");
+    expect(citationGateway).toContain("libraryId");
+
+    expect(existsSync(resolve(process.cwd(), "src/pages/FlashcardsPage.tsx"))).toBe(false);
+    expect(router).toContain('{ path: "flashcards", element: <Navigate to="/canvas" replace /> }');
+    for (const legacyTable of ["flashcards", "flashcard_srs", "flashcard_reviews"]) {
+      expect(libraryBackup).toContain(`"${legacyTable}"`);
+    }
+    expect(syncStorage).toContain("flashcards: [");
+    expect(syncStorage).toContain('table === "annotations" || table === "flashcards"');
   });
 
   it("keeps Library collection workflows inside the feature controller", () => {
