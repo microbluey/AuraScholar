@@ -18,9 +18,8 @@ import {
 } from "@aurascholar/core";
 import { Badge, Button } from "@aurascholar/ui";
 import { InlineNotice, type InlineNoticeTone } from "./InlineNotice";
-import { getLibraryDb } from "../services/aura-db";
 import { isDesktopRuntime } from "../services/aura-platform";
-import { loadCitationGraphByDoi } from "../services/citation-graph";
+import { loadCitationGraphPageSnapshot } from "../services/citation-graph-page-data";
 import { describeSafeError } from "../services/sensitive-text";
 
 const RELATION_COLOR: Record<string, string> = {
@@ -244,13 +243,12 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
       setImportNotice(null);
       setInLibrary(new Set());
       try {
-        const { db, libraryId } = await getLibraryDb();
-        const graph = await loadCitationGraphByDoi(requestedDoi, {
+        const snapshot = await loadCitationGraphPageSnapshot(requestedDoi, {
           buildGraph: (doi) => smokeBuildCitationGraph({ doi }),
-          db,
           signal: controller.signal,
         });
         if (!isCurrent()) return;
+        const graph = snapshot.graph;
         if (!graph) {
           setError("OpenAlex 中找不到这篇论文");
           setLayout(null);
@@ -262,17 +260,7 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
         if (!isCurrent()) return;
         setLayout(nextLayout);
         setCenterTitle(nextLayout.nodes.find((node) => node.relation === "center")?.title ?? "");
-        const dois = nextLayout.nodes.map((node) => node.doi).filter(Boolean) as string[];
-        if (dois.length > 0) {
-          const placeholders = dois.map(() => "?").join(",");
-          const rows = await db.query<{ doi: string }>(
-            `SELECT doi
-             FROM works
-             WHERE library_id = ? AND doi IN (${placeholders}) AND deleted_at IS NULL`,
-            [libraryId, ...dois],
-          );
-          if (isCurrent()) setInLibrary(new Set(rows.map((row) => row.doi)));
-        }
+        setInLibrary(snapshot.inLibraryDois);
       } catch (e) {
         if (isCurrent()) setError(describeSafeError(e));
       } finally {

@@ -19,8 +19,9 @@ built with [electron-vite](https://electron-vite.org/).
   instead of opening database sessions or embedding SQL. Read services own
   active-Library scoping and row aggregation; durable multi-row mutations go
   through typed `window.aura.data.command` gateways so transaction ownership
-  remains in the main process. Remaining legacy page-level boundaries are
-  frozen by the architecture-health ratchet and must decrease over time.
+  remains in the main process. The architecture-health gate rejects recognized
+  direct database-session, Repository-construction, and SQL-access patterns in
+  renderer pages and components.
 - **Renderer feature controllers** — migrated workflows keep async mutations,
   modal lifecycles, and global event subscriptions in feature hooks. Pages
   consume semantic actions and compose those workflows with their view state.
