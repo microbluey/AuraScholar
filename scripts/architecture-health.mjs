@@ -11,6 +11,8 @@ const UI_GATEWAY_ALLOWLIST = new Set([
   "apps/desktop/src/features/canvas/canvas-citation-resolver.ts",
   "apps/desktop/src/features/canvas/persistence.ts",
   "apps/desktop/src/features/reader/library-reader-session.ts",
+  "apps/desktop/src/shared/library-backup.ts",
+  "apps/desktop/src/shared/sqlite-sync-storage.ts",
 ]);
 
 export function normalizePath(value) {
@@ -53,12 +55,23 @@ function addFingerprint(target, rule, path, subject, amount = 1) {
 }
 
 function isUiBoundaryPath(path) {
-  if (UI_GATEWAY_ALLOWLIST.has(path) || /\.(?:test|spec)\.[^.]+$/.test(path)) return false;
-  return (
-    path.startsWith("apps/desktop/src/pages/") ||
-    path.startsWith("apps/desktop/src/components/") ||
-    path.startsWith("apps/desktop/src/features/")
-  );
+  if (!path.startsWith("apps/desktop/src/")) return false;
+  const extension = extname(path);
+  if (extension !== ".ts" && extension !== ".tsx") return false;
+  if (
+    path.endsWith(".d.ts") ||
+    /(^|\/)(generated|vendor)(\/|\.|$)/.test(path) ||
+    /\.(?:test|spec)\.[^.]+$/.test(path) ||
+    path.startsWith("apps/desktop/src/services/") ||
+    UI_GATEWAY_ALLOWLIST.has(path)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isRendererDbGatewayModule(moduleName) {
+  return /(?:^|\/)services\/aura-db(?:\.[cm]?[jt]s)?$/.test(moduleName);
 }
 
 function importClauseHasRuntimeValue(clause) {
@@ -114,11 +127,15 @@ export function collectBoundaryFingerprints(path, text) {
         );
       }
     }
-    if (/services\/aura-db$/.test(moduleName) && /\bget(?:Library)?Db\b/.test(clause)) {
+    if (isRendererDbGatewayModule(moduleName)) {
       addFingerprint(fingerprints, "runtime-db-gateway-import", normalized, moduleName);
     }
   }
 
+  for (const match of text.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+    if (!isRendererDbGatewayModule(match[1])) continue;
+    addFingerprint(fingerprints, "dynamic-db-gateway-import", normalized, match[1]);
+  }
   for (const match of text.matchAll(
     /\bimport\s*\(\s*["'](@aurascholar\/db\/repos\/[^"']+)["']\s*\)/g,
   )) {

@@ -65,8 +65,9 @@ pnpm health:test      # 运行护栏自身的回归测试
    新增测试或 Smoke 场景文件不超过 800 行。
 2. 已超过阈值的历史文件以目标分支行数为上限,只能持平或缩小;把巨型文件改名
    不能绕过新文件阈值。
-3. `pages`、`components` 和非网关 `features` 代码不得新增运行时 Repository
-   导入、`getLibraryDb` 调用、原始 SQL 或 Renderer DB bridge。类型专用导入不计入。
+3. 桌面 Renderer 的 UI 与编排代码不得新增运行时 Repository 导入、静态或动态
+   `aura-db` 网关导入、`getLibraryDb` 调用、原始 SQL 或 Renderer DB bridge。
+   `apps/desktop/src/services` 与显式网关 allowlist 不计入；类型专用导入不计入。
 4. ESLint warning 按“文件 + 规则”建立预算;已有 warning 可以修复,不得新增或转移
    到其他文件。
 5. 当前指标必须与提交的基线完全一致。修复债务后需运行 `pnpm health:baseline`;
@@ -77,6 +78,9 @@ pnpm health:test      # 运行护栏自身的回归测试
 候选基线,例如
 `node scripts/architecture-health.mjs baseline --base <target-commit-sha>`，确保本地
 结果与 CI 使用的 policy 一致。
+
+扩大门禁覆盖范围前，应先用独立重构 PR 清除新覆盖路径中的历史债务。后续的策略
+PR 不得把这些新发现的债务写入基线，以免“扩大检测”反而永久接受此前的盲区。
 
 这些阈值用于阻止新的巨石代码,不能代替职责设计。不要为了通过行数检查机械拆文件,
 也不要把页面逻辑整体搬进一个巨型 Hook。推荐的依赖方向是

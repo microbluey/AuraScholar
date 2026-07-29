@@ -67,6 +67,7 @@ test("distinguishes type-only imports from renderer database access", () => {
       import { WorksRepo, type ReadingStatus } from "@aurascholar/db/repos/works";
       import { TagsRepo } from "@aurascholar/db";
       import { type CollectionsRepo, newId } from "@aurascholar/db";
+      import { type Database } from "../services/aura-db";
       import { getLibraryDb } from "../services/aura-db";
 
       async function mutate() {
@@ -100,6 +101,10 @@ test("distinguishes type-only imports from renderer database access", () => {
     undefined,
   );
   assert.equal(result["repo-construction|apps/desktop/src/pages/ProbePage.tsx|WorksRepo"], 2);
+  assert.equal(
+    result["runtime-db-gateway-import|apps/desktop/src/pages/ProbePage.tsx|../services/aura-db"],
+    1,
+  );
   assert.equal(result["get-library-db|apps/desktop/src/pages/ProbePage.tsx|call"], 1);
   assert.equal(result["direct-sql-method|apps/desktop/src/pages/ProbePage.tsx|query"], 1);
   assert.equal(result["direct-sql-method|apps/desktop/src/pages/ProbePage.tsx|exec"], undefined);
@@ -108,6 +113,78 @@ test("distinguishes type-only imports from renderer database access", () => {
       "runtime-repo-import|apps/desktop/src/pages/ProbePage.tsx|@aurascholar/db/repos/annotations"
     ],
     undefined,
+  );
+});
+
+test("covers root renderer files and dynamic database gateway imports", () => {
+  const appPath = "apps/desktop/src/App.tsx";
+  const result = collectBoundaryFingerprints(
+    appPath,
+    `
+      import * as dbGateway from "./services/aura-db.js";
+
+      async function load() {
+        const { getLibraryDb: openLibrary } = await import("./services/aura-db");
+        const { db } = await openLibrary();
+        await getLibraryDb();
+        await db.query("SELECT id FROM works");
+      }
+    `,
+  );
+
+  assert.equal(result["dynamic-db-gateway-import|apps/desktop/src/App.tsx|./services/aura-db"], 1);
+  assert.equal(
+    result["runtime-db-gateway-import|apps/desktop/src/App.tsx|./services/aura-db.js"],
+    1,
+  );
+  assert.equal(result["get-library-db|apps/desktop/src/App.tsx|call"], 1);
+  assert.equal(result["direct-sql-method|apps/desktop/src/App.tsx|query"], 1);
+  assert.equal(
+    collectBoundaryFingerprints(
+      "apps/desktop/src/hooks/useLibrary.ts",
+      `database.query("SELECT id FROM works");`,
+    )["direct-sql-method|apps/desktop/src/hooks/useLibrary.ts|query"],
+    1,
+  );
+  assert.equal(
+    collectBoundaryFingerprints(
+      "apps/desktop/src/main.tsx",
+      `window.aura.db.query("SELECT id FROM works");`,
+    )["renderer-db-bridge|apps/desktop/src/main.tsx|query"],
+    1,
+  );
+});
+
+test("exempts renderer data gateways, declarations, tests, styles, and exact allowlists", () => {
+  const source = `
+    import { WorksRepo } from "@aurascholar/db/repos/works";
+    import { getLibraryDb } from "../services/aura-db";
+    void getLibraryDb();
+    void new WorksRepo(database, "library");
+    void database.query("SELECT id FROM works");
+  `;
+  const exemptPaths = [
+    "apps/desktop/src/services/probe.ts",
+    "apps/desktop/src/App.test.tsx",
+    "apps/desktop/src/hooks/probe.spec.ts",
+    "apps/desktop/src/types/database.d.ts",
+    "apps/desktop/src/styles/probe.css",
+    "apps/desktop/src/features/reader/library-reader-session.ts",
+    "apps/desktop/src/features/canvas/canvas-citation-resolver.ts",
+    "apps/desktop/src/features/canvas/persistence.ts",
+    "apps/desktop/src/shared/library-backup.ts",
+    "apps/desktop/src/shared/sqlite-sync-storage.ts",
+  ];
+
+  for (const path of exemptPaths) {
+    assert.deepEqual(collectBoundaryFingerprints(path, source), {}, path);
+  }
+
+  assert.equal(
+    collectBoundaryFingerprints("apps/desktop/src/shared/probe.ts", source)[
+      "direct-sql-method|apps/desktop/src/shared/probe.ts|query"
+    ],
+    1,
   );
 });
 
@@ -153,7 +230,10 @@ test("freezes oversized files while allowing compliant files to grow", () => {
 
 test("rejects new warning and boundary fingerprints but accepts debt reduction", () => {
   const base = snapshot({
-    boundaries: { "get-library-db|apps/desktop/src/pages/ReaderPage.tsx|call": 2 },
+    boundaries: {
+      "dynamic-db-gateway-import|apps/desktop/src/App.tsx|./services/aura-db": 1,
+      "get-library-db|apps/desktop/src/pages/ReaderPage.tsx|call": 2,
+    },
     warnings: {
       "lint-warning|apps/desktop/src/pages/ReaderPage.tsx|react-hooks/set-state-in-effect": 3,
     },
@@ -161,7 +241,9 @@ test("rejects new warning and boundary fingerprints but accepts debt reduction",
   assert.deepEqual(
     compareRatchet(
       snapshot({
-        boundaries: { "get-library-db|apps/desktop/src/pages/ReaderPage.tsx|call": 1 },
+        boundaries: {
+          "get-library-db|apps/desktop/src/pages/ReaderPage.tsx|call": 1,
+        },
         warnings: {
           "lint-warning|apps/desktop/src/pages/ReaderPage.tsx|react-hooks/set-state-in-effect": 2,
         },
@@ -173,6 +255,7 @@ test("rejects new warning and boundary fingerprints but accepts debt reduction",
   const failures = compareRatchet(
     snapshot({
       boundaries: {
+        "dynamic-db-gateway-import|apps/desktop/src/App.tsx|./services/aura-db": 2,
         "get-library-db|apps/desktop/src/pages/ReaderPage.tsx|call": 2,
         "repo-construction|apps/desktop/src/pages/ReaderPage.tsx|WorksRepo": 1,
       },
@@ -182,7 +265,7 @@ test("rejects new warning and boundary fingerprints but accepts debt reduction",
     }),
     base,
   );
-  assert.equal(failures.length, 2);
+  assert.equal(failures.length, 3);
   assert.ok(failures.some((failure) => failure.startsWith("UI database boundary:")));
   assert.ok(failures.some((failure) => failure.startsWith("Lint warning:")));
 });
