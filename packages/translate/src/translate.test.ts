@@ -138,6 +138,18 @@ describe("DeepLTranslator", () => {
     expect(http.requests[0]?.url).toBe("https://api.deepl.example/custom/v2/translate");
   });
 
+  it("forwards caller cancellation to the HTTP request", async () => {
+    const http = new StubHttpClient();
+    const controller = new AbortController();
+    http.on(/deepl\.com\/v2\/translate/, (request) => {
+      expect(request.signal).toBe(controller.signal);
+      return jsonResponse(200, { translations: [{ text: "已取消前完成" }] });
+    });
+    const translator = new DeepLTranslator({ http, apiKey: "k" });
+
+    await translator.translate({ text: "hello", targetLang: "zh" }, { signal: controller.signal });
+  });
+
   it("rejects unsafe custom base URLs", () => {
     const http = new StubHttpClient();
     expect(
@@ -162,8 +174,7 @@ describe("DeepLTranslator", () => {
     const http = new StubHttpClient();
     http.on(/deepl\.com\/v2\/translate/, () =>
       jsonResponse(403, {
-        message:
-          "auth failed Authorization: DeepL-Auth-Key deepl-secret and apiKey=deepl-inline",
+        message: "auth failed Authorization: DeepL-Auth-Key deepl-secret and apiKey=deepl-inline",
       }),
     );
     const t = new DeepLTranslator({ http, apiKey: "local-deepl-key" });
@@ -186,11 +197,33 @@ describe("BaiduTranslator", () => {
       // Verify the documented signature: md5(appid + q + salt + key).
       const expected = md5("app1" + params.get("q") + params.get("salt") + "secret");
       expect(params.get("sign")).toBe(expected);
-      return jsonResponse(200, { trans_result: [{ src: "a", dst: "甲" }, { src: "b", dst: "乙" }] });
+      return jsonResponse(200, {
+        trans_result: [
+          { src: "a", dst: "甲" },
+          { src: "b", dst: "乙" },
+        ],
+      });
     });
     const t = new BaiduTranslator({ http, appid: "app1", key: "secret", salt: "1234" });
     const out = await t.translate({ text: "a\nb", targetLang: "zh" });
     expect(out.text).toBe("甲\n乙");
+  });
+
+  it("forwards caller cancellation to the HTTP request", async () => {
+    const http = new StubHttpClient();
+    const controller = new AbortController();
+    http.on(/fanyi-api\.baidu\.com/, (request) => {
+      expect(request.signal).toBe(controller.signal);
+      return jsonResponse(200, { trans_result: [{ src: "a", dst: "甲" }] });
+    });
+    const translator = new BaiduTranslator({
+      http,
+      appid: "app1",
+      key: "secret",
+      salt: "1234",
+    });
+
+    await translator.translate({ text: "a", targetLang: "zh" }, { signal: controller.signal });
   });
 
   it("redacts provider error messages before throwing", async () => {
@@ -206,8 +239,6 @@ describe("BaiduTranslator", () => {
     await expect(t.translate({ text: "a", targetLang: "zh" })).rejects.toThrow(
       /百度翻译错误 52003: invalid credential client_secret=\[redacted\]/,
     );
-    await expect(t.translate({ text: "a", targetLang: "zh" })).rejects.not.toThrow(
-      /baidu-secret/,
-    );
+    await expect(t.translate({ text: "a", targetLang: "zh" })).rejects.not.toThrow(/baidu-secret/);
   });
 });

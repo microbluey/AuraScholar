@@ -3,15 +3,15 @@
     "lint-warning|apps/desktop/src/components/CitationGraphView.tsx|react-hooks/refs": 1,
     "lint-warning|apps/desktop/src/components/CitationGraphView.tsx|react-hooks/set-state-in-effect": 1,
     "lint-warning|apps/desktop/src/pages/LibraryPage.tsx|react-hooks/set-state-in-effect": 5,
-    "lint-warning|apps/desktop/src/pages/ReaderPage.tsx|react-hooks/set-state-in-effect": 3
+    "lint-warning|apps/desktop/src/pages/ReaderPage.tsx|react-hooks/set-state-in-effect": 1
   },
   "schemaVersion": 1,
   "source": {
     "production": {
       "byExtension": {
         ".css": 16808,
-        ".ts": 31867,
-        ".tsx": 32657
+        ".ts": 32099,
+        ".tsx": 33004
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 221,
@@ -36,7 +36,7 @@
         "apps/desktop/src/clipboard.ts": 56,
         "apps/desktop/src/components/AppErrorBoundary.tsx": 168,
         "apps/desktop/src/components/CitationGraphView.tsx": 746,
-        "apps/desktop/src/components/ConfirmDialog.tsx": 160,
+        "apps/desktop/src/components/ConfirmDialog.tsx": 163,
         "apps/desktop/src/components/ImportConfirmDialog.tsx": 490,
         "apps/desktop/src/components/InlineNotice.tsx": 61,
         "apps/desktop/src/components/MetadataEditor.tsx": 680,
@@ -68,6 +68,7 @@
         "apps/desktop/src/features/canvas/canvas-excerpt-commit.ts": 74,
         "apps/desktop/src/features/canvas/canvas-excerpt-dnd.ts": 414,
         "apps/desktop/src/features/canvas/canvas-history.ts": 342,
+        "apps/desktop/src/features/canvas/canvas-ingress-lifecycle.ts": 7,
         "apps/desktop/src/features/canvas/canvas-interactions.ts": 241,
         "apps/desktop/src/features/canvas/canvas-link.ts": 257,
         "apps/desktop/src/features/canvas/canvas-note-draft.ts": 787,
@@ -81,7 +82,7 @@
         "apps/desktop/src/features/canvas/persistence.ts": 450,
         "apps/desktop/src/features/canvas/routes.ts": 20,
         "apps/desktop/src/features/canvas/synthesis.ts": 280,
-        "apps/desktop/src/features/canvas/useCanvasIngress.tsx": 98,
+        "apps/desktop/src/features/canvas/useCanvasIngress.tsx": 168,
         "apps/desktop/src/features/canvas/workspace-controls.css": 649,
         "apps/desktop/src/features/canvas/workspace-controls.ts": 74,
         "apps/desktop/src/features/canvas/workspace-load.ts": 117,
@@ -94,7 +95,10 @@
         "apps/desktop/src/features/library/library-collection-model.ts": 78,
         "apps/desktop/src/features/library/useLibraryCollectionController.ts": 454,
         "apps/desktop/src/features/library/useTagManager.ts": 313,
-        "apps/desktop/src/features/reader/library-reader-session.ts": 178,
+        "apps/desktop/src/features/reader/ReaderPageChrome.tsx": 314,
+        "apps/desktop/src/features/reader/library-reader-session.ts": 247,
+        "apps/desktop/src/features/reader/reader-session-coordinator.ts": 107,
+        "apps/desktop/src/features/reader/reader-session-state.ts": 45,
         "apps/desktop/src/features/settings/backup-safety.ts": 31,
         "apps/desktop/src/keyboard.ts": 7,
         "apps/desktop/src/main.tsx": 106,
@@ -103,7 +107,7 @@
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1149,
         "apps/desktop/src/pages/LibraryPage.tsx": 4708,
-        "apps/desktop/src/pages/ReaderPage.tsx": 2183,
+        "apps/desktop/src/pages/ReaderPage.tsx": 2143,
         "apps/desktop/src/pages/SentinelPage.tsx": 1361,
         "apps/desktop/src/pages/SettingsPage.tsx": 2067,
         "apps/desktop/src/pages/SnippetsPage.tsx": 1130,
@@ -233,9 +237,9 @@
         "packages/sync/src/watermark.ts": 3,
         "packages/sync/src/webdav.ts": 297,
         "packages/tokens/src/index.ts": 13,
-        "packages/translate/src/baidu.ts": 95,
+        "packages/translate/src/baidu.ts": 98,
         "packages/translate/src/chunk.ts": 55,
-        "packages/translate/src/deepl.ts": 95,
+        "packages/translate/src/deepl.ts": 96,
         "packages/translate/src/factory.ts": 64,
         "packages/translate/src/index.ts": 17,
         "packages/translate/src/llm.ts": 49,
@@ -244,11 +248,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 81332
+      "totalLines": 81911
     },
     "tests": {
       "byExtension": {
-        ".ts": 37182,
+        ".ts": 37706,
         ".tsx": 104
       },
       "files": {
@@ -331,6 +335,7 @@
         "apps/desktop/src/features/canvas/canvas-excerpt-commit.test.ts": 211,
         "apps/desktop/src/features/canvas/canvas-excerpt-dnd.test.ts": 362,
         "apps/desktop/src/features/canvas/canvas-history.test.ts": 440,
+        "apps/desktop/src/features/canvas/canvas-ingress-lifecycle.test.ts": 18,
         "apps/desktop/src/features/canvas/canvas-interactions.test.ts": 272,
         "apps/desktop/src/features/canvas/canvas-link.test.ts": 247,
         "apps/desktop/src/features/canvas/canvas-navigation-router.test.ts": 42,
@@ -345,7 +350,10 @@
         "apps/desktop/src/features/canvas/workspace-controls.test.ts": 116,
         "apps/desktop/src/features/canvas/workspace-load.test.ts": 290,
         "apps/desktop/src/features/library/library-collection-model.test.ts": 147,
-        "apps/desktop/src/features/reader/library-reader-session.test.ts": 225,
+        "apps/desktop/src/features/reader/library-reader-session.test.ts": 397,
+        "apps/desktop/src/features/reader/reader-session-coordinator.test.ts": 113,
+        "apps/desktop/src/features/reader/reader-session-stale-completion.test.ts": 127,
+        "apps/desktop/src/features/reader/reader-session-state.test.ts": 63,
         "apps/desktop/src/services/app-shell-data.test.ts": 152,
         "apps/desktop/src/services/citation-graph.test.ts": 198,
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
@@ -399,9 +407,9 @@
         "packages/sync/src/table-guard.test.ts": 43,
         "packages/sync/src/watermark.test.ts": 12,
         "packages/sync/src/webdav.test.ts": 288,
-        "packages/translate/src/translate.test.ts": 213
+        "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 37286
+      "totalLines": 37810
     }
   },
   "uiDatabaseBoundary": {
@@ -410,22 +418,16 @@
     "direct-sql-method|apps/desktop/src/pages/SpatialCanvasPage.tsx|query": 1,
     "get-library-db|apps/desktop/src/components/CitationGraphView.tsx|call": 1,
     "get-library-db|apps/desktop/src/pages/FlashcardsPage.tsx|call": 4,
-    "get-library-db|apps/desktop/src/pages/ReaderPage.tsx|call": 6,
     "get-library-db|apps/desktop/src/pages/SentinelPage.tsx|call": 5,
     "get-library-db|apps/desktop/src/pages/SpatialCanvasPage.tsx|call": 2,
     "repo-construction|apps/desktop/src/pages/FlashcardsPage.tsx|FlashcardsRepo": 4,
-    "repo-construction|apps/desktop/src/pages/ReaderPage.tsx|AnnotationsRepo": 5,
-    "repo-construction|apps/desktop/src/pages/ReaderPage.tsx|WorksRepo": 2,
     "repo-construction|apps/desktop/src/pages/SentinelPage.tsx|SentinelRepo": 5,
     "repo-construction|apps/desktop/src/pages/SpatialCanvasPage.tsx|WorksRepo": 2,
     "runtime-db-gateway-import|apps/desktop/src/components/CitationGraphView.tsx|../services/aura-db": 1,
     "runtime-db-gateway-import|apps/desktop/src/pages/FlashcardsPage.tsx|../services/aura-db": 1,
-    "runtime-db-gateway-import|apps/desktop/src/pages/ReaderPage.tsx|../services/aura-db": 1,
     "runtime-db-gateway-import|apps/desktop/src/pages/SentinelPage.tsx|../services/aura-db": 1,
     "runtime-db-gateway-import|apps/desktop/src/pages/SpatialCanvasPage.tsx|../services/aura-db": 1,
     "runtime-repo-import|apps/desktop/src/pages/FlashcardsPage.tsx|@aurascholar/db/repos/flashcards": 1,
-    "runtime-repo-import|apps/desktop/src/pages/ReaderPage.tsx|@aurascholar/db/repos/annotations": 1,
-    "runtime-repo-import|apps/desktop/src/pages/ReaderPage.tsx|@aurascholar/db/repos/works": 1,
     "runtime-repo-import|apps/desktop/src/pages/SentinelPage.tsx|@aurascholar/db/repos/sentinel": 1,
     "runtime-repo-import|apps/desktop/src/pages/SpatialCanvasPage.tsx|@aurascholar/db/repos/works": 1
   }

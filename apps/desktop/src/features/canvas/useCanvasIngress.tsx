@@ -1,5 +1,5 @@
 import type { CanvasWorkspaceSummary } from "@aurascholar/db/repos/canvas";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CanvasTargetPicker } from "./CanvasTargetPicker";
 import {
@@ -7,6 +7,7 @@ import {
   listCanvasWorkspaces,
   readLastCanvasWorkspaceId,
 } from "./persistence";
+import { isCanvasIngressRequestCurrent } from "./canvas-ingress-lifecycle";
 import { canvasWorkspaceIngressPath } from "./routes";
 
 export interface CanvasIngressRequest {
@@ -15,15 +16,34 @@ export interface CanvasIngressRequest {
   workId: string;
 }
 
+export interface CanvasIngressOptions {
+  signal?: AbortSignal;
+}
+
 interface CanvasTargetState {
   activeWorkspaceId: string;
   request: CanvasIngressRequest;
+  requestSequence: number;
+  signal?: AbortSignal;
   workspaces: CanvasWorkspaceSummary[];
 }
 
 export function useCanvasIngress(onError?: (message: string) => void) {
   const navigate = useNavigate();
   const [targetState, setTargetState] = useState<CanvasTargetState | null>(null);
+  const requestSequenceRef = useRef(0);
+
+  const cancelCanvasIngress = useCallback(() => {
+    requestSequenceRef.current += 1;
+    setTargetState(null);
+  }, []);
+
+  useEffect(
+    () => () => {
+      requestSequenceRef.current += 1;
+    },
+    [],
+  );
 
   const navigateToTarget = useCallback(
     (workspaceId: string, request: CanvasIngressRequest) => {
@@ -38,9 +58,15 @@ export function useCanvasIngress(onError?: (message: string) => void) {
   );
 
   const openInCanvas = useCallback(
-    async (request: CanvasIngressRequest): Promise<void> => {
+    async (request: CanvasIngressRequest, options: CanvasIngressOptions = {}): Promise<void> => {
+      const requestSequence = ++requestSequenceRef.current;
+      setTargetState(null);
+      const isCurrent = () =>
+        isCanvasIngressRequestCurrent(requestSequenceRef.current, requestSequence, options.signal);
+      if (!isCurrent()) return;
       try {
         const workspaces = await listCanvasWorkspaces();
+        if (!isCurrent()) return;
         const rememberedId = readLastCanvasWorkspaceId();
         const activeWorkspace =
           workspaces.find((workspace) => workspace.workspaceId === rememberedId) ?? workspaces[0];
@@ -52,10 +78,14 @@ export function useCanvasIngress(onError?: (message: string) => void) {
         setTargetState({
           activeWorkspaceId: activeWorkspace.workspaceId,
           request,
+          requestSequence,
+          signal: options.signal,
           workspaces,
         });
       } catch (error) {
-        onError?.(error instanceof Error ? error.message : "无法读取空间白板列表");
+        if (isCurrent()) {
+          onError?.(error instanceof Error ? error.message : "无法读取空间白板列表");
+        }
       }
     },
     [navigateToTarget, onError],
@@ -68,18 +98,58 @@ export function useCanvasIngress(onError?: (message: string) => void) {
         activeWorkspaceId={targetState?.activeWorkspaceId ?? ""}
         workspaces={targetState?.workspaces ?? []}
         sourceLabel={targetState?.request.sourceLabel}
-        onCancel={() => setTargetState(null)}
+        onCancel={cancelCanvasIngress}
         onConfirm={(workspaceId) => {
-          const request = targetState?.request;
-          if (!request) return;
+          const target = targetState;
+          if (
+            !target ||
+            !isCanvasIngressRequestCurrent(
+              requestSequenceRef.current,
+              target.requestSequence,
+              target.signal,
+            )
+          ) {
+            cancelCanvasIngress();
+            return;
+          }
+          requestSequenceRef.current += 1;
           setTargetState(null);
-          navigateToTarget(workspaceId, request);
+          navigateToTarget(workspaceId, target.request);
         }}
         onCreateWorkspace={async (name) => {
+          const target = targetState;
+          if (
+            !target ||
+            !isCanvasIngressRequestCurrent(
+              requestSequenceRef.current,
+              target.requestSequence,
+              target.signal,
+            )
+          ) {
+            throw new DOMException("Canvas ingress cancelled", "AbortError");
+          }
           const created = await createCanvasWorkspace(name);
+          if (
+            !isCanvasIngressRequestCurrent(
+              requestSequenceRef.current,
+              target.requestSequence,
+              target.signal,
+            )
+          ) {
+            return created;
+          }
           const workspaces = await listCanvasWorkspaces();
+          if (
+            !isCanvasIngressRequestCurrent(
+              requestSequenceRef.current,
+              target.requestSequence,
+              target.signal,
+            )
+          ) {
+            return created;
+          }
           setTargetState((current) =>
-            current
+            current?.requestSequence === target.requestSequence
               ? {
                   ...current,
                   activeWorkspaceId: created.workspaceId,
@@ -91,8 +161,8 @@ export function useCanvasIngress(onError?: (message: string) => void) {
         }}
       />
     ),
-    [navigateToTarget, targetState],
+    [cancelCanvasIngress, navigateToTarget, targetState],
   );
 
-  return { openInCanvas, targetPicker };
+  return { cancelCanvasIngress, openInCanvas, targetPicker };
 }

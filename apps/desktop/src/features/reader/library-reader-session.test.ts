@@ -6,8 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   LibraryReaderSessionError,
   createLibraryReaderAnnotation,
+  deleteLibraryReaderAnnotation,
   loadLibraryReaderSession,
+  markLibraryReaderWorkStarted,
+  restoreLibraryReaderAnnotation,
   type LibraryReaderSessionDataSource,
+  updateLibraryReaderAnnotationContent,
 } from "./library-reader-session";
 
 function work(overrides: Partial<WorkWithAuthors> = {}): WorkWithAuthors {
@@ -110,6 +114,7 @@ function dataSource(
   const doc = fakeDocument();
   return {
     createAnnotation: vi.fn(async () => "annotation-new"),
+    deleteAnnotation: vi.fn(async () => undefined),
     listAnnotations: vi.fn(async () => [annotationRow()]),
     listAttachments: vi.fn(async () => [attachment()]),
     loadDocument: vi.fn(async () => doc),
@@ -118,6 +123,9 @@ function dataSource(
       data: new Uint8Array([1, 2, 3]),
     })),
     loadWork: vi.fn(async () => work()),
+    markReadingStarted: vi.fn(async () => true),
+    restoreAnnotation: vi.fn(async () => undefined),
+    updateAnnotationContent: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -210,16 +218,180 @@ describe("library reader session", () => {
     await expect(pending).resolves.toEqual({ ...draft, id: "annotation-committed" });
   });
 
-  it("rejects archived works before reading an attachment", async () => {
+  it("does not start any write after its request has already been aborted", async () => {
+    const source = dataSource();
+    const controller = new AbortController();
+    controller.abort();
+    const session = { work: work(), attachment: attachment() };
+    const draft: Omit<ReaderAnnotation, "id"> = {
+      type: "highlight",
+      color: "#ffd866",
+      pageIndex: 1,
+      anchor: {
+        version: 1,
+        pageIndex: 1,
+        quote: { exact: "unsaved evidence", prefix: "", suffix: "" },
+      },
+    };
+
+    await expect(
+      createLibraryReaderAnnotation(session, draft, controller.signal, source),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      deleteLibraryReaderAnnotation("annotation-1", controller.signal, source),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      restoreLibraryReaderAnnotation("annotation-1", controller.signal, source),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      updateLibraryReaderAnnotationContent(
+        "annotation-1",
+        "unsaved comment",
+        controller.signal,
+        source,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      markLibraryReaderWorkStarted("work-1", controller.signal, source),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(source.createAnnotation).not.toHaveBeenCalled();
+    expect(source.deleteAnnotation).not.toHaveBeenCalled();
+    expect(source.restoreAnnotation).not.toHaveBeenCalled();
+    expect(source.updateAnnotationContent).not.toHaveBeenCalled();
+    expect(source.markReadingStarted).not.toHaveBeenCalled();
+  });
+
+  it("reports a committed annotation delete even if aborted during the write", async () => {
+    const written = deferred<void>();
     const source = dataSource({
-      loadWork: vi.fn(async () => work({ deleted_at: 99 })),
+      deleteAnnotation: vi.fn(() => written.promise),
+    });
+    const controller = new AbortController();
+
+    const pending = deleteLibraryReaderAnnotation("annotation-1", controller.signal, source);
+    await vi.waitFor(() => expect(source.deleteAnnotation).toHaveBeenCalledOnce());
+    controller.abort();
+    written.resolve(undefined);
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("reports a committed annotation restore even if aborted during the write", async () => {
+    const written = deferred<void>();
+    const source = dataSource({
+      restoreAnnotation: vi.fn(() => written.promise),
+    });
+    const controller = new AbortController();
+
+    const pending = restoreLibraryReaderAnnotation("annotation-1", controller.signal, source);
+    await vi.waitFor(() => expect(source.restoreAnnotation).toHaveBeenCalledOnce());
+    controller.abort();
+    written.resolve(undefined);
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("reports a committed annotation content update even if aborted during the write", async () => {
+    const written = deferred<void>();
+    const source = dataSource({
+      updateAnnotationContent: vi.fn(() => written.promise),
+    });
+    const controller = new AbortController();
+
+    const pending = updateLibraryReaderAnnotationContent(
+      "annotation-1",
+      "committed comment",
+      controller.signal,
+      source,
+    );
+    await vi.waitFor(() => expect(source.updateAnnotationContent).toHaveBeenCalledOnce());
+    controller.abort();
+    written.resolve(undefined);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(source.updateAnnotationContent).toHaveBeenCalledWith(
+      "annotation-1",
+      "committed comment",
+    );
+  });
+
+  it("returns the committed conditional reading-state result after an abort", async () => {
+    const written = deferred<boolean>();
+    const source = dataSource({
+      markReadingStarted: vi.fn(() => written.promise),
+    });
+    const controller = new AbortController();
+
+    const pending = markLibraryReaderWorkStarted("work-1", controller.signal, source);
+    await vi.waitFor(() => expect(source.markReadingStarted).toHaveBeenCalledOnce());
+    controller.abort();
+    written.resolve(false);
+
+    await expect(pending).resolves.toBe(false);
+  });
+
+  it("rejects archived works before reading an attachment", async () => {
+    const archived = work({ deleted_at: 99 });
+    const source = dataSource({
+      loadWork: vi.fn(async () => archived),
     });
 
     await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
       expect.objectContaining<Partial<LibraryReaderSessionError>>({
         code: "work-archived",
+        work: archived,
       }),
     );
     expect(source.loadPdf).not.toHaveBeenCalled();
+  });
+
+  it("preserves loaded work context when its PDF is unavailable", async () => {
+    const loadedWork = work();
+    const source = dataSource({
+      loadPdf: vi.fn(async () => null),
+      loadWork: vi.fn(async () => loadedWork),
+    });
+
+    await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
+      expect.objectContaining<Partial<LibraryReaderSessionError>>({
+        code: "attachment-missing",
+        work: loadedWork,
+      }),
+    );
+  });
+
+  it("preserves loaded work context when the PDF blob cannot be read", async () => {
+    const loadedWork = work();
+    const source = dataSource({
+      loadPdf: vi.fn(async () => {
+        throw new Error("blob unavailable");
+      }),
+      loadWork: vi.fn(async () => loadedWork),
+    });
+
+    await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
+      expect.objectContaining<Partial<LibraryReaderSessionError>>({
+        code: "attachment-unavailable",
+        work: loadedWork,
+      }),
+    );
+  });
+
+  it("preserves loaded work context when the PDF cannot be parsed", async () => {
+    const loadedWork = work();
+    const source = dataSource({
+      loadDocument: vi.fn(async () => {
+        throw new Error("invalid PDF");
+      }),
+      loadWork: vi.fn(async () => loadedWork),
+    });
+
+    await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
+      expect.objectContaining<Partial<LibraryReaderSessionError>>({
+        code: "pdf-invalid",
+        work: loadedWork,
+      }),
+    );
   });
 });

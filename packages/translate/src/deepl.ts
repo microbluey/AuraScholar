@@ -25,7 +25,7 @@ export class DeepLTranslator implements Translator {
     this.baseUrl = normalizeDeepLBaseUrl(opts.baseUrl);
   }
 
-  async translate(input: TranslateInput, _opts?: TranslateOptions): Promise<TranslateResult> {
+  async translate(input: TranslateInput, opts?: TranslateOptions): Promise<TranslateResult> {
     const text = input.text.trim();
     if (!text) return { text: "", engine: this.id };
 
@@ -44,6 +44,7 @@ export class DeepLTranslator implements Translator {
         "content-type": "application/x-www-form-urlencoded",
       },
       body: form.toString(),
+      signal: opts?.signal,
       timeoutMs: 60_000,
     });
     if (res.status !== 200) {
