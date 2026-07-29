@@ -1,4 +1,5 @@
 import type { MergeWorksResult, ReadingStatus } from "@aurascholar/db/repos/works";
+import type { DiscoverySource } from "@aurascholar/core";
 import type {
   SentinelCheckUpdate,
   SentinelCreateInput,
@@ -131,6 +132,47 @@ export interface ApplyRemoteSyncSegmentCommandInput {
   segment: ApplyRemoteSegmentCommand;
 }
 
+export interface CreateSavedSearchCommandInput extends LibraryScopedCommandInput {
+  query: string;
+  sources: DiscoverySource[] | null;
+}
+
+export interface CreateSavedSearchCommandResult {
+  created: boolean;
+  id: string;
+}
+
+export interface SavedSearchCommandInput extends LibraryScopedCommandInput {
+  savedSearchId: string;
+}
+
+export interface SavedSearchMutationResult {
+  updated: number;
+}
+
+export interface RecordSavedSearchRunCommandInput extends SavedSearchCommandInput {
+  expectedUpdatedAt: number;
+  nextRunAt: number;
+  observedIds: string[];
+}
+
+export interface RecordSavedSearchRunCommandResult {
+  committed: boolean;
+  freshCount: number;
+  updatedAt: number | null;
+}
+
+export interface RecordSavedSearchErrorCommandInput extends SavedSearchCommandInput {
+  error: string;
+  expectedUpdatedAt: number;
+  nextRunAt: number;
+}
+
+export interface RecordSavedSearchErrorCommandResult {
+  committed: boolean;
+  updatedAt: number | null;
+}
+
 export interface CreateOrRestoreSentinelCommandInput
   extends LibraryScopedCommandInput, SentinelCreateInput {}
 
@@ -231,6 +273,30 @@ export interface DataCommandMap {
   "library.trashWorks": {
     input: WorkIdsCommandInput;
     output: WorkMutationCountResult;
+  };
+  "savedSearch.clearNew": {
+    input: SavedSearchCommandInput;
+    output: SavedSearchMutationResult;
+  };
+  "savedSearch.create": {
+    input: CreateSavedSearchCommandInput;
+    output: CreateSavedSearchCommandResult;
+  };
+  "savedSearch.delete": {
+    input: SavedSearchCommandInput;
+    output: SavedSearchMutationResult;
+  };
+  "savedSearch.recordError": {
+    input: RecordSavedSearchErrorCommandInput;
+    output: RecordSavedSearchErrorCommandResult;
+  };
+  "savedSearch.recordRun": {
+    input: RecordSavedSearchRunCommandInput;
+    output: RecordSavedSearchRunCommandResult;
+  };
+  "savedSearch.restore": {
+    input: SavedSearchCommandInput;
+    output: SavedSearchMutationResult;
   };
   "sentinel.createOrRestore": {
     input: CreateOrRestoreSentinelCommandInput;

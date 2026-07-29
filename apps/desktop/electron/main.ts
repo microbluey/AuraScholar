@@ -24,6 +24,8 @@ if (SMOKE_MODE) {
   app.commandLine.appendSwitch("disable-gpu");
 }
 
+const hasSingleInstanceLock = SMOKE_MODE || app.requestSingleInstanceLock();
+
 async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1280,
@@ -70,25 +72,43 @@ async function createWindow(): Promise<void> {
   initResearchBrowser(win);
 }
 
-app.whenReady().then(() => {
-  registerPlatformHandlers();
-  registerDbHandlers();
-  registerDataCommandHandlers();
-  registerResearchHandlers();
-  registerCloseLifecycleHandlers();
-  handle(CH.citationBridgePort, () => citationBridgePort());
-  startCitationBridge();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", focusPrimaryWindow);
 
-  void createWindow();
+  app.whenReady().then(() => {
+    registerPlatformHandlers();
+    registerDbHandlers();
+    registerDataCommandHandlers();
+    registerResearchHandlers();
+    registerCloseLifecycleHandlers();
+    handle(CH.citationBridgePort, () => citationBridgePort());
+    startCitationBridge();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+    void createWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+    });
   });
-});
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+function focusPrimaryWindow(): void {
+  const [win] = BrowserWindow.getAllWindows();
+  if (!win) {
+    if (app.isReady()) void createWindow();
+    return;
+  }
+
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
 
 function isAllowedAppNavigation(rawUrl: string): boolean {
   let url: URL;

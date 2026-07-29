@@ -1,292 +1,440 @@
 // Saved-search runner: re-runs stored open-source queries on a schedule and
-// surfaces newly-published matches. The discovery analogue of the sentinel
-// loop (services/sentinel.ts) — startup catch-up + hourly in-app timer.
-import { workFingerprint } from "@aurascholar/db/ids";
-import {
-  SavedSearchInactiveError,
-  SavedSearchesRepo,
-  type SavedSearchRow,
-} from "@aurascholar/db/repos/saved-searches";
-import type { NormalizedWork } from "@aurascholar/connectors";
+// surfaces newly-published matches. Network work stays in the renderer, while
+// every durable mutation crosses the typed main-process command boundary.
+import type { DiscoverySource } from "@aurascholar/core";
+import { SavedSearchesRepo, type SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
 import { getLibraryDb } from "./aura-db";
 import { auraNotifier } from "./aura-platform";
-import { describeSafeError } from "./sensitive-text";
 import type { DiscoveryResultWithLibrary } from "./discovery";
-import type { DiscoverySource } from "@aurascholar/core";
+import {
+  canonicalSavedSearchSources,
+  isSavedSearchReportUnavailable,
+  parseSavedSearchSources,
+  savedSearchReportErrorMessage,
+  savedSearchResultId,
+  toSavedSearchView,
+  type SavedSearchView,
+} from "./saved-search-model";
+import { savedSearchPollKey, waitForSavedSearchPoll } from "./saved-search-polling";
+import type {
+  CreateSavedSearchResult,
+  SavedSearchNotification,
+  SavedSearchScope,
+  SavedSearchServiceDependencies,
+  SavedSearchTimer,
+  SavedSearchWriteGateway,
+} from "./saved-search-service-contract";
+import { describeSafeError } from "./sensitive-text";
 
-// How long until a saved search is polled again. Conservative — new
-// publications appear over days, not minutes, and we want to stay polite to the
-// open APIs.
-const POLL_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12h
+// New publications appear over days, not minutes. The scheduler wakes hourly
+// to catch overdue rows, while each successful row is deferred for 12 hours.
+const POLL_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const LOOP_INTERVAL_MS = 60 * 60 * 1000;
 
-export interface SavedSearchView {
-  id: string;
-  query: string;
-  sources: DiscoverySource[] | null;
-  newCount: number;
-  lastRunAt: number | null;
-  lastError: string | null;
+export type { SavedSearchView } from "./saved-search-model";
+export type {
+  CreateSavedSearchResult,
+  SavedSearchReadRepository,
+  SavedSearchServiceDependencies,
+  SavedSearchWriteGateway,
+} from "./saved-search-service-contract";
+
+interface PollOutcome {
+  committed: boolean;
+  error?: { cause: unknown; message: string };
+  freshCount: number;
 }
 
-export interface CreateSavedSearchResult {
-  created: boolean;
-  id: string;
+interface PollEntry {
+  controller: AbortController;
+  notifyRequested: boolean;
+  promise: Promise<PollOutcome>;
+  waiters: number;
 }
 
-const ALL_DISCOVERY_SOURCES: DiscoverySource[] = ["arxiv", "crossref", "openalex", "s2"];
-
-async function savedSearchesRepo(): Promise<SavedSearchesRepo> {
-  const { db, libraryId } = await getLibraryDb();
-  return new SavedSearchesRepo(db, libraryId);
+interface LoopState {
+  controller: AbortController | null;
+  stopped: boolean;
+  timer: SavedSearchTimer | null;
 }
 
-function toView(row: SavedSearchRow): SavedSearchView {
-  return {
-    id: row.id,
-    query: row.query,
-    sources: parseSources(row.sources_json),
-    newCount: row.new_count,
-    lastRunAt: row.last_run_at,
-    lastError: row.last_error ? describeSafeError(row.last_error) : null,
-  };
-}
+const defaultWrites: SavedSearchWriteGateway = {
+  async clearNew(input) {
+    return window.aura.data.command("savedSearch.clearNew", input);
+  },
+  async create(input) {
+    return window.aura.data.command("savedSearch.create", input);
+  },
+  async delete(input) {
+    return window.aura.data.command("savedSearch.delete", input);
+  },
+  async recordError(input) {
+    return window.aura.data.command("savedSearch.recordError", input);
+  },
+  async recordRun(input) {
+    return window.aura.data.command("savedSearch.recordRun", input);
+  },
+  async restore(input) {
+    return window.aura.data.command("savedSearch.restore", input);
+  },
+};
 
-function parseSources(value: string | null): DiscoverySource[] | null {
-  if (!value) return null;
-  const parsed = parseJsonValue(value);
-  if (!Array.isArray(parsed)) return null;
-  const sources = parsed.filter(isDiscoverySource);
-  return sources.length ? [...new Set(sources)] : null;
-}
+const defaultDependencies: SavedSearchServiceDependencies = {
+  clearTimer: (timer) => globalThis.clearTimeout(timer),
+  dispatchUpdated: () => {
+    window.dispatchEvent(new CustomEvent("aurascholar:saved-searches-updated"));
+  },
+  loopIntervalMs: LOOP_INTERVAL_MS,
+  nextRunDelayMs: POLL_INTERVAL_MS,
+  notify: (notification) => auraNotifier.notify(notification),
+  now: () => Date.now(),
+  onLoopError: () => undefined,
+  async openScope() {
+    const { db, libraryId } = await getLibraryDb();
+    return { libraryId, repository: new SavedSearchesRepo(db, libraryId) };
+  },
+  schedule: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+  async search(query, sources, signal) {
+    const { searchDiscoveryDetailed } = await import("./discovery");
+    return searchDiscoveryDetailed(query, sources, signal);
+  },
+  writes: defaultWrites,
+};
 
-function parseSeenIds(value: string): { ids: string[]; recovered: boolean } {
-  const parsed = parseJsonValue(value);
-  if (!Array.isArray(parsed)) return { ids: [], recovered: true };
-  return {
-    ids: parsed.filter((item): item is string => typeof item === "string"),
-    recovered: false,
-  };
-}
+export class SavedSearchService {
+  private readonly generations = new Map<string, number>();
+  private readonly inFlight = new Map<string, PollEntry>();
+  private loop: LoopState | null = null;
 
-function parseJsonValue(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
+  constructor(private readonly dependencies: SavedSearchServiceDependencies) {}
+
+  async list(): Promise<SavedSearchView[]> {
+    const scope = await this.dependencies.openScope();
+    return (await scope.repository.list()).map(toSavedSearchView);
+  }
+
+  async create(query: string, sources?: DiscoverySource[]): Promise<CreateSavedSearchResult> {
+    const scope = await this.dependencies.openScope();
+    const result = await this.dependencies.writes.create({
+      libraryId: scope.libraryId,
+      query: query.trim().replace(/\s+/g, " "),
+      sources: canonicalSavedSearchSources(sources),
+    });
+    if (result.created) {
+      await this.run(result.id, { silent: true });
+    }
+    return result;
+  }
+
+  async delete(id: string): Promise<void> {
+    const scope = await this.dependencies.openScope();
+    this.invalidatePollGeneration(scope.libraryId, id);
+    try {
+      await this.dependencies.writes.delete({
+        libraryId: scope.libraryId,
+        savedSearchId: id,
+      });
+    } catch (error) {
+      this.publishUpdateBestEffort();
+      throw error;
+    }
+  }
+
+  async restore(id: string): Promise<void> {
+    const scope = await this.dependencies.openScope();
+    await this.dependencies.writes.restore({
+      libraryId: scope.libraryId,
+      savedSearchId: id,
+    });
+  }
+
+  async clearBadge(id: string): Promise<void> {
+    const scope = await this.dependencies.openScope();
+    await this.dependencies.writes.clearNew({
+      libraryId: scope.libraryId,
+      savedSearchId: id,
+    });
+  }
+
+  async run(id: string, options: { signal?: AbortSignal; silent?: boolean } = {}): Promise<number> {
+    const scope = await this.dependencies.openScope();
+    options.signal?.throwIfAborted();
+    const row = (await scope.repository.list()).find((candidate) => candidate.id === id);
+    options.signal?.throwIfAborted();
+    if (!row) return 0;
+    return this.runRow(scope, row, {
+      signal: options.signal,
+      silent: options.silent ?? false,
+      throwOnError: !(options.silent ?? false),
+    });
+  }
+
+  async runDue(signal?: AbortSignal): Promise<number> {
+    signal?.throwIfAborted();
+    const scope = await this.dependencies.openScope();
+    signal?.throwIfAborted();
+    const due = (await scope.repository.due(this.dependencies.now())).map((row) => ({
+      generation: this.pollGeneration(scope.libraryId, row.id),
+      row,
+    }));
+    signal?.throwIfAborted();
+    let total = 0;
+    for (const candidate of due) {
+      if (signal?.aborted) break;
+      const current = await scope.repository.get(candidate.row.id);
+      if (signal?.aborted) break;
+      if (
+        !current ||
+        current.deleted_at !== null ||
+        current.updated_at !== candidate.row.updated_at ||
+        this.pollGeneration(scope.libraryId, current.id) !== candidate.generation
+      ) {
+        continue;
+      }
+      total += await this.runRow(scope, current, {
+        signal,
+        silent: false,
+        throwOnError: false,
+      });
+    }
+    return total;
+  }
+
+  startLoop(): () => void {
+    if (this.loop) return () => this.stopLoop();
+
+    const state: LoopState = { controller: null, stopped: false, timer: null };
+    this.loop = state;
+
+    const runCycle = async () => {
+      if (state.stopped || this.loop !== state) return;
+      const controller = new AbortController();
+      state.controller = controller;
+      try {
+        await this.runDue(controller.signal);
+      } catch (error) {
+        if (!controller.signal.aborted) this.dependencies.onLoopError(error);
+      } finally {
+        if (state.controller === controller) state.controller = null;
+        if (!state.stopped && this.loop === state) {
+          state.timer = this.dependencies.schedule(() => {
+            state.timer = null;
+            void runCycle();
+          }, this.dependencies.loopIntervalMs);
+        }
+      }
+    };
+
+    void runCycle();
+    return () => {
+      if (this.loop === state) this.stopLoop();
+    };
+  }
+
+  stopLoop(): void {
+    const state = this.loop;
+    if (!state) return;
+    this.loop = null;
+    state.stopped = true;
+    state.controller?.abort();
+    if (state.timer !== null) this.dependencies.clearTimer(state.timer);
+    state.controller = null;
+    state.timer = null;
+  }
+
+  private async runRow(
+    scope: SavedSearchScope,
+    row: SavedSearchRow,
+    options: {
+      signal?: AbortSignal;
+      silent: boolean;
+      throwOnError: boolean;
+    },
+  ): Promise<number> {
+    const key = savedSearchPollKey(scope.libraryId, row.id);
+    let entry = this.inFlight.get(key);
+    if (!entry) {
+      const controller = new AbortController();
+      entry = {
+        controller,
+        notifyRequested: !options.silent,
+        promise: Promise.resolve({ committed: false, freshCount: 0 }),
+        waiters: 0,
+      };
+      const currentEntry = entry;
+      entry.promise = this.executePoll(scope, row, currentEntry).finally(() => {
+        if (this.inFlight.get(key) === currentEntry) this.inFlight.delete(key);
+      });
+      this.inFlight.set(key, entry);
+    } else if (!options.silent) {
+      entry.notifyRequested = true;
+    }
+
+    entry.waiters += 1;
+    try {
+      const outcome = await waitForSavedSearchPoll(entry.promise, options.signal);
+      if (outcome.error && options.throwOnError) {
+        throw new Error(outcome.error.message, { cause: outcome.error.cause });
+      }
+      return outcome.freshCount;
+    } finally {
+      entry.waiters -= 1;
+      if (entry.waiters === 0 && this.inFlight.get(key) === entry) {
+        this.inFlight.delete(key);
+        entry.controller.abort();
+      }
+    }
+  }
+
+  private async executePoll(
+    scope: SavedSearchScope,
+    row: SavedSearchRow,
+    entry: PollEntry,
+  ): Promise<PollOutcome> {
+    const sources = parseSavedSearchSources(row.sources_json) ?? undefined;
+    let results: DiscoveryResultWithLibrary[];
+    try {
+      // This network request deliberately happens before the main-process
+      // command. The command opens only the short CAS transaction.
+      const report = await this.dependencies.search(row.query, sources, entry.controller.signal);
+      if (entry.controller.signal.aborted) return cancelledOutcome();
+      if (isSavedSearchReportUnavailable(report)) {
+        throw new Error(savedSearchReportErrorMessage(report));
+      }
+      results = report.results;
+    } catch (error) {
+      if (entry.controller.signal.aborted) return cancelledOutcome();
+      const message = describeSafeError(error);
+      const commit = await this.dependencies.writes.recordError({
+        error: message,
+        expectedUpdatedAt: row.updated_at,
+        libraryId: scope.libraryId,
+        nextRunAt: this.dependencies.now() + this.dependencies.nextRunDelayMs,
+        savedSearchId: row.id,
+      });
+      if (!commit.committed) return staleOutcome();
+      if (!this.isCurrentEntry(scope.libraryId, row.id, entry)) return cancelledOutcome();
+      this.publishUpdateBestEffort();
+      return { committed: true, error: { cause: error, message }, freshCount: 0 };
+    }
+
+    if (entry.controller.signal.aborted) return cancelledOutcome();
+    const observedIds = [...new Set(results.map((result) => savedSearchResultId(result.work)))];
+    const commit = await this.dependencies.writes.recordRun({
+      expectedUpdatedAt: row.updated_at,
+      libraryId: scope.libraryId,
+      nextRunAt: this.dependencies.now() + this.dependencies.nextRunDelayMs,
+      observedIds,
+      savedSearchId: row.id,
+    });
+    if (!commit.committed) return staleOutcome();
+    if (!this.isCurrentEntry(scope.libraryId, row.id, entry)) return cancelledOutcome();
+
+    this.publishUpdateBestEffort();
+    if (entry.notifyRequested && commit.freshCount > 0) {
+      await this.notifyBestEffort({
+        title: `🔎 检索订阅有 ${commit.freshCount} 篇新结果`,
+        body: row.query,
+        tag: `saved-search:${row.id}`,
+      });
+    }
+    return { committed: true, freshCount: commit.freshCount };
+  }
+
+  private invalidatePollGeneration(libraryId: string, id: string): void {
+    const key = savedSearchPollKey(libraryId, id);
+    this.generations.set(key, this.pollGeneration(libraryId, id) + 1);
+    const entry = this.inFlight.get(key);
+    if (!entry) return;
+    this.inFlight.delete(key);
+    entry.controller.abort();
+  }
+
+  private pollGeneration(libraryId: string, id: string): number {
+    return this.generations.get(savedSearchPollKey(libraryId, id)) ?? 0;
+  }
+
+  private isCurrentEntry(libraryId: string, id: string, entry: PollEntry): boolean {
+    return (
+      !entry.controller.signal.aborted &&
+      this.inFlight.get(savedSearchPollKey(libraryId, id)) === entry
+    );
+  }
+
+  private publishUpdateBestEffort(): void {
+    try {
+      this.dependencies.dispatchUpdated();
+    } catch {
+      // The CAS write is already durable; renderer event delivery is best-effort.
+    }
+  }
+
+  private async notifyBestEffort(notification: SavedSearchNotification): Promise<void> {
+    try {
+      await this.dependencies.notify(notification);
+    } catch {
+      // Poll state is already durable; OS notification delivery is best-effort.
+    }
   }
 }
 
-function isDiscoverySource(value: unknown): value is DiscoverySource {
-  return value === "arxiv" || value === "crossref" || value === "openalex" || value === "s2";
+export function createSavedSearchService(
+  dependencies: SavedSearchServiceDependencies,
+): SavedSearchService {
+  return new SavedSearchService(dependencies);
 }
 
-function normalizeQuery(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-}
-
-function canonicalSources(sources?: DiscoverySource[] | null): DiscoverySource[] {
-  const selected = sources && sources.length > 0 ? sources : ALL_DISCOVERY_SOURCES;
-  const unique = [...new Set(selected)];
-  const allSelected =
-    unique.length === ALL_DISCOVERY_SOURCES.length &&
-    ALL_DISCOVERY_SOURCES.every((source) => unique.includes(source));
-  return [...(allSelected ? ALL_DISCOVERY_SOURCES : unique)].sort();
-}
-
-function sameSources(a?: DiscoverySource[] | null, b?: DiscoverySource[] | null): boolean {
-  return JSON.stringify(canonicalSources(a)) === JSON.stringify(canonicalSources(b));
-}
-
-/** Stable identity for a result, matching the discovery dedupe keys. */
-function stableId(work: NormalizedWork): string {
-  if (work.doi) return `doi:${work.doi.toLowerCase()}`;
-  if (work.arxivId) return `arxiv:${work.arxivId.toLowerCase()}`;
-  if (work.openalexId) return `openalex:${work.openalexId.toLowerCase()}`;
-  if (work.s2Id) return `s2:${work.s2Id.toLowerCase()}`;
-  if (work.pmid) return `pmid:${work.pmid.toLowerCase()}`;
-  const firstAuthor = work.authors[0]?.family ?? work.authors[0]?.displayName?.split(/\s+/).pop();
-  return `fp:${workFingerprint(work.title, work.year ?? null, firstAuthor ?? null)}`;
-}
+const savedSearchService = new SavedSearchService(defaultDependencies);
 
 export async function listSavedSearches(): Promise<SavedSearchView[]> {
-  const repo = await savedSearchesRepo();
-  return (await repo.list()).map(toView);
+  return savedSearchService.list();
 }
 
 export async function createSavedSearch(
   query: string,
   sources?: DiscoverySource[],
 ): Promise<CreateSavedSearchResult> {
-  const repo = await savedSearchesRepo();
-  const normalizedQuery = normalizeQuery(query);
-  const existing = (await repo.list()).find(
-    (row) =>
-      normalizeQuery(row.query) === normalizedQuery &&
-      sameSources(parseSources(row.sources_json), sources),
-  );
-  if (existing) return { created: false, id: existing.id };
-
-  const storedSources = sameSources(sources, null) ? null : canonicalSources(sources);
-  const id = await repo.create({
-    query: query.trim().replace(/\s+/g, " "),
-    sources: storedSources,
-  });
-  // Seed the baseline immediately so the first scheduled run only reports
-  // genuinely new papers rather than the entire current result set.
-  await runSavedSearch(id, { silent: true });
-  return { created: true, id };
+  return savedSearchService.create(query, sources);
 }
 
 export async function deleteSavedSearch(id: string): Promise<void> {
-  const repo = await savedSearchesRepo();
-  await repo.softDelete(id);
+  await savedSearchService.delete(id);
 }
 
 export async function restoreSavedSearch(id: string): Promise<void> {
-  const repo = await savedSearchesRepo();
-  await repo.restore(id);
+  await savedSearchService.restore(id);
 }
 
 export async function clearSavedSearchBadge(id: string): Promise<void> {
-  const repo = await savedSearchesRepo();
-  await repo.clearNew(id);
+  await savedSearchService.clearBadge(id);
 }
 
 /** Run one saved search now. Returns the number of newly-seen results. */
-export async function runSavedSearch(id: string, opts: { silent?: boolean } = {}): Promise<number> {
-  const repo = await savedSearchesRepo();
-  const rows = await repo.list();
-  const row = rows.find((r) => r.id === id);
-  if (!row) return 0;
-  return runRow(repo, row, {
-    silent: opts.silent ?? false,
-    throwOnError: !(opts.silent ?? false),
-  });
-}
-
-async function runRow(
-  repo: SavedSearchesRepo,
-  row: SavedSearchRow,
-  options: { silent: boolean; throwOnError: boolean },
+export async function runSavedSearch(
+  id: string,
+  options: { signal?: AbortSignal; silent?: boolean } = {},
 ): Promise<number> {
-  const sources = parseSources(row.sources_json) ?? undefined;
-  let results: DiscoveryResultWithLibrary[];
-  try {
-    const { searchDiscoveryDetailed } = await import("./discovery");
-    const report = await searchDiscoveryDetailed(row.query, sources);
-    if (isDiscoveryReportUnavailable(report)) {
-      throw new Error(discoveryReportErrorMessage(report));
-    }
-    results = report.results;
-  } catch (error) {
-    // A transient failure shouldn't reset the baseline — reschedule and bail.
-    const message = describeSafeError(error);
-    try {
-      await repo.recordError(row.id, message, Date.now() + POLL_INTERVAL_MS);
-      notifySavedSearchesUpdated();
-    } catch (recordError) {
-      if (recordError instanceof SavedSearchInactiveError) return 0;
-      throw recordError;
-    }
-    if (options.throwOnError) throw new Error(message, { cause: error });
-    return 0;
-  }
-
-  const parsedSeen = parseSeenIds(row.seen_ids_json);
-  const seen = new Set<string>(parsedSeen.ids);
-  const currentIds = results.map((r) => stableId(r.work));
-  const isFirstRun = parsedSeen.recovered || (seen.size === 0 && row.last_run_at == null);
-  const fresh = isFirstRun ? [] : currentIds.filter((key) => !seen.has(key));
-
-  // The new baseline is the union of what we've ever seen and what's here now,
-  // so a paper dropping out of the top results doesn't re-alert when it returns.
-  const nextSeen = [...new Set([...seen, ...currentIds])];
-  try {
-    await repo.recordRun(row.id, nextSeen, fresh.length, Date.now() + POLL_INTERVAL_MS);
-  } catch (error) {
-    if (error instanceof SavedSearchInactiveError) return 0;
-    throw error;
-  }
-
-  notifySavedSearchesUpdated();
-
-  if (!options.silent && fresh.length > 0) {
-    await auraNotifier.notify({
-      title: `🔎 检索订阅有 ${fresh.length} 篇新结果`,
-      body: row.query,
-      tag: `saved-search:${row.id}`,
-    });
-  }
-  return fresh.length;
+  return savedSearchService.run(id, options);
 }
 
-function isDiscoveryReportUnavailable(report: { sources: DiscoverySearchReportSources }): boolean {
-  const sources = sourceReports(report.sources);
-  return (
-    sources.length > 0 && sources.every((source) => SOURCE_FAILURE_STATUSES.has(source.status))
-  );
+/** Poll every due saved search once. Returns total newly-seen results committed. */
+export async function runDueSavedSearches(signal?: AbortSignal): Promise<number> {
+  return savedSearchService.runDue(signal);
 }
 
-function discoveryReportErrorMessage(report: { sources: DiscoverySearchReportSources }): string {
-  const details = sourceReports(report.sources)
-    .filter((source) => SOURCE_FAILURE_STATUSES.has(source.status))
-    .map((source) => `${sourceLabel(source.source)} ${sourceStatusLabel(source.status)}`)
-    .join("; ");
-  return details ? `检索源暂时不可用:${details}` : "检索源暂时不可用";
+/** Startup catch-up, followed by one wake-up after each completed cycle. */
+export function startSavedSearchLoop(): () => void {
+  return savedSearchService.startLoop();
 }
 
-type DiscoverySearchSourceReport = { source: DiscoverySource; status: string; error?: string };
-type DiscoverySearchReportSources = Partial<Record<DiscoverySource, DiscoverySearchSourceReport>>;
-
-const SOURCE_FAILURE_STATUSES = new Set(["timeout", "error", "rate_limited", "aborted"]);
-
-function sourceReports(sources: DiscoverySearchReportSources): DiscoverySearchSourceReport[] {
-  return Object.values(sources).filter((source): source is DiscoverySearchSourceReport =>
-    Boolean(source),
-  );
+export function stopSavedSearchLoop(): void {
+  savedSearchService.stopLoop();
 }
 
-function sourceLabel(source: DiscoverySource): string {
-  switch (source) {
-    case "crossref":
-      return "Crossref";
-    case "openalex":
-      return "OpenAlex";
-    case "s2":
-      return "Semantic Scholar";
-    case "arxiv":
-      return "arXiv";
-  }
+function cancelledOutcome(): PollOutcome {
+  return { committed: false, freshCount: 0 };
 }
 
-function sourceStatusLabel(status: string): string {
-  if (status === "timeout") return "超时";
-  if (status === "rate_limited") return "限流";
-  if (status === "aborted") return "已停止";
-  return "失败";
-}
-
-/** Poll every due saved search once. Returns total new results found. */
-export async function runDueSavedSearches(): Promise<number> {
-  const repo = await savedSearchesRepo();
-  const due = await repo.due();
-  let total = 0;
-  for (const row of due) {
-    total += await runRow(repo, row, { silent: false, throwOnError: false });
-  }
-  return total;
-}
-
-function notifySavedSearchesUpdated(): void {
-  window.dispatchEvent(new CustomEvent("aurascholar:saved-searches-updated"));
-}
-
-let started = false;
-
-/** Startup catch-up + hourly re-check while the app is open. */
-export function startSavedSearchLoop(): void {
-  if (started) return;
-  started = true;
-  void runDueSavedSearches();
-  setInterval(() => void runDueSavedSearches(), 60 * 60 * 1000);
+function staleOutcome(): PollOutcome {
+  return { committed: false, freshCount: 0 };
 }

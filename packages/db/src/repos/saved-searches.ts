@@ -4,6 +4,7 @@
 import type { Database } from "../database.js";
 import { summarizePersistedError } from "../error-summary.js";
 import { newId } from "../ids.js";
+import { withDatabaseWriteLock } from "./write-lock.js";
 
 export interface SavedSearchRow {
   id: string;
@@ -17,12 +18,36 @@ export interface SavedSearchRow {
   last_error: string | null;
   created_at: number;
   updated_at: number;
+  deleted_at: number | null;
 }
 
 export interface SavedSearchInput {
   query: string;
   /** Discovery source ids to query; null = all sources. */
   sources?: string[] | null;
+}
+
+export interface SavedSearchRunCommitInput {
+  expectedUpdatedAt: number;
+  observedIds: string[];
+  nextRunAt: number;
+}
+
+export interface SavedSearchRunCommitResult {
+  committed: boolean;
+  freshCount: number;
+  updatedAt: number | null;
+}
+
+export interface SavedSearchErrorCommitInput {
+  expectedUpdatedAt: number;
+  error: string;
+  nextRunAt: number;
+}
+
+export interface SavedSearchCommitResult {
+  committed: boolean;
+  updatedAt: number | null;
 }
 
 export class SavedSearchInactiveError extends Error {
@@ -44,30 +69,48 @@ export class SavedSearchesRepo {
     if (changed === 0) throw error;
   }
 
+  private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    return withDatabaseWriteLock(this.db, fn);
+  }
+
   async create(input: SavedSearchInput): Promise<string> {
-    const id = newId();
-    const now = Date.now();
-    await this.db.run(
-      `INSERT INTO saved_searches
-         (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, '[]', 0, NULL, ?, ?, ?)`,
-      [
-        id,
-        this.libraryId,
-        input.query,
-        input.sources ? JSON.stringify(input.sources) : null,
-        now,
-        now,
-        now,
-      ],
+    return this.withWriteLock(async () => {
+      const id = newId();
+      const now = Date.now();
+      await this.db.run(
+        `INSERT INTO saved_searches
+           (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '[]', 0, NULL, ?, ?, ?)`,
+        [
+          id,
+          this.libraryId,
+          input.query,
+          input.sources ? JSON.stringify(input.sources) : null,
+          now,
+          now,
+          now,
+        ],
+      );
+      return id;
+    });
+  }
+
+  async get(id: string): Promise<SavedSearchRow | null> {
+    const rows = await this.db.query<SavedSearchRow>(
+      `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+              last_error, created_at, updated_at, deleted_at
+       FROM saved_searches
+       WHERE id = ? AND library_id = ?
+       LIMIT 1`,
+      [id, this.libraryId],
     );
-    return id;
+    return rows[0] ?? null;
   }
 
   async list(): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
       `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
-              created_at, updated_at
+              created_at, updated_at, deleted_at
        FROM saved_searches
        WHERE library_id = ? AND deleted_at IS NULL
        ORDER BY created_at DESC`,
@@ -79,7 +122,7 @@ export class SavedSearchesRepo {
   async due(now = Date.now()): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
       `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
-              created_at, updated_at
+              created_at, updated_at, deleted_at
        FROM saved_searches
        WHERE library_id = ?
          AND deleted_at IS NULL
@@ -99,57 +142,161 @@ export class SavedSearchesRepo {
     newCount: number,
     nextRunAt: number,
   ): Promise<void> {
-    const now = Date.now();
-    const changed = await this.db.run(
-      `UPDATE saved_searches
-       SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?,
-           last_error = NULL, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [JSON.stringify(seenIds), newCount, now, nextRunAt, now, id, this.libraryId],
-    );
-    this.assertChanged(changed, new SavedSearchInactiveError(id));
+    await this.withWriteLock(async () => {
+      const now = Date.now();
+      const changed = await this.db.run(
+        `UPDATE saved_searches
+         SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?,
+             last_error = NULL, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [JSON.stringify(seenIds), newCount, now, nextRunAt, now, id, this.libraryId],
+      );
+      this.assertChanged(changed, new SavedSearchInactiveError(id));
+    });
+  }
+
+  /**
+   * Commit observed result ids only while the row still matches the snapshot
+   * that initiated the remote request. The baseline merge and unread delta are
+   * derived inside the same serialized commit so callers cannot overwrite
+   * newer polling, badge, delete, or restore state with a stale response. The
+   * desktop command owns the surrounding SQLite transaction.
+   */
+  async commitRunIfCurrent(
+    id: string,
+    input: SavedSearchRunCommitInput,
+  ): Promise<SavedSearchRunCommitResult> {
+    return this.withWriteLock(async () => {
+      const rows = await this.db.query<
+        Pick<SavedSearchRow, "last_run_at" | "seen_ids_json" | "updated_at">
+      >(
+        `SELECT seen_ids_json, last_run_at, updated_at
+         FROM saved_searches
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL AND updated_at = ?
+         LIMIT 1`,
+        [id, this.libraryId, input.expectedUpdatedAt],
+      );
+      const current = rows[0];
+      if (!current) return { committed: false, freshCount: 0, updatedAt: null };
+
+      const baseline = parseSeenIds(current.seen_ids_json);
+      const seen = new Set(baseline.ids);
+      const observedIds = [...new Set(input.observedIds)];
+      const firstRun = baseline.recovered || (seen.size === 0 && current.last_run_at === null);
+      const freshCount = firstRun
+        ? 0
+        : observedIds.reduce((count, observedId) => count + (seen.has(observedId) ? 0 : 1), 0);
+      const nextSeenIds = [...new Set([...seen, ...observedIds])];
+      const now = Date.now();
+      const updatedAt = Math.max(current.updated_at + 1, now);
+      const changed = await this.db.run(
+        `UPDATE saved_searches
+         SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?,
+             last_error = NULL, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL AND updated_at = ?`,
+        [
+          JSON.stringify(nextSeenIds),
+          freshCount,
+          now,
+          input.nextRunAt,
+          now,
+          id,
+          this.libraryId,
+          input.expectedUpdatedAt,
+        ],
+      );
+      if (changed === 0) return { committed: false, freshCount: 0, updatedAt: null };
+      return { committed: true, freshCount, updatedAt };
+    });
   }
 
   async recordError(id: string, error: string, nextRunAt: number): Promise<void> {
-    const now = Date.now();
-    const changed = await this.db.run(
-      `UPDATE saved_searches
-       SET last_run_at = ?, next_run_at = ?, last_error = ?, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [now, nextRunAt, summarizePersistedError(error), now, id, this.libraryId],
-    );
-    this.assertChanged(changed, new SavedSearchInactiveError(id));
+    await this.withWriteLock(async () => {
+      const now = Date.now();
+      const changed = await this.db.run(
+        `UPDATE saved_searches
+         SET next_run_at = ?, last_error = ?,
+             updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [nextRunAt, summarizePersistedError(error), now, id, this.libraryId],
+      );
+      this.assertChanged(changed, new SavedSearchInactiveError(id));
+    });
+  }
+
+  async recordErrorIfCurrent(
+    id: string,
+    input: SavedSearchErrorCommitInput,
+  ): Promise<SavedSearchCommitResult> {
+    return this.withWriteLock(async () => {
+      const now = Date.now();
+      const updatedAt = Math.max(input.expectedUpdatedAt + 1, now);
+      const changed = await this.db.run(
+        `UPDATE saved_searches
+         SET next_run_at = ?, last_error = ?,
+             updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL AND updated_at = ?`,
+        [
+          input.nextRunAt,
+          summarizePersistedError(input.error),
+          now,
+          id,
+          this.libraryId,
+          input.expectedUpdatedAt,
+        ],
+      );
+      return changed > 0 ? { committed: true, updatedAt } : { committed: false, updatedAt: null };
+    });
   }
 
   /** Clear the unread badge (user has viewed the new results). */
   async clearNew(id: string): Promise<void> {
-    const changed = await this.db.run(
-      `UPDATE saved_searches
-       SET new_count = 0, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [Date.now(), id, this.libraryId],
-    );
-    this.assertChanged(changed, new SavedSearchInactiveError(id));
+    await this.withWriteLock(async () => {
+      const changed = await this.db.run(
+        `UPDATE saved_searches
+         SET new_count = 0, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [Date.now(), id, this.libraryId],
+      );
+      this.assertChanged(changed, new SavedSearchInactiveError(id));
+    });
   }
 
   async softDelete(id: string): Promise<void> {
-    const now = Date.now();
-    const changed = await this.db.run(
-      `UPDATE saved_searches
-       SET deleted_at = ?, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-      [now, now, id, this.libraryId],
-    );
-    this.assertChanged(changed, new Error(`Saved search ${id} is missing or already removed`));
+    await this.withWriteLock(async () => {
+      const now = Date.now();
+      const changed = await this.db.run(
+        `UPDATE saved_searches
+         SET deleted_at = ?, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
+        [now, now, id, this.libraryId],
+      );
+      this.assertChanged(changed, new Error(`Saved search ${id} is missing or already removed`));
+    });
   }
 
   async restore(id: string): Promise<void> {
-    const changed = await this.db.run(
-      `UPDATE saved_searches
-       SET deleted_at = NULL, updated_at = ?
-       WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
-      [Date.now(), id, this.libraryId],
-    );
-    this.assertChanged(changed, new Error(`Saved search ${id} is missing or already active`));
+    await this.withWriteLock(async () => {
+      const changed = await this.db.run(
+        `UPDATE saved_searches
+         SET deleted_at = NULL, updated_at = MAX(updated_at + 1, ?)
+         WHERE id = ? AND library_id = ? AND deleted_at IS NOT NULL`,
+        [Date.now(), id, this.libraryId],
+      );
+      this.assertChanged(changed, new Error(`Saved search ${id} is missing or already active`));
+    });
+  }
+}
+
+function parseSeenIds(value: string): { ids: string[]; recovered: boolean } {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return { ids: [], recovered: true };
+    return {
+      ids: parsed.filter((item): item is string => typeof item === "string"),
+      recovered: false,
+    };
+  } catch {
+    return { ids: [], recovered: true };
   }
 }
