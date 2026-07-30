@@ -46,17 +46,14 @@ import type { ImportDecision } from "../components/ImportConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { useModalFocusTrap } from "../components/useModalFocusTrap";
+import {
+  DiscoverySavedSearchRecentStrip,
+  DiscoverySavedSearchRouteSummary,
+} from "../features/discovery/DiscoverySavedSearchHome";
+import { DiscoverySavedSearchPanel } from "../features/discovery/DiscoverySavedSearchPanel";
+import { useDiscoverySavedSearchController } from "../features/discovery/useDiscoverySavedSearchController";
 import { isImeComposing } from "../keyboard";
 import { describeSafeError } from "../services/sensitive-text";
-import {
-  clearSavedSearchBadge,
-  createSavedSearch,
-  deleteSavedSearch,
-  listSavedSearches,
-  restoreSavedSearch,
-  runSavedSearch,
-  type SavedSearchView,
-} from "../services/saved-searches";
 
 const ImportConfirmDialog = lazy(() =>
   import("../components/ImportConfirmDialog").then((mod) => ({
@@ -84,10 +81,6 @@ const MIN_SITE_ACTION_BUSY_MS = 250;
 const MIN_SITE_PROXY_BUSY_MS = 250;
 const MIN_SITE_RESTORE_BUSY_MS = 250;
 const MIN_PROXY_CONFIG_SAVE_BUSY_MS = 250;
-const MIN_SAVED_SEARCH_SAVE_BUSY_MS = 350;
-const MIN_SAVED_SEARCH_CHECK_BUSY_MS = 350;
-const MIN_SAVED_SEARCH_OPEN_BUSY_MS = 350;
-const MIN_SAVED_SEARCH_DELETE_BUSY_MS = 350;
 const MIN_DISCOVERY_SEARCH_BUSY_MS = 350;
 const MIN_DISCOVERY_LOAD_MORE_BUSY_MS = 250;
 const MIN_DISCOVERY_IMPORT_BUSY_MS = 350;
@@ -275,11 +268,6 @@ function initialDiscoverySourceStatus(): Record<DiscoverySource, SourceStatus> {
     : previewDiscoverySourceStatus();
 }
 
-interface SavedSearchUndoState {
-  id: string;
-  message: string;
-}
-
 interface SiteRemoveUndoState {
   message: string;
   site: DiscoverySite;
@@ -287,11 +275,8 @@ interface SiteRemoveUndoState {
 
 interface DiscoverySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__?: unknown;
-  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__?: unknown;
-  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__?: unknown;
-  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_REMOVE_SITE__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SITE__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_REPLACED_ACTIVE_SEARCH__?: boolean;
@@ -306,30 +291,6 @@ function consumeDiscoverySmokeSearchFailure(): Error | null {
   const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__;
   if (failure == null) return null;
   delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__;
-  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
-}
-
-function consumeDiscoverySmokeSaveSearchFailure(): Error | null {
-  const target = window as DiscoverySmokeWindow;
-  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__;
-  if (failure == null) return null;
-  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__;
-  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
-}
-
-function consumeDiscoverySmokeDeleteSearchFailure(): Error | null {
-  const target = window as DiscoverySmokeWindow;
-  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__;
-  if (failure == null) return null;
-  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__;
-  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
-}
-
-function consumeDiscoverySmokeRestoreSearchFailure(): Error | null {
-  const target = window as DiscoverySmokeWindow;
-  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__;
-  if (failure == null) return null;
-  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__;
   return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
 }
 
@@ -355,18 +316,6 @@ function consumeDiscoverySmokeLoadMoreFailure(): Error | null {
   if (failure == null) return null;
   delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__;
   return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
-}
-
-function lastRunLabel(value: number | null): string {
-  if (!value) return "尚未运行";
-  const delta = Date.now() - value;
-  if (delta < 60_000) return "刚刚运行";
-  if (delta < 60 * 60_000) return `${Math.max(1, Math.round(delta / 60_000))} 分钟前`;
-  if (delta < 24 * 60 * 60_000) return `${Math.round(delta / (60 * 60_000))} 小时前`;
-  return new Date(value).toLocaleDateString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-  });
 }
 
 function sourceStatusSummary(statuses: Record<DiscoverySource, SourceStatus>): string {
@@ -608,21 +557,6 @@ export function DiscoveryPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [oaOnly, setOaOnly] = useState(false);
-  // Saved searches ("检索订阅").
-  const [savedSearches, setSavedSearches] = useState<SavedSearchView[]>([]);
-  const [savingSearch, setSavingSearch] = useState(false);
-  const [openingSavedSearchIds, setOpeningSavedSearchIds] = useState<Set<string>>(() => new Set());
-  const openingSavedSearchIdsRef = useRef<Set<string>>(new Set());
-  const [checkingSavedSearchIds, setCheckingSavedSearchIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const checkingSavedSearchIdsRef = useRef<Set<string>>(new Set());
-  const [deletingSavedSearchIds, setDeletingSavedSearchIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const deletingSavedSearchIdsRef = useRef<Set<string>>(new Set());
-  const [savedSearchUndo, setSavedSearchUndo] = useState<SavedSearchUndoState | null>(null);
-  const [savedSearchUndoBusy, setSavedSearchUndoBusy] = useState(false);
   const [siteRemoveUndo, setSiteRemoveUndo] = useState<SiteRemoveUndoState | null>(null);
   const [siteRemoveUndoBusy, setSiteRemoveUndoBusy] = useState(false);
   const [sourceStatus, setSourceStatus] = useState<Record<DiscoverySource, SourceStatus>>(() =>
@@ -666,11 +600,6 @@ export function DiscoveryPage() {
     [visibleSites],
   );
   const sourceCount = selectedSources.size;
-  const savedNewCount = useMemo(
-    () => savedSearches.reduce((sum, saved) => sum + saved.newCount, 0),
-    [savedSearches],
-  );
-  const recentSavedSearches = useMemo(() => savedSearches.slice(0, 3), [savedSearches]);
   const activeSourceStatus = useMemo(() => sourceStatusSummary(sourceStatus), [sourceStatus]);
   const hasOpenSourceSearchRun =
     query.trim().length > 0 &&
@@ -729,11 +658,6 @@ export function DiscoveryPage() {
     const list = await listSites();
     setSites(list);
     setSiteData(await sitesWithData(list.map((s) => s.id)));
-  }, []);
-
-  const refreshSavedSearches = useCallback(async () => {
-    if (!isDesktopRuntime()) return;
-    setSavedSearches(await listSavedSearches());
   }, []);
 
   useEffect(() => {
@@ -954,19 +878,6 @@ export function DiscoveryPage() {
     () => displayedResults.find((r) => r.id === selectedId) ?? displayedResults[0] ?? null,
     [displayedResults, selectedId],
   );
-
-  // ---- Saved searches: load on mount, refresh when the loop posts updates ----
-  useEffect(() => {
-    const refreshId = window.setTimeout(() => {
-      void refreshSavedSearches();
-    }, 0);
-    const onUpdate = () => void refreshSavedSearches();
-    window.addEventListener("aurascholar:saved-searches-updated", onUpdate);
-    return () => {
-      window.clearTimeout(refreshId);
-      window.removeEventListener("aurascholar:saved-searches-updated", onUpdate);
-    };
-  }, [refreshSavedSearches]);
 
   // ---- Browser: tab list sync + bounds reporting + downloads ----
 
@@ -1375,69 +1286,35 @@ export function DiscoveryPage() {
     if (query.trim()) void runSearch();
   }, [query, runSearch]);
 
-  const saveCurrentSearch = useCallback(async () => {
-    const q = query.trim();
-    if (!q || !isDesktopRuntime()) return;
-    const startedAt = Date.now();
-    setSavingSearch(true);
-    try {
-      const smokeFailure = consumeDiscoverySmokeSaveSearchFailure();
-      if (smokeFailure) {
-        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_SAVE_BUSY_MS);
-        throw smokeFailure;
-      }
-      const result = await createSavedSearch(q, [...selectedSources]);
-      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_SAVE_BUSY_MS);
-      await refreshSavedSearches();
-      setMessage(
-        result.created ? `已保存检索订阅:“${q}”,有新结果时会通知你` : `检索订阅已存在:“${q}”`,
-      );
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_SAVE_BUSY_MS);
-      setMessage(`保存订阅失败，检索条件仍保留，可重新保存:${describeUnknownError(e)}`);
-    } finally {
-      setSavingSearch(false);
-    }
-  }, [query, selectedSources, refreshSavedSearches]);
-
-  const openSavedSearch = useCallback(
-    async (saved: SavedSearchView) => {
-      if (
-        openingSavedSearchIdsRef.current.has(saved.id) ||
-        checkingSavedSearchIdsRef.current.has(saved.id) ||
-        deletingSavedSearchIdsRef.current.has(saved.id)
-      ) {
-        return;
-      }
-      const startedAt = Date.now();
-      const nextOpening = new Set(openingSavedSearchIdsRef.current);
-      nextOpening.add(saved.id);
-      openingSavedSearchIdsRef.current = nextOpening;
-      setOpeningSavedSearchIds(nextOpening);
-      const sources =
-        saved.sources && saved.sources.length > 0 ? saved.sources : DEFAULT_DISCOVERY_SOURCES;
+  const openSavedSearchQuery = useCallback(
+    async ({ query: savedQuery, sources }: { query: string; sources: DiscoverySource[] }) => {
       setMode("opensource");
-      setQuery(saved.query);
+      setQuery(savedQuery);
       setSelectedSources(new Set(sources));
-      setMessage(`正在打开订阅:“${saved.query}”...`);
-      try {
-        const opened = await runSearch({ query: saved.query, sources });
-        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_OPEN_BUSY_MS);
-        if (opened && saved.newCount > 0) {
-          await clearSavedSearchBadge(saved.id);
-          await refreshSavedSearches();
-        }
-      } catch (e) {
-        setMessage(`打开订阅失败:${describeUnknownError(e)}`);
-      } finally {
-        const updatedOpening = new Set(openingSavedSearchIdsRef.current);
-        updatedOpening.delete(saved.id);
-        openingSavedSearchIdsRef.current = updatedOpening;
-        setOpeningSavedSearchIds(updatedOpening);
-      }
+      return runSearch({ query: savedQuery, sources });
     },
-    [refreshSavedSearches, runSearch],
+    [runSearch],
   );
+  const savedSearchController = useDiscoverySavedSearchController({
+    confirm,
+    defaultSources: DEFAULT_DISCOVERY_SOURCES,
+    enabled: desktopRuntime,
+    onMessage: setMessage,
+    onOpenSearch: openSavedSearchQuery,
+    query,
+    selectedSources,
+  });
+  const {
+    check: runSavedSearchNow,
+    newCount: savedNewCount,
+    open: openSavedSearch,
+    recentItems: recentSavedSearches,
+    remove: removeSavedSearch,
+    restoreLastDelete: undoSavedSearchDelete,
+    rowActions: savedSearchRowActions,
+    saveCurrent: saveCurrentSearch,
+    saving: savingSearch,
+  } = savedSearchController;
 
   useEffect(() => {
     const target = window as DiscoverySmokeWindow;
@@ -1456,75 +1333,6 @@ export function DiscoveryPage() {
       }
     };
   }, [runSearch]);
-
-  const removeSavedSearch = useCallback(
-    async (saved: SavedSearchView) => {
-      if (
-        openingSavedSearchIdsRef.current.has(saved.id) ||
-        checkingSavedSearchIdsRef.current.has(saved.id) ||
-        deletingSavedSearchIdsRef.current.has(saved.id)
-      ) {
-        return;
-      }
-      const confirmed = await confirm({
-        title: "删除检索订阅？",
-        description: `将停止跟踪「${saved.query}」的新论文。`,
-        details: ["已经入库的文献和当前检索结果不会被删除。", "之后可以用同样关键词重新保存订阅。"],
-        confirmLabel: "删除订阅",
-        tone: "warning",
-      });
-      if (!confirmed) return;
-      const startedAt = Date.now();
-      deletingSavedSearchIdsRef.current.add(saved.id);
-      setDeletingSavedSearchIds(new Set(deletingSavedSearchIdsRef.current));
-      setSavedSearchUndo(null);
-      setMessage(`正在删除检索订阅:“${saved.query}”...`);
-      try {
-        const smokeFailure = consumeDiscoverySmokeDeleteSearchFailure();
-        if (smokeFailure) {
-          await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
-          throw smokeFailure;
-        }
-        await deleteSavedSearch(saved.id);
-        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
-        await refreshSavedSearches();
-        const undoMessage = `已删除检索订阅:“${saved.query}”`;
-        setSavedSearchUndo({ id: saved.id, message: undoMessage });
-        setMessage(undoMessage);
-      } catch (e) {
-        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
-        setMessage(`删除订阅失败，订阅仍保留，可重新删除:${describeUnknownError(e)}`);
-      } finally {
-        deletingSavedSearchIdsRef.current.delete(saved.id);
-        setDeletingSavedSearchIds(new Set(deletingSavedSearchIdsRef.current));
-      }
-    },
-    [confirm, refreshSavedSearches],
-  );
-
-  const undoSavedSearchDelete = useCallback(async () => {
-    if (!savedSearchUndo || savedSearchUndoBusy || !desktopRuntime) return;
-    const startedAt = Date.now();
-    setSavedSearchUndoBusy(true);
-    setMessage("正在撤销删除检索订阅...");
-    try {
-      const smokeFailure = consumeDiscoverySmokeRestoreSearchFailure();
-      if (smokeFailure) {
-        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
-        throw smokeFailure;
-      }
-      await restoreSavedSearch(savedSearchUndo.id);
-      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
-      await refreshSavedSearches();
-      setSavedSearchUndo(null);
-      setMessage("已撤销删除检索订阅");
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_DELETE_BUSY_MS);
-      setMessage(`撤销删除订阅失败，撤销入口仍保留，可重新撤销:${describeUnknownError(e)}`);
-    } finally {
-      setSavedSearchUndoBusy(false);
-    }
-  }, [desktopRuntime, refreshSavedSearches, savedSearchUndo, savedSearchUndoBusy]);
 
   const undoSiteRemove = useCallback(async () => {
     if (!siteRemoveUndo || siteRemoveUndoBusy || !desktopRuntime) return;
@@ -1549,30 +1357,6 @@ export function DiscoveryPage() {
       setSiteRemoveUndoBusy(false);
     }
   }, [desktopRuntime, refreshSites, siteRemoveUndo, siteRemoveUndoBusy]);
-
-  const runSavedSearchNow = useCallback(
-    async (id: string) => {
-      if (checkingSavedSearchIdsRef.current.has(id) || deletingSavedSearchIdsRef.current.has(id))
-        return;
-      checkingSavedSearchIdsRef.current.add(id);
-      setCheckingSavedSearchIds(new Set(checkingSavedSearchIdsRef.current));
-      setMessage("正在检查订阅的新结果...");
-      const startedAt = Date.now();
-      try {
-        const n = await runSavedSearch(id);
-        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_CHECK_BUSY_MS);
-        await refreshSavedSearches();
-        setMessage(n > 0 ? `发现 ${n} 篇新结果` : "暂无新结果");
-      } catch (e) {
-        await waitForMinimumElapsed(startedAt, MIN_SAVED_SEARCH_CHECK_BUSY_MS);
-        setMessage(`检查订阅失败:${describeUnknownError(e)}`);
-      } finally {
-        checkingSavedSearchIdsRef.current.delete(id);
-        setCheckingSavedSearchIds(new Set(checkingSavedSearchIdsRef.current));
-      }
-    },
-    [refreshSavedSearches],
-  );
 
   const importResult = useCallback(async (result: DiscoveryResultWithLibrary) => {
     if (!isDesktopRuntime()) {
@@ -2193,106 +1977,14 @@ export function DiscoveryPage() {
               )}
             </Card>
 
-            {savedSearches.length > 0 && (
-              <div className="discovery-subs">
-                <div className="discovery-subs__head">检索订阅</div>
-                <div className="discovery-subs__list">
-                  {savedSearches.map((saved) => {
-                    const checking = checkingSavedSearchIds.has(saved.id);
-                    const opening = openingSavedSearchIds.has(saved.id);
-                    const deleting = deletingSavedSearchIds.has(saved.id);
-                    return (
-                      <div key={saved.id} className="discovery-sub">
-                        <button
-                          type="button"
-                          className="discovery-sub__main"
-                          onClick={() => void openSavedSearch(saved)}
-                          title={
-                            opening
-                              ? "正在打开订阅"
-                              : checking
-                                ? "正在检查新结果"
-                                : deleting
-                                  ? "正在删除订阅"
-                                  : saved.lastError
-                                    ? `最近检查失败:${saved.lastError}`
-                                    : "点击重新运行此检索"
-                          }
-                          disabled={checking || opening || deleting}
-                          aria-busy={opening || deleting ? "true" : undefined}
-                        >
-                          <span className="discovery-sub__query-stack">
-                            <span className="discovery-sub__query">{saved.query}</span>
-                            {opening && (
-                              <small className="discovery-sub__status">正在打开订阅...</small>
-                            )}
-                            {deleting && (
-                              <small className="discovery-sub__status">正在删除订阅...</small>
-                            )}
-                            {saved.lastError && (
-                              <small className="discovery-sub__error">
-                                最近失败:{saved.lastError}
-                              </small>
-                            )}
-                          </span>
-                          {saved.newCount > 0 && (
-                            <Badge variant="success">{saved.newCount} 新</Badge>
-                          )}
-                          {saved.lastError && <Badge variant="warning">检查失败</Badge>}
-                        </button>
-                        <button
-                          type="button"
-                          className="discovery-sub__action"
-                          title={
-                            deleting
-                              ? "正在删除订阅"
-                              : checking
-                                ? "正在检查新结果"
-                                : "立即检查新结果"
-                          }
-                          onClick={() => void runSavedSearchNow(saved.id)}
-                          disabled={checking || opening || deleting}
-                          aria-busy={checking ? "true" : undefined}
-                        >
-                          {checking ? "…" : "↻"}
-                        </button>
-                        <button
-                          type="button"
-                          className="discovery-sub__action"
-                          title={checking || opening || deleting ? "订阅操作进行中" : "删除订阅"}
-                          onClick={() => void removeSavedSearch(saved)}
-                          disabled={checking || opening || deleting}
-                          aria-busy={deleting ? "true" : undefined}
-                        >
-                          {deleting ? "…" : "×"}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {savedSearchUndo &&
-            (message === savedSearchUndo.message ||
-              savedSearchUndoBusy ||
-              message?.startsWith("撤销删除订阅失败，撤销入口仍保留")) ? (
-              <InlineNotice className="library-command__message" message={message}>
-                <span className="library-command__message-text">{message}</span>
-                <button
-                  type="button"
-                  className="library-command__message-action"
-                  onClick={() => void undoSavedSearchDelete()}
-                  disabled={savedSearchUndoBusy}
-                  aria-busy={savedSearchUndoBusy ? "true" : undefined}
-                  aria-label="撤销删除检索订阅"
-                >
-                  {savedSearchUndoBusy ? "撤销中..." : "撤销"}
-                </button>
-              </InlineNotice>
-            ) : (
-              <InlineNotice className="library-command__message" message={message} />
-            )}
+            <DiscoverySavedSearchPanel
+              message={message}
+              snapshot={savedSearchController}
+              onCheck={runSavedSearchNow}
+              onDelete={removeSavedSearch}
+              onOpen={openSavedSearch}
+              onUndo={undoSavedSearchDelete}
+            />
 
             {results.length > 0 && (
               <div className="discovery-refine">
@@ -2666,46 +2358,17 @@ export function DiscoveryPage() {
           <strong>站点浏览取全文</strong>
           <small>{firstSearchSite ? `${firstSearchSite.name} 起步` : "桌面应用中显示站点"}</small>
         </button>
-        <div className="discovery-route-card discovery-route-card--passive">
-          <span className="discovery-route-card__mark">↻</span>
-          <strong>检索订阅</strong>
-          <small>
-            {recentSavedSearches.length
-              ? `${recentSavedSearches.length} 个近期订阅 · ${savedNewCount} 个新结果`
-              : "保存主题后自动追踪新论文"}
-          </small>
-        </div>
+        <DiscoverySavedSearchRouteSummary
+          newCount={savedNewCount}
+          recentCount={recentSavedSearches.length}
+        />
       </div>
 
-      {recentSavedSearches.length > 0 && (
-        <div className="discovery-saved-strip">
-          <span>近期订阅</span>
-          {recentSavedSearches.map((saved) => {
-            const opening = openingSavedSearchIds.has(saved.id);
-            const deleting = deletingSavedSearchIds.has(saved.id);
-            return (
-              <button
-                key={saved.id}
-                type="button"
-                onClick={() => void openSavedSearch(saved)}
-                disabled={opening || deleting}
-                aria-busy={opening || deleting ? "true" : undefined}
-              >
-                <strong>{saved.query}</strong>
-                <small>
-                  {opening
-                    ? "打开中..."
-                    : deleting
-                      ? "删除中..."
-                      : saved.newCount
-                        ? `${saved.newCount} 新`
-                        : lastRunLabel(saved.lastRunAt)}
-                </small>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <DiscoverySavedSearchRecentStrip
+        items={recentSavedSearches}
+        rowActions={savedSearchRowActions}
+        onOpen={openSavedSearch}
+      />
 
       <div className="discovery-cards">
         <button
