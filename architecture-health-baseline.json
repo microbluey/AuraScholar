@@ -10,8 +10,8 @@
     "production": {
       "byExtension": {
         ".css": 16398,
-        ".ts": 35064,
-        ".tsx": 32040
+        ".ts": 36516,
+        ".tsx": 31632
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 348,
@@ -90,9 +90,15 @@
         "apps/desktop/src/features/canvas/workspace-load.ts": 117,
         "apps/desktop/src/features/discovery/DiscoverySavedSearchHome.tsx": 81,
         "apps/desktop/src/features/discovery/DiscoverySavedSearchPanel.tsx": 143,
+        "apps/desktop/src/features/discovery/discovery-result-model.ts": 193,
         "apps/desktop/src/features/discovery/discovery-saved-search-controller.ts": 470,
         "apps/desktop/src/features/discovery/discovery-saved-search-model.ts": 89,
+        "apps/desktop/src/features/discovery/discovery-search-controller-model.ts": 178,
+        "apps/desktop/src/features/discovery/discovery-search-controller.ts": 385,
+        "apps/desktop/src/features/discovery/discovery-search-executor.ts": 393,
+        "apps/desktop/src/features/discovery/discovery-search-model.ts": 114,
         "apps/desktop/src/features/discovery/useDiscoverySavedSearchController.ts": 151,
+        "apps/desktop/src/features/discovery/useDiscoverySearchController.ts": 189,
         "apps/desktop/src/features/library/CollectionManager.tsx": 243,
         "apps/desktop/src/features/library/LibraryActionIconButton.tsx": 56,
         "apps/desktop/src/features/library/LibraryCollectionManagement.tsx": 66,
@@ -116,7 +122,7 @@
         "apps/desktop/src/features/settings/backup-safety.ts": 31,
         "apps/desktop/src/keyboard.ts": 7,
         "apps/desktop/src/main.tsx": 106,
-        "apps/desktop/src/pages/DiscoveryPage.tsx": 2938,
+        "apps/desktop/src/pages/DiscoveryPage.tsx": 2530,
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1149,
         "apps/desktop/src/pages/LibraryPage.tsx": 4227,
@@ -268,16 +274,16 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 83502
+      "totalLines": 84546
     },
     "tests": {
       "byExtension": {
-        ".ts": 41477,
+        ".ts": 42686,
         ".tsx": 317
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 385,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 409,
         "apps/desktop/electron/main/data-commands.test.ts": 1210,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
         "apps/desktop/electron/main/legacy-transaction-debt.test.ts": 258,
@@ -304,7 +310,7 @@
         "apps/desktop/electron/main/smoke/contracts.ts": 648,
         "apps/desktop/electron/main/smoke/fragments/canvas.ts": 761,
         "apps/desktop/electron/main/smoke/fragments/discovery-import.ts": 390,
-        "apps/desktop/electron/main/smoke/fragments/discovery-results.ts": 246,
+        "apps/desktop/electron/main/smoke/fragments/discovery-results.ts": 346,
         "apps/desktop/electron/main/smoke/fragments/discovery-saved-searches.ts": 339,
         "apps/desktop/electron/main/smoke/fragments/discovery-sites.ts": 550,
         "apps/desktop/electron/main/smoke/fragments/fixtures.ts": 445,
@@ -373,7 +379,10 @@
         "apps/desktop/src/features/canvas/workspace-controls.test.ts": 116,
         "apps/desktop/src/features/canvas/workspace-load.test.ts": 290,
         "apps/desktop/src/features/discovery/DiscoverySavedSearchViews.test.tsx": 213,
+        "apps/desktop/src/features/discovery/discovery-result-model.test.ts": 261,
         "apps/desktop/src/features/discovery/discovery-saved-search-controller.test.ts": 509,
+        "apps/desktop/src/features/discovery/discovery-search-controller.test.ts": 592,
+        "apps/desktop/src/features/discovery/discovery-search-model.test.ts": 232,
         "apps/desktop/src/features/library/library-collection-model.test.ts": 147,
         "apps/desktop/src/features/library/library-refresh-controller.test.ts": 299,
         "apps/desktop/src/features/library/library-work-lifecycle-model.test.ts": 156,
@@ -441,7 +450,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 41794
+      "totalLines": 43003
     }
   },
   "uiDatabaseBoundary": {}

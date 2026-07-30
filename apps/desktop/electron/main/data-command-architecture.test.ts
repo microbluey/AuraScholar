@@ -256,6 +256,30 @@ describe("main-process data command architecture", () => {
     expect(hook).toContain(updateEvent);
   });
 
+  it("keeps Discovery result search lifecycle inside the feature controller", () => {
+    const discoveryPage = source("src/pages/DiscoveryPage.tsx");
+    const controller = source("src/features/discovery/discovery-search-controller.ts");
+    const hook = source("src/features/discovery/useDiscoverySearchController.ts");
+
+    expect(discoveryPage).toContain("useDiscoverySearchController");
+    expect(discoveryPage).not.toContain("searchTokenRef");
+    expect(discoveryPage).not.toContain("searchAbortRef");
+    expect(discoveryPage).not.toContain("searchDiscoveryDetailed");
+    expect(discoveryPage).not.toContain("setResults(");
+    expect(discoveryPage).not.toContain("const [searching");
+    expect(discoveryPage).not.toContain("const [loadingMore");
+
+    expect(hook).toContain("discovery-search-controller");
+    expect(hook).toContain("searchDiscoveryDetailed");
+    expect(hook).toContain("useSyncExternalStore");
+    expect(hook).toContain("controller.start()");
+    expect(hook).toContain("controller.stop()");
+    expect(controller).toContain("loadMore");
+    expect(controller).toContain("AbortController");
+    expect(controller).not.toContain("window.");
+    expect(controller).not.toContain('from "react"');
+  });
+
   it("keeps Canvas and Citation Graph reads behind scoped data services", () => {
     const canvasPage = source("src/pages/SpatialCanvasPage.tsx");
     const canvasGateway = source("src/services/canvas-page-data.ts");

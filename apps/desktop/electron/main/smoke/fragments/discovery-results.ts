@@ -241,6 +241,106 @@ export const smokeDiscoveryResults = String.raw`        window.__AURASCHOLAR_SMO
           delete window.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
         }
 
+        const discoveryStaleLoadMoreSmoke = {
+          baseQuery: "Smoke Discovery Pending Load More Base",
+          baseTitle: "Smoke Discovery Pending Load More First Page",
+          staleTitle: "Smoke Discovery Stale Second Page Must Be Ignored",
+          freshQuery: "Smoke Discovery Fresh Search Replaces Pagination",
+          freshTitle: "Smoke Discovery Fresh Search Result"
+        };
+        window.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__ = {
+          query: discoveryStaleLoadMoreSmoke.baseQuery,
+          title: discoveryStaleLoadMoreSmoke.baseTitle,
+          doi: "10.4242/aurascholar.discovery-stale-page-one",
+          hasMore: true,
+          page: 1
+        };
+        try {
+          await (window.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_SEARCH__?.(
+            discoveryStaleLoadMoreSmoke.baseQuery,
+            ["crossref"]
+          ) ?? Promise.resolve(false));
+          await waitFor(
+            () =>
+              bodyIncludes(discoveryStaleLoadMoreSmoke.baseTitle) &&
+              bodyIncludes("加载更多"),
+            4_000
+          );
+
+          window.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__ = {
+            delayMs: 800,
+            query: discoveryStaleLoadMoreSmoke.baseQuery,
+            title: discoveryStaleLoadMoreSmoke.staleTitle,
+            doi: "10.4242/aurascholar.discovery-stale-page-two",
+            hasMore: false,
+            page: 2
+          };
+          const loadMoreHookReady = Boolean(
+            await waitFor(
+              () =>
+                typeof window.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_LOAD_MORE__ === "function",
+              2_000
+            )
+          );
+          const staleLoadMorePromise =
+            typeof window.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_LOAD_MORE__ === "function"
+              ? Promise.resolve(window.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_LOAD_MORE__())
+              : Promise.resolve(false);
+          const staleLoadMoreBusyVisible = Boolean(
+            await waitFor(
+              () => {
+                const button = document.querySelector(".discovery-load-more > button");
+                return button?.disabled && button.getAttribute("aria-busy") === "true"
+                  ? button
+                  : null;
+              },
+              1_000
+            )
+          );
+
+          window.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__ = {
+            query: discoveryStaleLoadMoreSmoke.freshQuery,
+            title: discoveryStaleLoadMoreSmoke.freshTitle,
+            doi: "10.4242/aurascholar.discovery-fresh-search",
+            hasMore: false,
+            page: 1
+          };
+          const freshSearchSucceeded = await (
+            window.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_SEARCH__?.(
+              discoveryStaleLoadMoreSmoke.freshQuery,
+              ["crossref"]
+            ) ?? Promise.resolve(false)
+          );
+          await staleLoadMorePromise.catch(() => false);
+          await waitFor(
+            () => bodyIncludes(discoveryStaleLoadMoreSmoke.freshTitle),
+            4_000
+          );
+          // Let React commit any state publication queued by the settled
+          // pagination request before asserting that its stale row is absent.
+          await wait(100);
+          const staleLoadMoreIgnored =
+            freshSearchSucceeded === true &&
+            bodyIncludes(discoveryStaleLoadMoreSmoke.freshTitle) &&
+            !bodyIncludes(discoveryStaleLoadMoreSmoke.staleTitle);
+          discoveryLoadMoreRetryRecoveryVisible =
+            discoveryLoadMoreRetryRecoveryVisible &&
+            loadMoreHookReady &&
+            staleLoadMoreBusyVisible &&
+            staleLoadMoreIgnored;
+          discoveryLoadMoreRetryRecoveryDetail += [
+            "",
+            "staleHook=" + loadMoreHookReady,
+            "staleBusy=" + staleLoadMoreBusyVisible,
+            "freshSucceeded=" + freshSearchSucceeded,
+            "freshVisible=" + bodyIncludes(discoveryStaleLoadMoreSmoke.freshTitle),
+            "staleAbsent=" + !bodyIncludes(discoveryStaleLoadMoreSmoke.staleTitle),
+            "isolated=" + staleLoadMoreIgnored
+          ].join("; ");
+        } finally {
+          delete window.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
+        }
+
         window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_READ__ =
           "Smoke settings AI config read failure";
 `;
