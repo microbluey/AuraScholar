@@ -1,11 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
-import type { DiscoveryQuery, DiscoverySource, SourceCursor } from "@aurascholar/core";
-import type {
-  DiscoveryResultWithLibrary,
-  DiscoverySearchReportWithLibrary,
-} from "../services/discovery";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryResultWithLibrary } from "../services/discovery";
 import {
   activateResearchTab,
   activeResearchUrl,
@@ -51,6 +48,24 @@ import {
   DiscoverySavedSearchRouteSummary,
 } from "../features/discovery/DiscoverySavedSearchHome";
 import { DiscoverySavedSearchPanel } from "../features/discovery/DiscoverySavedSearchPanel";
+import {
+  discoveryImportBusyLabel,
+  discoveryImportMessage,
+  fulltextProfile,
+  identifierSignals,
+  resultConfidence,
+  resultSources,
+  sourceLabel,
+} from "../features/discovery/discovery-result-model";
+import {
+  sourceStatusSummary,
+  statusLabel,
+  type DiscoverySourceStatus,
+} from "../features/discovery/discovery-search-model";
+import {
+  discoverySearchApplied,
+  useDiscoverySearchController,
+} from "../features/discovery/useDiscoverySearchController";
 import { useDiscoverySavedSearchController } from "../features/discovery/useDiscoverySavedSearchController";
 import { isImeComposing } from "../keyboard";
 import { describeSafeError } from "../services/sensitive-text";
@@ -81,8 +96,6 @@ const MIN_SITE_ACTION_BUSY_MS = 250;
 const MIN_SITE_PROXY_BUSY_MS = 250;
 const MIN_SITE_RESTORE_BUSY_MS = 250;
 const MIN_PROXY_CONFIG_SAVE_BUSY_MS = 250;
-const MIN_DISCOVERY_SEARCH_BUSY_MS = 350;
-const MIN_DISCOVERY_LOAD_MORE_BUSY_MS = 250;
 const MIN_DISCOVERY_IMPORT_BUSY_MS = 350;
 const MIN_DISCOVERY_SITE_ADD_BUSY_MS = 350;
 const MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS = 350;
@@ -91,17 +104,6 @@ async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Prom
   const remaining = minimumMs - (Date.now() - startedAt);
   if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
 }
-
-const SOURCE_STATUS_ORDER: SourceStatus[] = [
-  "searching",
-  "done",
-  "empty",
-  "timeout",
-  "rate_limited",
-  "error",
-  "stopped",
-  "idle",
-];
 
 function hostOf(url: string): string {
   try {
@@ -119,15 +121,6 @@ function faviconUrl(homeUrl: string): string {
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostOf(homeUrl))}&sz=64`;
 }
 
-type SourceStatus =
-  | "idle"
-  | "searching"
-  | "done"
-  | "empty"
-  | "timeout"
-  | "error"
-  | "rate_limited"
-  | "stopped";
 type Mode = "home" | "opensource" | "browser";
 type SortKey = "relevance" | "year" | "citations";
 type SiteManagementAction = "remove" | "hide" | "clear";
@@ -211,15 +204,15 @@ const PREVIEW_DISCOVERY_RESULTS: DiscoveryResultWithLibrary[] = [
 ];
 
 function previewDiscoverySourceStatus(
-  activeSources: DiscoverySource[] = DEFAULT_DISCOVERY_SOURCES,
-): Record<DiscoverySource, SourceStatus> {
+  activeSources: readonly DiscoverySource[] = DEFAULT_DISCOVERY_SOURCES,
+): Record<DiscoverySource, DiscoverySourceStatus> {
   const active = new Set(activeSources);
   return Object.fromEntries(
     SOURCES.map((source) => [
       source.id,
       active.has(source.id) ? (source.id === "arxiv" ? "empty" : "done") : "idle",
     ]),
-  ) as Record<DiscoverySource, SourceStatus>;
+  ) as Record<DiscoverySource, DiscoverySourceStatus>;
 }
 
 function initialDiscoveryMode(): Mode {
@@ -253,17 +246,17 @@ function initialDiscoverySelectedId(): string | null {
   return isDesktopRuntime() ? null : (PREVIEW_DISCOVERY_RESULTS[0]?.id ?? null);
 }
 
-function initialDiscoverySourceStatus(): Record<DiscoverySource, SourceStatus> {
+function initialDiscoverySourceStatus(): Record<DiscoverySource, DiscoverySourceStatus> {
   if (initialPendingFulltextTarget()) {
     return Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
       DiscoverySource,
-      SourceStatus
+      DiscoverySourceStatus
     >;
   }
   return isDesktopRuntime()
     ? (Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
         DiscoverySource,
-        SourceStatus
+        DiscoverySourceStatus
       >)
     : previewDiscoverySourceStatus();
 }
@@ -275,23 +268,14 @@ interface SiteRemoveUndoState {
 
 interface DiscoverySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__?: unknown;
-  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__?: unknown;
-  __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_REMOVE_SITE__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SITE__?: unknown;
   __AURASCHOLAR_SMOKE_DISCOVERY_REPLACED_ACTIVE_SEARCH__?: boolean;
+  __AURASCHOLAR_SMOKE_RUN_DISCOVERY_LOAD_MORE__?: () => Promise<boolean>;
   __AURASCHOLAR_SMOKE_RUN_DISCOVERY_SEARCH__?: (
     query: string,
     sources?: DiscoverySource[],
   ) => Promise<boolean>;
-}
-
-function consumeDiscoverySmokeSearchFailure(): Error | null {
-  const target = window as DiscoverySmokeWindow;
-  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__;
-  if (failure == null) return null;
-  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SEARCH__;
-  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
 }
 
 function consumeDiscoverySmokeRemoveSiteFailure(): Error | null {
@@ -308,190 +292,6 @@ function consumeDiscoverySmokeRestoreSiteFailure(): Error | null {
   if (failure == null) return null;
   delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SITE__;
   return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
-}
-
-function consumeDiscoverySmokeLoadMoreFailure(): Error | null {
-  const target = window as DiscoverySmokeWindow;
-  const failure = target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__;
-  if (failure == null) return null;
-  delete target.__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_LOAD_MORE__;
-  return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
-}
-
-function sourceStatusSummary(statuses: Record<DiscoverySource, SourceStatus>): string {
-  const active = SOURCE_STATUS_ORDER.find((status) =>
-    Object.values(statuses).some((item) => item === status),
-  );
-  return active ? statusLabel(active) : "待命";
-}
-
-function discoverySearchMessage(
-  resultCount: number,
-  reports: DiscoverySearchReportWithLibrary[],
-): string {
-  const sourceReports = reports.flatMap((report) => Object.values(report.sources));
-  const failed = sourceReports.filter((report) => DISCOVERY_FAILURE_STATUSES.has(report.status));
-  const completed = sourceReports.filter(
-    (report) => report.status === "done" || report.status === "empty",
-  );
-
-  if (resultCount > 0) {
-    const suffix = failed.length > 0 ? `；${sourceFailureSummary(failed)} 暂时不可用` : "";
-    return `找到 ${resultCount} 条候选结果${suffix}`;
-  }
-  if (failed.length > 0 && completed.length === 0) {
-    return `检索源暂时不可用:${sourceFailureSummary(failed)}`;
-  }
-  if (failed.length > 0) {
-    return `没有找到结果；${sourceFailureSummary(failed)} 暂时不可用，可稍后重试`;
-  }
-  return "没有找到结果,换个关键词试试";
-}
-
-const DISCOVERY_FAILURE_STATUSES = new Set(["timeout", "error", "rate_limited", "aborted"]);
-
-function sourceFailureSummary(
-  reports: Array<DiscoverySearchReportWithLibrary["sources"][DiscoverySource]>,
-): string {
-  return reports
-    .map((report) => `${sourceLabel(report.source)} ${statusLabel(uiSourceStatus(report.status))}`)
-    .join("; ");
-}
-
-function resultSources(result: DiscoveryResultWithLibrary): DiscoverySource[] {
-  const selected = result.matchedSources?.length ? result.matchedSources : [result.source];
-  const order = new Map(SOURCES.map((source, index) => [source.id, index]));
-  return [...new Set(selected)].sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
-}
-
-function identifierSignals(work: DiscoveryResultWithLibrary["work"]): string[] {
-  return [
-    work.doi ? `DOI ${work.doi}` : undefined,
-    work.arxivId ? `arXiv ${work.arxivId}` : undefined,
-    work.openalexId ? "OpenAlex ID" : undefined,
-    work.s2Id ? "Semantic Scholar ID" : undefined,
-    work.pmid ? `PMID ${work.pmid}` : undefined,
-  ].filter((item): item is string => Boolean(item));
-}
-
-function resultConfidence(result: DiscoveryResultWithLibrary): {
-  badge: string;
-  detail: string;
-  label: string;
-  tier: "strong" | "medium" | "low";
-  variant: "success" | "neutral" | "warning";
-} {
-  const work = result.work;
-  const sourceCount = resultSources(result).length;
-  const identifiers = identifierSignals(work);
-  const stablePrimaryId = Boolean(work.doi || work.arxivId);
-  let points = 0;
-  if (stablePrimaryId) points += 3;
-  else if (identifiers.length > 0) points += 2;
-  if (sourceCount >= 2) points += 2;
-  if (work.abstract) points += 1;
-  if (work.venueName && work.year) points += 1;
-  if (work.authors.length > 0) points += 1;
-  if (work.oaPdfUrl) points += 1;
-
-  const tier = points >= 6 ? "strong" : points >= 3 ? "medium" : "low";
-  const reasons = [
-    stablePrimaryId ? "稳定标识" : identifiers.length > 0 ? "外部 ID" : undefined,
-    sourceCount >= 2 ? `${sourceCount} 个数据源佐证` : `${sourceLabel(result.source)} 单源`,
-    work.abstract ? "有摘要" : undefined,
-    work.venueName && work.year ? "出版信息完整" : undefined,
-    work.oaPdfUrl ? "有开放全文线索" : undefined,
-  ].filter((item): item is string => Boolean(item));
-
-  if (tier === "strong") {
-    return {
-      badge: "可信度强",
-      detail: reasons.slice(0, 3).join(" · "),
-      label: "强",
-      tier,
-      variant: "success",
-    };
-  }
-  if (tier === "medium") {
-    return {
-      badge: "可信度中",
-      detail: reasons.slice(0, 3).join(" · "),
-      label: "中",
-      tier,
-      variant: "neutral",
-    };
-  }
-  return {
-    badge: "需核对",
-    detail: reasons.slice(0, 2).join(" · ") || "缺少稳定标识",
-    label: "需核对",
-    tier,
-    variant: "warning",
-  };
-}
-
-function fulltextProfile(result: DiscoveryResultWithLibrary): {
-  detail: string;
-  label: string;
-  variant: "success" | "neutral" | "warning";
-} {
-  if (result.inLibrary && result.needsFulltext) {
-    return {
-      detail: result.work.oaPdfUrl
-        ? "已入库，但开放 PDF 未能自动挂载；可继续用站点浏览或机构入口补全文。"
-        : "已入库但还没有 PDF，适合继续走站点浏览或图书馆入口补全文。",
-      label: "待补全文",
-      variant: "warning",
-    };
-  }
-  if (result.work.oaPdfUrl) {
-    return {
-      detail: "入库时会尝试获取开放 PDF；也可以用站点浏览器核对来源页面。",
-      label: "开放 PDF 可用",
-      variant: "success",
-    };
-  }
-  if (result.inLibrary) {
-    return {
-      detail: "库中已有记录；打开阅读器后可确认本地附件。",
-      label: "库中记录",
-      variant: "neutral",
-    };
-  }
-  if (result.work.doi || result.work.url) {
-    return {
-      detail: "未发现直接开放 PDF，可先入库，再通过 DOI、出版商页面或机构入口找全文。",
-      label: "需站点查找",
-      variant: "neutral",
-    };
-  }
-  return {
-    detail: "当前源没有提供开放 PDF 或可靠落地页，入库前建议核对标题和作者。",
-    label: "未发现全文",
-    variant: "warning",
-  };
-}
-
-function discoveryImportBusyLabel(result: DiscoveryResultWithLibrary): string {
-  return result.work.oaPdfUrl ? "导入并抓取 PDF..." : "导入中...";
-}
-
-function discoveryImportMessage(
-  result: DiscoveryResultWithLibrary,
-  imported: { deduped: boolean; pdfFetched: boolean; title: string },
-): string {
-  if (imported.deduped) {
-    return imported.pdfFetched
-      ? `已在库中:${imported.title}，PDF 已可用`
-      : `已在库中:${imported.title}`;
-  }
-  if (imported.pdfFetched) {
-    return `已入库:${imported.title}，开放 PDF 已挂载`;
-  }
-  if (result.work.oaPdfUrl) {
-    return `已入库:${imported.title}；开放 PDF 未能自动获取，可去找全文`;
-  }
-  return `已入库:${imported.title}；暂无开放 PDF，可去找全文`;
 }
 
 function PendingFulltextTarget({ detail, title }: { detail: string; title: string }) {
@@ -537,12 +337,6 @@ export function DiscoveryPage() {
   const [selectedSources, setSelectedSources] = useState<Set<DiscoverySource>>(
     () => new Set(SOURCES.map((s) => s.id)),
   );
-  const [results, setResults] = useState<DiscoveryResultWithLibrary[]>(() =>
-    initialDiscoveryResults(),
-  );
-  const [selectedId, setSelectedId] = useState<string | null>(() => initialDiscoverySelectedId());
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
   const [importingId, setImportingId] = useState<string | null>(null);
   // Advanced query fields (sent to the API, not just client filtering).
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -552,16 +346,10 @@ export function DiscoveryPage() {
   const [venue, setVenue] = useState("");
   // API-level sort: changing it re-runs the search so the API re-ranks.
   const [sortBy, setSortBy] = useState<SortKey>("relevance");
-  // Per-source pagination cursors for "load more"; plus a client-only OA filter.
-  const [cursors, setCursors] = useState<Partial<Record<DiscoverySource, SourceCursor>>>({});
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  // Pagination belongs to the search controller; this is the client-only OA filter.
   const [oaOnly, setOaOnly] = useState(false);
   const [siteRemoveUndo, setSiteRemoveUndo] = useState<SiteRemoveUndoState | null>(null);
   const [siteRemoveUndoBusy, setSiteRemoveUndoBusy] = useState(false);
-  const [sourceStatus, setSourceStatus] = useState<Record<DiscoverySource, SourceStatus>>(() =>
-    initialDiscoverySourceStatus(),
-  );
 
   // Browser (multi-tab; views live in the Electron main process)
   const [tabs, setTabs] = useState<ResearchTab[]>([]);
@@ -586,13 +374,54 @@ export function DiscoveryPage() {
   // Mirror in a ref so the download subscription (deps: [mode]) reads it fresh.
   const pendingWorkRef = useRef(pendingWork);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const searchTokenRef = useRef(0);
-  const searchAbortRef = useRef<AbortController | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const openSourceSearchInputRef = useRef<HTMLInputElement>(null);
   const boundsErrorReportedRef = useRef(false);
 
   const desktopRuntime = isDesktopRuntime();
+  const buildQuery = useCallback(
+    (text = query): DiscoveryQuery => ({
+      text: text.trim(),
+      author: author.trim() || undefined,
+      yearFrom: yearFrom.trim() ? Number(yearFrom.trim()) : undefined,
+      yearTo: yearTo.trim() ? Number(yearTo.trim()) : undefined,
+      venue: venue.trim() || undefined,
+    }),
+    [query, author, yearFrom, yearTo, venue],
+  );
+  const discoverySearch = useDiscoverySearchController({
+    allSources: DEFAULT_DISCOVERY_SOURCES,
+    initialSnapshot: {
+      results: initialDiscoveryResults(),
+      selectedId: initialDiscoverySelectedId(),
+      sourceStatus: initialDiscoverySourceStatus(),
+    },
+    onMessage: setMessage,
+    preview: desktopRuntime
+      ? undefined
+      : {
+          message:
+            "浏览器预览正在展示一组聚合检索样例；桌面应用会实时查询 OpenAlex、Crossref、Semantic Scholar 和 arXiv。",
+          results: PREVIEW_DISCOVERY_RESULTS,
+          sourceStatus: previewDiscoverySourceStatus,
+        },
+  });
+  const {
+    cancel: cancelDiscoverySearch,
+    clear: clearDiscoverySearch,
+    cursors,
+    loadMore: loadMoreDiscoveryResults,
+    loadingMore,
+    loadMoreError,
+    results,
+    search: executeDiscoverySearch,
+    searchError,
+    searching,
+    select: selectDiscoveryResult,
+    selectedId,
+    sourceStatus,
+    updateResult: updateDiscoveryResult,
+  } = discoverySearch;
   const visibleSites = useMemo(() => sites.filter((s) => !s.hidden), [sites]);
   const activeTab = useMemo(() => tabs.find((t) => t.active) ?? null, [tabs]);
   const firstSearchSite = useMemo(
@@ -690,17 +519,7 @@ export function DiscoveryPage() {
       if (!desktopRuntime) {
         setMode("opensource");
         setQuery(target.title);
-        setResults([]);
-        setSelectedId(null);
-        setCursors({});
-        setSearchError(null);
-        setLoadMoreError(null);
-        setSourceStatus(
-          Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
-            DiscoverySource,
-            SourceStatus
-          >,
-        );
+        clearDiscoverySearch();
         setMessage(`已保留《${target.title}》的补全文目标；浏览器预览不会打开内置站点浏览器。`);
         return;
       }
@@ -709,7 +528,7 @@ export function DiscoveryPage() {
       const dest = ezproxy.trim() ? (ezproxyRewrite(ezproxy, url) ?? url) : url;
       openResearchTabWithFeedback("_fulltext", dest, proxy, { keepBrowserOnFailure: true });
     },
-    [desktopRuntime, ezproxy, openResearchTabWithFeedback, proxy],
+    [clearDiscoverySearch, desktopRuntime, ezproxy, openResearchTabWithFeedback, proxy],
   );
 
   // "Find full text" hand-off from the library (via query params).
@@ -724,17 +543,7 @@ export function DiscoveryPage() {
       if (!isDesktopRuntime()) {
         setMode("opensource");
         if (title.trim()) setQuery(title.trim());
-        setResults([]);
-        setSelectedId(null);
-        setCursors({});
-        setSearchError(null);
-        setLoadMoreError(null);
-        setSourceStatus(
-          Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
-            DiscoverySource,
-            SourceStatus
-          >,
-        );
+        clearDiscoverySearch();
         setMessage(
           title
             ? `已保留《${title}》的补全文目标；浏览器预览不会打开内置站点浏览器。`
@@ -751,8 +560,14 @@ export function DiscoveryPage() {
       setSearchParams({}, { replace: true });
     }, 0);
     return () => window.clearTimeout(handoffId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, ezproxy, proxy, openResearchTabWithFeedback]);
+  }, [
+    clearDiscoverySearch,
+    ezproxy,
+    openResearchTabWithFeedback,
+    proxy,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const openViaLibrary = useCallback(async () => {
     if (!ezproxy.trim()) {
@@ -859,19 +674,8 @@ export function DiscoveryPage() {
 
   // Any selected source still has more pages to fetch.
   const canLoadMore = useMemo(
-    () => [...selectedSources].some((s) => cursors[s]?.hasMore),
-    [selectedSources, cursors],
-  );
-
-  const buildQuery = useCallback(
-    (text = query): DiscoveryQuery => ({
-      text: text.trim(),
-      author: author.trim() || undefined,
-      yearFrom: yearFrom.trim() ? Number(yearFrom.trim()) : undefined,
-      yearTo: yearTo.trim() ? Number(yearTo.trim()) : undefined,
-      venue: venue.trim() || undefined,
-    }),
-    [query, author, yearFrom, yearTo, venue],
+    () => Object.values(cursors).some((cursor) => cursor?.hasMore),
+    [cursors],
   );
 
   const selectedResult = useMemo(
@@ -1068,149 +872,24 @@ export function DiscoveryPage() {
 
   const runSearch = useCallback(
     async (options: { query?: string; sources?: DiscoverySource[] } = {}): Promise<boolean> => {
-      const searchText = options.query ?? query;
-      if (!searchText.trim()) return false;
-      if (!isDesktopRuntime()) {
-        const requestedSources = options.sources ?? Array.from(selectedSources);
-        const sources = requestedSources.length > 0 ? requestedSources : DEFAULT_DISCOVERY_SOURCES;
-        searchTokenRef.current += 1;
-        searchAbortRef.current?.abort();
-        searchAbortRef.current = null;
-        setQuery(searchText.trim());
-        setResults(PREVIEW_DISCOVERY_RESULTS);
-        setSelectedId(PREVIEW_DISCOVERY_RESULTS[0]?.id ?? null);
-        setCursors({});
-        setSearching(false);
-        setSearchError(null);
-        setLoadMoreError(null);
-        setSourceStatus(previewDiscoverySourceStatus(sources));
-        setMessage(
-          "浏览器预览正在展示一组聚合检索样例；桌面应用会实时查询 OpenAlex、Crossref、Semantic Scholar 和 arXiv。",
-        );
-        return true;
-      }
+      const searchText = (options.query ?? query).trim();
+      if (!searchText) return false;
       const requestedSources = options.sources ?? Array.from(selectedSources);
       const sources = requestedSources.length > 0 ? requestedSources : DEFAULT_DISCOVERY_SOURCES;
-      const startedAt = Date.now();
-      const previousController = searchAbortRef.current;
-      previousController?.abort();
-      if (previousController) {
+      if (searching) {
         (window as DiscoverySmokeWindow).__AURASCHOLAR_SMOKE_DISCOVERY_REPLACED_ACTIVE_SEARCH__ =
           true;
       }
-      const controller = new AbortController();
-      searchAbortRef.current = controller;
-      const token = searchTokenRef.current + 1;
-      searchTokenRef.current = token;
-      setSearching(true);
-      setResults([]);
-      setSelectedId(null);
-      setCursors({}); // fresh search resets pagination
-      setSearchError(null);
-      setLoadMoreError(null);
-      setSourceStatus(
-        Object.fromEntries(
-          SOURCES.map((source) => [source.id, sources.includes(source.id) ? "searching" : "idle"]),
-        ) as Record<DiscoverySource, SourceStatus>,
-      );
-      setMessage(null);
-      const structured = buildQuery(searchText);
-      try {
-        const smokeFailure = consumeDiscoverySmokeSearchFailure();
-        if (smokeFailure) throw smokeFailure;
-        const { mergeDiscoveryResults, searchDiscoveryDetailed } =
-          await import("../services/discovery");
-        const mergeResults = (items: DiscoveryResultWithLibrary[]) =>
-          mergeDiscoveryResults(items, mergeStatus);
-        const reports = await Promise.all(
-          sources.map(async (source) => {
-            const report = await searchDiscoveryDetailed(structured, [source], controller.signal, {
-              sort: sortBy,
-            });
-            if (searchTokenRef.current !== token) return null;
-            const status = report.sources[source]?.status ?? "empty";
-            setSourceStatus((prev) => ({ ...prev, [source]: uiSourceStatus(status) }));
-            if (report.cursors[source]) {
-              setCursors((prev) => ({ ...prev, [source]: report.cursors[source] }));
-            }
-            setResults((prev) => {
-              const next = mergeResults([...prev, ...report.results]);
-              setSelectedId((current) => current ?? next[0]?.id ?? null);
-              return next;
-            });
-            return report;
-          }),
-        );
-        if (searchTokenRef.current !== token) return false;
-        const activeReports = reports.filter((report): report is DiscoverySearchReportWithLibrary =>
-          Boolean(report),
-        );
-        const finalResults = mergeResults(activeReports.flatMap((report) => report.results));
-        setResults(finalResults);
-        setSelectedId((current) => current ?? finalResults[0]?.id ?? null);
-        setSearchError(null);
-        setMessage(discoverySearchMessage(finalResults.length, activeReports));
-        return true;
-      } catch (e) {
-        if (searchTokenRef.current !== token) return false;
-        const detail = describeUnknownError(e);
-        setSearchError(detail);
-        setSourceStatus(
-          Object.fromEntries(
-            SOURCES.map((source) => [source.id, sources.includes(source.id) ? "error" : "idle"]),
-          ) as Record<DiscoverySource, SourceStatus>,
-        );
-        setMessage(`检索失败:${detail}`);
-        return false;
-      } finally {
-        if (searchTokenRef.current === token) {
-          await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_SEARCH_BUSY_MS);
-          setSearching(false);
-          searchAbortRef.current = null;
-        }
-      }
+      if (!desktopRuntime || options.query !== undefined) setQuery(searchText);
+      const outcome = await executeDiscoverySearch({
+        query: buildQuery(searchText),
+        sort: sortBy,
+        sources,
+      });
+      return discoverySearchApplied(outcome);
     },
-    [query, selectedSources, buildQuery, sortBy],
+    [buildQuery, desktopRuntime, executeDiscoverySearch, query, searching, selectedSources, sortBy],
   );
-
-  // Fetch the next page from each selected source that still has more, then
-  // merge into the existing result set (cross-page duplicates are deduped).
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !canLoadMore) return;
-    const sources = [...selectedSources].filter((s) => cursors[s]?.hasMore);
-    if (sources.length === 0) return;
-    const startedAt = Date.now();
-    setLoadingMore(true);
-    setLoadMoreError(null);
-    const controller = new AbortController();
-    const structured = buildQuery();
-    try {
-      const smokeFailure = consumeDiscoverySmokeLoadMoreFailure();
-      if (smokeFailure) throw smokeFailure;
-      const { mergeDiscoveryResults, searchDiscoveryDetailed } =
-        await import("../services/discovery");
-      const mergeResults = (items: DiscoveryResultWithLibrary[]) =>
-        mergeDiscoveryResults(items, mergeStatus);
-      await Promise.all(
-        sources.map(async (source) => {
-          const report = await searchDiscoveryDetailed(structured, [source], controller.signal, {
-            sort: sortBy,
-            cursors: { [source]: cursors[source] },
-          });
-          setCursors((prev) => ({ ...prev, [source]: report.cursors[source] }));
-          setResults((prev) => mergeResults([...prev, ...report.results]));
-        }),
-      );
-      setLoadMoreError(null);
-    } catch (e) {
-      const detail = describeUnknownError(e);
-      setLoadMoreError(detail);
-      setMessage(`加载更多失败:${detail}`);
-    } finally {
-      await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_LOAD_MORE_BUSY_MS);
-      setLoadingMore(false);
-    }
-  }, [loadingMore, canLoadMore, selectedSources, cursors, buildQuery, sortBy]);
 
   // Re-run the search when the sort key changes (API re-ranks server-side).
   // Skip the initial render and when there's nothing searched yet.
@@ -1230,42 +909,16 @@ export function DiscoveryPage() {
   }, [sortBy]);
 
   const stopSearch = useCallback(() => {
-    searchTokenRef.current += 1;
-    searchAbortRef.current?.abort();
-    searchAbortRef.current = null;
-    setSearching(false);
-    setSourceStatus(
-      (prev) =>
-        Object.fromEntries(
-          Object.entries(prev).map(([source, status]) => [
-            source,
-            status === "searching" ? "stopped" : status,
-          ]),
-        ) as Record<DiscoverySource, SourceStatus>,
-    );
+    cancelDiscoverySearch();
     setMessage("已停止检索");
-  }, []);
+  }, [cancelDiscoverySearch]);
 
   const clearOpenSourceSearch = useCallback(() => {
-    searchTokenRef.current += 1;
-    searchAbortRef.current?.abort();
-    searchAbortRef.current = null;
-    setSearching(false);
+    clearDiscoverySearch();
     setQuery("");
-    setResults([]);
-    setSelectedId(null);
-    setCursors({});
-    setSearchError(null);
-    setLoadMoreError(null);
     setMessage(null);
-    setSourceStatus(
-      Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
-        DiscoverySource,
-        SourceStatus
-      >,
-    );
     window.setTimeout(() => openSourceSearchInputRef.current?.focus(), 0);
-  }, []);
+  }, [clearDiscoverySearch]);
 
   const toggleSource = useCallback((source: DiscoverySource) => {
     setSelectedSources((prev) => {
@@ -1326,13 +979,19 @@ export function DiscoveryPage() {
       setSelectedSources(new Set(nextSources));
       return runSearch({ query: text, sources: nextSources });
     };
+    const runSmokeLoadMore = async (): Promise<boolean> =>
+      discoverySearchApplied(await loadMoreDiscoveryResults());
     target.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_SEARCH__ = runSmokeSearch;
+    target.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_LOAD_MORE__ = runSmokeLoadMore;
     return () => {
       if (target.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_SEARCH__ === runSmokeSearch) {
         delete target.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_SEARCH__;
       }
+      if (target.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_LOAD_MORE__ === runSmokeLoadMore) {
+        delete target.__AURASCHOLAR_SMOKE_RUN_DISCOVERY_LOAD_MORE__;
+      }
     };
-  }, [runSearch]);
+  }, [loadMoreDiscoveryResults, runSearch]);
 
   const undoSiteRemove = useCallback(async () => {
     if (!siteRemoveUndo || siteRemoveUndoBusy || !desktopRuntime) return;
@@ -1358,58 +1017,49 @@ export function DiscoveryPage() {
     }
   }, [desktopRuntime, refreshSites, siteRemoveUndo, siteRemoveUndoBusy]);
 
-  const importResult = useCallback(async (result: DiscoveryResultWithLibrary) => {
-    if (!isDesktopRuntime()) {
+  const importResult = useCallback(
+    async (result: DiscoveryResultWithLibrary) => {
+      if (!isDesktopRuntime()) {
+        const startedAt = Date.now();
+        setImportingId(result.id);
+        setMessage("正在演示入库状态...");
+        await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
+        updateDiscoveryResult(result.id, (item) => ({
+          ...item,
+          inLibrary: true,
+          libraryWorkId: `preview-library:${result.id}`,
+          needsFulltext: !result.work.oaPdfUrl,
+        }));
+        selectDiscoveryResult(result.id);
+        setImportingId(null);
+        setMessage("预览已标记为已入库；真实入库会在桌面应用中写入本地文献库。");
+        return;
+      }
       const startedAt = Date.now();
       setImportingId(result.id);
-      setMessage("正在演示入库状态...");
-      await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
-      setResults((prev) =>
-        prev.map((item) =>
-          item.id === result.id
-            ? {
-                ...item,
-                inLibrary: true,
-                libraryWorkId: `preview-library:${result.id}`,
-                needsFulltext: !result.work.oaPdfUrl,
-              }
-            : item,
-        ),
-      );
-      setSelectedId(result.id);
-      setImportingId(null);
-      setMessage("预览已标记为已入库；真实入库会在桌面应用中写入本地文献库。");
-      return;
-    }
-    const startedAt = Date.now();
-    setImportingId(result.id);
-    setMessage(result.work.oaPdfUrl ? "正在加入文献库并获取开放 PDF..." : "正在加入文献库...");
-    try {
-      const { importDiscoveryResult } = await import("../services/discovery");
-      const imported = await importDiscoveryResult(result.work);
-      await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
-      setMessage(discoveryImportMessage(result, imported));
-      setResults((prev) =>
-        prev.map((item) =>
-          item.id === result.id
-            ? {
-                ...item,
-                inLibrary: true,
-                libraryWorkId: imported.workId,
-                needsFulltext: !imported.pdfFetched,
-              }
-            : item,
-        ),
-      );
-      setSelectedId(result.id);
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
-      setMessage(`入库失败:${describeUnknownError(e)}`);
-    } finally {
-      setImportingId(null);
-    }
-  }, []);
+      setMessage(result.work.oaPdfUrl ? "正在加入文献库并获取开放 PDF..." : "正在加入文献库...");
+      try {
+        const { importDiscoveryResult } = await import("../services/discovery");
+        const imported = await importDiscoveryResult(result.work);
+        await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
+        setMessage(discoveryImportMessage(result, imported));
+        updateDiscoveryResult(result.id, (item) => ({
+          ...item,
+          inLibrary: true,
+          libraryWorkId: imported.workId,
+          needsFulltext: !imported.pdfFetched,
+        }));
+        selectDiscoveryResult(result.id);
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      } catch (e) {
+        await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
+        setMessage(`入库失败:${describeUnknownError(e)}`);
+      } finally {
+        setImportingId(null);
+      }
+    },
+    [selectDiscoveryResult, updateDiscoveryResult],
+  );
 
   const openLibraryResult = useCallback(
     (result: DiscoveryResultWithLibrary) => {
@@ -2101,7 +1751,7 @@ export function DiscoveryPage() {
                     result={result}
                     selected={selectedResult?.id === result.id}
                     importing={importingId === result.id}
-                    onSelect={() => setSelectedId(result.id)}
+                    onSelect={() => selectDiscoveryResult(result.id)}
                     onPrimaryAction={() => {
                       if (result.inLibrary && result.libraryWorkId) {
                         openLibraryResult(result);
@@ -2123,7 +1773,7 @@ export function DiscoveryPage() {
                   />
                 ))
               )}
-              {results.length > 0 && (canLoadMore || loadMoreError) && (
+              {results.length > 0 && !searching && (canLoadMore || loadMoreError) && (
                 <div className="discovery-load-more">
                   {loadMoreError && (
                     <div className="discovery-load-more__error" role="alert">
@@ -2133,8 +1783,8 @@ export function DiscoveryPage() {
                       </div>
                       <Button
                         variant="secondary"
-                        onClick={() => void loadMore()}
-                        disabled={loadingMore || !canLoadMore}
+                        onClick={() => void loadMoreDiscoveryResults()}
+                        disabled={searching || loadingMore || !canLoadMore}
                         aria-busy={loadingMore || undefined}
                         aria-label="重试加载更多结果"
                       >
@@ -2145,8 +1795,8 @@ export function DiscoveryPage() {
                   {canLoadMore && (
                     <Button
                       variant="secondary"
-                      onClick={() => void loadMore()}
-                      disabled={loadingMore}
+                      onClick={() => void loadMoreDiscoveryResults()}
+                      disabled={searching || loadingMore}
                       aria-busy={loadingMore || undefined}
                     >
                       {loadingMore ? "加载中…" : "加载更多"}
@@ -2851,7 +2501,7 @@ function SearchProgress({
   searching,
 }: {
   sources: typeof SOURCES;
-  statuses: Record<DiscoverySource, SourceStatus>;
+  statuses: Record<DiscoverySource, DiscoverySourceStatus>;
   searching: boolean;
 }) {
   if (!searching && Object.values(statuses).every((status) => status === "idle")) return null;
@@ -2877,62 +2527,4 @@ function SearchProgress({
       })}
     </div>
   );
-}
-
-function statusLabel(status: SourceStatus): string {
-  switch (status) {
-    case "searching":
-      return "检索中";
-    case "done":
-      return "完成";
-    case "empty":
-      return "无结果";
-    case "timeout":
-      return "超时";
-    case "error":
-      return "失败";
-    case "rate_limited":
-      return "限流";
-    case "stopped":
-      return "已停止";
-    case "idle":
-      return "未启用";
-  }
-}
-
-function uiSourceStatus(status: string): SourceStatus {
-  if (status === "aborted") return "stopped";
-  if (status === "timeout" || status === "error" || status === "rate_limited") return status;
-  if (status === "done" || status === "empty") return status;
-  return "error";
-}
-
-function sourceLabel(source: DiscoverySource): string {
-  switch (source) {
-    case "crossref":
-      return "Crossref";
-    case "openalex":
-      return "OpenAlex";
-    case "s2":
-      return "Semantic Scholar";
-    case "arxiv":
-      return "arXiv";
-  }
-}
-
-function mergeStatus(
-  fallback: DiscoveryResultWithLibrary | undefined,
-  preferred: DiscoveryResultWithLibrary,
-): DiscoveryResultWithLibrary {
-  const matchedSources = resultSources({
-    ...preferred,
-    matchedSources: [...(preferred.matchedSources ?? []), ...(fallback?.matchedSources ?? [])],
-  });
-  return {
-    ...preferred,
-    inLibrary: preferred.inLibrary || fallback?.inLibrary || false,
-    libraryWorkId: preferred.libraryWorkId ?? fallback?.libraryWorkId,
-    matchedSources,
-    score: Math.max(preferred.score, fallback?.score ?? 0),
-  };
 }
