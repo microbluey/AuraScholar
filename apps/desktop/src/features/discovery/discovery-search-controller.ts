@@ -67,7 +67,10 @@ export class DiscoverySearchController<
       Status
     >,
   ) {
-    const initialResults = dependencies.mergeResults(dependencies.initialSnapshot?.results ?? []);
+    const initialResults = dependencies.mergeResults(
+      dependencies.initialSnapshot?.results ?? [],
+      null,
+    );
     this.snapshot = {
       cursors: copyDiscoveryRecord(dependencies.initialSnapshot?.cursors ?? {}),
       loadingMore: false,
@@ -81,6 +84,7 @@ export class DiscoverySearchController<
         dependencies.resultId,
         dependencies.initialSnapshot?.results,
         dependencies.resultKeys,
+        dependencies.isSameResult,
       ),
       sourceStatus: {
         ...createDiscoverySourceRecord(dependencies.allSources, dependencies.statuses.idle),
@@ -257,30 +261,45 @@ export class DiscoverySearchController<
     if (selectedId !== this.snapshot.selectedId) this.update({ selectedId });
   }
 
+  hasResult(reference: Result): boolean {
+    return this.findResultByIdentity(reference) !== null;
+  }
+
   updateResult(id: string, updater: (result: Result) => Result): void {
-    if (!this.active) return;
-    let updatedId: string | null = null;
-    let changed = false;
-    const updated = this.snapshot.results.map((result) => {
-      if (this.dependencies.resultId(result) !== id) return result;
-      const next = updater(result);
-      updatedId = this.dependencies.resultId(next);
-      changed ||= next !== result;
-      return next;
-    });
-    if (!changed) return;
-    const results = this.dependencies.mergeResults(updated);
-    const preferred = this.snapshot.selectedId === id ? updatedId : this.snapshot.selectedId;
+    const reference = this.snapshot.results.find(
+      (result) => this.dependencies.resultId(result) === id,
+    );
+    if (reference) this.updateResultByIdentity(reference, updater);
+  }
+
+  updateResultByIdentity(reference: Result, updater: (result: Result) => Result): string | null {
+    if (!this.active) return null;
+    const current = this.findResultByIdentity(reference);
+    if (!current) return null;
+
+    const currentId = this.dependencies.resultId(current);
+    const next = updater(current);
+    if (next === current) return currentId;
+
+    const previousResults = this.snapshot.results;
+    const updated = previousResults.map((result) => (result === current ? next : result));
+    const results = this.dependencies.mergeResults(updated, this.activeRequest?.query ?? null);
+    const canonical = this.findResultByIdentity(next, results);
+    const canonicalId = canonical ? this.dependencies.resultId(canonical) : null;
+    const preferred =
+      this.snapshot.selectedId === currentId ? canonicalId : this.snapshot.selectedId;
     this.update({
       results,
       selectedId: reconcileDiscoverySelection(
         results,
         preferred,
         this.dependencies.resultId,
-        this.snapshot.results,
+        previousResults,
         this.dependencies.resultKeys,
+        this.dependencies.isSameResult,
       ),
     });
+    return canonicalId;
   }
 
   private abortRequests(): void {
@@ -309,6 +328,26 @@ export class DiscoverySearchController<
       update: (patch: Partial<DiscoverySearchSnapshot<Result, Source, Cursor, Status>>) =>
         this.update(patch),
     };
+  }
+
+  private findResultByIdentity(
+    reference: Result,
+    results: readonly Result[] = this.snapshot.results,
+  ): Result | null {
+    const referenceId = this.dependencies.resultId(reference);
+    const direct = results.find((result) => this.dependencies.resultId(result) === referenceId);
+    if (direct) return direct;
+
+    const isSameResult = this.dependencies.isSameResult;
+    if (isSameResult) return results.find((result) => isSameResult(reference, result)) ?? null;
+
+    const resultKeys = this.dependencies.resultKeys;
+    if (!resultKeys) return null;
+    const referenceKeys = new Set(resultKeys(reference));
+    if (referenceKeys.size === 0) return null;
+    return (
+      results.find((result) => resultKeys(result).some((key) => referenceKeys.has(key))) ?? null
+    );
   }
 
   private isCurrent(ticket: DiscoverySearchTicket<Query, Source>): boolean {

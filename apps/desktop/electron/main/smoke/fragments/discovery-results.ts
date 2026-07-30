@@ -128,7 +128,10 @@ export const smokeDiscoveryResults = String.raw`        window.__AURASCHOLAR_SMO
             Array.from(document.querySelectorAll(".discovery-detail-actions button")).find(
               (button) => button.textContent?.includes("加入文献库")
             );
-          detailImportButton()?.click();
+          window.__AURASCHOLAR_SMOKE_DISCOVERY_IMPORT_CALL_COUNT__ = 0;
+          const importButton = detailImportButton();
+          importButton?.click();
+          importButton?.click();
           await waitFor(
             () =>
               bodyIncludes("正在加入文献库并获取开放 PDF") &&
@@ -150,14 +153,19 @@ export const smokeDiscoveryResults = String.raw`        window.__AURASCHOLAR_SMO
             bodyIncludes("待补全文") &&
             bodyIncludes("去找全文") &&
             bodyIncludes("开放 PDF 未能自动挂载");
+          discoveryImportSingleFlightVisible =
+            window.__AURASCHOLAR_SMOKE_DISCOVERY_IMPORT_CALL_COUNT__ === 1;
           discoveryTrustSignalsDetail +=
             "; importBusy=" +
             discoveryImportBusyVisible +
             "; importFallback=" +
             discoveryImportFulltextFallbackVisible +
+            "; importCalls=" +
+            window.__AURASCHOLAR_SMOKE_DISCOVERY_IMPORT_CALL_COUNT__ +
             "; afterImportDetail=" +
             text(".discovery-detail-card").slice(0, 220);
         } finally {
+          delete window.__AURASCHOLAR_SMOKE_DISCOVERY_IMPORT_CALL_COUNT__;
           delete window.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
         }
 

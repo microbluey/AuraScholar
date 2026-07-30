@@ -19,6 +19,10 @@ import {
 import { describeSafeError } from "@aurascholar/platform";
 import { clueFromInput } from "../ingest/clues.js";
 import { stripBoolean } from "./query.js";
+import { mergeDiscoveryResults, normalizeDiscoveryTitle } from "./search-merge.js";
+
+export { hasConflictingDiscoveryIdentifiers, sameDiscoveryWorkIdentity } from "./search-merge.js";
+export { mergeDiscoveryResults };
 
 export type DiscoverySource = "crossref" | "openalex" | "s2" | "arxiv";
 
@@ -315,7 +319,8 @@ async function runSource(
   const aborted = new Promise<DiscoverySourceOutcome>((resolve) => {
     controller.signal.addEventListener(
       "abort",
-      () => resolve(sourceOutcome(source, page, limit, [], signal?.aborted ? "aborted" : "timeout")),
+      () =>
+        resolve(sourceOutcome(source, page, limit, [], signal?.aborted ? "aborted" : "timeout")),
       { once: true },
     );
   });
@@ -389,7 +394,11 @@ function reportFromOutcomes(
   ) as Record<DiscoverySource, SourceCursor>;
   return {
     // No slice: paginated "load more" accumulates results client-side.
-    results: mergeDiscoveryResults(outcomes.flatMap((outcome) => outcome.results), undefined, sort),
+    results: mergeDiscoveryResults(
+      outcomes.flatMap((outcome) => outcome.results),
+      undefined,
+      sort,
+    ),
     sources: reports,
     cursors,
   };
@@ -399,132 +408,6 @@ function emptyReport(sources: DiscoverySource[]): DiscoverySearchReport {
   return reportFromOutcomes(sources, [], "relevance");
 }
 
-export function mergeDiscoveryResults<T extends DiscoveryResult>(
-  results: T[],
-  mergePreferred?: DiscoveryResultMerger<T>,
-  sortKey: DiscoverySort = "relevance",
-): T[] {
-  interface MergeGroup {
-    result: T;
-    keys: Set<string>;
-  }
-
-  const groups: MergeGroup[] = [];
-  const keyToGroup = new Map<string, MergeGroup>();
-  for (const result of results) {
-    const keys = dedupeKeys(result.work);
-    const linked = [...new Set(keys.map((key) => keyToGroup.get(key)).filter(isMergeGroup))];
-    let group = linked[0];
-
-    if (!group) {
-      group = { result: mergePreferred?.(undefined, result) ?? result, keys: new Set(keys) };
-      groups.push(group);
-    } else {
-      for (const other of linked.slice(1)) {
-        group.result = mergePair(group.result, other.result, mergePreferred);
-        for (const key of other.keys) group.keys.add(key);
-        groups.splice(groups.indexOf(other), 1);
-      }
-      group.result = mergePair(group.result, result, mergePreferred);
-      for (const key of keys) group.keys.add(key);
-    }
-
-    for (const key of group.keys) keyToGroup.set(key, group);
-  }
-
-  return groups.map((group) => group.result).sort(comparatorFor(sortKey));
-}
-
-/** Unified ordering for the merged set; falls back to relevance as tiebreak. */
-function comparatorFor(sortKey: DiscoverySort) {
-  return (a: DiscoveryResult, b: DiscoveryResult): number => {
-    if (sortKey === "year") {
-      return sortYear(b.work) - sortYear(a.work) || b.score - a.score;
-    }
-    if (sortKey === "citations") {
-      return (b.work.citedByCount ?? -1) - (a.work.citedByCount ?? -1) || b.score - a.score;
-    }
-    return b.score - a.score || sortYear(b.work) - sortYear(a.work);
-  };
-}
-
-function isMergeGroup<T extends DiscoveryResult>(
-  group: { result: T; keys: Set<string> } | undefined,
-): group is { result: T; keys: Set<string> } {
-  return !!group;
-}
-
-function mergePair<T extends DiscoveryResult>(
-  existing: T,
-  result: T,
-  mergePreferred?: DiscoveryResultMerger<T>,
-): T {
-  const [preferred, fallback] = prefersResult(result, existing)
-    ? [result, existing]
-    : [existing, result];
-  // Keep cross-source signals even when the less-complete record carries them:
-  // Crossref is the bibliographic winner but reports no citation count or OA
-  // link, which OpenAlex/S2 do.
-  const work: NormalizedWork = {
-    ...preferred.work,
-    citedByCount: preferred.work.citedByCount ?? fallback.work.citedByCount,
-    oaPdfUrl: preferred.work.oaPdfUrl ?? fallback.work.oaPdfUrl,
-  };
-  const withBestScore = {
-    ...preferred,
-    work,
-    score: Math.max(existing.score, result.score),
-  } as T;
-  return mergePreferred?.(fallback, withBestScore) ?? withBestScore;
-}
-
-function prefersResult(candidate: DiscoveryResult, current: DiscoveryResult): boolean {
-  const sourceRank: Record<DiscoverySource, number> = {
-    crossref: 4,
-    openalex: 3,
-    s2: 2,
-    arxiv: 1,
-  };
-  const currentCompleteness = completeness(current.work) + sourceRank[current.source];
-  const candidateCompleteness = completeness(candidate.work) + sourceRank[candidate.source];
-  return candidateCompleteness > currentCompleteness;
-}
-
-function completeness(work: NormalizedWork): number {
-  return [
-    work.doi,
-    work.abstract,
-    work.venueName,
-    work.year,
-    work.authors.length > 0 ? "authors" : undefined,
-    work.oaPdfUrl,
-  ].filter(Boolean).length;
-}
-
-function dedupeKeys(work: NormalizedWork): string[] {
-  const keys = [
-    work.doi ? `doi:${work.doi.toLowerCase()}` : undefined,
-    work.arxivId ? `arxiv:${work.arxivId.toLowerCase()}` : undefined,
-    work.openalexId ? `openalex:${work.openalexId.toLowerCase()}` : undefined,
-    work.s2Id ? `s2:${work.s2Id.toLowerCase()}` : undefined,
-    work.pmid ? `pmid:${work.pmid.toLowerCase()}` : undefined,
-    work.title ? `title:${normalizeTitle(work.title)}:${work.year ?? ""}` : undefined,
-  ].filter((key): key is string => !!key);
-  return keys.length > 0 ? keys : ["unknown"];
-}
-
 function resultId(source: DiscoverySource, work: NormalizedWork, index: number): string {
-  return `${source}:${work.doi ?? work.arxivId ?? work.openalexId ?? work.s2Id ?? normalizeTitle(work.title)}:${index}`;
-}
-
-function normalizeTitle(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9一-鿿]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function sortYear(work: NormalizedWork): number {
-  return work.year ?? 0;
+  return `${source}:${work.doi ?? work.arxivId ?? work.openalexId ?? work.s2Id ?? normalizeDiscoveryTitle(work.title)}:${index}`;
 }

@@ -280,6 +280,25 @@ describe("main-process data command architecture", () => {
     expect(controller).not.toContain('from "react"');
   });
 
+  it("keeps Discovery result import lifecycle inside the feature controller", () => {
+    const discoveryPage = source("src/pages/DiscoveryPage.tsx");
+    const controller = source("src/features/discovery/discovery-import-controller.ts");
+    const hook = source("src/features/discovery/useDiscoveryResultImportController.ts");
+
+    expect(discoveryPage).toContain("useDiscoveryResultImportController");
+    expect(discoveryPage).not.toContain("const [importingId");
+    expect(discoveryPage).not.toContain("importDiscoveryResult");
+
+    expect(hook).toContain("discovery-import-controller");
+    expect(hook).toContain("importDiscoveryResult");
+    expect(hook).toContain("useSyncExternalStore");
+    expect(hook).toContain("controller.start()");
+    expect(hook).toContain("controller.stop()");
+    expect(controller).toContain("class DiscoveryImportController");
+    expect(controller).not.toContain("window.");
+    expect(controller).not.toContain('from "react"');
+  });
+
   it("keeps Canvas and Citation Graph reads behind scoped data services", () => {
     const canvasPage = source("src/pages/SpatialCanvasPage.tsx");
     const canvasGateway = source("src/services/canvas-page-data.ts");

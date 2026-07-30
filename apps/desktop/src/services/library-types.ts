@@ -6,6 +6,8 @@ export interface IngestResult {
   deduped: boolean;
   title: string;
   pdfFetched: boolean;
+  /** Safe user-facing detail when metadata committed but PDF acquisition failed. */
+  pdfError?: string;
   /** Set when title-search confidence was low; UI should let the user verify. */
   needsConfirmation?: boolean;
 }

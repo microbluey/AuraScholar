@@ -8524,7 +8524,7 @@ body.research-fullscreen .app-mobile-dock,
   background: color-mix(in srgb, var(--color-accent-subtle) 64%, var(--color-surface));
 }
 
-.discovery-result__actions button:disabled {
+.discovery-result__actions button:is(:disabled, [aria-disabled="true"]) {
   border-color: var(--color-border);
   background: var(--color-surface-sunken);
   color: var(--color-text-muted);

@@ -1,4 +1,5 @@
 import {
+  hasConflictingDiscoveryIdentifiers,
   mergeDiscoveryResults,
   searchOpenSourcesDetailed,
   type DiscoveryQuery,
@@ -27,6 +28,15 @@ export interface DiscoveryResultWithLibrary extends DiscoveryResult {
 
 export interface DiscoverySearchReportWithLibrary extends Omit<DiscoverySearchReport, "results"> {
   results: DiscoveryResultWithLibrary[];
+}
+
+interface FingerprintLibraryCandidate {
+  arxivId?: string;
+  doi?: string;
+  id: string;
+  openalexId?: string;
+  pmid?: string;
+  s2Id?: string;
 }
 
 export { mergeDiscoveryResults };
@@ -72,7 +82,7 @@ export async function importDiscoveryResult(work: NormalizedWork): Promise<Inges
   return ingestResolvedWork(work);
 }
 
-async function markLibraryStatus(
+export async function markLibraryStatus(
   results: DiscoveryResult[],
 ): Promise<DiscoveryResultWithLibrary[]> {
   if (!("aura" in window) || results.length === 0) {
@@ -106,7 +116,7 @@ async function markLibraryStatus(
   const byOpenAlex = new Map<string, string>();
   const byS2 = new Map<string, string>();
   const byPmid = new Map<string, string>();
-  const byFingerprint = new Map<string, string>();
+  const byFingerprint = new Map<string, FingerprintLibraryCandidate[]>();
 
   if (dois.length > 0) {
     const rows = await db.query<{ id: string; doi: string }>(
@@ -163,32 +173,75 @@ async function markLibraryStatus(
   }
 
   if (fingerprints.length > 0) {
-    const rows = await db.query<{ id: string; fingerprint: string }>(
-      `SELECT id, fingerprint
+    const rows = await db.query<{
+      arxiv_id: string | null;
+      doi: string | null;
+      fingerprint: string;
+      id: string;
+      openalex_id: string | null;
+      pmid: string | null;
+      s2_id: string | null;
+    }>(
+      `SELECT id, fingerprint, doi, arxiv_id, openalex_id, s2_id, pmid
        FROM works
        WHERE library_id = ?
          AND fingerprint IN (${fingerprints.map(() => "?").join(",")})
          AND deleted_at IS NULL`,
       [libraryId, ...fingerprints],
     );
-    for (const row of rows) byFingerprint.set(row.fingerprint, row.id);
+    for (const row of rows) {
+      const candidate: FingerprintLibraryCandidate = {
+        arxivId: row.arxiv_id ?? undefined,
+        doi: row.doi ?? undefined,
+        id: row.id,
+        openalexId: row.openalex_id ?? undefined,
+        pmid: row.pmid ?? undefined,
+        s2Id: row.s2_id ?? undefined,
+      };
+      const candidates = byFingerprint.get(row.fingerprint);
+      if (candidates) candidates.push(candidate);
+      else byFingerprint.set(row.fingerprint, [candidate]);
+    }
   }
 
-  return results.map((result) => {
+  const matches = results.map((result) => {
     const work = result.work;
     const fingerprint = fingerprintForWork(work);
-    const id =
+    const directId =
       (work.doi ? byDoi.get(work.doi.toLowerCase()) : undefined) ??
       (work.arxivId ? byArxiv.get(work.arxivId.toLowerCase()) : undefined) ??
       (work.openalexId ? byOpenAlex.get(work.openalexId.toLowerCase()) : undefined) ??
       (work.s2Id ? byS2.get(work.s2Id.toLowerCase()) : undefined) ??
-      (work.pmid ? byPmid.get(work.pmid.toLowerCase()) : undefined) ??
-      (fingerprint ? byFingerprint.get(fingerprint) : undefined);
+      (work.pmid ? byPmid.get(work.pmid.toLowerCase()) : undefined);
+    const fingerprintCandidates = fingerprint ? byFingerprint.get(fingerprint) : undefined;
+    const id = directId ?? uniqueCompatibleFingerprintWorkId(work, fingerprintCandidates);
+    return { id, result };
+  });
+  const matchedWorkIds = [...new Set(matches.flatMap(({ id }) => (id ? [id] : [])))];
+  const workIdsWithPdf = new Set<string>();
+  if (matchedWorkIds.length > 0) {
+    const rows = await db.query<{ work_id: string }>(
+      `SELECT DISTINCT a.work_id
+       FROM attachments a
+       JOIN works w
+         ON w.id = a.work_id
+        AND w.library_id = ?
+        AND w.deleted_at IS NULL
+       WHERE a.work_id IN (${matchedWorkIds.map(() => "?").join(",")})
+         AND a.kind = 'pdf'
+         AND a.deleted_at IS NULL`,
+      [libraryId, ...matchedWorkIds],
+    );
+    for (const row of rows) workIdsWithPdf.add(row.work_id);
+  }
+
+  return matches.map(({ id, result }) => {
     return {
       ...result,
       inLibrary: !!id,
       libraryWorkId: id,
       matchedSources: [result.source],
+      needsFulltext: id ? !workIdsWithPdf.has(id) : undefined,
     };
   });
 }
@@ -198,6 +251,7 @@ interface DiscoverySmokeImportFixture {
   deduped?: boolean;
   doi?: string;
   needsConfirmation?: boolean;
+  pdfError?: string;
   pdfFetched?: boolean;
   title?: string;
   workId?: string;
@@ -222,13 +276,17 @@ interface DiscoverySmokeFixture {
 
 interface DiscoverySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__?: DiscoverySmokeFixture | null;
+  __AURASCHOLAR_SMOKE_DISCOVERY_IMPORT_CALL_COUNT__?: number;
 }
 
 async function smokeDiscoveryImportResult(work: NormalizedWork): Promise<IngestResult | null> {
-  const fixture = (window as DiscoverySmokeWindow).__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
+  const smokeWindow = window as DiscoverySmokeWindow;
+  const fixture = smokeWindow.__AURASCHOLAR_SMOKE_DISCOVERY_FIXTURE__;
   const importResult = fixture?.importResult;
   if (!importResult) return null;
   if (importResult.doi && importResult.doi.toLowerCase() !== work.doi?.toLowerCase()) return null;
+  smokeWindow.__AURASCHOLAR_SMOKE_DISCOVERY_IMPORT_CALL_COUNT__ =
+    (smokeWindow.__AURASCHOLAR_SMOKE_DISCOVERY_IMPORT_CALL_COUNT__ ?? 0) + 1;
   if (importResult.delayMs && importResult.delayMs > 0) {
     await new Promise((resolve) => window.setTimeout(resolve, importResult.delayMs));
   }
@@ -237,6 +295,7 @@ async function smokeDiscoveryImportResult(work: NormalizedWork): Promise<IngestR
     deduped: importResult.deduped ?? false,
     title: importResult.title ?? work.title,
     pdfFetched: importResult.pdfFetched ?? false,
+    pdfError: importResult.pdfError,
     needsConfirmation: importResult.needsConfirmation,
   };
 }
@@ -341,4 +400,16 @@ function fingerprintForWork(work: NormalizedWork): string | null {
   const firstAuthor = work.authors[0]?.family ?? work.authors[0]?.displayName?.split(/\s+/).pop();
   if (!work.title) return null;
   return workFingerprint(work.title, work.year ?? null, firstAuthor ?? null);
+}
+
+function uniqueCompatibleFingerprintWorkId(
+  work: NormalizedWork,
+  candidates: readonly FingerprintLibraryCandidate[] | undefined,
+): string | undefined {
+  const compatibleIds = new Set(
+    candidates
+      ?.filter((candidate) => !hasConflictingDiscoveryIdentifiers(work, candidate))
+      .map((candidate) => candidate.id),
+  );
+  return compatibleIds.size === 1 ? compatibleIds.values().next().value : undefined;
 }

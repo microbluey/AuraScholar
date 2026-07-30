@@ -8,12 +8,14 @@ type Source = "alpha" | "beta";
 type Status = "idle" | "searching" | "done" | "error" | "stopped";
 
 interface Query {
+  sort?: "relevance" | "year" | "citations";
   text: string;
 }
 
 interface Result {
   id: string;
   identity?: string;
+  stable?: string;
   title: string;
 }
 
@@ -65,7 +67,8 @@ function harness(
       selectedId?: string | null;
       sourceStatus?: Partial<Record<Source, Status>>;
     };
-    mergeResults?: (results: readonly Result[]) => readonly Result[];
+    isSameResult?: (left: Result, right: Result) => boolean;
+    mergeResults?: (results: readonly Result[], query: Query | null) => readonly Result[];
     resultKeys?: (result: Result) => readonly string[];
     waitForMinimumElapsed?: (startedAt: number, kind: "search" | "load-more") => Promise<void>;
   } = {},
@@ -80,6 +83,7 @@ function harness(
     getSourceStatus: (value: Report) => value.status,
     hasMore: (cursor: Cursor) => cursor.hasMore,
     initialSnapshot: overrides.initialSnapshot,
+    isSameResult: overrides.isSameResult,
     loadSource: loadSourceMock,
     mergeResults:
       overrides.mergeResults ??
@@ -226,6 +230,10 @@ describe("DiscoverySearchController", () => {
         "alias-paper",
       ]),
     );
+    const streamedReference = instance
+      .getSnapshot()
+      .results.find((item) => item.id === "alias-paper");
+    expect(streamedReference).toBeDefined();
     instance.select("alias-paper");
 
     slowSource.resolve({
@@ -238,6 +246,18 @@ describe("DiscoverySearchController", () => {
       "canonical-paper",
     ]);
     expect(instance.getSnapshot().selectedId).toBe("canonical-paper");
+    expect(instance.hasResult(streamedReference!)).toBe(true);
+    expect(
+      instance.updateResultByIdentity(streamedReference!, (result) => ({
+        ...result,
+        title: "Imported paper",
+      })),
+    ).toBe("canonical-paper");
+    expect(instance.getSnapshot().results.find((item) => item.id === "canonical-paper")).toEqual({
+      id: "canonical-paper",
+      identity: "paper",
+      title: "Imported paper",
+    });
   });
 
   it("blocks pagination until every initial-search source has settled", async () => {
@@ -302,6 +322,55 @@ describe("DiscoverySearchController", () => {
     await expect(replacement).resolves.toEqual({ status: "applied" });
     expect(instance.getSnapshot().searching).toBe(false);
     expect(instance.getSnapshot().results.map((item) => item.id)).toEqual(["new-result"]);
+  });
+
+  it("uses the current request query for streamed, final, and paginated merges", async () => {
+    const staleSource = deferred<Report>();
+    const currentSibling = deferred<Report>();
+    const mergeQueries: Array<Query | null> = [];
+    const { instance } = harness(
+      async (input) => {
+        if (input.query.text === "stale") return staleSource.promise;
+        if (input.kind === "load-more") return report("current-page-2", 2, false);
+        if (input.source === "beta") return currentSibling.promise;
+        return report("current-alpha", 1, true);
+      },
+      {
+        mergeResults: (results, query) => {
+          mergeQueries.push(query);
+          return results;
+        },
+      },
+    );
+    instance.start();
+
+    const stale = instance.search({
+      query: { sort: "year", text: "stale" },
+      sources: ["alpha"],
+    });
+    const current = instance.search({
+      query: { sort: "citations", text: "current" },
+      sources: ["alpha", "beta"],
+    });
+    await vi.waitFor(() =>
+      expect(instance.getSnapshot().results.map((item) => item.id)).toEqual(["current-alpha"]),
+    );
+
+    staleSource.resolve(report("must-not-merge"));
+    await expect(stale).resolves.toEqual({ status: "stopped" });
+    currentSibling.resolve(report("current-beta", 1, false));
+    await expect(current).resolves.toEqual({ status: "applied" });
+    await expect(instance.loadMore()).resolves.toEqual({ status: "applied" });
+
+    expect(mergeQueries[0]).toBeNull();
+    expect(mergeQueries.slice(1)).toHaveLength(4);
+    expect(mergeQueries.slice(1)).toEqual([
+      { sort: "citations", text: "current" },
+      { sort: "citations", text: "current" },
+      { sort: "citations", text: "current" },
+      { sort: "citations", text: "current" },
+    ]);
+    expect(instance.getSnapshot().results.map((item) => item.id)).not.toContain("must-not-merge");
   });
 
   it("aborts load-more and rejects its late publication when a fresh search starts", async () => {
@@ -515,6 +584,57 @@ describe("DiscoverySearchController", () => {
 
     instance.select("missing");
     expect(instance.getSnapshot().selectedId).toBe("second-canonical");
+  });
+
+  it("returns null when an identity reference is no longer in the current results", async () => {
+    const { instance } = harness(async (input) =>
+      report(input.query.text === "first" ? "first-result" : "replacement-result"),
+    );
+    instance.start();
+    await instance.search(request("first"));
+    const staleReference = instance.getSnapshot().results[0]!;
+
+    await instance.search(request("replacement"));
+
+    expect(instance.hasResult(staleReference)).toBe(false);
+    expect(
+      instance.updateResultByIdentity(staleReference, (result) => ({
+        ...result,
+        title: "Must not apply",
+      })),
+    ).toBeNull();
+    expect(instance.getSnapshot().results).toEqual([
+      { id: "replacement-result", title: "replacement-result" },
+    ]);
+  });
+
+  it("does not use a fallback key when stable identities conflict", async () => {
+    const { instance } = harness(
+      async (input) => ({
+        cursor: { hasMore: false, page: 1 },
+        results: [
+          input.query.text === "first"
+            ? { id: "first", identity: "shared-title", stable: "doi:first", title: "Shared" }
+            : { id: "second", identity: "shared-title", stable: "doi:second", title: "Shared" },
+        ],
+        status: "done",
+      }),
+      {
+        isSameResult: (left, right) =>
+          left.stable && right.stable
+            ? left.stable === right.stable
+            : left.identity === right.identity,
+        resultKeys: (result) => [result.identity ?? result.id],
+      },
+    );
+    instance.start();
+    await instance.search(request("first"));
+    const reference = instance.getSnapshot().results[0]!;
+
+    await instance.search(request("second"));
+
+    expect(instance.hasResult(reference)).toBe(false);
+    expect(instance.updateResultByIdentity(reference, (result) => result)).toBeNull();
   });
 
   it("keeps selection on the same paper when a later merge replaces its result id", async () => {

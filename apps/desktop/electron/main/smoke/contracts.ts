@@ -66,6 +66,7 @@ export interface SmokeRendererResult {
   discoveryFulltextCueVisible: boolean;
   discoveryImportBusyVisible: boolean;
   discoveryImportFulltextFallbackVisible: boolean;
+  discoveryImportSingleFlightVisible: boolean;
   discoveryLoadMoreRetryRecoveryDetail: string;
   discoveryLoadMoreRetryRecoveryVisible: boolean;
   discoverySearchAriaBusyVisible: boolean;

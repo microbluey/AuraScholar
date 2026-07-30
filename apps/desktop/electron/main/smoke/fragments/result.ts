@@ -78,6 +78,7 @@ export const smokeResult = String.raw`        return {
           discoveryFulltextCueVisible,
           discoveryImportBusyVisible,
           discoveryImportFulltextFallbackVisible,
+          discoveryImportSingleFlightVisible,
           discoveryLoadMoreRetryRecoveryDetail,
           discoveryLoadMoreRetryRecoveryVisible,
           discoverySearchAriaBusyVisible,

@@ -62,7 +62,7 @@ export async function executeDiscoverySearch<
     const preview = dependencies.preview?.(ticket.request);
     if (preview) {
       if (!context.isCurrent()) return stoppedResult;
-      const results = dependencies.mergeResults(preview.results);
+      const results = dependencies.mergeResults(preview.results, ticket.request.query);
       context.update({
         cursors: copyDiscoveryRecord(preview.cursors ?? {}),
         results,
@@ -73,6 +73,7 @@ export async function executeDiscoverySearch<
           dependencies.resultId,
           [],
           dependencies.resultKeys,
+          dependencies.isSameResult,
         ),
         sourceStatus: {
           ...searchStatuses(dependencies, []),
@@ -93,7 +94,7 @@ export async function executeDiscoverySearch<
             signal: ticket.controller.signal,
             source,
           });
-          publishSourceReport(context, report, source);
+          publishSourceReport(context, report, source, ticket.request.query);
           return report;
         } catch (error) {
           publishSourceFailure(context, source);
@@ -115,7 +116,7 @@ export async function executeDiscoverySearch<
     });
     const reports = completed.map(({ report }) => report);
     const snapshot = context.getSnapshot();
-    const results = dependencies.mergeResults(snapshot.results);
+    const results = dependencies.mergeResults(snapshot.results, ticket.request.query);
     const cursors = copyDiscoveryRecord(snapshot.cursors);
     const sourceStatus = copyDiscoveryRecord(snapshot.sourceStatus) as Record<Source, Status>;
     const error = sourceFailure
@@ -132,6 +133,7 @@ export async function executeDiscoverySearch<
         dependencies.resultId,
         snapshot.results,
         dependencies.resultKeys,
+        dependencies.isSameResult,
       ),
       sourceStatus,
     });
@@ -169,14 +171,15 @@ function publishSourceReport<Query, Source extends PropertyKey, Result, Report, 
   context: ExecutionContext<Query, Source, Result, Report, Cursor, Status>,
   report: Report,
   source: Source,
+  query: Query,
 ): void {
   if (!context.isCurrent()) return;
   const { dependencies } = context;
   const snapshot = context.getSnapshot();
-  const results = dependencies.mergeResults([
-    ...snapshot.results,
-    ...dependencies.getResults(report),
-  ]);
+  const results = dependencies.mergeResults(
+    [...snapshot.results, ...dependencies.getResults(report)],
+    query,
+  );
   const cursors = copyDiscoveryRecord(snapshot.cursors);
   const cursor = dependencies.getCursor(report, source);
   if (cursor === undefined) delete cursors[source];
@@ -190,6 +193,7 @@ function publishSourceReport<Query, Source extends PropertyKey, Result, Report, 
       dependencies.resultId,
       snapshot.results,
       dependencies.resultKeys,
+      dependencies.isSameResult,
     ),
     sourceStatus: {
       ...snapshot.sourceStatus,
@@ -236,7 +240,7 @@ export async function executeDiscoveryLoadMore<
             signal: ticket.controller.signal,
             source,
           });
-          publishSourceReport(context, report, source);
+          publishSourceReport(context, report, source, ticket.request.query);
           return report;
         } catch (error) {
           publishSourceFailure(context, source);
@@ -275,6 +279,7 @@ export async function executeDiscoveryLoadMore<
         dependencies.resultId,
         snapshot.results,
         dependencies.resultKeys,
+        dependencies.isSameResult,
       ),
       sourceStatus,
     });

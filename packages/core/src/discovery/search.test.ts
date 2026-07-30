@@ -116,6 +116,211 @@ describe("mergeDiscoveryResults", () => {
     expect(merged[0]?.score).toBe(92);
     expect(merged[0]?.work.abstract).toBe("Richer abstract");
   });
+
+  it("does not merge matching titles when stable identifiers conflict", () => {
+    const merged = mergeDiscoveryResults([
+      result({
+        id: "first",
+        source: "crossref",
+        work: {
+          title: "A Reused Article Title",
+          doi: "10.1234/first",
+          year: 2024,
+          authors: [],
+          source: "crossref",
+        },
+      }),
+      result({
+        id: "second",
+        source: "s2",
+        work: {
+          title: "A Reused Article Title",
+          doi: "10.1234/second",
+          year: 2024,
+          authors: [],
+          source: "s2",
+        },
+      }),
+    ]);
+
+    expect(merged.map((item) => item.id)).toEqual(["first", "second"]);
+  });
+
+  it("retains accumulated identifier conflicts after a richer alias becomes representative", () => {
+    const merged = mergeDiscoveryResults([
+      result({
+        id: "doi-alias",
+        source: "crossref",
+        score: 20,
+        work: {
+          title: "A Reused Article Title",
+          doi: "10.1234/first",
+          year: 2024,
+          authors: [],
+          source: "crossref",
+        },
+      }),
+      result({
+        id: "richer-s2-alias",
+        source: "openalex",
+        score: 90,
+        work: {
+          title: "A Reused Article Title",
+          s2Id: "S2-BRIDGE",
+          year: 2024,
+          abstract: "A richer record that replaces the group representative.",
+          venueName: "Journal",
+          oaPdfUrl: "https://example.test/paper.pdf",
+          authors: [{ displayName: "A. Author", position: 0 }],
+          source: "openalex",
+        },
+      }),
+      result({
+        id: "conflicting-doi",
+        source: "s2",
+        score: 70,
+        work: {
+          title: "A Reused Article Title",
+          doi: "10.1234/second",
+          s2Id: "S2-BRIDGE",
+          year: 2024,
+          authors: [],
+          source: "s2",
+        },
+      }),
+    ]);
+
+    expect(merged.map((item) => item.id)).toEqual(["richer-s2-alias", "conflicting-doi"]);
+  });
+
+  it("retains alias constraints across streamed merge calls", () => {
+    const firstPage = mergeDiscoveryResults([
+      result({
+        id: "doi-alias",
+        source: "crossref",
+        score: 20,
+        work: {
+          title: "A Streamed Article",
+          doi: "10.1234/first",
+          year: 2024,
+          authors: [],
+          source: "crossref",
+        },
+      }),
+      result({
+        id: "richer-s2-alias",
+        source: "openalex",
+        score: 90,
+        work: {
+          title: "A Streamed Article",
+          s2Id: "S2-BRIDGE",
+          year: 2024,
+          abstract: "A richer record that becomes the representative.",
+          venueName: "Journal",
+          oaPdfUrl: "https://example.test/paper.pdf",
+          authors: [{ displayName: "A. Author", position: 0 }],
+          source: "openalex",
+        },
+      }),
+    ]);
+
+    expect(firstPage).toHaveLength(1);
+    expect(firstPage[0]).toMatchObject({
+      id: "richer-s2-alias",
+      work: { doi: "10.1234/first", s2Id: "S2-BRIDGE" },
+    });
+
+    const streamed = mergeDiscoveryResults([
+      ...firstPage,
+      result({
+        id: "conflicting-doi",
+        source: "s2",
+        score: 70,
+        work: {
+          title: "A Streamed Article",
+          doi: "10.1234/second",
+          s2Id: "S2-BRIDGE",
+          year: 2024,
+          authors: [],
+          source: "s2",
+        },
+      }),
+    ]);
+
+    expect(streamed.map((item) => item.id)).toEqual(["richer-s2-alias", "conflicting-doi"]);
+  });
+
+  it("keeps an alias unresolved when it exactly matches mutually conflicting groups", () => {
+    const merged = mergeDiscoveryResults([
+      result({
+        id: "first",
+        source: "openalex",
+        score: 30,
+        work: {
+          title: "A Reused Article Title",
+          doi: "10.1234/first",
+          openalexId: "W-SHARED",
+          year: 2024,
+          authors: [],
+          source: "openalex",
+        },
+      }),
+      result({
+        id: "second",
+        source: "openalex",
+        score: 20,
+        work: {
+          title: "A Reused Article Title",
+          doi: "10.1234/second",
+          openalexId: "W-SHARED",
+          year: 2024,
+          authors: [],
+          source: "openalex",
+        },
+      }),
+      result({
+        id: "ambiguous-alias",
+        source: "openalex",
+        score: 90,
+        work: {
+          title: "A Reused Article Title",
+          openalexId: "W-SHARED",
+          year: 2024,
+          abstract: "Metadata must not be assigned to either conflicting DOI.",
+          authors: [],
+          source: "openalex",
+        },
+      }),
+    ]);
+
+    expect(merged).toHaveLength(3);
+    expect(merged.map((item) => item.id)).toEqual(["ambiguous-alias", "first", "second"]);
+  });
+
+  it("normalizes surrounding whitespace in stable identifiers", () => {
+    const merged = mergeDiscoveryResults([
+      result({
+        id: "trimmed",
+        work: {
+          title: "A Paper",
+          doi: "10.1234/example",
+          authors: [],
+          source: "openalex",
+        },
+      }),
+      result({
+        id: "padded",
+        work: {
+          title: "Different Metadata",
+          doi: " 10.1234/EXAMPLE ",
+          authors: [],
+          source: "openalex",
+        },
+      }),
+    ]);
+
+    expect(merged).toHaveLength(1);
+  });
 });
 
 describe("searchOpenSources", () => {

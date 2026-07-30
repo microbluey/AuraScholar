@@ -23,7 +23,7 @@
   user-select: none;
   white-space: nowrap;
 }
-.au-button:disabled {
+.au-button:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -37,7 +37,7 @@
   color: var(--color-accent-contrast);
   box-shadow: 0 6px 16px color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
-.au-button--primary:hover:not(:disabled) {
+.au-button--primary:hover:not(:disabled):not([aria-disabled="true"]) {
   box-shadow: 0 9px 22px color-mix(in srgb, var(--color-accent) 25%, transparent);
   transform: translateY(-1px);
 }
@@ -46,7 +46,7 @@
   color: var(--color-text);
   border-color: var(--color-border);
 }
-.au-button--secondary:hover:not(:disabled) {
+.au-button--secondary:hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: var(--color-border-strong);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--color-text) 7%, transparent);
 }
@@ -54,7 +54,7 @@
   background: transparent;
   color: var(--color-text-secondary);
 }
-.au-button--ghost:hover:not(:disabled) {
+.au-button--ghost:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--color-accent-subtle);
   color: var(--color-text);
 }

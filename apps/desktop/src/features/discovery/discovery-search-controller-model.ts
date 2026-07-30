@@ -77,13 +77,14 @@ export interface DiscoverySearchControllerDependencies<
   hasMore(cursor: Cursor): boolean;
   initialSnapshot?: DiscoverySearchInitialSnapshot<Result, Source, Cursor, Status>;
   loadSource(input: DiscoverySourceLoadInput<Query, Source, Cursor>): Promise<Report>;
-  mergeResults(results: readonly Result[]): readonly Result[];
+  mergeResults(results: readonly Result[], query: Query | null): readonly Result[];
   messages?: DiscoverySearchMessageDependencies<Query, Source, Result, Report>;
   now?: () => number;
   preview?(
     request: DiscoverySearchRequest<Query, Source>,
   ): DiscoverySearchPreview<Result, Source, Cursor, Status> | null;
   reportMessage?(message: string | null): void;
+  isSameResult?(left: Result, right: Result): boolean;
   resultId(result: Result): string;
   resultKeys?(result: Result): readonly string[];
   statuses: {
@@ -145,14 +146,17 @@ export function reconcileDiscoverySelection<Result>(
   resultId: (result: Result) => string,
   previousResults: readonly Result[] = [],
   resultKeys?: (result: Result) => readonly string[],
+  isSameResult?: (left: Result, right: Result) => boolean,
 ): string | null {
   if (preferred && results.some((result) => resultId(result) === preferred)) return preferred;
-  if (preferred && resultKeys) {
+  if (preferred && (isSameResult || resultKeys)) {
     const previous = previousResults.find((result) => resultId(result) === preferred);
     if (previous) {
-      const previousKeys = new Set(resultKeys(previous));
+      const previousKeys = resultKeys ? new Set(resultKeys(previous)) : null;
       const replacement = results.find((result) =>
-        resultKeys(result).some((key) => previousKeys.has(key)),
+        isSameResult
+          ? isSameResult(previous, result)
+          : resultKeys!(result).some((key) => previousKeys!.has(key)),
       );
       if (replacement) return resultId(replacement);
     }
