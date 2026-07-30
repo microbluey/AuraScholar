@@ -164,6 +164,44 @@ describe("main-process data command architecture", () => {
     expect(commands).not.toMatch(/\bfetch\s*\(/);
   });
 
+  it("keeps Saved Search UI workflows inside the Discovery feature controller", () => {
+    const discoveryPage = source("src/pages/DiscoveryPage.tsx");
+    const controller = source("src/features/discovery/discovery-saved-search-controller.ts");
+    const hook = source("src/features/discovery/useDiscoverySavedSearchController.ts");
+    const workflowFunctions = [
+      "clearSavedSearchBadge",
+      "createSavedSearch",
+      "deleteSavedSearch",
+      "listSavedSearches",
+      "restoreSavedSearch",
+      "runSavedSearch",
+    ];
+    const smokeFlags = [
+      "__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_DELETE_SEARCH__",
+      "__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_RESTORE_SEARCH__",
+      "__AURASCHOLAR_SMOKE_DISCOVERY_FAIL_NEXT_SAVE_SEARCH__",
+    ];
+    const controllerWorkflows = ["check", "open", "refresh", "remove", "save", "undoDelete"];
+    const updateEvent = "aurascholar:saved-searches-updated";
+
+    expect(discoveryPage).toContain("useDiscoverySavedSearchController");
+    expect(hook).toContain("createDiscoverySavedSearchController");
+    expect(controller).toContain("class DiscoverySavedSearchController");
+    for (const workflow of controllerWorkflows) {
+      expect(controller).toMatch(new RegExp(`\\basync\\s+${workflow}\\s*\\(`));
+    }
+    for (const workflowFunction of workflowFunctions) {
+      expect(discoveryPage).not.toMatch(new RegExp(`\\b${workflowFunction}\\b`));
+      expect(hook).toMatch(new RegExp(`\\b${workflowFunction}\\b`));
+    }
+    for (const smokeFlag of smokeFlags) {
+      expect(discoveryPage).not.toContain(smokeFlag);
+      expect(hook).toContain(smokeFlag);
+    }
+    expect(discoveryPage).not.toContain(updateEvent);
+    expect(hook).toContain(updateEvent);
+  });
+
   it("keeps Canvas and Citation Graph reads behind scoped data services", () => {
     const canvasPage = source("src/pages/SpatialCanvasPage.tsx");
     const canvasGateway = source("src/services/canvas-page-data.ts");
