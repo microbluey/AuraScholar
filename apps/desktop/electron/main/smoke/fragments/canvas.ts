@@ -252,16 +252,27 @@ export const smokeCanvas = String.raw`        location.hash = "#/canvas?workId="
             Array.from(document.querySelectorAll(".react-flow__node")).find(
               (node) => node.getAttribute("data-id") === nodeId
             ) ?? null;
-          const quickLinkSourceHandle = await waitFor(() => {
+          const resolveQuickLinkSourceHandle = () => {
             const handle = quickLinkNode(
               persistedCanvasPaper.id
             )?.querySelector(
               '[data-canvas-connection-handle="link-right"]'
             );
-            if (!(handle instanceof HTMLElement)) return null;
+            if (
+              !(handle instanceof HTMLElement) ||
+              !handle.isConnected ||
+              !handle.classList.contains("connectablestart") ||
+              handle.getAttribute("data-nodeid") !== persistedCanvasPaper.id
+            ) {
+              return null;
+            }
             const rect = handle.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0 ? handle : null;
-          }, 3_000);
+          };
+          const quickLinkSourceHandle = await waitFor(
+            resolveQuickLinkSourceHandle,
+            3_000
+          );
           canvasQuickLinkSourceReady =
             quickLinkSourceHandle instanceof HTMLElement;
           const quickLinkEdgeRowsBefore = await window.aura.db.query(
@@ -278,8 +289,8 @@ export const smokeCanvas = String.raw`        location.hash = "#/canvas?workId="
           const quickLinkNodeIdsBefore = new Set(
             quickLinkNodeRowsBefore.map((row) => row.id)
           );
-          const quickLinkPane = document.querySelector(".react-flow__pane");
-          const quickLinkDropPoint = await waitFor(() => {
+          const resolveQuickLinkDropPoint = () => {
+            const quickLinkPane = document.querySelector(".react-flow__pane");
             if (!(quickLinkPane instanceof HTMLElement)) return null;
             const paneRect = quickLinkPane.getBoundingClientRect();
             const nodeRects = Array.from(
@@ -323,71 +334,149 @@ export const smokeCanvas = String.raw`        location.hash = "#/canvas?workId="
               }
             }
             return bestClearance >= 80 ? bestPoint : null;
-          }, 3_000);
+          };
+          const quickLinkDropPoint = await waitFor(
+            resolveQuickLinkDropPoint,
+            3_000
+          );
           canvasQuickLinkDropPointReady = Boolean(quickLinkDropPoint);
           if (
             quickLinkSourceHandle instanceof HTMLElement &&
             quickLinkDropPoint
           ) {
-            const sourceRect = quickLinkSourceHandle.getBoundingClientRect();
-            const sourcePoint = {
-              x: sourceRect.left + sourceRect.width / 2,
-              y: sourceRect.top + sourceRect.height / 2
-            };
             const mouseOptions = {
               bubbles: true,
               cancelable: true,
               button: 0,
+              composed: true,
               view: window
             };
-            quickLinkSourceHandle.dispatchEvent(
-              new MouseEvent("mousedown", {
-                ...mouseOptions,
-                buttons: 1,
-                clientX: sourcePoint.x,
-                clientY: sourcePoint.y
-              })
-            );
-            await wait(16);
-            document.dispatchEvent(
-              new MouseEvent("mousemove", {
-                ...mouseOptions,
-                buttons: 1,
-                clientX:
+            const dragQuickLinkToBlank = async () => {
+              // Canvas state can re-render a node between the readiness check
+              // and this gesture. Dispatching on that detached handle never
+              // reaches React's delegated listener, so always reacquire it.
+              let liveSourceHandle = await waitFor(
+                resolveQuickLinkSourceHandle,
+                1_000
+              );
+              if (!(liveSourceHandle instanceof HTMLElement)) return false;
+              await new Promise((resolve) =>
+                window.requestAnimationFrame(() =>
+                  window.requestAnimationFrame(() => resolve(undefined))
+                )
+              );
+              liveSourceHandle = resolveQuickLinkSourceHandle();
+              if (!(liveSourceHandle instanceof HTMLElement)) return false;
+              const sourceRect = liveSourceHandle.getBoundingClientRect();
+              const sourcePoint = {
+                x: sourceRect.left + sourceRect.width / 2,
+                y: sourceRect.top + sourceRect.height / 2
+              };
+              const handshakeDropPoint = resolveQuickLinkDropPoint();
+              if (!handshakeDropPoint) return false;
+              const dragDistance = Math.hypot(
+                handshakeDropPoint.x - sourcePoint.x,
+                handshakeDropPoint.y - sourcePoint.y
+              );
+              if (dragDistance < 24) return false;
+              const handshakePoint = {
+                x:
                   sourcePoint.x +
-                  (quickLinkDropPoint.x - sourcePoint.x) * 0.6,
-                clientY:
+                  ((handshakeDropPoint.x - sourcePoint.x) / dragDistance) * 16,
+                y:
                   sourcePoint.y +
-                  (quickLinkDropPoint.y - sourcePoint.y) * 0.6
-              })
-            );
-            await wait(16);
-            document.dispatchEvent(
-              new MouseEvent("mousemove", {
-                ...mouseOptions,
-                buttons: 1,
-                clientX: quickLinkDropPoint.x,
-                clientY: quickLinkDropPoint.y
-              })
-            );
-            await wait(16);
-            canvasQuickLinkConnectionStarted = Boolean(
-              await waitFor(
-                () =>
-                  document.querySelector(
-                    ".react-flow__connection, .react-flow__handle.connectingfrom"
-                  ),
-                750
-              )
-            );
-            document.dispatchEvent(
-              new MouseEvent("mouseup", {
-                ...mouseOptions,
-                buttons: 0,
-                clientX: quickLinkDropPoint.x,
-                clientY: quickLinkDropPoint.y
-              })
-            );
+                  ((handshakeDropPoint.y - sourcePoint.y) / dragDistance) * 16
+              };
+              liveSourceHandle.dispatchEvent(
+                new MouseEvent("mousedown", {
+                  ...mouseOptions,
+                  buttons: 1,
+                  clientX: sourcePoint.x,
+                  clientY: sourcePoint.y
+                })
+              );
+              await wait(16);
+              document.dispatchEvent(
+                new MouseEvent("mousemove", {
+                  ...mouseOptions,
+                  buttons: 1,
+                  clientX: handshakePoint.x,
+                  clientY: handshakePoint.y
+                })
+              );
+              const started = Boolean(
+                await waitFor(
+                  () =>
+                    document.querySelector(
+                      ".canvas-workspace--connecting, " +
+                        ".react-flow__connection, " +
+                        ".react-flow__handle.connectingfrom"
+                    ),
+                  750
+                )
+              );
+              if (!started) {
+                document.dispatchEvent(
+                  new MouseEvent("mouseup", {
+                    ...mouseOptions,
+                    buttons: 0,
+                    clientX: sourcePoint.x,
+                    clientY: sourcePoint.y
+                  })
+                );
+                await wait(120);
+                return false;
+              }
+              const dropPoint = resolveQuickLinkDropPoint();
+              if (!dropPoint) {
+                document.dispatchEvent(
+                  new MouseEvent("mouseup", {
+                    ...mouseOptions,
+                    buttons: 0,
+                    clientX: sourcePoint.x,
+                    clientY: sourcePoint.y
+                  })
+                );
+                await wait(120);
+                return false;
+              }
+              for (const progress of [0.5, 1]) {
+                await wait(16);
+                document.dispatchEvent(
+                  new MouseEvent("mousemove", {
+                    ...mouseOptions,
+                    buttons: 1,
+                    clientX:
+                      handshakePoint.x +
+                      (dropPoint.x - handshakePoint.x) * progress,
+                    clientY:
+                      handshakePoint.y +
+                      (dropPoint.y - handshakePoint.y) * progress
+                  })
+                );
+              }
+              await new Promise((resolve) =>
+                window.requestAnimationFrame(() => resolve(undefined))
+              );
+              document.dispatchEvent(
+                new MouseEvent("mouseup", {
+                  ...mouseOptions,
+                  buttons: 0,
+                  clientX: dropPoint.x,
+                  clientY: dropPoint.y
+                })
+              );
+              await wait(32);
+              return true;
+            };
+            for (
+              let attempt = 0;
+              attempt < 3 && !canvasQuickLinkConnectionStarted;
+              attempt += 1
+            ) {
+              canvasQuickLinkConnectionStarted =
+                await dragQuickLinkToBlank();
+            }
           }
 
           const persistedQuickLinkEdge = await waitFor(async () => {

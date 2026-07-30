@@ -339,9 +339,31 @@ export const smokeLibraryBulkTrash = String.raw`          clickRowByTitle(SAMPLE
                 bodyIncludes("已将 1 篇文献移入回收站") &&
                 !rowText().includes(TRASH_UNDO_SMOKE.title)
             );
+            window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READ__ =
+              "Smoke unrelated refresh failure while trash undo remains available";
+            document.querySelector('[data-library-action="refresh"]')?.click();
+            const unrelatedRefreshFailureVisible = Boolean(
+              await waitFor(
+                () =>
+                  bodyIncludes("读取文献库失败") &&
+                  bodyIncludes(
+                    "Smoke unrelated refresh failure while trash undo remains available"
+                  ),
+                3_000
+              )
+            );
+            delete window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READ__;
+            const trashUndoButtonAfterUnrelatedNotice = document.querySelector(
+              'button[aria-label="撤销移入回收站"]'
+            );
+            libraryTrashUndoVisible =
+              libraryTrashUndoVisible &&
+              unrelatedRefreshFailureVisible &&
+              Boolean(trashUndoButtonAfterUnrelatedNotice) &&
+              !trashUndoButtonAfterUnrelatedNotice?.disabled;
             window.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__ =
               TRASH_UNDO_RESTORE_FAILURE_SMOKE.error;
-            trashUndoButton?.click();
+            trashUndoButtonAfterUnrelatedNotice?.click();
             libraryTrashUndoFailureBusyVisible = Boolean(
               await waitFor(() => {
                 const button = document.querySelector('button[aria-label="撤销移入回收站"]');

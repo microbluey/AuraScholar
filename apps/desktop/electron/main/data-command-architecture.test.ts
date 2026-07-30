@@ -56,6 +56,60 @@ describe("main-process data command architecture", () => {
     expect(dataService).toContain("citationCountsForWorks");
   });
 
+  it("keeps Library refresh and work lifecycle coordination inside feature primitives", () => {
+    const libraryPage = source("src/pages/LibraryPage.tsx");
+    const refreshController = source("src/features/library/library-refresh-controller.ts");
+    const refreshHook = source("src/features/library/useLibraryRefreshController.ts");
+    const lifecycleModel = source("src/features/library/library-work-lifecycle-model.ts");
+
+    expect(libraryPage).toContain("useLibraryRefreshController");
+    expect(libraryPage).not.toContain("refreshSeqRef");
+    expect(libraryPage).toContain("searchRef.current = value");
+    expect(libraryPage).toContain("activeCollectionRef.current = value");
+    expect(libraryPage).toContain("activeFilterRef.current = value");
+    expect(refreshController).toContain("class LibraryRefreshController");
+    expect(refreshController).toContain("batch.latestQuery = currentQuery");
+    expect(refreshController).toContain("batch.dirty = true");
+    expect(refreshHook).toContain("controller.start()");
+    expect(refreshHook).toContain("controller.stop()");
+
+    expect(libraryPage).toContain("new MutationLease<LibraryWorkAction>()");
+    expect(libraryPage).toContain("scopeSelectedIds(");
+    expect(libraryPage).toContain("selectedIds,");
+    expect(libraryPage).toContain("reconcileTrashUndo(current, workIds)");
+    expect(libraryPage).not.toContain("Array.from(selectedIds)");
+    expect(libraryPage).toContain("message ?? trashUndo?.message ?? null");
+    expect(libraryPage).toContain("message === trashUndo.message) return");
+
+    for (const pureFeatureSource of [refreshController, lifecycleModel]) {
+      expect(pureFeatureSource).not.toContain("../services/");
+      expect(pureFeatureSource).not.toContain("window.");
+      expect(pureFeatureSource).not.toContain('from "react"');
+    }
+  });
+
+  it("keeps the Library inspector presentation outside the page coordinator", () => {
+    const libraryPage = source("src/pages/LibraryPage.tsx");
+    const selectedWorkPanel = source("src/features/library/LibrarySelectedWorkPanel.tsx");
+    const selectedWorkSections = source("src/features/library/LibrarySelectedWorkSections.tsx");
+    const workDisplay = source("src/features/library/library-work-display.ts");
+
+    expect(libraryPage).toContain("<LibrarySelectedWorkPanel");
+    expect(libraryPage).not.toContain("function SelectedWorkPanel");
+    expect(libraryPage).not.toContain("function NotesPanel");
+    expect(libraryPage).not.toContain("function CitationMiniGraph");
+    expect(selectedWorkPanel).toContain("export function LibrarySelectedWorkPanel");
+    expect(selectedWorkPanel).not.toContain("useEffect");
+
+    for (const presentationSource of [selectedWorkPanel, selectedWorkSections]) {
+      expect(presentationSource).not.toContain("useNavigate");
+      expect(presentationSource).not.toContain("window.");
+      expect(presentationSource).not.toContain("data.command(");
+      expect(presentationSource).not.toContain("getLibraryDb");
+    }
+    expect(workDisplay).not.toContain('from "react"');
+  });
+
   it("keeps App Shell reads behind a scoped data service", () => {
     const appShell = source("src/App.tsx");
     const dataService = source("src/services/app-shell-data.ts");

@@ -48,8 +48,11 @@ import { describeSafeError } from "../services/sensitive-text";
 import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
 import { LibraryCollectionManagement } from "../features/library/LibraryCollectionManagement";
 import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
+import { LibrarySelectedWorkPanel } from "../features/library/LibrarySelectedWorkPanel";
 import { TagManager } from "../features/library/TagManager";
 import { TextPromptDialog, type TextPromptConfig } from "../features/library/TextPromptDialog";
+import { libraryTagTone, readingStatusLabel } from "../features/library/library-work-display";
+import { useLibraryRefreshController } from "../features/library/useLibraryRefreshController";
 import type {
   CollectionActivationReason,
   CollectionManagerViewTarget,
@@ -58,12 +61,18 @@ import {
   moveCollectionRows,
   type MoveCollectionEventDetail,
 } from "../features/library/library-collection-model";
+import {
+  MutationLease,
+  reconcileTrashUndo,
+  scopeSelectedIds,
+  type LibraryTrashUndoState,
+  type MutationLeaseGrant,
+} from "../features/library/library-work-lifecycle-model";
 import { addLibraryTagToWorks, setWorksLibraryCollection } from "../services/library-organization";
 import {
   emptyWorkMeta,
   loadLibraryPageData,
   loadLibraryWorkRuntimeMeta,
-  type WorkNotePreview,
   type WorkRuntimeMeta,
   type WorkTableMeta,
 } from "../services/library-page-data";
@@ -85,9 +94,9 @@ const ImportConfirmDialog = lazy(() =>
 
 type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred" | "trash";
 type SortMode = "added" | "year";
-type DetailPanelTab = "overview" | "notes" | "related";
 type ExtraFilter = "with-pdf" | "without-pdf";
 type ImportMethod = "identifier" | "pdf" | "references";
+type LibraryWorkAction = "merge" | "purge" | "restore" | "trash";
 
 interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_IMPORT_PDF__?: (file: File) => Promise<void>;
@@ -146,10 +155,30 @@ interface LibraryViewDetail {
   tag?: string | null;
 }
 
-interface TrashUndoState {
-  count: number;
-  ids: string[];
-  message: string;
+interface LibraryRefreshQuery {
+  activeCollection: string | null;
+  activeFilter: LibraryFilter;
+  desktopRuntime: boolean;
+  previewItems: WorkWithAuthors[];
+  previewTrashItems: WorkWithAuthors[];
+  previewWorkMeta: Record<string, WorkTableMeta>;
+  search: string;
+}
+
+type LibraryRefreshData = Awaited<ReturnType<typeof loadLibraryPageData>> & {
+  previewMode: boolean;
+};
+
+function isSameLibraryRefreshQuery(left: LibraryRefreshQuery, right: LibraryRefreshQuery): boolean {
+  return (
+    left.activeCollection === right.activeCollection &&
+    left.activeFilter === right.activeFilter &&
+    left.desktopRuntime === right.desktopRuntime &&
+    left.previewItems === right.previewItems &&
+    left.previewTrashItems === right.previewTrashItems &&
+    left.previewWorkMeta === right.previewWorkMeta &&
+    left.search === right.search
+  );
 }
 
 const PREVIEW_TIMESTAMP = Date.UTC(2026, 6, 1);
@@ -654,7 +683,7 @@ export function LibraryPage() {
   const requestedWorkId = searchParams.get("work");
   const requestedFilter = normalizeLibraryFilter(searchParams.get("filter"));
   const [input, setInput] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearchState] = useState("");
   const [items, setItems] = useState<WorkWithAuthors[]>([]);
   const [previewItems, setPreviewItems] = useState<WorkWithAuthors[]>(() => PREVIEW_LIBRARY_WORKS);
   const [previewTrashItems, setPreviewTrashItems] = useState<WorkWithAuthors[]>([]);
@@ -665,8 +694,8 @@ export function LibraryPage() {
     cloneWorkMetaMap(PREVIEW_LIBRARY_META),
   );
   const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
-  const [activeCollection, setActiveCollection] = useState<string | null>(null);
-  const [activeFilter, setActiveFilter] = useState<LibraryFilter>("all");
+  const [activeCollection, setActiveCollectionState] = useState<string | null>(null);
+  const [activeFilter, setActiveFilterState] = useState<LibraryFilter>("all");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [activeSource, setActiveSource] = useState<string | null>(null);
   const [extraFilter, setExtraFilter] = useState<ExtraFilter | null>(null);
@@ -678,7 +707,7 @@ export function LibraryPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [messageLeaving, setMessageLeaving] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [trashUndo, setTrashUndo] = useState<TrashUndoState | null>(null);
+  const [trashUndo, setTrashUndo] = useState<LibraryTrashUndoState | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [page, setPage] = useState(0);
   const [tagManagerIntent, setTagManagerIntent] = useState<"create" | "manage" | null>(null);
@@ -687,9 +716,7 @@ export function LibraryPage() {
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [citeMenuOpen, setCiteMenuOpen] = useState(false);
   const [citationBusy, setCitationBusy] = useState<"copy" | "export" | null>(null);
-  const [workActionBusy, setWorkActionBusy] = useState<
-    "merge" | "purge" | "restore" | "trash" | null
-  >(null);
+  const [workActionBusy, setWorkActionBusy] = useState<LibraryWorkAction | null>(null);
   const [starActionBusyById, setStarActionBusyById] = useState<Record<string, boolean>>({});
   const [readingStatusBusy, setReadingStatusBusy] = useState<{
     status: ReadingStatus;
@@ -707,6 +734,21 @@ export function LibraryPage() {
   const [confirmDraft, setConfirmDraft] = useState<IngestDraft | null>(null);
   const [findingFulltext, setFindingFulltext] = useState(false);
   const [quickDropActive, setQuickDropActive] = useState(false);
+  const searchRef = useRef(search);
+  const activeCollectionRef = useRef(activeCollection);
+  const activeFilterRef = useRef(activeFilter);
+  const setSearch = useCallback((value: string) => {
+    searchRef.current = value;
+    setSearchState(value);
+  }, []);
+  const setActiveCollection = useCallback((value: string | null) => {
+    activeCollectionRef.current = value;
+    setActiveCollectionState(value);
+  }, []);
+  const setActiveFilter = useCallback((value: LibraryFilter) => {
+    activeFilterRef.current = value;
+    setActiveFilterState(value);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedPdfInputRef = useRef<HTMLInputElement>(null);
   const refsInputRef = useRef<HTMLInputElement>(null);
@@ -716,10 +758,10 @@ export function LibraryPage() {
   const citeMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const citeMenuRef = useRef<HTMLDivElement>(null);
   const importingRef = useRef(false);
+  const workMutationLeaseRef = useRef(new MutationLease<LibraryWorkAction>());
   const starActionBusyRef = useRef<Record<string, boolean>>({});
   const readingStatusBusyRef = useRef<{ status: ReadingStatus; workId: string } | null>(null);
   const quickDropDepthRef = useRef(0);
-  const refreshSeqRef = useRef(0);
   const selectedMetaSeqRef = useRef(0);
   const pendingRequestedWorkIdRef = useRef<string | null>(null);
   const pendingRequestedWorkNeedsFreshRowsRef = useRef(false);
@@ -730,15 +772,26 @@ export function LibraryPage() {
   const reportCanvasIngressError = useCallback((error: string) => setMessage(error), []);
   const { openInCanvas, targetPicker } = useCanvasIngress(reportCanvasIngressError);
   const findShortcut = useMemo(() => shortcutLabel("F"), []);
+  const acquireWorkMutation = useCallback(
+    (action: LibraryWorkAction): MutationLeaseGrant<LibraryWorkAction> | null => {
+      const grant = workMutationLeaseRef.current.tryAcquire(action);
+      if (grant) setWorkActionBusy(action);
+      return grant;
+    },
+    [],
+  );
+  const releaseWorkMutation = useCallback((grant: MutationLeaseGrant<LibraryWorkAction>) => {
+    if (workMutationLeaseRef.current.release(grant)) setWorkActionBusy(null);
+  }, []);
 
   useEffect(() => {
     if (!message) return;
     setMessageLeaving(false);
     const tone = inferNoticeTone(message);
     if (tone === "busy") return;
+    if (trashUndo && message === trashUndo.message) return;
     const hasUndoAction = Boolean(
-      trashUndo &&
-      (message === trashUndo.message || message.startsWith("撤销移入回收站失败，撤销入口仍保留")),
+      trashUndo && message.startsWith("撤销移入回收站失败，撤销入口仍保留"),
     );
     let duration = 4_500;
     if (tone === "warning") duration = 6_500;
@@ -748,6 +801,7 @@ export function LibraryPage() {
       setMessageLeaving(true);
     }, duration - 220);
     const removeTimeout = window.setTimeout(() => {
+      setMessageLeaving(false);
       setMessage((current) => (current === message ? null : current));
     }, duration);
     return () => {
@@ -761,41 +815,47 @@ export function LibraryPage() {
     setImportDialogOpen(true);
   }, []);
 
-  const refresh = useCallback(async () => {
-    const seq = refreshSeqRef.current + 1;
-    refreshSeqRef.current = seq;
-    if (!isDesktopRuntime()) {
-      if (refreshSeqRef.current !== seq) return;
-      const previewSource = activeFilter === "trash" ? previewTrashItems : previewItems;
-      const scopedPreviewItems =
-        activeFilter !== "trash" && activeCollection
-          ? previewSource.filter((work) => PREVIEW_WORK_COLLECTIONS[work.id] === activeCollection)
-          : previewSource;
-      setCollections(PREVIEW_LIBRARY_COLLECTIONS);
-      setItems(filterPreviewWorksFrom(scopedPreviewItems, search));
-      setWorkMeta(previewWorkMeta);
-      setTrashCount(previewTrashItems.length);
-      setLibraryLoadError(null);
-      setMessage((current) =>
-        current && !current.startsWith("浏览器预览无法读取本地文献库")
-          ? current
-          : PREVIEW_LIBRARY_SCOPE_MESSAGE,
-      );
-      return;
-    }
-    setLibraryLoadError(null);
-    try {
+  const coordinatedRefresh = useLibraryRefreshController<LibraryRefreshQuery, LibraryRefreshData>({
+    getQuery: () => ({
+      activeCollection: activeCollectionRef.current,
+      activeFilter: activeFilterRef.current,
+      desktopRuntime: isDesktopRuntime(),
+      previewItems,
+      previewTrashItems,
+      previewWorkMeta,
+      search: searchRef.current,
+    }),
+    isSameQuery: isSameLibraryRefreshQuery,
+    load: async (query) => {
+      if (!query.desktopRuntime) {
+        const previewSource =
+          query.activeFilter === "trash" ? query.previewTrashItems : query.previewItems;
+        const scopedPreviewItems =
+          query.activeFilter !== "trash" && query.activeCollection
+            ? previewSource.filter(
+                (work) => PREVIEW_WORK_COLLECTIONS[work.id] === query.activeCollection,
+              )
+            : previewSource;
+        return {
+          collections: PREVIEW_LIBRARY_COLLECTIONS,
+          previewMode: true,
+          trashCount: query.previewTrashItems.length,
+          works: filterPreviewWorksFrom(scopedPreviewItems, query.search),
+          workMeta: query.previewWorkMeta,
+        };
+      }
       const smokeFailure = consumeLibrarySmokeReadFailure();
       if (smokeFailure) throw smokeFailure;
       const snapshot = await loadLibraryPageData({
-        collectionId: activeCollection ?? undefined,
+        collectionId: query.activeCollection ?? undefined,
         limit: LIST_HARD_LIMIT,
-        search: search || undefined,
-        showTrash: activeFilter === "trash",
+        search: query.search || undefined,
+        showTrash: query.activeFilter === "trash",
       });
       await waitForLibrarySmokeAfterReadDelay();
-      if (refreshSeqRef.current !== seq) return;
-
+      return { ...snapshot, previewMode: false };
+    },
+    apply: (snapshot) => {
       setCollections(snapshot.collections);
       setTrashCount(snapshot.trashCount);
       setItems(snapshot.works);
@@ -804,30 +864,46 @@ export function LibraryPage() {
         pendingRequestedWorkNeedsFreshRowsRef.current = false;
       }
       setLibraryLoadError(null);
-      setMessage((current) => (current?.startsWith("读取文献库失败") ? null : current));
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    } catch (e) {
-      if (refreshSeqRef.current !== seq) return;
-      const detail = describeSafeError(e);
+      setMessage((current) => {
+        if (snapshot.previewMode) {
+          return current && !current.startsWith("浏览器预览无法读取本地文献库")
+            ? current
+            : PREVIEW_LIBRARY_SCOPE_MESSAGE;
+        }
+        return current?.startsWith("读取文献库失败") ? null : current;
+      });
+      if (!snapshot.previewMode) {
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      }
+    },
+    reportFailure: (error) => {
+      const detail = describeSafeError(error);
       setLibraryLoadError(detail);
       setMessage(`读取文献库失败：${detail}`);
-      return e instanceof Error ? e : new Error(detail);
-    }
-  }, [search, activeCollection, activeFilter, previewItems, previewTrashItems, previewWorkMeta]);
+    },
+  });
+  const refresh = useCallback(async (): Promise<Error | undefined> => {
+    const result = await coordinatedRefresh();
+    return result.status === "failed" ? result.error : undefined;
+  }, [coordinatedRefresh]);
 
   useEffect(() => {
     const t = setTimeout(() => void refresh(), search ? 250 : 0);
-    return () => {
-      clearTimeout(t);
-      refreshSeqRef.current += 1;
-    };
-  }, [refresh, search]);
+    return () => clearTimeout(t);
+  }, [
+    activeCollection,
+    activeFilter,
+    previewItems,
+    previewTrashItems,
+    previewWorkMeta,
+    refresh,
+    search,
+  ]);
 
   useEffect(() => {
     const onDerivedDataUpdated = () => void refresh();
     window.addEventListener("aurascholar:sentinel-updated", onDerivedDataUpdated);
     return () => {
-      refreshSeqRef.current += 1;
       window.removeEventListener("aurascholar:sentinel-updated", onDerivedDataUpdated);
     };
   }, [refresh]);
@@ -925,7 +1001,7 @@ export function LibraryPage() {
         setBusy(false);
       }
     },
-    [input, busy, surfaceDedup],
+    [input, busy, setActiveCollection, setActiveFilter, setSearch, surfaceDedup],
   );
 
   const handleUpload = useCallback(
@@ -1052,7 +1128,7 @@ export function LibraryPage() {
       window.removeEventListener("aurascholar:create-tag", onCreateTag);
       window.removeEventListener("aurascholar:manage-tags", onManageTags);
     };
-  }, []);
+  }, [setActiveCollection, setActiveFilter]);
 
   useEffect(() => {
     if (!requestedWorkId) return;
@@ -1083,6 +1159,9 @@ export function LibraryPage() {
     requestedWorkId,
     search,
     searchParams,
+    setActiveCollection,
+    setActiveFilter,
+    setSearch,
     setSearchParams,
   ]);
 
@@ -1150,6 +1229,14 @@ export function LibraryPage() {
   const countBaseItems = isTrashView ? [] : items;
   const totalDisplay = countBaseItems.length.toLocaleString("zh-CN");
   const tableRows = filteredItems;
+  const actionableSelectedIds = useMemo(
+    () =>
+      scopeSelectedIds(
+        selectedIds,
+        tableRows.map((work) => work.id),
+      ),
+    [selectedIds, tableRows],
+  );
   const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pagedRows = useMemo(
@@ -1284,7 +1371,6 @@ export function LibraryPage() {
             : `已为《${selectedWork.title}》上传 PDF(${result.pageCount} 页)${annotationMessage}`,
         );
         await refresh();
-        setSelectedWorkId(selectedWork.id);
         window.dispatchEvent(new Event("aurascholar:library-updated"));
       } catch (e) {
         setMessage(`上传 PDF 失败:${describeSafeError(e)}`);
@@ -1380,7 +1466,6 @@ export function LibraryPage() {
         await setLibraryWorkStarred(work.id, starred);
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
-        setSelectedWorkId(work.id);
         try {
           const refreshFailure = await refresh();
           if (refreshFailure) throw refreshFailure;
@@ -1429,7 +1514,6 @@ export function LibraryPage() {
         await setLibraryWorkReadingStatus(selectedWork.id, status);
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
         setMessage(successMessage);
-        setSelectedWorkId(selectedWork.id);
         try {
           const refreshFailure = await refresh();
           if (refreshFailure) throw refreshFailure;
@@ -1449,66 +1533,56 @@ export function LibraryPage() {
   );
 
   const deleteSelectedWork = useCallback(async () => {
-    if (!selectedWork || workActionBusy) return;
+    if (!selectedWork) return;
+    const mutationGrant = acquireWorkMutation("trash");
+    if (!mutationGrant) return;
     const workId = selectedWork.id;
     const title = selectedWork.title;
-    const confirmed = await confirm({
-      title: "移入回收站？",
-      description: `《${title}》会从当前列表移到回收站。`,
-      details: ["你可以在回收站恢复它。", "永久删除前，PDF、批注、标签和关联数据都会保留。"],
-      confirmLabel: "移入回收站",
-      tone: "warning",
-    });
-    if (!confirmed) return;
-    if (!isDesktopRuntime()) {
-      const deletedAt = Date.now();
-      const deletedWork = { ...selectedWork, deleted_at: deletedAt, updated_at: deletedAt };
-      const undoMessage = `已将《${title}》移入预览回收站`;
-      setPreviewItems((current) => current.filter((work) => work.id !== workId));
-      setPreviewTrashItems((current) => [
-        deletedWork,
-        ...current.filter((work) => work.id !== workId),
-      ]);
-      setItems((current) => current.filter((work) => work.id !== workId));
-      setTrashCount((current) => current + 1);
-      setTrashUndo({ count: 1, ids: [workId], message: undoMessage });
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(workId);
-        return next;
-      });
-      setMessage(undoMessage);
-      return;
-    }
-    const startedAt = Date.now();
-    setWorkActionBusy("trash");
-    setTrashUndo(null);
-    setMessage(`正在将《${title}》移入回收站...`);
-    const undoMessage = `已将《${title}》移入回收站`;
-    let trashCommitted = false;
     try {
-      const smokeFailure = consumeLibrarySmokeTrashFailure();
-      if (smokeFailure) {
-        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        throw smokeFailure;
-      }
-      await trashLibraryWorks([workId]);
-      trashCommitted = true;
-      const refreshFailure = await refresh();
-      if (refreshFailure) throw refreshFailure;
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      setMessage(undoMessage);
-      setTrashUndo({ count: 1, ids: [workId], message: undoMessage });
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(workId);
-        return next;
+      const confirmed = await confirm({
+        title: "移入回收站？",
+        description: `《${title}》会从当前列表移到回收站。`,
+        details: ["你可以在回收站恢复它。", "永久删除前，PDF、批注、标签和关联数据都会保留。"],
+        confirmLabel: "移入回收站",
+        tone: "warning",
       });
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      if (trashCommitted) {
-        setMessage(`${undoMessage}，但列表刷新失败，可点击撤销或稍后刷新:${describeSafeError(e)}`);
+      if (!confirmed) return;
+      if (!isDesktopRuntime()) {
+        const deletedAt = Date.now();
+        const deletedWork = { ...selectedWork, deleted_at: deletedAt, updated_at: deletedAt };
+        const undoMessage = `已将《${title}》移入预览回收站`;
+        setPreviewItems((current) => current.filter((work) => work.id !== workId));
+        setPreviewTrashItems((current) => [
+          deletedWork,
+          ...current.filter((work) => work.id !== workId),
+        ]);
+        setItems((current) => current.filter((work) => work.id !== workId));
+        setTrashCount((current) => current + 1);
+        setTrashUndo({ count: 1, ids: [workId], message: undoMessage });
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(workId);
+          return next;
+        });
+        setMessage(undoMessage);
+        return;
+      }
+      const startedAt = Date.now();
+      setMessage(`正在将《${title}》移入回收站...`);
+      const undoMessage = `已将《${title}》移入回收站`;
+      let trashCommitted = false;
+      try {
+        const smokeFailure = consumeLibrarySmokeTrashFailure();
+        if (smokeFailure) {
+          await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+          throw smokeFailure;
+        }
+        await trashLibraryWorks([workId]);
+        trashCommitted = true;
+        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+        const refreshFailure = await refresh();
+        if (refreshFailure) throw refreshFailure;
+        setMessage(undoMessage);
         setTrashUndo({ count: 1, ids: [workId], message: undoMessage });
         setSelectedIds((prev) => {
           const next = new Set(prev);
@@ -1516,73 +1590,98 @@ export function LibraryPage() {
           return next;
         });
         window.dispatchEvent(new Event("aurascholar:library-updated"));
-      } else {
-        setMessage(`移入回收站失败，文献仍保留，可重新移入回收站:${describeSafeError(e)}`);
+      } catch (e) {
+        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+        if (trashCommitted) {
+          setMessage(
+            `${undoMessage}，但列表刷新失败，可点击撤销或稍后刷新:${describeSafeError(e)}`,
+          );
+          setTrashUndo({ count: 1, ids: [workId], message: undoMessage });
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(workId);
+            return next;
+          });
+          window.dispatchEvent(new Event("aurascholar:library-updated"));
+        } else {
+          setMessage(`移入回收站失败，文献仍保留，可重新移入回收站:${describeSafeError(e)}`);
+        }
       }
     } finally {
-      setWorkActionBusy(null);
+      releaseWorkMutation(mutationGrant);
     }
-  }, [confirm, refresh, selectedWork, workActionBusy]);
+  }, [acquireWorkMutation, confirm, refresh, releaseWorkMutation, selectedWork]);
 
   const undoTrash = useCallback(async () => {
-    if (!trashUndo || workActionBusy) return;
-    const startedAt = Date.now();
+    if (!trashUndo) return;
+    const mutationGrant = acquireWorkMutation("restore");
+    if (!mutationGrant) return;
     const { count, ids } = trashUndo;
-    if (!isDesktopRuntime()) {
-      const restoreIds = new Set(ids);
-      const restored = previewTrashItems
-        .filter((work) => restoreIds.has(work.id))
-        .map((work) => ({ ...work, deleted_at: null, updated_at: Date.now() }));
-      setPreviewTrashItems((current) => current.filter((work) => !restoreIds.has(work.id)));
-      setPreviewItems((current) => [...restored, ...current]);
-      setItems((current) =>
-        activeFilter === "trash"
-          ? current.filter((work) => !restoreIds.has(work.id))
-          : [...restored, ...current],
-      );
-      setTrashCount((current) => Math.max(0, current - restored.length));
-      setTrashUndo(null);
-      setSelectedIds(new Set());
-      setSelectedWorkId(restored[0]?.id ?? selectedWorkId);
-      setMessage(
-        count === 1 ? "已撤销移入预览回收站" : `已撤销移入预览回收站:${count} 篇文献已恢复`,
-      );
-      return;
-    }
-    setWorkActionBusy("restore");
-    setMessage(`正在撤销移入回收站:${count} 篇文献...`);
-    const successMessage =
-      count === 1 ? "已撤销移入回收站" : `已撤销移入回收站:${count} 篇文献已恢复`;
-    let restoreCommitted = false;
     try {
-      const smokeFailure = consumeLibrarySmokeTrashRestoreFailure();
-      if (smokeFailure) {
-        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        throw smokeFailure;
-      }
-      await restoreLibraryWorks(ids);
-      restoreCommitted = true;
-      const refreshFailure = await refresh();
-      if (refreshFailure) throw refreshFailure;
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      setTrashUndo(null);
-      setSelectedIds(new Set());
-      setMessage(successMessage);
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      if (restoreCommitted) {
+      if (!isDesktopRuntime()) {
+        const restoreIds = new Set(ids);
+        const restored = previewTrashItems
+          .filter((work) => restoreIds.has(work.id))
+          .map((work) => ({ ...work, deleted_at: null, updated_at: Date.now() }));
+        setPreviewTrashItems((current) => current.filter((work) => !restoreIds.has(work.id)));
+        setPreviewItems((current) => [...restored, ...current]);
+        setItems((current) =>
+          activeFilter === "trash"
+            ? current.filter((work) => !restoreIds.has(work.id))
+            : [...restored, ...current],
+        );
+        setTrashCount((current) => Math.max(0, current - restored.length));
         setTrashUndo(null);
         setSelectedIds(new Set());
-        setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+        setSelectedWorkId(restored[0]?.id ?? selectedWorkId);
+        setMessage(
+          count === 1 ? "已撤销移入预览回收站" : `已撤销移入预览回收站:${count} 篇文献已恢复`,
+        );
+        return;
+      }
+      const startedAt = Date.now();
+      setMessage(`正在撤销移入回收站:${count} 篇文献...`);
+      const successMessage =
+        count === 1 ? "已撤销移入回收站" : `已撤销移入回收站:${count} 篇文献已恢复`;
+      let restoreCommitted = false;
+      try {
+        const smokeFailure = consumeLibrarySmokeTrashRestoreFailure();
+        if (smokeFailure) {
+          await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+          throw smokeFailure;
+        }
+        await restoreLibraryWorks(ids);
+        restoreCommitted = true;
+        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+        const refreshFailure = await refresh();
+        if (refreshFailure) throw refreshFailure;
+        setTrashUndo(null);
+        setSelectedIds(new Set());
+        setMessage(successMessage);
         window.dispatchEvent(new Event("aurascholar:library-updated"));
-      } else {
-        setMessage(`撤销移入回收站失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
+      } catch (e) {
+        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+        if (restoreCommitted) {
+          setTrashUndo(null);
+          setSelectedIds(new Set());
+          setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+          window.dispatchEvent(new Event("aurascholar:library-updated"));
+        } else {
+          setMessage(`撤销移入回收站失败，撤销入口仍保留，可重新撤销:${describeSafeError(e)}`);
+        }
       }
     } finally {
-      setWorkActionBusy(null);
+      releaseWorkMutation(mutationGrant);
     }
-  }, [activeFilter, previewTrashItems, refresh, selectedWorkId, trashUndo, workActionBusy]);
+  }, [
+    acquireWorkMutation,
+    activeFilter,
+    previewTrashItems,
+    refresh,
+    releaseWorkMutation,
+    selectedWorkId,
+    trashUndo,
+  ]);
 
   useEffect(() => {
     const pendingRequestedWorkId = pendingRequestedWorkIdRef.current;
@@ -1871,11 +1970,11 @@ export function LibraryPage() {
   );
 
   const bulkAddTag = useCallback(async () => {
-    if (selectedIds.size === 0) {
+    if (actionableSelectedIds.length === 0) {
       setMessage("请先勾选要添加标签的文献");
       return;
     }
-    const workIds = Array.from(selectedIds);
+    const workIds = [...actionableSelectedIds];
     setTextPrompt({
       title: "添加标签",
       label: "标签名称",
@@ -1939,10 +2038,10 @@ export function LibraryPage() {
         }
       },
     });
-  }, [selectedIds, refresh]);
+  }, [actionableSelectedIds, refresh]);
 
   const bulkMoveToCollection = useCallback(async () => {
-    if (selectedIds.size === 0) {
+    if (actionableSelectedIds.length === 0) {
       setMessage("请先勾选要移动的文献");
       return;
     }
@@ -1951,12 +2050,12 @@ export function LibraryPage() {
       return;
     }
     setMoveDialogOpen(true);
-  }, [selectedIds]);
+  }, [actionableSelectedIds.length]);
 
   const moveSelectedToCollection = useCallback(
     async (target: string | null, targetName: string): Promise<boolean> => {
-      if (selectedIds.size === 0 || !isDesktopRuntime()) return false;
-      const workIds = Array.from(selectedIds);
+      if (actionableSelectedIds.length === 0 || !isDesktopRuntime()) return false;
+      const workIds = [...actionableSelectedIds];
       const startedAt = Date.now();
       const successMessage = target
         ? `已移动 ${workIds.length} 篇文献到「${targetName}」`
@@ -1985,239 +2084,277 @@ export function LibraryPage() {
         return false;
       }
     },
-    [selectedIds, refresh],
+    [actionableSelectedIds, refresh],
   );
 
   const bulkDelete = useCallback(async () => {
-    if (selectedIds.size === 0 || workActionBusy) return;
-    const workIds = Array.from(selectedIds);
-    const confirmed = await confirm({
-      title: "批量移入回收站？",
-      description: `将选中的 ${workIds.length} 篇文献移入回收站。`,
-      details: [
-        "这些文献之后可以从回收站恢复。",
-        "永久删除前，关联 PDF、批注、标签和其他研究数据都会保留。",
-      ],
-      confirmLabel: `移入 ${workIds.length} 篇`,
-      tone: "warning",
-    });
-    if (!confirmed) return;
-    if (!isDesktopRuntime()) {
-      const deleteIds = new Set(workIds);
-      const deletedAt = Date.now();
-      const movedWorks = previewItems
-        .filter((work) => deleteIds.has(work.id))
-        .map((work) => ({ ...work, deleted_at: deletedAt, updated_at: deletedAt }));
-      const undoMessage = `已将 ${movedWorks.length} 篇文献移入预览回收站`;
-      setPreviewItems((current) => current.filter((work) => !deleteIds.has(work.id)));
-      setPreviewTrashItems((current) => [
-        ...movedWorks,
-        ...current.filter((work) => !deleteIds.has(work.id)),
-      ]);
-      setItems((current) => current.filter((work) => !deleteIds.has(work.id)));
-      setTrashCount((current) => current + movedWorks.length);
-      setTrashUndo({
-        count: movedWorks.length,
-        ids: movedWorks.map((work) => work.id),
-        message: undoMessage,
-      });
-      setSelectedIds(new Set());
-      setMessage(undoMessage);
-      return;
-    }
-    const startedAt = Date.now();
-    setWorkActionBusy("trash");
-    setTrashUndo(null);
-    setMessage(`正在将 ${workIds.length} 篇文献移入回收站...`);
-    const undoMessage = `已将 ${workIds.length} 篇文献移入回收站`;
-    let trashCommitted = false;
+    if (actionableSelectedIds.length === 0) return;
+    const mutationGrant = acquireWorkMutation("trash");
+    if (!mutationGrant) return;
+    const workIds = [...actionableSelectedIds];
     try {
-      await trashLibraryWorks(workIds);
-      trashCommitted = true;
-      const refreshFailure = await refresh();
-      if (refreshFailure) throw refreshFailure;
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      setMessage(undoMessage);
-      setTrashUndo({ count: workIds.length, ids: workIds, message: undoMessage });
-      setSelectedIds(new Set());
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      if (trashCommitted) {
-        setMessage(`${undoMessage}，但列表刷新失败，可点击撤销或稍后刷新:${describeSafeError(e)}`);
+      const confirmed = await confirm({
+        title: "批量移入回收站？",
+        description: `将选中的 ${workIds.length} 篇文献移入回收站。`,
+        details: [
+          "这些文献之后可以从回收站恢复。",
+          "永久删除前，关联 PDF、批注、标签和其他研究数据都会保留。",
+        ],
+        confirmLabel: `移入 ${workIds.length} 篇`,
+        tone: "warning",
+      });
+      if (!confirmed) return;
+      if (!isDesktopRuntime()) {
+        const deleteIds = new Set(workIds);
+        const deletedAt = Date.now();
+        const movedWorks = previewItems
+          .filter((work) => deleteIds.has(work.id))
+          .map((work) => ({ ...work, deleted_at: deletedAt, updated_at: deletedAt }));
+        const undoMessage = `已将 ${movedWorks.length} 篇文献移入预览回收站`;
+        setPreviewItems((current) => current.filter((work) => !deleteIds.has(work.id)));
+        setPreviewTrashItems((current) => [
+          ...movedWorks,
+          ...current.filter((work) => !deleteIds.has(work.id)),
+        ]);
+        setItems((current) => current.filter((work) => !deleteIds.has(work.id)));
+        setTrashCount((current) => current + movedWorks.length);
+        setTrashUndo({
+          count: movedWorks.length,
+          ids: movedWorks.map((work) => work.id),
+          message: undoMessage,
+        });
+        setSelectedIds(new Set());
+        setMessage(undoMessage);
+        return;
+      }
+      const startedAt = Date.now();
+      setMessage(`正在将 ${workIds.length} 篇文献移入回收站...`);
+      const undoMessage = `已将 ${workIds.length} 篇文献移入回收站`;
+      let trashCommitted = false;
+      try {
+        await trashLibraryWorks(workIds);
+        trashCommitted = true;
+        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+        const refreshFailure = await refresh();
+        if (refreshFailure) throw refreshFailure;
+        setMessage(undoMessage);
         setTrashUndo({ count: workIds.length, ids: workIds, message: undoMessage });
         setSelectedIds(new Set());
         window.dispatchEvent(new Event("aurascholar:library-updated"));
-      } else {
-        setMessage(`批量移入回收站失败，所选文献仍保留，可重新移入回收站:${describeSafeError(e)}`);
-      }
-    } finally {
-      setWorkActionBusy(null);
-    }
-  }, [confirm, previewItems, selectedIds, refresh, workActionBusy]);
-
-  const restoreWorks = useCallback(
-    async (workIds: string[]) => {
-      if (workIds.length === 0 || workActionBusy) return;
-      const startedAt = Date.now();
-      if (!isDesktopRuntime()) {
-        const restoreIds = new Set(workIds);
-        const restored = previewTrashItems
-          .filter((work) => restoreIds.has(work.id))
-          .map((work) => ({ ...work, deleted_at: null, updated_at: Date.now() }));
-        setPreviewTrashItems((current) => current.filter((work) => !restoreIds.has(work.id)));
-        setPreviewItems((current) => [...restored, ...current]);
-        setItems((current) =>
-          activeFilter === "trash"
-            ? current.filter((work) => !restoreIds.has(work.id))
-            : [...restored, ...current],
-        );
-        setTrashCount((current) => Math.max(0, current - restored.length));
-        setTrashUndo(null);
-        setSelectedIds(new Set());
-        setSelectedWorkId(restored[0]?.id ?? selectedWorkId);
-        setMessage(`已从预览回收站恢复 ${restored.length} 篇文献`);
-        return;
-      }
-      setWorkActionBusy("restore");
-      setTrashUndo(null);
-      setMessage(`正在恢复 ${workIds.length} 篇文献...`);
-      const successMessage = `已恢复 ${workIds.length} 篇文献`;
-      let restoreCommitted = false;
-      try {
-        await restoreLibraryWorks(workIds);
-        restoreCommitted = true;
-        const refreshFailure = await refresh();
-        if (refreshFailure) throw refreshFailure;
-        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        setMessage(successMessage);
-        setSelectedIds(new Set());
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
       } catch (e) {
         await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        if (restoreCommitted) {
-          setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
-          setSelectedIds(new Set());
-          window.dispatchEvent(new Event("aurascholar:library-updated"));
-        } else {
-          setMessage(`恢复文献失败，所选文献仍保留在回收站，可重新恢复:${describeSafeError(e)}`);
-        }
-      } finally {
-        setWorkActionBusy(null);
-      }
-    },
-    [activeFilter, previewTrashItems, refresh, selectedWorkId, workActionBusy],
-  );
-
-  const purgeWorks = useCallback(
-    async (workIds: string[]) => {
-      if (workIds.length === 0 || workActionBusy) return;
-      if (!isDesktopRuntime()) {
-        setMessage("浏览器预览不会永久删除文献；可以恢复回收站文献，或刷新页面重置演示数据。");
-        return;
-      }
-      const confirmed = await confirm({
-        title: "永久删除文献？",
-        description: `将永久删除 ${workIds.length} 篇回收站文献。`,
-        details: [
-          "这会移除文献库记录、PDF 关联、批注、标签、笔记和引用关联。",
-          "内容寻址的本地文件当前不会立即从磁盘回收。",
-          "该操作不能撤销。",
-        ],
-        confirmationHelp: "输入“永久删除”后才会启用确认按钮。",
-        confirmationPhrase: "永久删除",
-        confirmLabel: "永久删除",
-        tone: "danger",
-      });
-      if (!confirmed) return;
-      const startedAt = Date.now();
-      setWorkActionBusy("purge");
-      setTrashUndo(null);
-      setMessage(`正在永久删除 ${workIds.length} 篇文献...`);
-      const successMessage = `已永久删除 ${workIds.length} 篇文献`;
-      let purgeCommitted = false;
-      try {
-        await purgeLibraryWorks(workIds);
-        purgeCommitted = true;
-        const refreshFailure = await refresh();
-        if (refreshFailure) throw refreshFailure;
-        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        setMessage(successMessage);
-        setSelectedIds(new Set());
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
-      } catch (e) {
-        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-        if (purgeCommitted) {
-          setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+        if (trashCommitted) {
+          setMessage(
+            `${undoMessage}，但列表刷新失败，可点击撤销或稍后刷新:${describeSafeError(e)}`,
+          );
+          setTrashUndo({ count: workIds.length, ids: workIds, message: undoMessage });
           setSelectedIds(new Set());
           window.dispatchEvent(new Event("aurascholar:library-updated"));
         } else {
           setMessage(
-            `永久删除失败，所选文献仍保留在回收站，可重新永久删除:${describeSafeError(e)}`,
+            `批量移入回收站失败，所选文献仍保留，可重新移入回收站:${describeSafeError(e)}`,
           );
         }
+      }
+    } finally {
+      releaseWorkMutation(mutationGrant);
+    }
+  }, [
+    acquireWorkMutation,
+    actionableSelectedIds,
+    confirm,
+    previewItems,
+    refresh,
+    releaseWorkMutation,
+  ]);
+
+  const restoreWorks = useCallback(
+    async (workIds: string[]) => {
+      if (workIds.length === 0) return;
+      const mutationGrant = acquireWorkMutation("restore");
+      if (!mutationGrant) return;
+      try {
+        if (!isDesktopRuntime()) {
+          const restoreIds = new Set(workIds);
+          const restored = previewTrashItems
+            .filter((work) => restoreIds.has(work.id))
+            .map((work) => ({ ...work, deleted_at: null, updated_at: Date.now() }));
+          setPreviewTrashItems((current) => current.filter((work) => !restoreIds.has(work.id)));
+          setPreviewItems((current) => [...restored, ...current]);
+          setItems((current) =>
+            activeFilter === "trash"
+              ? current.filter((work) => !restoreIds.has(work.id))
+              : [...restored, ...current],
+          );
+          setTrashCount((current) => Math.max(0, current - restored.length));
+          setTrashUndo((current) => reconcileTrashUndo(current, workIds));
+          setSelectedIds(new Set());
+          setSelectedWorkId(restored[0]?.id ?? selectedWorkId);
+          setMessage(`已从预览回收站恢复 ${restored.length} 篇文献`);
+          return;
+        }
+        const startedAt = Date.now();
+        setMessage(`正在恢复 ${workIds.length} 篇文献...`);
+        const successMessage = `已恢复 ${workIds.length} 篇文献`;
+        let restoreCommitted = false;
+        try {
+          await restoreLibraryWorks(workIds);
+          restoreCommitted = true;
+          await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+          const refreshFailure = await refresh();
+          if (refreshFailure) throw refreshFailure;
+          setTrashUndo((current) => reconcileTrashUndo(current, workIds));
+          setMessage(successMessage);
+          setSelectedIds(new Set());
+          window.dispatchEvent(new Event("aurascholar:library-updated"));
+        } catch (e) {
+          await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+          if (restoreCommitted) {
+            setTrashUndo((current) => reconcileTrashUndo(current, workIds));
+            setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+            setSelectedIds(new Set());
+            window.dispatchEvent(new Event("aurascholar:library-updated"));
+          } else {
+            setMessage(`恢复文献失败，所选文献仍保留在回收站，可重新恢复:${describeSafeError(e)}`);
+          }
+        }
       } finally {
-        setWorkActionBusy(null);
+        releaseWorkMutation(mutationGrant);
       }
     },
-    [confirm, refresh, workActionBusy],
+    [
+      acquireWorkMutation,
+      activeFilter,
+      previewTrashItems,
+      refresh,
+      releaseWorkMutation,
+      selectedWorkId,
+    ],
+  );
+
+  const purgeWorks = useCallback(
+    async (workIds: string[]) => {
+      if (workIds.length === 0) return;
+      const mutationGrant = acquireWorkMutation("purge");
+      if (!mutationGrant) return;
+      try {
+        if (!isDesktopRuntime()) {
+          setMessage("浏览器预览不会永久删除文献；可以恢复回收站文献，或刷新页面重置演示数据。");
+          return;
+        }
+        const confirmed = await confirm({
+          title: "永久删除文献？",
+          description: `将永久删除 ${workIds.length} 篇回收站文献。`,
+          details: [
+            "这会移除文献库记录、PDF 关联、批注、标签、笔记和引用关联。",
+            "内容寻址的本地文件当前不会立即从磁盘回收。",
+            "该操作不能撤销。",
+          ],
+          confirmationHelp: "输入“永久删除”后才会启用确认按钮。",
+          confirmationPhrase: "永久删除",
+          confirmLabel: "永久删除",
+          tone: "danger",
+        });
+        if (!confirmed) return;
+        const startedAt = Date.now();
+        setMessage(`正在永久删除 ${workIds.length} 篇文献...`);
+        const successMessage = `已永久删除 ${workIds.length} 篇文献`;
+        let purgeCommitted = false;
+        try {
+          await purgeLibraryWorks(workIds);
+          purgeCommitted = true;
+          await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+          const refreshFailure = await refresh();
+          if (refreshFailure) throw refreshFailure;
+          setTrashUndo((current) => reconcileTrashUndo(current, workIds));
+          setMessage(successMessage);
+          setSelectedIds(new Set());
+          window.dispatchEvent(new Event("aurascholar:library-updated"));
+        } catch (e) {
+          await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+          if (purgeCommitted) {
+            setTrashUndo((current) => reconcileTrashUndo(current, workIds));
+            setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+            setSelectedIds(new Set());
+            window.dispatchEvent(new Event("aurascholar:library-updated"));
+          } else {
+            setMessage(
+              `永久删除失败，所选文献仍保留在回收站，可重新永久删除:${describeSafeError(e)}`,
+            );
+          }
+        }
+      } finally {
+        releaseWorkMutation(mutationGrant);
+      }
+    },
+    [acquireWorkMutation, confirm, refresh, releaseWorkMutation],
   );
 
   const bulkMerge = useCallback(async () => {
-    if (selectedIds.size < 2 || workActionBusy || !isDesktopRuntime()) return;
-    if (!selectedWork || !selectedIds.has(selectedWork.id)) {
+    if (actionableSelectedIds.length < 2 || !isDesktopRuntime()) return;
+    if (!selectedWork || !actionableSelectedIds.includes(selectedWork.id)) {
       setMessage("请先在已勾选的文献中点选一篇作为主记录，再执行合并");
       return;
     }
-    const duplicates = Array.from(selectedIds).filter((id) => id !== selectedWork.id);
+    const mutationGrant = acquireWorkMutation("merge");
+    if (!mutationGrant) return;
+    const duplicates = actionableSelectedIds.filter((id) => id !== selectedWork.id);
     const titles = items
       .filter((work) => duplicates.includes(work.id))
       .slice(0, 4)
       .map((work) => `《${work.title}》`)
       .join("、");
-    const confirmed = await confirm({
-      title: "合并重复文献？",
-      description: `将 ${duplicates.length} 篇重复文献合并到主记录《${selectedWork.title}》。`,
-      details: [
-        "PDF、批注、标签、摘录、文件夹、引文、衍生数据和哨兵任务会迁移到主记录。",
-        "主记录的题名与作者优先保留，重复项会移入回收站。",
-        titles ? `重复项：${titles}${duplicates.length > 4 ? "…" : ""}` : null,
-      ],
-      confirmLabel: "确认合并",
-      tone: "warning",
-    });
-    if (!confirmed) return;
-    const startedAt = Date.now();
-    setWorkActionBusy("merge");
-    setMessage(`正在合并 ${duplicates.length} 篇重复文献到《${selectedWork.title}》...`);
     try {
-      const result = await mergeLibraryWorks(selectedWork.id, duplicates);
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      const successMessage = `已合并 ${result.merged} 篇重复文献到《${selectedWork.title}》${
-        result.movedAttachments ? `，迁移 ${result.movedAttachments} 个附件` : ""
-      }`;
-      setMessage(successMessage);
-      setSelectedIds(new Set());
-      setSelectedWorkId(selectedWork.id);
+      const confirmed = await confirm({
+        title: "合并重复文献？",
+        description: `将 ${duplicates.length} 篇重复文献合并到主记录《${selectedWork.title}》。`,
+        details: [
+          "PDF、批注、标签、摘录、文件夹、引文、衍生数据和哨兵任务会迁移到主记录。",
+          "主记录的题名与作者优先保留，重复项会移入回收站。",
+          titles ? `重复项：${titles}${duplicates.length > 4 ? "…" : ""}` : null,
+        ],
+        confirmLabel: "确认合并",
+        tone: "warning",
+      });
+      if (!confirmed) return;
+      const startedAt = Date.now();
+      setMessage(`正在合并 ${duplicates.length} 篇重复文献到《${selectedWork.title}》...`);
       try {
-        const refreshFailure = await refresh();
-        if (refreshFailure) throw refreshFailure;
+        const result = await mergeLibraryWorks(selectedWork.id, duplicates);
+        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+        const successMessage = `已合并 ${result.merged} 篇重复文献到《${selectedWork.title}》${
+          result.movedAttachments ? `，迁移 ${result.movedAttachments} 个附件` : ""
+        }`;
+        setMessage(successMessage);
+        setSelectedIds(new Set());
+        try {
+          const refreshFailure = await refresh();
+          if (refreshFailure) throw refreshFailure;
+        } catch (e) {
+          setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+        }
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
       } catch (e) {
-        setMessage(`${successMessage}，但列表刷新失败，可稍后刷新:${describeSafeError(e)}`);
+        await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
+        setMessage(`合并失败，主记录和重复文献仍保持原状，可重新合并:${describeSafeError(e)}`);
       }
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    } catch (e) {
-      await waitForMinimumElapsed(startedAt, MIN_WORK_ACTION_BUSY_MS);
-      setMessage(`合并失败，主记录和重复文献仍保持原状，可重新合并:${describeSafeError(e)}`);
     } finally {
-      setWorkActionBusy(null);
+      releaseWorkMutation(mutationGrant);
     }
-  }, [confirm, items, refresh, selectedIds, selectedWork, workActionBusy]);
+  }, [
+    acquireWorkMutation,
+    actionableSelectedIds,
+    confirm,
+    items,
+    refresh,
+    releaseWorkMutation,
+    selectedWork,
+  ]);
 
   const handleExportCitations = useCallback(
     async (format: ExportFormat) => {
-      if (selectedIds.size === 0 || citationBusy) return;
-      const workIds = Array.from(selectedIds);
+      if (actionableSelectedIds.length === 0 || citationBusy) return;
+      const workIds = [...actionableSelectedIds];
       const startedAt = Date.now();
       setCiteMenuOpen(false);
       setCitationBusy("export");
@@ -2257,13 +2394,13 @@ export function LibraryPage() {
         setCitationBusy(null);
       }
     },
-    [citationBusy, previewWorksById, selectedIds],
+    [actionableSelectedIds, citationBusy, previewWorksById],
   );
 
   const handleCopyBibliography = useCallback(
     async (styleId: string) => {
-      if (selectedIds.size === 0 || citationBusy) return;
-      const workIds = Array.from(selectedIds);
+      if (actionableSelectedIds.length === 0 || citationBusy) return;
+      const workIds = [...actionableSelectedIds];
       const startedAt = Date.now();
       setCiteMenuOpen(false);
       setCitationBusy("copy");
@@ -2302,7 +2439,7 @@ export function LibraryPage() {
         setCitationBusy(null);
       }
     },
-    [citationBusy, previewWorksById, selectedIds],
+    [actionableSelectedIds, citationBusy, previewWorksById],
   );
 
   const handleRefsFile = useCallback(async (file: File) => {
@@ -2423,16 +2560,19 @@ export function LibraryPage() {
     setActiveSource(null);
     setExtraFilter(null);
     setSelectedIds(new Set());
-  }, []);
+  }, [setActiveCollection, setActiveFilter]);
 
-  const openBreadcrumbCollection = useCallback((collectionId: string) => {
-    setActiveFilter("all");
-    setActiveCollection(collectionId);
-    setActiveTag(null);
-    setActiveSource(null);
-    setExtraFilter(null);
-    setSelectedIds(new Set());
-  }, []);
+  const openBreadcrumbCollection = useCallback(
+    (collectionId: string) => {
+      setActiveFilter("all");
+      setActiveCollection(collectionId);
+      setActiveTag(null);
+      setActiveSource(null);
+      setExtraFilter(null);
+      setSelectedIds(new Set());
+    },
+    [setActiveCollection, setActiveFilter],
+  );
 
   const activateManagedCollection = useCallback(
     (collectionId: string, reason: CollectionActivationReason) => {
@@ -2440,17 +2580,18 @@ export function LibraryPage() {
       setActiveCollection(collectionId);
       setActiveTag(null);
       setActiveSource(null);
+      setSelectedIds(new Set());
       if (reason === "restore") {
         setExtraFilter(null);
-        setSelectedIds(new Set());
       }
     },
-    [],
+    [setActiveCollection, setActiveFilter],
   );
 
   const clearManagedActiveCollection = useCallback(() => {
     setActiveCollection(null);
-  }, []);
+    setSelectedIds(new Set());
+  }, [setActiveCollection]);
 
   const previewMoveCollection = useCallback((detail: MoveCollectionEventDetail) => {
     setCollections((current) => moveCollectionRows(current, detail));
@@ -2473,13 +2614,14 @@ export function LibraryPage() {
       setExtraFilter(null);
       setSelectedIds(new Set());
     },
-    [clearLibraryView, openBreadcrumbCollection],
+    [clearLibraryView, openBreadcrumbCollection, setActiveCollection, setActiveFilter],
   );
 
   const clearInlineSearch = useCallback(() => {
     setSearch("");
+    setSelectedIds(new Set());
     searchInputRef.current?.focus();
-  }, []);
+  }, [setSearch]);
 
   const requestPdfImport = useCallback(() => {
     if (!isDesktopRuntime()) {
@@ -2504,6 +2646,7 @@ export function LibraryPage() {
     }
     selectedPdfInputRef.current?.click();
   }, []);
+  const visibleNoticeMessage = message ?? trashUndo?.message ?? null;
 
   return (
     <div
@@ -2586,7 +2729,10 @@ export function LibraryPage() {
               aria-label={isTrashView ? "搜索回收站文献" : "搜索当前文献结果"}
               placeholder={isTrashView ? "搜索回收站" : "在结果中搜索"}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setSelectedIds(new Set());
+              }}
               onKeyDown={(e) => {
                 if (isImeComposing(e)) return;
                 if (e.key === "Escape" && search) {
@@ -2660,21 +2806,19 @@ export function LibraryPage() {
           e.target.value = "";
         }}
       />
-      {trashUndo &&
-      (message === trashUndo.message ||
-        workActionBusy === "restore" ||
-        message?.startsWith("撤销移入回收站失败，撤销入口仍保留")) ? (
+      {trashUndo ? (
         <InlineNotice
           className={`library-command__message ${
-            messageLeaving ? "library-command__message--leaving" : ""
+            message && messageLeaving ? "library-command__message--leaving" : ""
           }`}
-          message={message}
+          message={visibleNoticeMessage}
           onDismiss={() => {
             setMessageLeaving(false);
+            if (!message || message === trashUndo.message) setTrashUndo(null);
             setMessage(null);
           }}
         >
-          <span className="library-command__message-text">{message}</span>
+          <span className="library-command__message-text">{visibleNoticeMessage}</span>
           <button
             type="button"
             className="library-command__message-action"
@@ -2699,14 +2843,14 @@ export function LibraryPage() {
         />
       )}
 
-      {selectedIds.size > 0 && (
+      {actionableSelectedIds.length > 0 && (
         <div className="library-bulkbar">
-          <span className="library-bulkbar__count">已选 {selectedIds.size} 篇</span>
+          <span className="library-bulkbar__count">已选 {actionableSelectedIds.length} 篇</span>
           {isTrashView ? (
             <>
               <button
                 type="button"
-                onClick={() => void restoreWorks(Array.from(selectedIds))}
+                onClick={() => void restoreWorks(actionableSelectedIds)}
                 disabled={Boolean(workActionBusy)}
                 aria-busy={workActionBusy === "restore" ? "true" : undefined}
               >
@@ -2715,7 +2859,7 @@ export function LibraryPage() {
               <button
                 type="button"
                 className="library-bulkbar__danger"
-                onClick={() => void purgeWorks(Array.from(selectedIds))}
+                onClick={() => void purgeWorks(actionableSelectedIds)}
                 disabled={Boolean(workActionBusy)}
                 aria-busy={workActionBusy === "purge" ? "true" : undefined}
               >
@@ -2738,7 +2882,7 @@ export function LibraryPage() {
               >
                 移动到文件夹
               </button>
-              {selectedIds.size > 1 && (
+              {actionableSelectedIds.length > 1 && (
                 <button
                   type="button"
                   onClick={() => void bulkMerge()}
@@ -2972,7 +3116,10 @@ export function LibraryPage() {
                   {activeCollectionRow && (
                     <button
                       type="button"
-                      onClick={() => setActiveCollection(null)}
+                      onClick={() => {
+                        setActiveCollection(null);
+                        setSelectedIds(new Set());
+                      }}
                       aria-label={`移除文件夹筛选 ${activeCollectionRow.name}`}
                     >
                       文件夹 · {activeCollectionPath.map((item) => item.name).join(" / ")}
@@ -2982,7 +3129,10 @@ export function LibraryPage() {
                   {activeTag && (
                     <button
                       type="button"
-                      onClick={() => setActiveTag(null)}
+                      onClick={() => {
+                        setActiveTag(null);
+                        setSelectedIds(new Set());
+                      }}
                       aria-label={`移除标签筛选 ${activeTag}`}
                     >
                       标签 · {activeTag}
@@ -2992,7 +3142,10 @@ export function LibraryPage() {
                   {activeSource && (
                     <button
                       type="button"
-                      onClick={() => setActiveSource(null)}
+                      onClick={() => {
+                        setActiveSource(null);
+                        setSelectedIds(new Set());
+                      }}
                       aria-label={`移除来源筛选 ${activeSource}`}
                     >
                       来源 · {activeSource}
@@ -3002,7 +3155,10 @@ export function LibraryPage() {
                   {extraFilter && (
                     <button
                       type="button"
-                      onClick={() => setExtraFilter(null)}
+                      onClick={() => {
+                        setExtraFilter(null);
+                        setSelectedIds(new Set());
+                      }}
                       aria-label={`移除筛选 ${extraFilterLabel(extraFilter)}`}
                     >
                       {extraFilterLabel(extraFilter)}
@@ -3196,7 +3352,7 @@ export function LibraryPage() {
               closeSelectedWork();
             }}
           >
-            <SelectedWorkPanel
+            <LibrarySelectedWorkPanel
               key={selectedWork.id}
               work={selectedWork}
               meta={selectedMeta}
@@ -3319,7 +3475,7 @@ export function LibraryPage() {
       {moveDialogOpen && (
         <MoveToCollectionDialog
           collections={collections}
-          selectedCount={selectedIds.size}
+          selectedCount={actionableSelectedIds.length}
           onClose={() => setMoveDialogOpen(false)}
           onMove={async (collectionId, collectionName) => {
             const moved = await moveSelectedToCollection(collectionId, collectionName);
@@ -3343,6 +3499,7 @@ export function LibraryPage() {
             setActiveTag(filter.tag);
             setActiveSource(filter.source);
             setExtraFilter(filter.extra);
+            setSelectedIds(new Set());
             setAdvancedFilterOpen(false);
           }}
         />
@@ -4002,7 +4159,10 @@ function WorkTags({
       {labels.map((label, offset) => (
         <span
           key={label}
-          className={`library-research-tag library-research-tag--${tagTone(label, index + offset)}`}
+          className={`library-research-tag library-research-tag--${libraryTagTone(
+            label,
+            index + offset,
+          )}`}
         >
           {label}
         </span>
@@ -4021,14 +4181,6 @@ function fallbackWorkLabels(work: WorkWithAuthors) {
   return labels;
 }
 
-function tagTone(label: string, index: number) {
-  if (/arxiv/i.test(label)) return "teal";
-  if (/doi/i.test(label)) return "blue";
-  if (label === "阅读中") return "green";
-  if (label === "已读") return "purple";
-  return ["teal", "blue", "purple", "amber", "green"][index % 5] ?? "teal";
-}
-
 function citationLabel(meta?: WorkTableMeta) {
   const references = meta?.references ?? 0;
   const citedBy = meta?.citedBy ?? 0;
@@ -4036,12 +4188,6 @@ function citationLabel(meta?: WorkTableMeta) {
   if (references > 0 && citedBy > 0) return `参${references} / 引${citedBy}`;
   if (references > 0) return `参${references}`;
   return `引${citedBy}`;
-}
-
-function readingStatusLabel(status: ReadingStatus | string) {
-  if (status === "reading") return "阅读中";
-  if (status === "read") return "已读";
-  return "未读";
 }
 
 function extraFilterLabel(filter: ExtraFilter) {
@@ -4078,631 +4224,4 @@ function formatAddedDate(createdAt: number | null | undefined) {
     month: "numeric",
     day: "numeric",
   }).format(date);
-}
-
-function SelectedWorkPanel({
-  work,
-  meta,
-  tableMeta,
-  isTrashView,
-  attachingPdf,
-  workActionBusy,
-  starActionBusyTarget,
-  readingStatusBusyTarget,
-  onOpenReader,
-  onRestoreWork,
-  onPurgeWork,
-  onDeleteWork,
-  onToggleStar,
-  onSetReadingStatus,
-  onUploadPdf,
-  onFindFulltext,
-  findingFulltext,
-  onAddToCanvas,
-  onOpenCanvas,
-  onOpenGraph,
-  onEditMetadata,
-  onClose,
-}: {
-  work: WorkWithAuthors | null;
-  meta: WorkRuntimeMeta | null;
-  tableMeta?: WorkTableMeta;
-  isTrashView: boolean;
-  attachingPdf: boolean;
-  workActionBusy: "merge" | "purge" | "restore" | "trash" | null;
-  starActionBusyTarget?: boolean;
-  readingStatusBusyTarget?: ReadingStatus;
-  onOpenReader: () => void;
-  onRestoreWork: () => void;
-  onPurgeWork: () => void;
-  onDeleteWork: () => void;
-  onToggleStar: () => void;
-  onSetReadingStatus: (status: ReadingStatus) => void;
-  onUploadPdf: () => void;
-  onFindFulltext: () => void;
-  findingFulltext: boolean;
-  onAddToCanvas: () => void;
-  onOpenCanvas: () => void;
-  onOpenGraph: () => void;
-  onEditMetadata: () => void;
-  onClose: () => void;
-}) {
-  const [activePanelTab, setActivePanelTab] = useState<DetailPanelTab>("overview");
-
-  useEffect(() => {
-    setActivePanelTab("overview");
-  }, [work?.id]);
-
-  if (!work) {
-    return (
-      <div className="library-detail au-panel">
-        <h2>文献详情</h2>
-        <p className="au-text-muted">
-          选择一篇文献后，这里会显示元信息、笔记、预览、研究素材和引用脉络。
-        </p>
-      </div>
-    );
-  }
-
-  const authorText =
-    work.authorNames.length > 0 ? work.authorNames.slice(0, 4).join(", ") : "作者未标注";
-  const sourceText = [work.venue_name, work.year].filter(Boolean).join(" · ") || "来源未标注";
-  const tags = (tableMeta?.tags ?? []).slice(0, 4);
-  const starActionBusy = typeof starActionBusyTarget === "boolean";
-  const readingStatusBusy = Boolean(readingStatusBusyTarget);
-
-  if (isTrashView) {
-    return (
-      <>
-        <div className="library-detail au-panel library-detail--selected library-detail--trash">
-          <div className="library-panel-heading">
-            <span className="library-panel-kicker">回收站文献</span>
-            <div className="library-panel-actions">
-              <button
-                type="button"
-                onClick={onRestoreWork}
-                disabled={Boolean(workActionBusy)}
-                aria-busy={workActionBusy === "restore" ? "true" : undefined}
-              >
-                {workActionBusy === "restore" ? "恢复中..." : "恢复 ›"}
-              </button>
-              <button
-                type="button"
-                className="library-inspector-close"
-                onClick={onClose}
-                aria-label="关闭文献详情"
-                title="关闭详情"
-              >
-                ×
-              </button>
-            </div>
-          </div>
-          <h2>{work.title}</h2>
-          <p>{authorText}</p>
-          <div className="library-detail__meta-grid">
-            <span>
-              <strong>{work.year ?? "—"}</strong>
-              <small>年份</small>
-            </span>
-            <span>
-              <strong>{work.venue_name ?? "—"}</strong>
-              <small>来源</small>
-            </span>
-            <span>
-              <strong>{work.doi ? "有" : "无"}</strong>
-              <small>DOI</small>
-            </span>
-          </div>
-          <div className="library-detail__chips">
-            {tags.length > 0 ? (
-              tags.map((tag, index) => (
-                <span
-                  key={tag}
-                  className={`library-research-tag library-research-tag--${tagTone(tag, index)}`}
-                >
-                  {tag}
-                </span>
-              ))
-            ) : (
-              <span className="library-research-tag library-research-tag--neutral">未标注</span>
-            )}
-          </div>
-          <Button
-            className="library-detail__read"
-            onClick={onRestoreWork}
-            disabled={Boolean(workActionBusy)}
-            aria-busy={workActionBusy === "restore" ? "true" : undefined}
-          >
-            {workActionBusy === "restore" ? "恢复中..." : "恢复到文献库"}
-          </Button>
-          <button
-            type="button"
-            className="library-danger-button"
-            onClick={onPurgeWork}
-            disabled={Boolean(workActionBusy)}
-            aria-busy={workActionBusy === "purge" ? "true" : undefined}
-          >
-            {workActionBusy === "purge" ? "删除中..." : "永久删除"}
-          </button>
-        </div>
-        <div className="library-automation au-panel">
-          <div className="library-panel-heading">
-            <h3>书目信息</h3>
-          </div>
-          <BibliographicLines work={work} />
-          <StatusLine label="题录来源" value={sourceText} variant="neutral" />
-          <StatusLine
-            label="PDF 附件"
-            value={meta ? (meta.pdfCount ? `${meta.pdfCount} 个` : "无") : "读取中"}
-            variant={meta?.pdfCount ? "success" : "neutral"}
-          />
-          <p className="library-preview-copy">{work.abstract || "暂无摘要。"}</p>
-        </div>
-      </>
-    );
-  }
-
-  return (
-    <div className="library-inspector library-detail--selected au-panel">
-      <div className="library-inspector__summary">
-        <div className="library-panel-heading">
-          <span className="library-panel-kicker">当前文献</span>
-          <div className="library-panel-actions">
-            <button type="button" onClick={onEditMetadata}>
-              编辑
-            </button>
-            <button
-              type="button"
-              onClick={onToggleStar}
-              disabled={starActionBusy}
-              aria-busy={starActionBusy ? "true" : undefined}
-            >
-              {starActionBusy
-                ? starActionBusyTarget
-                  ? "标记中..."
-                  : "取消中..."
-                : work.starred
-                  ? "取消重点"
-                  : "标为重点"}
-            </button>
-            <button
-              type="button"
-              className="library-inspector-close"
-              onClick={onClose}
-              aria-label="关闭文献详情"
-              title="关闭详情"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-        <h2>{work.title}</h2>
-        <p>{authorText}</p>
-        {tags.length > 0 && (
-          <div className="library-detail__chips">
-            {tags.map((tag, index) => (
-              <span
-                key={tag}
-                className={`library-research-tag library-research-tag--${tagTone(tag, index)}`}
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="library-detail__meta-grid">
-          <span>
-            <strong>{work.year ?? "—"}</strong>
-            <small>年份</small>
-          </span>
-          <span>
-            <strong>{work.venue_name ?? "—"}</strong>
-            <small>来源</small>
-          </span>
-          <span>
-            <strong>{meta ? (meta.pdfCount ? "可读" : "缺失") : "—"}</strong>
-            <small>全文</small>
-          </span>
-        </div>
-        <div className="library-reading-toggle" role="group" aria-label="阅读状态">
-          {(["unread", "reading", "read"] as const).map((status) => {
-            const statusBusy = readingStatusBusyTarget === status;
-            const isCurrentStatus = work.reading_status === status;
-            const label = readingStatusLabel(status);
-            return (
-              <button
-                key={status}
-                type="button"
-                aria-label={isCurrentStatus ? `${label}，当前阅读状态` : label}
-                aria-pressed={isCurrentStatus}
-                className={isCurrentStatus ? "library-reading-toggle__active" : ""}
-                onClick={() => onSetReadingStatus(status)}
-                disabled={readingStatusBusy}
-                aria-busy={statusBusy ? "true" : undefined}
-              >
-                {statusBusy ? "更新中..." : label}
-              </button>
-            );
-          })}
-        </div>
-        <Button className="library-detail__read" onClick={onOpenReader}>
-          {meta?.pdfCount ? "继续阅读" : "打开阅读器"}
-        </Button>
-        <Button variant="secondary" className="library-panel-action" onClick={onAddToCanvas}>
-          加入白板
-        </Button>
-      </div>
-
-      <div className="library-side-tabs" role="tablist" aria-label="文献详情">
-        {(
-          [
-            ["overview", "概览"],
-            ["notes", `笔记 ${meta?.annotationCount ?? 0}`],
-            ["related", "脉络"],
-          ] as const
-        ).map(([panel, label]) => (
-          <button
-            key={panel}
-            id={`library-detail-tab-${panel}`}
-            aria-controls={`library-detail-panel-${panel}`}
-            aria-selected={activePanelTab === panel}
-            className={`library-side-tab ${
-              activePanelTab === panel ? "library-side-tab--active" : ""
-            }`}
-            role="tab"
-            type="button"
-            onClick={() => setActivePanelTab(panel)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div
-        className="library-inspector__body"
-        id={`library-detail-panel-${activePanelTab}`}
-        role="tabpanel"
-        aria-labelledby={`library-detail-tab-${activePanelTab}`}
-      >
-        {activePanelTab === "overview" && (
-          <>
-            <section className="library-inspector__section">
-              <div className="library-panel-heading">
-                <h3>摘要</h3>
-              </div>
-              <p className="library-preview-copy">{work.abstract || "暂无摘要。"}</p>
-            </section>
-            <section className="library-inspector__section">
-              <div className="library-panel-heading">
-                <h3>书目信息</h3>
-              </div>
-              <BibliographicLines work={work} />
-              <StatusLine label="题录来源" value={sourceText} variant="neutral" />
-            </section>
-            <section className="library-inspector__section">
-              <div className="library-panel-heading">
-                <h3>全文文件</h3>
-                <div className="library-panel-actions">
-                  <button
-                    type="button"
-                    onClick={onUploadPdf}
-                    disabled={attachingPdf}
-                    aria-busy={attachingPdf ? "true" : undefined}
-                  >
-                    {attachingPdf ? "上传中..." : meta?.pdfCount ? "上传新版本" : "上传 PDF"}
-                  </button>
-                  {meta && !meta.pdfCount && (
-                    <button
-                      type="button"
-                      onClick={onFindFulltext}
-                      disabled={findingFulltext}
-                      aria-busy={findingFulltext ? "true" : undefined}
-                    >
-                      {findingFulltext ? "查找中..." : "查找全文"}
-                    </button>
-                  )}
-                </div>
-              </div>
-              {!meta ? (
-                <div className="library-fulltext-empty" aria-live="polite">
-                  正在读取全文信息...
-                </div>
-              ) : meta.pdfPreview ? (
-                <div className="library-fulltext-file">
-                  <div className="library-fulltext-file__header">
-                    <span>当前阅读版本</span>
-                    <Badge variant="success">{meta.pdfPreview.page_count ?? "?"} 页</Badge>
-                  </div>
-                  <strong title={meta.pdfPreview.original_filename ?? undefined}>
-                    {meta.pdfPreview.original_filename ?? "未命名全文文件"}
-                  </strong>
-                  <div className="library-fulltext-file__meta">
-                    <span>{formatAttachmentSize(meta.pdfPreview.byte_size)}</span>
-                    <span>{formatAttachmentSource(meta.pdfPreview.fetched_via)}</span>
-                    {meta.pdfCount > 1 && <span>共 {meta.pdfCount} 个版本</span>}
-                  </div>
-                </div>
-              ) : (
-                <div className="library-fulltext-empty">尚未添加全文文件</div>
-              )}
-            </section>
-            <section className="library-inspector__section">
-              <div className="library-panel-heading">
-                <h3>研究素材</h3>
-              </div>
-              <StatusLine
-                label="批注"
-                value={meta ? `${meta.annotationCount} 条` : "读取中"}
-                variant={meta?.annotationCount ? "success" : "neutral"}
-              />
-              <StatusLine label="空间白板" value="可作为文献卡加入" variant="neutral" />
-            </section>
-            <section className="library-inspector__section library-inspector__section--danger">
-              <button
-                type="button"
-                className="library-detail__secondary-danger"
-                onClick={onDeleteWork}
-                disabled={Boolean(workActionBusy)}
-                aria-busy={workActionBusy === "trash" ? "true" : undefined}
-              >
-                {workActionBusy === "trash" ? "移入中..." : "移入回收站"}
-              </button>
-            </section>
-          </>
-        )}
-
-        {activePanelTab === "notes" && (
-          <>
-            <NotesPanel meta={meta} onOpenReader={onOpenReader} />
-            <section className="library-inspector__section">
-              <div className="library-panel-heading">
-                <h3>空间白板</h3>
-                <button type="button" onClick={onOpenCanvas}>
-                  打开空间白板
-                </button>
-              </div>
-              <p className="library-preview-copy">
-                将完整文献作为卡片加入画布，再与摘录、研究笔记和 AI 合成建立连接。
-              </p>
-              <Button className="library-panel-action" variant="primary" onClick={onAddToCanvas}>
-                加入白板
-              </Button>
-            </section>
-          </>
-        )}
-
-        {activePanelTab === "related" && (
-          <section className="library-inspector__section">
-            <div className="library-panel-heading">
-              <h3>引用脉络</h3>
-              <button type="button" onClick={onOpenGraph}>
-                打开图谱
-              </button>
-            </div>
-            <CitationMiniGraph
-              references={tableMeta?.references ?? 0}
-              citedBy={tableMeta?.citedBy ?? 0}
-            />
-            <div className="library-citation-stats">
-              <span>参考 {tableMeta?.references ?? 0}</span>
-              <span>被引 {tableMeta?.citedBy ?? 0}</span>
-            </div>
-          </section>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function NotesPanel({
-  meta,
-  onOpenReader,
-}: {
-  meta: WorkRuntimeMeta | null;
-  onOpenReader: () => void;
-}) {
-  const notes = meta?.notePreviews ?? [];
-  return (
-    <section className="library-inspector__section">
-      <div className="library-panel-heading">
-        <h3>笔记 / 批注</h3>
-        <button type="button" onClick={onOpenReader}>
-          编辑笔记 ›
-        </button>
-      </div>
-      <StatusLine
-        label="总数"
-        value={meta ? `${meta.annotationCount} 条` : "读取中"}
-        variant={meta?.annotationCount ? "success" : "neutral"}
-      />
-      {notes.length > 0 ? (
-        <div className="library-notes-list library-notes-list--expanded">
-          {notes.map((note) => (
-            <article key={note.id} className="library-note-preview">
-              <div>
-                <strong>{annotationTypeLabel(note.type)}</strong>
-                <small>
-                  第 {note.page_index + 1} 页 · {formatDateTime(note.updated_at)}
-                </small>
-              </div>
-              <p>{notePreviewText(note)}</p>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <p className="library-panel-empty">
-          {meta ? "暂无笔记。进入阅读器后可以高亮、批注和整理摘录。" : "正在读取笔记…"}
-        </p>
-      )}
-    </section>
-  );
-}
-
-function annotationTypeLabel(type: string) {
-  const labels: Record<string, string> = {
-    highlight: "高亮",
-    underline: "下划线",
-    strikeout: "删除线",
-    note: "笔记",
-    ink: "手写",
-  };
-  return labels[type] ?? "批注";
-}
-
-function notePreviewText(note: WorkNotePreview) {
-  const content = note.content_md?.replace(/\s+/g, " ").trim();
-  return content || `${annotationTypeLabel(note.type)}批注，尚未填写笔记内容。`;
-}
-
-function formatDateTime(value: number) {
-  if (!value) return "未知时间";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未知时间";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function formatAttachmentSize(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "大小未知";
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
-function formatAttachmentSource(source: string | null) {
-  if (!source) return "来源未知";
-  const labels: Record<string, string> = {
-    manual: "手动上传",
-    preview: "示例文件",
-    "research-download": "检索下载",
-    unpaywall: "Unpaywall",
-    arxiv: "arXiv",
-    openalex: "OpenAlex",
-  };
-  return labels[source] ?? source;
-}
-
-// Thumbnail of the citation neighborhood. Node counts are real (from the local
-// `citations` table); the full interactive graph lives on the /graph route. We
-// cap rendered dots at 5 per side so the thumbnail stays legible — the exact
-// counts are shown numerically beneath it.
-function CitationMiniGraph({ references, citedBy }: { references: number; citedBy: number }) {
-  if (references === 0 && citedBy === 0) {
-    return (
-      <div className="library-citation-mini library-citation-mini--empty">
-        本地暂无引文边。打开图谱可抓取上下游引用。
-      </div>
-    );
-  }
-  const spread = (n: number) => {
-    const shown = Math.min(n, 5);
-    if (shown === 0) return [];
-    const top = 18;
-    const bottom = 94;
-    const step = shown === 1 ? 0 : (bottom - top) / (shown - 1);
-    return Array.from({ length: shown }, (_, i) => top + step * i);
-  };
-  const left = spread(references);
-  const right = spread(citedBy);
-  return (
-    <svg
-      className="library-citation-mini"
-      viewBox="0 0 260 112"
-      role="img"
-      aria-label={`引用脉络缩略图:参考 ${references} 篇，被引 ${citedBy} 篇`}
-    >
-      <text
-        x="6"
-        y="55"
-        className="library-citation-mini__label library-citation-mini__label--left"
-      >
-        参考文献
-      </text>
-      <text
-        x="206"
-        y="55"
-        className="library-citation-mini__label library-citation-mini__label--right"
-      >
-        被引文献
-      </text>
-      {left.map((y, i) => (
-        <g key={`left-${i}`}>
-          <path d={`M76 ${y} C 98 ${y}, 102 56, 124 56`} />
-          <circle cx="72" cy={y} r={4} />
-        </g>
-      ))}
-      {right.map((y, i) => (
-        <g key={`right-${i}`}>
-          <path
-            d={`M136 56 C 160 56, 164 ${y}, 186 ${y}`}
-            className="library-citation-mini__right-edge"
-          />
-          <circle className="library-citation-mini__right-node" cx="190" cy={y} r={4} />
-        </g>
-      ))}
-      <circle className="library-citation-mini__center" cx="130" cy="56" r="18" />
-      <text x="130" y="60" textAnchor="middle" className="library-citation-mini__center-label">
-        本文
-      </text>
-    </svg>
-  );
-}
-
-function StatusLine({
-  label,
-  value,
-  variant,
-}: {
-  label: string;
-  value: string;
-  variant: "accent" | "neutral" | "success" | "warning";
-}) {
-  return (
-    <div className="library-status-line">
-      <span>{label}</span>
-      <Badge variant={variant}>{value}</Badge>
-    </div>
-  );
-}
-
-/** Read-only list of the rich bibliographic fields that are populated. */
-function BibliographicLines({ work }: { work: WorkWithAuthors }) {
-  const vol = [
-    work.volume && `卷 ${work.volume}`,
-    work.issue && `期 ${work.issue}`,
-    work.pages && `页 ${work.pages}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const lines: Array<[string, string | null]> = [
-    ["卷期页", vol || null],
-    ["出版社", work.publisher],
-    ["出版地", work.place_published],
-    ["版本", work.edition],
-    ["ISSN", work.issn],
-    ["ISBN", work.isbn],
-    ["语言", work.language],
-    ["DOI", work.doi],
-  ];
-  const present = lines.filter(([, v]) => v);
-  if (present.length === 0) {
-    return (
-      <p className="library-bib-empty au-text-muted">
-        暂无详细书目信息,点「编辑」补全卷期页、出版社、ISSN 等。
-      </p>
-    );
-  }
-  return (
-    <dl className="library-bib-list">
-      {present.map(([label, value]) => (
-        <div className="library-bib-row" key={label}>
-          <dt>{label}</dt>
-          <dd title={value!}>{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
 }
