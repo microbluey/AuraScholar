@@ -1,5 +1,4 @@
-// Library service: glues ingest pipeline (core) + repos (db) + blob store
-// (fs) together for the desktop app.
+// Library service: glues ingest pipeline (core), repositories, and blob storage together.
 import { normalizeDoi } from "@aurascholar/db/ids";
 import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
 import { WorksRepo } from "@aurascholar/db/repos/works";
@@ -18,6 +17,7 @@ import type { PdfDocumentMetadata } from "@aurascholar/reader";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { getLibraryDb } from "./aura-db";
 import { blobPath, sha256Hex, auraFs, auraHttp } from "./aura-platform";
+import { fetchPdfForCommittedWork } from "./library-ingest-lifecycle";
 import { toWorkInput } from "./work-input";
 import type {
   AttachPdfResult,
@@ -80,12 +80,12 @@ export async function ingestResolvedWork(
 ): Promise<IngestResult> {
   const { works } = await repos();
   const { id, deduped } = await works.upsert(toWorkInput(work));
-  const pdfFetched = await tryFetchPdf(id, work);
+  const pdf = await fetchPdfForCommittedWork(() => tryFetchPdf(id, work));
   return {
     workId: id,
     deduped,
     title: work.title,
-    pdfFetched,
+    ...pdf,
     needsConfirmation: options.needsConfirmation,
   };
 }

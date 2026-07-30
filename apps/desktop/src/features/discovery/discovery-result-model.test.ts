@@ -11,6 +11,7 @@ import {
   identifierSignals,
   resultConfidence,
   resultSources,
+  sameDiscoveryResultIdentity,
   sourceLabel,
 } from "./discovery-result-model";
 
@@ -111,6 +112,29 @@ describe("discovery result model", () => {
       "pmid:pmid-1",
       "title:graphs agents science:2025",
     ]);
+  });
+
+  it("matches cross-source aliases without letting a title override conflicting identifiers", () => {
+    const crossref = discoveryResult({
+      result: { id: "crossref-paper" },
+      work: { doi: "10.1000/paper", title: "Shared paper", year: 2025 },
+    });
+    const openAlexAlias = discoveryResult({
+      result: { id: "openalex-paper" },
+      work: { openalexId: "W123", title: "Shared paper", year: 2025 },
+    });
+    const conflictingDoi = discoveryResult({
+      result: { id: "other-paper" },
+      work: { doi: "10.1000/other", title: "Shared paper", year: 2025 },
+    });
+    const sameDoiWithChangedMetadata = discoveryResult({
+      result: { id: "updated-paper" },
+      work: { doi: "10.1000/PAPER", title: "Updated title", year: 2026 },
+    });
+
+    expect(sameDiscoveryResultIdentity(crossref, openAlexAlias)).toBe(true);
+    expect(sameDiscoveryResultIdentity(crossref, sameDoiWithChangedMetadata)).toBe(true);
+    expect(sameDiscoveryResultIdentity(crossref, conflictingDoi)).toBe(false);
   });
 
   it.each([
@@ -233,27 +257,47 @@ describe("discovery result model", () => {
     {
       imported: { deduped: true, pdfFetched: true, title: "Existing with PDF" },
       result: discoveryResult(),
-      text: "已在库中:Existing with PDF，PDF 已可用",
+      text: "文献已在库中:Existing with PDF，PDF 已可用",
     },
     {
       imported: { deduped: true, pdfFetched: false, title: "Existing" },
       result: discoveryResult(),
-      text: "已在库中:Existing",
+      text: "文献已在库中:Existing；待补全文",
+    },
+    {
+      imported: {
+        deduped: true,
+        pdfError: "附件查询失败",
+        pdfFetched: false,
+        title: "Existing failed PDF",
+      },
+      result: discoveryResult(),
+      text: "文献已在库中:Existing failed PDF；PDF 获取失败:附件查询失败，待补全文",
     },
     {
       imported: { deduped: false, pdfFetched: true, title: "Imported with PDF" },
       result: discoveryResult(),
-      text: "已入库:Imported with PDF，开放 PDF 已挂载",
+      text: "文献已入库:Imported with PDF，开放 PDF 已挂载",
+    },
+    {
+      imported: {
+        deduped: false,
+        pdfError: "文件写入失败",
+        pdfFetched: false,
+        title: "Imported failed PDF",
+      },
+      result: discoveryResult({ work: { oaPdfUrl: "https://example.test/paper.pdf" } }),
+      text: "文献已入库:Imported failed PDF；PDF 获取失败:文件写入失败，待补全文",
     },
     {
       imported: { deduped: false, pdfFetched: false, title: "OA fallback" },
       result: discoveryResult({ work: { oaPdfUrl: "https://example.test/paper.pdf" } }),
-      text: "已入库:OA fallback；开放 PDF 未能自动获取，可去找全文",
+      text: "文献已入库:OA fallback；开放 PDF 未能自动获取，待补全文",
     },
     {
       imported: { deduped: false, pdfFetched: false, title: "Metadata only" },
       result: discoveryResult(),
-      text: "已入库:Metadata only；暂无开放 PDF，可去找全文",
+      text: "文献已入库:Metadata only；暂无开放 PDF，待补全文",
     },
   ])("formats import feedback as $text", ({ imported, result, text }) => {
     expect(discoveryImportMessage(result, imported)).toBe(text);

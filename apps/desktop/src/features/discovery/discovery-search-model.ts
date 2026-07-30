@@ -109,6 +109,7 @@ export function mergeDiscoveryStatus(
     inLibrary: preferred.inLibrary || fallback?.inLibrary || false,
     libraryWorkId: preferred.libraryWorkId ?? fallback?.libraryWorkId,
     matchedSources,
+    needsFulltext: preferred.needsFulltext ?? fallback?.needsFulltext,
     score: Math.max(preferred.score, fallback?.score ?? 0),
   };
 }

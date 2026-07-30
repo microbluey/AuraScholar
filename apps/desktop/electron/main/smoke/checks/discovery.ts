@@ -212,5 +212,10 @@ export function buildDiscoverySmokeChecks(renderer: SmokeRendererResult): SmokeC
       pass: renderer.discoveryImportBusyVisible && renderer.discoveryImportFulltextFallbackVisible,
       detail: renderer.discoveryTrustSignalsDetail,
     },
+    {
+      name: "discovery-import-single-flight",
+      pass: renderer.discoveryImportSingleFlightVisible,
+      detail: renderer.discoveryTrustSignalsDetail,
+    },
   ];
 }

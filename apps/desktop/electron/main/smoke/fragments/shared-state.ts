@@ -169,6 +169,7 @@ export const smokeSharedState = String.raw`        let initialWorkCount = null;
         let discoveryFulltextCueVisible = false;
         let discoveryImportBusyVisible = false;
         let discoveryImportFulltextFallbackVisible = false;
+        let discoveryImportSingleFlightVisible = false;
         let discoveryLoadMoreRetryRecoveryDetail = "";
         let discoveryLoadMoreRetryRecoveryVisible = false;
         let discoverySearchAriaBusyVisible = false;

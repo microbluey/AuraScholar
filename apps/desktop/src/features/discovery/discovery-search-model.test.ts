@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type {
-  DiscoverySource,
-  DiscoverySourceStatus as CoreDiscoverySourceStatus,
+import {
+  mergeDiscoveryResults,
+  type DiscoverySource,
+  type DiscoverySourceStatus as CoreDiscoverySourceStatus,
 } from "@aurascholar/core";
 import type {
   DiscoveryResultWithLibrary,
@@ -228,5 +229,61 @@ describe("discovery search model", () => {
 
     expect(merged.libraryWorkId).toBe("preferred-work");
     expect(merged.score).toBe(99);
+  });
+
+  it("preserves full-text follow-up state from the fallback result", () => {
+    const fallback = discoveryResult({
+      result: {
+        inLibrary: true,
+        needsFulltext: true,
+      },
+    });
+    const preferred = discoveryResult();
+
+    expect(mergeDiscoveryStatus(fallback, preferred).needsFulltext).toBe(true);
+    expect(
+      mergeDiscoveryStatus(fallback, discoveryResult({ result: { needsFulltext: false } }))
+        .needsFulltext,
+    ).toBe(false);
+  });
+
+  it("does not propagate library state across conflicting DOI results with the same title", () => {
+    const imported = discoveryResult({
+      result: {
+        id: "imported",
+        inLibrary: true,
+        libraryWorkId: "library-first",
+        needsFulltext: true,
+        work: {
+          authors: [],
+          doi: "10.1000/first",
+          source: "crossref",
+          title: "A Reused Article Title",
+          year: 2025,
+        },
+      },
+    });
+    const later = discoveryResult({
+      result: {
+        id: "later",
+        source: "s2",
+        work: {
+          authors: [],
+          doi: "10.1000/second",
+          source: "s2",
+          title: "A Reused Article Title",
+          year: 2025,
+        },
+      },
+    });
+
+    const merged = mergeDiscoveryResults([imported, later], mergeDiscoveryStatus);
+
+    expect(merged).toHaveLength(2);
+    expect(merged.find((item) => item.id === "later")).toMatchObject({
+      inLibrary: false,
+      libraryWorkId: undefined,
+      needsFulltext: undefined,
+    });
   });
 });

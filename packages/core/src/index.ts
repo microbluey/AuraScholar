@@ -26,7 +26,9 @@ export type { SentinelCheckResult } from "./sentinel/check.js";
 export { findDoiByTitle, TITLE_MATCH_THRESHOLD } from "./sentinel/title-match.js";
 export type { TitleMatchHints, TitleMatchResult } from "./sentinel/title-match.js";
 export {
+  hasConflictingDiscoveryIdentifiers,
   mergeDiscoveryResults,
+  sameDiscoveryWorkIdentity,
   searchOpenSources,
   searchOpenSourcesDetailed,
 } from "./discovery/search.js";

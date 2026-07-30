@@ -1,4 +1,4 @@
-import type { DiscoverySource } from "@aurascholar/core";
+import { sameDiscoveryWorkIdentity, type DiscoverySource } from "@aurascholar/core";
 import type { DiscoveryResultWithLibrary } from "../../services/discovery";
 
 export const DISCOVERY_SOURCE_ORDER = [
@@ -35,6 +35,7 @@ export type DiscoveryFulltextProfile = {
 
 export type DiscoveryImportResultSummary = {
   deduped: boolean;
+  pdfError?: string;
   pdfFetched: boolean;
   title: string;
 };
@@ -72,6 +73,17 @@ export function discoveryResultIdentityKeys(result: DiscoveryResultWithLibrary):
     work.pmid ? `pmid:${work.pmid.toLowerCase()}` : undefined,
     work.title ? `title:${normalizeDiscoveryTitle(work.title)}:${work.year ?? ""}` : undefined,
   ].filter((key): key is string => Boolean(key));
+}
+
+/**
+ * Compares one logical paper across streaming providers without allowing a
+ * title fallback to override conflicting stable identifiers.
+ */
+export function sameDiscoveryResultIdentity(
+  left: DiscoveryResultWithLibrary,
+  right: DiscoveryResultWithLibrary,
+): boolean {
+  return left.id === right.id || sameDiscoveryWorkIdentity(left.work, right.work);
 }
 
 export function resultConfidence(result: DiscoveryResultWithLibrary): DiscoveryResultConfidence {
@@ -171,17 +183,22 @@ export function discoveryImportMessage(
   imported: DiscoveryImportResultSummary,
 ): string {
   if (imported.deduped) {
-    return imported.pdfFetched
-      ? `已在库中:${imported.title}，PDF 已可用`
-      : `已在库中:${imported.title}`;
+    if (imported.pdfFetched) return `文献已在库中:${imported.title}，PDF 已可用`;
+    if (imported.pdfError) {
+      return `文献已在库中:${imported.title}；PDF 获取失败:${imported.pdfError}，待补全文`;
+    }
+    return `文献已在库中:${imported.title}；待补全文`;
   }
   if (imported.pdfFetched) {
-    return `已入库:${imported.title}，开放 PDF 已挂载`;
+    return `文献已入库:${imported.title}，开放 PDF 已挂载`;
+  }
+  if (imported.pdfError) {
+    return `文献已入库:${imported.title}；PDF 获取失败:${imported.pdfError}，待补全文`;
   }
   if (result.work.oaPdfUrl) {
-    return `已入库:${imported.title}；开放 PDF 未能自动获取，可去找全文`;
+    return `文献已入库:${imported.title}；开放 PDF 未能自动获取，待补全文`;
   }
-  return `已入库:${imported.title}；暂无开放 PDF，可去找全文`;
+  return `文献已入库:${imported.title}；暂无开放 PDF，待补全文`;
 }
 
 function normalizeDiscoveryTitle(title: string): string {

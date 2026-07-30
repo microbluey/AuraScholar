@@ -23,12 +23,12 @@ import {
   uiSourceStatus,
   type DiscoverySourceStatus,
 } from "./discovery-search-model";
-import { discoveryResultIdentityKeys } from "./discovery-result-model";
+import { discoveryResultIdentityKeys, sameDiscoveryResultIdentity } from "./discovery-result-model";
 
 const MIN_SEARCH_BUSY_MS = 350;
 const MIN_LOAD_MORE_BUSY_MS = 250;
 
-interface DiscoverySearchSessionQuery {
+export interface DiscoverySearchSessionQuery {
   query: DiscoveryQuery;
   sort: DiscoverySort;
 }
@@ -94,7 +94,7 @@ export function useDiscoverySearchController({
           sort: query.sort,
         });
       },
-      mergeResults: (results) => mergeDiscoveryResults([...results], mergeDiscoveryStatus),
+      mergeResults: mergeDiscoverySearchResults,
       messages: {
         loadMoreFailed: (error) => `加载更多失败:${describeSafeError(error)}`,
         searchFailed: (error) => `检索失败:${describeSafeError(error)}`,
@@ -108,6 +108,7 @@ export function useDiscoverySearchController({
           })
         : undefined,
       reportMessage: onMessage,
+      isSameResult: sameDiscoveryResultIdentity,
       resultId: (result) => result.id,
       resultKeys: discoveryResultIdentityKeys,
       statuses: {
@@ -141,9 +142,20 @@ export function useDiscoverySearchController({
   const cancel = useCallback(() => controller.cancel(), [controller]);
   const clear = useCallback(() => controller.clear(), [controller]);
   const select = useCallback((id: string | null) => controller.select(id), [controller]);
+  const hasResult = useCallback(
+    (reference: DiscoveryResultWithLibrary) => controller.hasResult(reference),
+    [controller],
+  );
   const updateResult = useCallback(
     (id: string, updater: (result: DiscoveryResultWithLibrary) => DiscoveryResultWithLibrary) =>
       controller.updateResult(id, updater),
+    [controller],
+  );
+  const updateResultByIdentity = useCallback(
+    (
+      reference: DiscoveryResultWithLibrary,
+      updater: (result: DiscoveryResultWithLibrary) => DiscoveryResultWithLibrary,
+    ) => controller.updateResultByIdentity(reference, updater),
     [controller],
   );
 
@@ -151,10 +163,12 @@ export function useDiscoverySearchController({
     ...snapshot,
     cancel,
     clear,
+    hasResult,
     loadMore,
     search,
     select,
     updateResult,
+    updateResultByIdentity,
   };
 }
 
@@ -186,4 +200,11 @@ function consumeDiscoverySearchSmokeFailure(kind: "search" | "load-more"): Error
 
 export function discoverySearchApplied(result: DiscoverySearchOperationResult): boolean {
   return result.status === "applied" || result.status === "partial";
+}
+
+export function mergeDiscoverySearchResults(
+  results: readonly DiscoveryResultWithLibrary[],
+  query: DiscoverySearchSessionQuery | null,
+): readonly DiscoveryResultWithLibrary[] {
+  return mergeDiscoveryResults([...results], mergeDiscoveryStatus, query?.sort ?? "relevance");
 }

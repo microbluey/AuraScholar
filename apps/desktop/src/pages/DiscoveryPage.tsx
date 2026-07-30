@@ -50,7 +50,6 @@ import {
 import { DiscoverySavedSearchPanel } from "../features/discovery/DiscoverySavedSearchPanel";
 import {
   discoveryImportBusyLabel,
-  discoveryImportMessage,
   fulltextProfile,
   identifierSignals,
   resultConfidence,
@@ -66,6 +65,7 @@ import {
   discoverySearchApplied,
   useDiscoverySearchController,
 } from "../features/discovery/useDiscoverySearchController";
+import { useDiscoveryResultImportController } from "../features/discovery/useDiscoveryResultImportController";
 import { useDiscoverySavedSearchController } from "../features/discovery/useDiscoverySavedSearchController";
 import { isImeComposing } from "../keyboard";
 import { describeSafeError } from "../services/sensitive-text";
@@ -96,7 +96,6 @@ const MIN_SITE_ACTION_BUSY_MS = 250;
 const MIN_SITE_PROXY_BUSY_MS = 250;
 const MIN_SITE_RESTORE_BUSY_MS = 250;
 const MIN_PROXY_CONFIG_SAVE_BUSY_MS = 250;
-const MIN_DISCOVERY_IMPORT_BUSY_MS = 350;
 const MIN_DISCOVERY_SITE_ADD_BUSY_MS = 350;
 const MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS = 350;
 
@@ -337,7 +336,6 @@ export function DiscoveryPage() {
   const [selectedSources, setSelectedSources] = useState<Set<DiscoverySource>>(
     () => new Set(SOURCES.map((s) => s.id)),
   );
-  const [importingId, setImportingId] = useState<string | null>(null);
   // Advanced query fields (sent to the API, not just client filtering).
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [author, setAuthor] = useState("");
@@ -417,11 +415,24 @@ export function DiscoveryPage() {
     search: executeDiscoverySearch,
     searchError,
     searching,
+    hasResult: hasDiscoveryResult,
     select: selectDiscoveryResult,
     selectedId,
     sourceStatus,
-    updateResult: updateDiscoveryResult,
+    updateResultByIdentity: updateDiscoveryResultByIdentity,
   } = discoverySearch;
+  const {
+    importResult,
+    importing: importingDiscoveryResult,
+    isImporting: isImportingDiscoveryResult,
+  } = useDiscoveryResultImportController({
+    desktopRuntime,
+    hasResult: hasDiscoveryResult,
+    onMessage: setMessage,
+    results,
+    selectResult: selectDiscoveryResult,
+    updateResultByIdentity: updateDiscoveryResultByIdentity,
+  });
   const visibleSites = useMemo(() => sites.filter((s) => !s.hidden), [sites]);
   const activeTab = useMemo(() => tabs.find((t) => t.active) ?? null, [tabs]);
   const firstSearchSite = useMemo(
@@ -1016,50 +1027,6 @@ export function DiscoveryPage() {
       setSiteRemoveUndoBusy(false);
     }
   }, [desktopRuntime, refreshSites, siteRemoveUndo, siteRemoveUndoBusy]);
-
-  const importResult = useCallback(
-    async (result: DiscoveryResultWithLibrary) => {
-      if (!isDesktopRuntime()) {
-        const startedAt = Date.now();
-        setImportingId(result.id);
-        setMessage("正在演示入库状态...");
-        await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
-        updateDiscoveryResult(result.id, (item) => ({
-          ...item,
-          inLibrary: true,
-          libraryWorkId: `preview-library:${result.id}`,
-          needsFulltext: !result.work.oaPdfUrl,
-        }));
-        selectDiscoveryResult(result.id);
-        setImportingId(null);
-        setMessage("预览已标记为已入库；真实入库会在桌面应用中写入本地文献库。");
-        return;
-      }
-      const startedAt = Date.now();
-      setImportingId(result.id);
-      setMessage(result.work.oaPdfUrl ? "正在加入文献库并获取开放 PDF..." : "正在加入文献库...");
-      try {
-        const { importDiscoveryResult } = await import("../services/discovery");
-        const imported = await importDiscoveryResult(result.work);
-        await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
-        setMessage(discoveryImportMessage(result, imported));
-        updateDiscoveryResult(result.id, (item) => ({
-          ...item,
-          inLibrary: true,
-          libraryWorkId: imported.workId,
-          needsFulltext: !imported.pdfFetched,
-        }));
-        selectDiscoveryResult(result.id);
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
-      } catch (e) {
-        await waitForMinimumElapsed(startedAt, MIN_DISCOVERY_IMPORT_BUSY_MS);
-        setMessage(`入库失败:${describeUnknownError(e)}`);
-      } finally {
-        setImportingId(null);
-      }
-    },
-    [selectDiscoveryResult, updateDiscoveryResult],
-  );
 
   const openLibraryResult = useCallback(
     (result: DiscoveryResultWithLibrary) => {
@@ -1750,7 +1717,8 @@ export function DiscoveryPage() {
                     key={result.id}
                     result={result}
                     selected={selectedResult?.id === result.id}
-                    importing={importingId === result.id}
+                    importing={isImportingDiscoveryResult(result)}
+                    importBlocked={importingDiscoveryResult}
                     onSelect={() => selectDiscoveryResult(result.id)}
                     onPrimaryAction={() => {
                       if (result.inLibrary && result.libraryWorkId) {
@@ -1818,7 +1786,8 @@ export function DiscoveryPage() {
               {selectedResult ? (
                 <ResultDetail
                   result={selectedResult}
-                  importing={importingId === selectedResult.id}
+                  importing={isImportingDiscoveryResult(selectedResult)}
+                  importBlocked={importingDiscoveryResult}
                   onPrimaryAction={() =>
                     selectedResult.inLibrary && selectedResult.libraryWorkId
                       ? openLibraryResult(selectedResult)
@@ -2340,6 +2309,7 @@ function ResultCard({
   result,
   selected,
   importing,
+  importBlocked,
   onSelect,
   onPrimaryAction,
   onFindFulltext,
@@ -2347,6 +2317,7 @@ function ResultCard({
   result: DiscoveryResultWithLibrary;
   selected: boolean;
   importing: boolean;
+  importBlocked: boolean;
   onSelect: () => void;
   onPrimaryAction: () => void;
   onFindFulltext: () => void;
@@ -2355,6 +2326,7 @@ function ResultCard({
   const confidence = resultConfidence(result);
   const fulltext = fulltextProfile(result);
   const sources = resultSources(result);
+  const importActionBlocked = !result.inLibrary && importBlocked;
   return (
     <article
       className={`discovery-result ${selected ? "discovery-result--selected" : ""}`}
@@ -2394,9 +2366,18 @@ function ResultCard({
           type="button"
           onClick={(e) => {
             e.stopPropagation();
+            if (importActionBlocked) return;
             onPrimaryAction();
           }}
           disabled={importing}
+          aria-disabled={importActionBlocked || undefined}
+          aria-busy={importing || undefined}
+          aria-label={
+            importActionBlocked && !importing
+              ? "加入文献库（另一篇文献正在入库，请稍候）"
+              : undefined
+          }
+          title={importActionBlocked && !importing ? "另一篇文献正在入库，请稍候" : undefined}
         >
           {result.inLibrary ? "打开" : importing ? discoveryImportBusyLabel(result) : "加入文献库"}
         </button>
@@ -2421,11 +2402,13 @@ function ResultCard({
 function ResultDetail({
   result,
   importing,
+  importBlocked,
   onPrimaryAction,
   onFindFulltext,
 }: {
   result: DiscoveryResultWithLibrary;
   importing: boolean;
+  importBlocked: boolean;
   onPrimaryAction: () => void;
   onFindFulltext: () => void;
 }) {
@@ -2434,6 +2417,7 @@ function ResultDetail({
   const fulltext = fulltextProfile(result);
   const sources = resultSources(result).map(sourceLabel).join(" / ");
   const identifiers = identifierSignals(work);
+  const importActionBlocked = !result.inLibrary && importBlocked;
 
   return (
     <>
@@ -2478,7 +2462,20 @@ function ResultDetail({
         <span>{fulltext.detail}</span>
       </div>
       <div className="discovery-detail-actions">
-        <Button onClick={onPrimaryAction} disabled={importing}>
+        <Button
+          onClick={() => {
+            if (!importActionBlocked) onPrimaryAction();
+          }}
+          disabled={importing}
+          aria-disabled={importActionBlocked || undefined}
+          aria-busy={importing || undefined}
+          aria-label={
+            importActionBlocked && !importing
+              ? "加入文献库（另一篇文献正在入库，请稍候）"
+              : undefined
+          }
+          title={importActionBlocked && !importing ? "另一篇文献正在入库，请稍候" : undefined}
+        >
           {result.inLibrary
             ? "打开库中文献"
             : importing
