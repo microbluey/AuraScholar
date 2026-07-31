@@ -10,12 +10,12 @@
     "production": {
       "byExtension": {
         ".css": 16398,
-        ".ts": 37241,
-        ".tsx": 31629
+        ".ts": 37246,
+        ".tsx": 31628
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 348,
-        "apps/desktop/electron/main.ts": 135,
+        "apps/desktop/electron/main.ts": 136,
         "apps/desktop/electron/main/citation-bridge.ts": 108,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
@@ -60,7 +60,7 @@
         "apps/desktop/src/features/canvas/CanvasTargetPicker.tsx": 298,
         "apps/desktop/src/features/canvas/CanvasToolbox.tsx": 115,
         "apps/desktop/src/features/canvas/CanvasViewportControls.tsx": 167,
-        "apps/desktop/src/features/canvas/CanvasWorkspace.tsx": 2871,
+        "apps/desktop/src/features/canvas/CanvasWorkspace.tsx": 2870,
         "apps/desktop/src/features/canvas/CanvasWorkspaceSwitcher.tsx": 559,
         "apps/desktop/src/features/canvas/RelationEdge.tsx": 109,
         "apps/desktop/src/features/canvas/canvas-annotation-ingress.ts": 151,
@@ -71,7 +71,7 @@
         "apps/desktop/src/features/canvas/canvas-excerpt-dnd.ts": 414,
         "apps/desktop/src/features/canvas/canvas-history.ts": 342,
         "apps/desktop/src/features/canvas/canvas-ingress-lifecycle.ts": 7,
-        "apps/desktop/src/features/canvas/canvas-interactions.ts": 241,
+        "apps/desktop/src/features/canvas/canvas-interactions.ts": 245,
         "apps/desktop/src/features/canvas/canvas-link.ts": 257,
         "apps/desktop/src/features/canvas/canvas-note-draft.ts": 787,
         "apps/desktop/src/features/canvas/canvas-reader-drawer.css": 330,
@@ -279,11 +279,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 85268
+      "totalLines": 85272
     },
     "tests": {
       "byExtension": {
-        ".ts": 44153,
+        ".ts": 44656,
         ".tsx": 317
       },
       "files": {
@@ -296,7 +296,7 @@
         "apps/desktop/electron/main/saved-search-commands.test.ts": 336,
         "apps/desktop/electron/main/sentinel-commands.test.ts": 510,
         "apps/desktop/electron/main/single-instance-guard.test.ts": 21,
-        "apps/desktop/electron/main/smoke.ts": 184,
+        "apps/desktop/electron/main/smoke.ts": 211,
         "apps/desktop/electron/main/smoke/checks.ts": 35,
         "apps/desktop/electron/main/smoke/checks/base.ts": 97,
         "apps/desktop/electron/main/smoke/checks/canvas.ts": 50,
@@ -313,14 +313,14 @@
         "apps/desktop/electron/main/smoke/checks/snippets.ts": 91,
         "apps/desktop/electron/main/smoke/checks/summarize.ts": 4,
         "apps/desktop/electron/main/smoke/contracts.ts": 649,
-        "apps/desktop/electron/main/smoke/fragments/canvas.ts": 761,
+        "apps/desktop/electron/main/smoke/fragments/canvas.ts": 677,
         "apps/desktop/electron/main/smoke/fragments/discovery-import.ts": 390,
         "apps/desktop/electron/main/smoke/fragments/discovery-results.ts": 354,
         "apps/desktop/electron/main/smoke/fragments/discovery-saved-searches.ts": 339,
         "apps/desktop/electron/main/smoke/fragments/discovery-sites.ts": 550,
         "apps/desktop/electron/main/smoke/fragments/fixtures.ts": 445,
         "apps/desktop/electron/main/smoke/fragments/graph.ts": 206,
-        "apps/desktop/electron/main/smoke/fragments/helpers.ts": 164,
+        "apps/desktop/electron/main/smoke/fragments/helpers.ts": 197,
         "apps/desktop/electron/main/smoke/fragments/homepage.ts": 467,
         "apps/desktop/electron/main/smoke/fragments/library-base.ts": 265,
         "apps/desktop/electron/main/smoke/fragments/library-bulk-operations.ts": 505,
@@ -355,6 +355,8 @@
         "apps/desktop/electron/main/smoke/fragments/shared-state.ts": 646,
         "apps/desktop/electron/main/smoke/fragments/shell-bootstrap.ts": 72,
         "apps/desktop/electron/main/smoke/fragments/snippets.ts": 523,
+        "apps/desktop/electron/main/smoke/input-driver.test.ts": 271,
+        "apps/desktop/electron/main/smoke/input-driver.ts": 247,
         "apps/desktop/electron/main/smoke/renderer-script.ts": 101,
         "apps/desktop/electron/preload/close-lifecycle.test.ts": 110,
         "apps/desktop/src/App.test.ts": 102,
@@ -370,7 +372,7 @@
         "apps/desktop/src/features/canvas/canvas-excerpt-dnd.test.ts": 362,
         "apps/desktop/src/features/canvas/canvas-history.test.ts": 440,
         "apps/desktop/src/features/canvas/canvas-ingress-lifecycle.test.ts": 18,
-        "apps/desktop/src/features/canvas/canvas-interactions.test.ts": 272,
+        "apps/desktop/src/features/canvas/canvas-interactions.test.ts": 281,
         "apps/desktop/src/features/canvas/canvas-link.test.ts": 247,
         "apps/desktop/src/features/canvas/canvas-navigation-router.test.ts": 42,
         "apps/desktop/src/features/canvas/canvas-note-draft.test.ts": 529,
@@ -461,7 +463,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 44470
+      "totalLines": 44973
     }
   },
   "uiDatabaseBoundary": {}

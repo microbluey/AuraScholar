@@ -3,6 +3,7 @@ import {
   applyCanvasSelectionDeletion,
   clampCanvasMenuPoint,
   isCanvasContextMenuShortcut,
+  isCanvasEdgeEditClick,
   isCanvasLayoutShortcut,
   isCanvasSelectionDeleteShortcut,
   planCanvasSelectionDeletion,
@@ -35,6 +36,14 @@ describe("canvas node interactions", () => {
     expect(shouldActivateCanvasNode({ ...base, interactiveTarget: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, connectionInProgress: true })).toBe(false);
     expect(shouldActivateCanvasNode({ ...base, tool: "pan" })).toBe(false);
+  });
+
+  it("recognizes a repeated primary edge click as an edit gesture", () => {
+    expect(isCanvasEdgeEditClick({ button: 0, detail: 1 })).toBe(false);
+    expect(isCanvasEdgeEditClick({ button: 0, detail: 2 })).toBe(true);
+    expect(isCanvasEdgeEditClick({ button: 0, detail: 3 })).toBe(true);
+    expect(isCanvasEdgeEditClick({ button: 1, detail: 2 })).toBe(false);
+    expect(isCanvasEdgeEditClick({ button: 2, detail: 2 })).toBe(false);
   });
 
   it("recognizes native keyboard context-menu shortcuts", () => {
