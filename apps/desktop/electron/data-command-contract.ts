@@ -1,5 +1,5 @@
 import type { MergeWorksResult, ReadingStatus } from "@aurascholar/db/repos/works";
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoverySource, ResearchProject } from "@aurascholar/core";
 import type {
   SentinelCheckUpdate,
   SentinelCreateInput,
@@ -205,6 +205,63 @@ export interface RecordSentinelCheckCommandResult {
   updatedAt: number | null;
 }
 
+export interface ResearchProjectCommandInput extends LibraryScopedCommandInput {
+  projectId: string;
+}
+
+export interface CreateResearchProjectCommandInput extends LibraryScopedCommandInput {
+  description?: string | null;
+  name: string;
+}
+
+export interface RenameResearchProjectCommandInput extends ResearchProjectCommandInput {
+  expectedUpdatedAt: number;
+  name: string;
+}
+
+export interface ResearchProjectWorksCommandInput extends ResearchProjectCommandInput {
+  workIds: string[];
+}
+
+export interface ListResearchProjectSourcesCommandInput extends ResearchProjectCommandInput {
+  limit?: number;
+  offset?: number;
+}
+
+export interface SearchResearchProjectLibraryWorksCommandInput extends ResearchProjectCommandInput {
+  limit?: number;
+  query: string;
+}
+
+export interface ResearchProjectSummary extends Omit<ResearchProject, "deletedAt" | "description"> {
+  canvasCount: number;
+  deletedAt: number | null;
+  description: string | null;
+  sourceCount: number;
+}
+
+export interface ResearchProjectWorkSummary {
+  annotationCount: number;
+  authorNames: string[];
+  doi: string | null;
+  id: string;
+  inProject: boolean;
+  pdfCount: number;
+  readingStatus: ReadingStatus;
+  starred: boolean;
+  tagNames: string[];
+  title: string;
+  updatedAt: number;
+  venueName: string | null;
+  year: number | null;
+}
+
+export interface ResearchProjectMutationResult {
+  updated: number;
+}
+
+export type ResearchProjectScopeCommandInput = Record<string, never>;
+
 export interface DataCommandMap {
   "library.addTagToWorks": {
     input: AddTagToWorksCommandInput;
@@ -273,6 +330,42 @@ export interface DataCommandMap {
   "library.trashWorks": {
     input: WorkIdsCommandInput;
     output: WorkMutationCountResult;
+  };
+  "project.addWorks": {
+    input: ResearchProjectWorksCommandInput;
+    output: ResearchProjectMutationResult;
+  };
+  "project.create": {
+    input: CreateResearchProjectCommandInput;
+    output: { project: ResearchProjectSummary };
+  };
+  "project.get": {
+    input: ResearchProjectCommandInput;
+    output: { project: ResearchProjectSummary | null };
+  };
+  "project.getScope": {
+    input: ResearchProjectScopeCommandInput;
+    output: { libraryId: string };
+  };
+  "project.list": {
+    input: LibraryScopedCommandInput;
+    output: { projects: ResearchProjectSummary[] };
+  };
+  "project.listSources": {
+    input: ListResearchProjectSourcesCommandInput;
+    output: { sources: ResearchProjectWorkSummary[]; total: number };
+  };
+  "project.removeWorks": {
+    input: ResearchProjectWorksCommandInput;
+    output: ResearchProjectMutationResult;
+  };
+  "project.rename": {
+    input: RenameResearchProjectCommandInput;
+    output: { project: ResearchProjectSummary };
+  };
+  "project.searchLibraryWorks": {
+    input: SearchResearchProjectLibraryWorksCommandInput;
+    output: { works: ResearchProjectWorkSummary[] };
   };
   "savedSearch.clearNew": {
     input: SavedSearchCommandInput;

@@ -6,6 +6,12 @@ const MAX_RECORD_ID_LENGTH = 512;
 export const MAX_LIBRARY_ORGANIZATION_UNDO_WORK_IDS = 20_000;
 
 export interface DataCommandDependencies {
+  execute?<K extends DataCommandName>(
+    commandName: K,
+    operation: (
+      database: Database,
+    ) => DataCommandOutput<NoInfer<K>> | Promise<DataCommandOutput<NoInfer<K>>>,
+  ): Promise<DataCommandOutput<K>>;
   getDeviceId?(): Promise<string>;
   transaction<K extends DataCommandName>(
     commandName: K,

@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 import type { DataCommandDependencies } from "./data-command-runtime";
 
 function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDependencies): void {
+  void dependencies.execute?.("project.get", async () => ({ project: null }));
+  // @ts-expect-error project.get must return its declared Project result.
+  void dependencies.execute?.("project.get", async () => ({ updated: 1 }));
   void dependencies.transaction("library.createCollection", async () => ({
     collectionId: "collection-id",
   }));
@@ -218,6 +221,37 @@ describe("main-process data command architecture", () => {
     expect(commands).not.toMatch(/\bfetch\s*\(/);
   });
 
+  it("keeps Research Project reads and writes behind the typed main-process gateway", () => {
+    const gateway = source("src/services/research-projects.ts");
+    const desktopAdapter = source("src/services/research-project-desktop-service.ts");
+    const featureService = source("src/services/research-project-service.ts");
+    const commands = source("electron/main/research-project-commands.ts");
+    const commandNames = [
+      "project.addWorks",
+      "project.create",
+      "project.get",
+      "project.getScope",
+      "project.list",
+      "project.listSources",
+      "project.removeWorks",
+      "project.rename",
+      "project.searchLibraryWorks",
+    ];
+
+    for (const commandName of commandNames) {
+      expect(gateway).toContain(`data.command("${commandName}"`);
+    }
+    for (const rendererSource of [gateway, desktopAdapter, featureService]) {
+      expect(rendererSource).not.toContain("getLibraryDb");
+      expect(rendererSource).not.toContain("window.aura.db");
+      expect(rendererSource).not.toContain("ResearchProjectsRepo");
+      expect(rendererSource).not.toMatch(/\.\s*(?:query|run|exec|queryScalar)\s*\(/);
+    }
+    expect(commands).toContain("assertActiveLocalLibrary");
+    expect(commands).toContain("new ResearchProjectsRepo");
+    expect(commands).toContain("expectedUpdatedAt");
+  });
+
   it("keeps Saved Search UI workflows inside the Discovery feature controller", () => {
     const discoveryPage = source("src/pages/DiscoveryPage.tsx");
     const controller = source("src/features/discovery/discovery-saved-search-controller.ts");
@@ -390,6 +424,7 @@ describe("main-process data command architecture", () => {
     const collectionCommands = source("electron/main/library-collection-commands.ts");
     const savedSearchCommands = source("electron/main/saved-search-commands.ts");
     const sentinelCommands = source("electron/main/sentinel-commands.ts");
+    const projectCommands = source("electron/main/research-project-commands.ts");
 
     expect(runtime).toContain("DataCommandOutput<NoInfer<K>>");
     expect(dispatcher).not.toContain("): Promise<unknown>");
@@ -397,6 +432,7 @@ describe("main-process data command architecture", () => {
     expect(collectionCommands).not.toContain("): Promise<unknown>");
     expect(savedSearchCommands).not.toContain("): Promise<unknown>");
     expect(sentinelCommands).not.toContain("): Promise<unknown>");
+    expect(projectCommands).not.toContain("): Promise<unknown>");
   });
 
   it("routes every raw database IPC method through the connection coordinator", () => {

@@ -38,10 +38,12 @@ export interface LibrarySelectedWorkPanelProps {
   onFindFulltext: () => void;
   findingFulltext: boolean;
   onAddToCanvas: () => void;
+  onAddToProject: () => void;
   onOpenCanvas: () => void;
   onOpenGraph: () => void;
   onEditMetadata: () => void;
   onClose: () => void;
+  projectIngressBusy?: boolean;
 }
 
 export function LibrarySelectedWorkPanel({
@@ -63,10 +65,12 @@ export function LibrarySelectedWorkPanel({
   onFindFulltext,
   findingFulltext,
   onAddToCanvas,
+  onAddToProject,
   onOpenCanvas,
   onOpenGraph,
   onEditMetadata,
   onClose,
+  projectIngressBusy = false,
 }: LibrarySelectedWorkPanelProps) {
   const [activePanelTab, setActivePanelTab] = useState<DetailPanelTab>("overview");
 
@@ -191,6 +195,15 @@ export function LibrarySelectedWorkPanel({
         <Button variant="secondary" className="library-panel-action" onClick={onAddToCanvas}>
           加入白板
         </Button>
+        <Button
+          variant="secondary"
+          className="library-panel-action"
+          onClick={onAddToProject}
+          disabled={projectIngressBusy}
+          aria-busy={projectIngressBusy ? "true" : undefined}
+        >
+          {projectIngressBusy ? "加入中..." : "加入项目"}
+        </Button>
       </div>
 
       <div className="library-side-tabs" role="tablist" aria-label="文献详情">
@@ -296,6 +309,7 @@ export function LibrarySelectedWorkPanel({
                 variant={meta?.annotationCount ? "success" : "neutral"}
               />
               <LibraryStatusLine label="空间白板" value="可作为文献卡加入" variant="neutral" />
+              <LibraryStatusLine label="研究项目" value="可加入一个或多个研究范围" variant="neutral" />
             </section>
             <section className="library-inspector__section library-inspector__section--danger">
               <button

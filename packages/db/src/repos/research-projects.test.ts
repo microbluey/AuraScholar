@@ -145,12 +145,22 @@ describe("ResearchProjectsRepo", () => {
     );
     expect(initialRows.every((row) => row.deleted_at === null)).toBe(true);
 
-    await expect(projects.addWorks(project.id, [first.id, second.id])).resolves.toBe(2);
-    const idempotentRows = await db.query<{ id: string; updated_at: number }>(
-      `SELECT id, updated_at FROM project_works WHERE project_id = ? ORDER BY work_id`,
+    await db.run(
+      `UPDATE project_works SET role = 'evidence' WHERE project_id = ? AND work_id = ?`,
+      [project.id, second.id],
+    );
+    await expect(projects.addWorks(project.id, [first.id, second.id])).resolves.toBe(0);
+    const idempotentRows = await db.query<{ id: string; role: string; updated_at: number }>(
+      `SELECT id, role, updated_at FROM project_works WHERE project_id = ? ORDER BY work_id`,
       [project.id],
     );
-    expect(idempotentRows).toEqual(initialRows.map(({ id, updated_at }) => ({ id, updated_at })));
+    expect(idempotentRows).toEqual(
+      initialRows.map(({ id, updated_at, work_id }) => ({
+        id,
+        role: work_id === second.id ? "evidence" : "source",
+        updated_at,
+      })),
+    );
 
     await expect(projects.removeWorks(project.id, [first.id, first.id])).resolves.toBe(1);
     expect(await projects.listWorkIds(project.id)).toEqual([second.id]);
@@ -163,7 +173,7 @@ describe("ResearchProjectsRepo", () => {
     expect(removed[0]?.id).toBe(projectWorkMembershipId(project.id, first.id));
     expect(removed[0]?.deleted_at).not.toBeNull();
 
-    await projects.addWorks(project.id, [first.id]);
+    await expect(projects.addWorks(project.id, [first.id, second.id])).resolves.toBe(1);
     const restored = await db.query<{ id: string; updated_at: number; deleted_at: number | null }>(
       `SELECT id, updated_at, deleted_at
        FROM project_works
@@ -173,6 +183,7 @@ describe("ResearchProjectsRepo", () => {
     expect(restored[0]?.id).toBe(removed[0]?.id);
     expect(restored[0]?.deleted_at).toBeNull();
     expect(restored[0]!.updated_at).toBeGreaterThan(removed[0]!.updated_at);
+    await expect(projects.addWorks(project.id, [first.id, second.id])).resolves.toBe(0);
   });
 
   it("keeps membership while a Work is trashed and exposes it again after restore", async () => {
@@ -276,7 +287,11 @@ describe("ResearchProjectsRepo", () => {
     const work = await foreignWorks.upsert({ title: "Concurrent membership" });
     await a.addWorks(first.id, [work.id]);
     await a.removeWorks(first.id, [work.id]);
-    await Promise.all([a.addWorks(first.id, [work.id]), b.addWorks(first.id, [work.id])]);
+    const restoredCounts = await Promise.all([
+      a.addWorks(first.id, [work.id]),
+      b.addWorks(first.id, [work.id]),
+    ]);
+    expect([...restoredCounts].sort()).toEqual([0, 1]);
 
     const memberships = await db.query<{ count: number; active: number }>(
       `SELECT COUNT(*) AS count,

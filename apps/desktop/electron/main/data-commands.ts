@@ -19,11 +19,12 @@ import {
   parseLibraryBackupJson,
 } from "../../src/shared/library-backup";
 import { SqliteSyncStorage } from "../../src/shared/sqlite-sync-storage";
-import { withMainDatabaseTransaction } from "./db";
+import { withMainDatabase, withMainDatabaseTransaction } from "./db";
 import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
 import { executeLibraryCollectionCommand } from "./library-collection-commands";
 import { executeLibraryTagCommand } from "./library-tag-commands";
+import { executeResearchProjectCommand } from "./research-project-commands";
 import { executeSavedSearchCommand } from "./saved-search-commands";
 import { executeSentinelCommand } from "./sentinel-commands";
 import {
@@ -43,6 +44,7 @@ const PROVIDER_SCOPE_PATTERN = /^webdav-[a-z0-9]{14}$/;
 export type { DataCommandDependencies } from "./data-command-runtime";
 
 const defaultDependencies: DataCommandDependencies = {
+  execute: (_commandName, operation) => withMainDatabase(operation),
   getDeviceId: getStableDeviceId,
   transaction: withMainDatabaseTransaction,
 };
@@ -71,6 +73,16 @@ export async function executeDataCommand(
     case "library.restoreCollection":
     case "library.setWorksCollection":
       return executeLibraryCollectionCommand(envelope, dependencies);
+    case "project.addWorks":
+    case "project.create":
+    case "project.get":
+    case "project.getScope":
+    case "project.list":
+    case "project.listSources":
+    case "project.removeWorks":
+    case "project.rename":
+    case "project.searchLibraryWorks":
+      return executeResearchProjectCommand(envelope, dependencies);
     case "savedSearch.clearNew":
     case "savedSearch.create":
     case "savedSearch.delete":
@@ -216,6 +228,15 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     value.name !== "library.trashWorks" &&
     value.name !== "library.purgeDeletedWorks" &&
     value.name !== "library.importBackup" &&
+    value.name !== "project.addWorks" &&
+    value.name !== "project.create" &&
+    value.name !== "project.get" &&
+    value.name !== "project.getScope" &&
+    value.name !== "project.list" &&
+    value.name !== "project.listSources" &&
+    value.name !== "project.removeWorks" &&
+    value.name !== "project.rename" &&
+    value.name !== "project.searchLibraryWorks" &&
     value.name !== "savedSearch.clearNew" &&
     value.name !== "savedSearch.create" &&
     value.name !== "savedSearch.delete" &&

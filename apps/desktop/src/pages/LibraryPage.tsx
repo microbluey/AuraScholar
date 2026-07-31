@@ -47,6 +47,11 @@ import {
 } from "../services/preview-library";
 import { describeSafeError } from "../services/sensitive-text";
 import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
+import { useProjectIngress } from "../features/projects/useProjectIngress";
+import {
+  LibraryBulkActionBar,
+  type LibraryBulkWorkAction as LibraryWorkAction,
+} from "../features/library/LibraryBulkActionBar";
 import { LibraryCollectionManagement } from "../features/library/LibraryCollectionManagement";
 import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
 import { LibrarySelectedWorkPanel } from "../features/library/LibrarySelectedWorkPanel";
@@ -102,8 +107,6 @@ type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred" | "trash
 type SortMode = "added" | "year";
 type ExtraFilter = "with-pdf" | "without-pdf";
 type ImportMethod = "identifier" | "pdf" | "references";
-type LibraryWorkAction = "merge" | "purge" | "restore" | "trash";
-
 interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_IMPORT_PDF__?: (file: File) => Promise<void>;
   __AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__?: number;
@@ -141,16 +144,6 @@ const MIN_REFERENCE_IMPORT_BUSY_MS = 250;
 const MIN_WORK_ACTION_BUSY_MS = 350;
 const REFERENCE_IMPORT_ACCEPT = ".bib,.ris,.nbib,.enw,.json,application/json,text/plain";
 const REFERENCE_IMPORT_FORMAT_LABEL = "BibTeX、RIS、PubMed NBIB、EndNote ENW 或 CSL-JSON";
-const CITATION_STYLES = [
-  { id: "apa", label: "APA 7th" },
-  { id: "gb7714", label: "GB/T 7714-2015" },
-  { id: "ieee", label: "IEEE" },
-  { id: "vancouver", label: "Vancouver" },
-  { id: "mla", label: "MLA 9th" },
-  { id: "nature", label: "Nature" },
-  { id: "chicago", label: "Chicago (note)" },
-] as const;
-
 const PREVIEW_LIBRARY_SCOPE_MESSAGE =
   "浏览器预览使用可重置的示例文献；星标、标签、阅读状态等整理操作只在本页生效，真实数据库、PDF 附件和 AI 合成需要在桌面应用中完成。";
 
@@ -694,7 +687,6 @@ export function LibraryPage() {
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
   const [textPrompt, setTextPrompt] = useState<TextPromptConfig | null>(null);
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
-  const [citeMenuOpen, setCiteMenuOpen] = useState(false);
   const [citationBusy, setCitationBusy] = useState<"copy" | "export" | null>(null);
   const [workActionBusy, setWorkActionBusy] = useState<LibraryWorkAction | null>(null);
   const [starActionBusyById, setStarActionBusyById] = useState<Record<string, boolean>>({});
@@ -735,8 +727,6 @@ export function LibraryPage() {
   const pageSelectCheckboxRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const contextPanelRef = useRef<HTMLElement | null>(null);
-  const citeMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const citeMenuRef = useRef<HTMLDivElement>(null);
   const importingRef = useRef(false);
   const workMutationLeaseRef = useRef(new MutationLease<LibraryWorkAction>());
   const starActionBusyRef = useRef<Record<string, boolean>>({});
@@ -751,6 +741,29 @@ export function LibraryPage() {
   const { confirm, confirmDialog } = useConfirmDialog();
   const reportCanvasIngressError = useCallback((error: string) => setMessage(error), []);
   const { openInCanvas, targetPicker } = useCanvasIngress(reportCanvasIngressError);
+  const reportProjectIngressError = useCallback(
+    (error: Error) => setMessage(`加入研究项目失败:${describeSafeError(error)}`),
+    [],
+  );
+  const reportProjectIngressAdded = useCallback(
+    ({ updated }: { updated: number }) =>
+      setMessage(updated > 0 ? `已将 ${updated} 篇文献加入研究项目` : "所选文献已在目标项目中"),
+    [],
+  );
+  const {
+    openProjectIngress,
+    pending: projectIngressBusy,
+    projectTargetPicker,
+  } = useProjectIngress({
+    onAdded: reportProjectIngressAdded,
+    onError: reportProjectIngressError,
+  });
+  const addWorksToProject = useCallback(
+    (workIds: readonly string[], sourceLabel?: string) => {
+      void openProjectIngress({ sourceLabel, workIds }).catch(() => undefined);
+    },
+    [openProjectIngress],
+  );
   const findShortcut = useMemo(() => shortcutLabel("F"), []);
   const acquireWorkMutation = useCallback(
     (action: LibraryWorkAction): MutationLeaseGrant<LibraryWorkAction> | null => {
@@ -1763,70 +1776,6 @@ export function LibraryPage() {
     setPage(0);
   }, [activeFilter, activeSource, activeTag, activeCollection, extraFilter, search, sortMode]);
 
-  const getCiteMenuItems = useCallback(() => {
-    return Array.from(
-      citeMenuRef.current?.querySelectorAll<HTMLButtonElement>(
-        '[role="menuitem"]:not(:disabled)',
-      ) ?? [],
-    );
-  }, []);
-
-  useEffect(() => {
-    if (!citeMenuOpen) return;
-    const frame = window.requestAnimationFrame(() => {
-      getCiteMenuItems()[0]?.focus({ preventScroll: true });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [citeMenuOpen, getCiteMenuItems]);
-
-  // Close the cite dropdown on any outside click / Escape.
-  useEffect(() => {
-    if (!citeMenuOpen) return;
-    const close = (e: Event) => {
-      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
-      if (e instanceof MouseEvent && (e.target as HTMLElement)?.closest?.(".library-cite-menu")) {
-        return;
-      }
-      setCiteMenuOpen(false);
-      if (e instanceof KeyboardEvent) {
-        citeMenuTriggerRef.current?.focus({ preventScroll: true });
-      }
-    };
-    window.addEventListener("click", close);
-    window.addEventListener("keydown", close);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("keydown", close);
-    };
-  }, [citeMenuOpen]);
-
-  const handleCiteMenuKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      const items = getCiteMenuItems();
-      if (!items.length) return;
-      const currentIndex = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement));
-      let nextIndex: number | null = null;
-      if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-        nextIndex = (currentIndex + 1) % items.length;
-      } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-        nextIndex = (currentIndex - 1 + items.length) % items.length;
-      } else if (event.key === "Home") {
-        nextIndex = 0;
-      } else if (event.key === "End") {
-        nextIndex = items.length - 1;
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        setCiteMenuOpen(false);
-        citeMenuTriggerRef.current?.focus({ preventScroll: true });
-        return;
-      }
-      if (nextIndex === null) return;
-      event.preventDefault();
-      items[nextIndex]?.focus({ preventScroll: true });
-    },
-    [getCiteMenuItems],
-  );
-
   const selectWork = useCallback((work: WorkWithAuthors) => {
     setSelectedWorkId(work.id);
     if (window.matchMedia("(max-width: 760px)").matches) {
@@ -2342,7 +2291,6 @@ export function LibraryPage() {
       if (actionableSelectedIds.length === 0 || citationBusy) return;
       const workIds = [...actionableSelectedIds];
       const startedAt = Date.now();
-      setCiteMenuOpen(false);
       setCitationBusy("export");
       if (!isDesktopRuntime()) {
         const works = workIds
@@ -2388,7 +2336,6 @@ export function LibraryPage() {
       if (actionableSelectedIds.length === 0 || citationBusy) return;
       const workIds = [...actionableSelectedIds];
       const startedAt = Date.now();
-      setCiteMenuOpen(false);
       setCitationBusy("copy");
       if (!isDesktopRuntime()) {
         const works = workIds
@@ -2830,148 +2777,29 @@ export function LibraryPage() {
       )}
 
       {actionableSelectedIds.length > 0 && (
-        <div className="library-bulkbar">
-          <span className="library-bulkbar__count">已选 {actionableSelectedIds.length} 篇</span>
-          {isTrashView ? (
-            <>
-              <button
-                type="button"
-                onClick={() => void restoreWorks(actionableSelectedIds)}
-                disabled={Boolean(workActionBusy)}
-                aria-busy={workActionBusy === "restore" ? "true" : undefined}
-              >
-                {workActionBusy === "restore" ? "恢复中..." : "恢复"}
-              </button>
-              <button
-                type="button"
-                className="library-bulkbar__danger"
-                onClick={() => void purgeWorks(actionableSelectedIds)}
-                disabled={Boolean(workActionBusy)}
-                aria-busy={workActionBusy === "purge" ? "true" : undefined}
-              >
-                {workActionBusy === "purge" ? "删除中..." : "永久删除"}
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => void bulkAddTag()}
-                disabled={Boolean(workActionBusy)}
-              >
-                添加标签
-              </button>
-              <button
-                type="button"
-                onClick={() => void bulkMoveToCollection()}
-                disabled={Boolean(workActionBusy)}
-              >
-                移动到文件夹
-              </button>
-              {actionableSelectedIds.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => void bulkMerge()}
-                  disabled={busy || Boolean(workActionBusy)}
-                  aria-busy={workActionBusy === "merge" ? "true" : undefined}
-                >
-                  {workActionBusy === "merge" ? "合并中..." : "合并文献"}
-                </button>
-              )}
-              <div className="library-cite-menu" aria-busy={citationBusy ? "true" : undefined}>
-                <button
-                  ref={citeMenuTriggerRef}
-                  id="library-cite-menu-trigger"
-                  type="button"
-                  aria-controls="library-cite-dropdown"
-                  aria-expanded={citeMenuOpen}
-                  aria-haspopup="menu"
-                  onClick={() => setCiteMenuOpen((v) => !v)}
-                  disabled={Boolean(citationBusy) || Boolean(workActionBusy)}
-                >
-                  {citationBusy === "export"
-                    ? "导出中..."
-                    : citationBusy === "copy"
-                      ? "复制中..."
-                      : "导出引用 ▾"}
-                </button>
-                {citeMenuOpen && (
-                  <div
-                    ref={citeMenuRef}
-                    className="library-cite-dropdown"
-                    id="library-cite-dropdown"
-                    role="menu"
-                    aria-labelledby="library-cite-menu-trigger"
-                    onKeyDown={handleCiteMenuKeyDown}
-                  >
-                    <div className="library-cite-dropdown__group" id="library-cite-export-heading">
-                      导出文件
-                    </div>
-                    <div role="group" aria-labelledby="library-cite-export-heading">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => void handleExportCitations("bibtex")}
-                        disabled={Boolean(citationBusy)}
-                      >
-                        BibTeX (.bib)
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => void handleExportCitations("ris")}
-                        disabled={Boolean(citationBusy)}
-                      >
-                        RIS (.ris)
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => void handleExportCitations("csljson")}
-                        disabled={Boolean(citationBusy)}
-                      >
-                        CSL-JSON (.json)
-                      </button>
-                    </div>
-                    <div className="library-cite-dropdown__group" id="library-cite-copy-heading">
-                      复制参考文献
-                    </div>
-                    <div role="group" aria-labelledby="library-cite-copy-heading">
-                      {CITATION_STYLES.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => void handleCopyBibliography(s.id)}
-                          disabled={Boolean(citationBusy)}
-                        >
-                          {s.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                className="library-bulkbar__danger"
-                onClick={() => void bulkDelete()}
-                disabled={Boolean(workActionBusy)}
-                aria-busy={workActionBusy === "trash" ? "true" : undefined}
-              >
-                {workActionBusy === "trash" ? "移入中..." : "删除"}
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            className="library-bulkbar__clear"
-            onClick={() => setSelectedIds(new Set())}
-            disabled={Boolean(workActionBusy)}
-          >
-            取消选择
-          </button>
-        </div>
+        <LibraryBulkActionBar
+          busy={busy}
+          citationBusy={citationBusy}
+          isTrashView={isTrashView}
+          onAddTag={bulkAddTag}
+          onAddToProject={() =>
+            addWorksToProject(
+              actionableSelectedIds,
+              `${actionableSelectedIds.length} 篇已选文献`,
+            )
+          }
+          onClear={() => setSelectedIds(new Set())}
+          onCopyBibliography={handleCopyBibliography}
+          onDelete={bulkDelete}
+          onExportCitations={handleExportCitations}
+          onMerge={bulkMerge}
+          onMoveToCollection={bulkMoveToCollection}
+          onPurge={() => purgeWorks(actionableSelectedIds)}
+          onRestore={() => restoreWorks(actionableSelectedIds)}
+          projectIngressBusy={projectIngressBusy}
+          selectedCount={actionableSelectedIds.length}
+          workActionBusy={workActionBusy}
+        />
       )}
 
       <div
@@ -3363,6 +3191,9 @@ export function LibraryPage() {
               onAddToCanvas={() =>
                 void openInCanvas({ workId: selectedWork.id, sourceLabel: selectedWork.title })
               }
+              onAddToProject={() =>
+                addWorksToProject([selectedWork.id], selectedWork.title)
+              }
               onOpenCanvas={() =>
                 void openInCanvas({ workId: selectedWork.id, sourceLabel: selectedWork.title })
               }
@@ -3383,6 +3214,7 @@ export function LibraryPage() {
                 }
               }}
               onEditMetadata={() => setEditingMetaId(selectedWork.id)}
+              projectIngressBusy={projectIngressBusy}
             />
           </aside>
         )}
@@ -3502,6 +3334,7 @@ export function LibraryPage() {
       )}
 
       {targetPicker}
+      {projectTargetPicker}
     </div>
   );
 }

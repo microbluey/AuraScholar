@@ -13,6 +13,14 @@ import { readLocalStorageItem, tryWriteLocalStorageItem } from "./storage";
 const LibraryPage = lazy(() =>
   import("./pages/LibraryPage").then((m) => ({ default: m.LibraryPage })),
 );
+const ResearchProjectsIndexPage = lazy(() =>
+  import("./pages/ResearchProjectPage").then((m) => ({
+    default: m.ResearchProjectsIndexPage,
+  })),
+);
+const ResearchProjectPage = lazy(() =>
+  import("./pages/ResearchProjectPage").then((m) => ({ default: m.ResearchProjectPage })),
+);
 const DiscoveryPage = lazy(() =>
   import("./pages/DiscoveryPage").then((m) => ({ default: m.DiscoveryPage })),
 );
@@ -76,6 +84,14 @@ const router = createHashRouter([
     children: [
       { index: true, element: <Navigate to="/library" replace /> },
       { path: "library", element: routeElement(<LibraryPage />, "文献库") },
+      {
+        path: "projects",
+        element: routeElement(<ResearchProjectsIndexPage />, "研究项目"),
+      },
+      {
+        path: "projects/:projectId",
+        element: routeElement(<ResearchProjectPage />, "研究项目"),
+      },
       { path: "discovery", element: routeElement(<DiscoveryPage />, "学术检索") },
       { path: "reader", element: routeElement(<ReaderPage />, "PDF 阅读器") },
       { path: "graph", element: routeElement(<GraphPage />, "引文脉络") },

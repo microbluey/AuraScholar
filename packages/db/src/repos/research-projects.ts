@@ -174,6 +174,7 @@ export class ResearchProjectsRepo {
   /**
    * Adds active Library Works and restores existing membership tombstones.
    * Duplicate work ids and already-active memberships are semantic no-ops.
+   * Returns only the number of memberships inserted or restored.
    */
   async addWorks(projectId: string, workIds: string[]): Promise<number> {
     const ids = normalizeIds(workIds, "Work id");
@@ -182,8 +183,9 @@ export class ResearchProjectsRepo {
       await this.requireActive(projectId);
       await this.assertWorksOwned(ids, { activeOnly: true });
       const now = Date.now();
+      let changed = 0;
       for (const workId of ids) {
-        await this.db.run(
+        changed += await this.db.run(
           `INSERT INTO project_works
                (id, project_id, work_id, role, created_at, updated_at, deleted_at)
              VALUES (?, ?, ?, 'source', ?, ?, NULL)
@@ -191,12 +193,11 @@ export class ResearchProjectsRepo {
                role = excluded.role,
                deleted_at = NULL,
                updated_at = MAX(project_works.updated_at + 1, excluded.updated_at)
-             WHERE project_works.deleted_at IS NOT NULL
-                OR project_works.role <> excluded.role`,
+             WHERE project_works.deleted_at IS NOT NULL`,
           [projectWorkMembershipId(projectId, workId), projectId, workId, now, now],
         );
       }
-      return ids.length;
+      return changed;
     });
   }
 

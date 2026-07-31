@@ -9,7 +9,6 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Graph } from "@phosphor-icons/react";
 import { ThemeToggle } from "@aurascholar/ui";
 import { AppErrorBoundary, useRouteBoundaryShell } from "./components/AppErrorBoundary";
 import { useModalFocusTrap } from "./components/useModalFocusTrap";
@@ -24,6 +23,11 @@ import {
   requestMoveLibraryCollection,
   requestRenameLibraryCollection,
 } from "./features/library/library-collection-events";
+import {
+  APP_NAV_ITEMS,
+  AppNavIcon,
+  type AppNavIconName,
+} from "./features/shell/app-navigation";
 import { isImeComposing } from "./keyboard";
 import { isPlatformShortcut, shortcutLabel } from "./shortcut-labels";
 import { readLocalStorageJson } from "./storage";
@@ -31,17 +35,6 @@ import { isDesktopRuntime } from "./services/aura-platform";
 import { cancelExitBarriers, runExitBarriers } from "./services/exit-barriers";
 import { describeSafeError } from "./services/sensitive-text";
 import type { LibraryShellStats } from "./services/app-shell-data";
-
-// 阅读器从文献库进入；/graph 仅保留给深链。
-const NAV = [
-  { to: "/library", icon: "library", label: "文献库" },
-  { to: "/discovery", icon: "search", label: "学术检索" },
-  { to: "/canvas", icon: "canvas", label: "空间白板" },
-  { to: "/snippets", icon: "snippet", label: "写作素材" },
-  { to: "/sentinel", icon: "radar", label: "检索哨兵" },
-  { to: "/homepage", icon: "profile", label: "学术主页" },
-  { to: "/settings", icon: "settings", label: "设置" },
-] as const;
 
 const PREVIEW_LIBRARY_STATS: LibraryShellStats = {
   total: 4,
@@ -112,22 +105,12 @@ interface AppStatsSmokeWindow extends Window {
 interface AppCommand {
   description: string;
   group: string;
-  icon: (typeof NAV)[number]["icon"];
+  icon: AppNavIconName;
   id: string;
   keywords: string[];
   run: () => void;
   title: string;
 }
-
-const NAV_DESCRIPTIONS: Record<(typeof NAV)[number]["to"], string> = {
-  "/library": "导入、整理、阅读和引用你的论文库。",
-  "/discovery": "检索开放学术来源并把结果沉淀到文献库。",
-  "/canvas": "在无限画布中关联文献、摘录、想法与 AI 合成。",
-  "/snippets": "整理摘录、批注和可复制的写作素材。",
-  "/sentinel": "订阅检索任务，持续追踪新论文。",
-  "/homepage": "编辑个人学术主页并导出发布内容。",
-  "/settings": "配置 AI、翻译、同步、备份和外观。",
-};
 
 const AI_UNCONFIGURED_LABEL = "AI 未配置";
 const AI_CHECKING_LABEL = "AI 检查中";
@@ -290,7 +273,9 @@ function scoreCommandAction(action: AppCommand, parts: string[]): number | null 
 
 function activeRouteLabel(pathname: string): string {
   if (pathname.startsWith("/reader")) return "PDF 阅读器";
-  const active = NAV.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`));
+  const active = APP_NAV_ITEMS.find(
+    (item) => pathname === item.to || pathname.startsWith(`${item.to}/`),
+  );
   return active?.label ?? "工作台";
 }
 
@@ -568,8 +553,8 @@ export function App() {
 
   const commandActions = useMemo<AppCommand[]>(
     () => [
-      ...NAV.map((item) => ({
-        description: NAV_DESCRIPTIONS[item.to],
+      ...APP_NAV_ITEMS.map((item) => ({
+        description: item.description,
         group: "工作区",
         icon: item.icon,
         id: `nav:${item.to}`,
@@ -784,7 +769,7 @@ export function App() {
             <kbd>{commandShortcut}</kbd>
           </button>
           <nav className="app-nav" aria-label="主导航">
-            {NAV.map((item) => (
+            {APP_NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -792,7 +777,7 @@ export function App() {
                 aria-label={item.label}
                 title={item.label}
               >
-                <NavIcon name={item.icon} />
+                <AppNavIcon name={item.icon} />
                 <span>{item.label}</span>
               </NavLink>
             ))}
@@ -1041,10 +1026,10 @@ function MobileDock({ onCommand }: { onCommand: (target?: HTMLElement | null) =>
         className="app-mobile-dock__item app-mobile-dock__item--command"
         onClick={(event) => onCommand(event.currentTarget)}
       >
-        <NavIcon name="search" />
+        <AppNavIcon name="search" />
         <span>快捷</span>
       </button>
-      {NAV.map((item) => (
+      {APP_NAV_ITEMS.map((item) => (
         <NavLink
           key={item.to}
           to={item.to}
@@ -1052,7 +1037,7 @@ function MobileDock({ onCommand }: { onCommand: (target?: HTMLElement | null) =>
           aria-label={item.label}
           title={item.label}
         >
-          <NavIcon name={item.icon} />
+          <AppNavIcon name={item.icon} />
           <span>{item.label}</span>
         </NavLink>
       ))}
@@ -1153,7 +1138,7 @@ function AppCommandPalette({
         tabIndex={-1}
       >
         <div className="app-command-palette__search">
-          <NavIcon name="search" />
+          <AppNavIcon name="search" />
           <input
             ref={inputRef}
             aria-activedescendant={
@@ -1199,7 +1184,7 @@ function AppCommandPalette({
                 aria-selected={index === boundedActiveIndex}
               >
                 <span className="app-command-item__icon">
-                  <NavIcon name={action.icon} />
+                  <AppNavIcon name={action.icon} />
                 </span>
                 <span className="app-command-item__body">
                   <strong>{action.title}</strong>
@@ -1835,73 +1820,4 @@ function LibrarySidebarMeta({
       )}
     </div>
   );
-}
-
-function NavIcon({ name }: { name: (typeof NAV)[number]["icon"] }) {
-  const common = {
-    width: 18,
-    height: 18,
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.8,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    "aria-hidden": true,
-    className: "app-nav-item__icon",
-  };
-
-  switch (name) {
-    case "library":
-      return (
-        <svg {...common}>
-          <path d="M5 4.5h4.5A2.5 2.5 0 0 1 12 7v12a2.5 2.5 0 0 0-2.5-2.5H5z" />
-          <path d="M19 4.5h-4.5A2.5 2.5 0 0 0 12 7v12a2.5 2.5 0 0 1 2.5-2.5H19z" />
-        </svg>
-      );
-    case "search":
-      return (
-        <svg {...common}>
-          <circle cx="11" cy="11" r="6.5" />
-          <path d="m16 16 4 4" />
-          <path d="M8.5 11h5" />
-        </svg>
-      );
-    case "canvas":
-      return <Graph size={18} weight="regular" aria-hidden className="app-nav-item__icon" />;
-    case "snippet":
-      return (
-        <svg {...common}>
-          <path d="M7 4h7l4 4v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
-          <path d="M13 4v5h5" />
-          <path d="M9 13h6" />
-          <path d="M9 16.5h4" />
-        </svg>
-      );
-    case "radar":
-      return (
-        <svg {...common}>
-          <path d="M12 19a7 7 0 1 0-7-7" />
-          <path d="M12 15a3 3 0 1 0-3-3" />
-          <path d="M12 12 18 6" />
-          <path d="M4 20h16" />
-        </svg>
-      );
-    case "profile":
-      return (
-        <svg {...common}>
-          <path d="M8 4h8a2 2 0 0 1 2 2v14H6V6a2 2 0 0 1 2-2z" />
-          <path d="M9 9h6" />
-          <path d="M9 13h6" />
-          <path d="M9 17h4" />
-        </svg>
-      );
-    case "settings":
-      return (
-        <svg {...common}>
-          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" />
-          <path d="M19 12a7 7 0 0 0-.1-1.1l2-1.5-2-3.4-2.4 1a7 7 0 0 0-1.9-1.1L14.3 3h-4.6l-.3 2.9A7 7 0 0 0 7.5 7l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .7.1 1.1l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 1.9 1.1l.3 2.9h4.6l.3-2.9a7 7 0 0 0 1.9-1.1l2.4 1 2-3.4-2-1.5c.1-.4.1-.7.1-1.1z" />
-        </svg>
-      );
-  }
 }
