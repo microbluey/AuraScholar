@@ -12,6 +12,11 @@ import { app, BrowserWindow, session, WebContentsView, type Session } from "elec
 import { describeSafeError } from "@aurascholar/platform";
 import { handle } from "./ipc";
 import {
+  isAllowedResearchUrl,
+  researchPartition,
+  validateResearchUrl,
+} from "./research-browser-policy";
+import {
   CH,
   EV,
   type Bounds,
@@ -22,10 +27,10 @@ import {
 
 const ARCHIVE_MS = 30 * 60 * 1000; // 30 minutes idle → archive
 const DOWNLOAD_SUBDIR = "research-downloads";
-const RESEARCH_PROTOCOLS = new Set(["http:", "https:"]);
 
 interface Tab {
   tabId: string;
+  ownerTabId: string;
   siteId: string;
   url: string;
   title: string;
@@ -45,35 +50,6 @@ const wiredSessions = new Set<string>();
 // new tab), so by download time the tab no longer holds the identity. The PDF
 // URL is the stable link between the two — see resolveDownloadIdentity.
 const identityByPdfUrl = new Map<string, ScholarIdentity>();
-
-function partitionFor(siteId: string): string {
-  return `persist:research-${siteId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-}
-
-function validateResearchUrl(rawUrl: string): URL {
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    throw new Error("无效的研究浏览器地址");
-  }
-  if (!RESEARCH_PROTOCOLS.has(url.protocol)) {
-    throw new Error(`研究浏览器不允许打开 ${url.protocol || "未知"} 协议`);
-  }
-  if (url.username || url.password) {
-    throw new Error("研究浏览器地址不能包含用户名或密码");
-  }
-  return url;
-}
-
-function isAllowedResearchUrl(rawUrl: string): boolean {
-  try {
-    validateResearchUrl(rawUrl);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function snapshot(): ResearchTab[] {
   return [...tabs.values()].map((t) => ({
@@ -98,7 +74,7 @@ function ensureDownloadDir(): void {
 
 /** Wire download interception once per site session. */
 function wireSession(sess: Session, siteId: string): void {
-  const key = partitionFor(siteId);
+  const key = researchPartition(siteId);
   if (wiredSessions.has(key)) return;
   wiredSessions.add(key);
   sess.setPermissionRequestHandler((_webContents, _permission, callback) => {
@@ -107,13 +83,14 @@ function wireSession(sess: Session, siteId: string): void {
   sess.on("will-download", (_e, item, sourceWebContents) => {
     ensureDownloadDir();
     const sourceTab = [...tabs.values()].find((t) => t.view?.webContents === sourceWebContents);
-    const sourceTabId = sourceTab?.tabId ?? activeTabId ?? "";
+    const sourceTabId = sourceTab?.tabId ?? "";
+    const ownerTabId = sourceTab?.ownerTabId ?? "";
     const scholar = resolveDownloadIdentity(sourceTab, item.getURL());
     const stamp = Date.now();
     const safe = item.getFilename().replace(/[^a-zA-Z0-9._-]/g, "-");
     // Tell the renderer a download is in flight so it can show progress while
     // the file streams + metadata is resolved (can be several seconds).
-    win?.webContents.send(EV.researchDownloadStarted, { fileName: safe });
+    win?.webContents.send(EV.researchDownloadStarted, { tabId: sourceTabId, fileName: safe });
     const fileName = `${stamp}-${safe}`;
     const relPath = `${DOWNLOAD_SUBDIR}/${fileName}`;
     const abs = join(app.getPath("userData"), DOWNLOAD_SUBDIR, fileName);
@@ -121,6 +98,7 @@ function wireSession(sess: Session, siteId: string): void {
     item.once("done", (_ev, state) => {
       win?.webContents.send(EV.researchDownloadFinished, {
         tabId: sourceTabId,
+        ownerTabId,
         fileName,
         relPath,
         success: state === "completed",
@@ -258,7 +236,7 @@ function resolveDownloadIdentity(tab: Tab | undefined, downloadUrl: string): Sch
 }
 
 function createView(tab: Tab): WebContentsView {
-  const sess = session.fromPartition(partitionFor(tab.siteId));
+  const sess = session.fromPartition(researchPartition(tab.siteId));
   wireSession(sess, tab.siteId);
   void applyProxy(sess, tab.proxy);
   const view = new WebContentsView({
@@ -276,7 +254,7 @@ function createView(tab: Tab): WebContentsView {
     // window. Open them in a fresh tab (same site session, so login/cookies
     // carry over) instead of hijacking the current page, which would strip the
     // user of their search-results context with no way back.
-    if (isAllowedResearchUrl(url)) spawnTab(tab.siteId, url, tab.proxy);
+    if (isAllowedResearchUrl(url)) spawnTab(tab.siteId, url, tab.proxy, tab.ownerTabId);
     return { action: "deny" };
   });
   view.webContents.on("will-navigate", (event, url) => {
@@ -316,11 +294,12 @@ function createView(tab: Tab): WebContentsView {
  * IPC handler and by in-page window.open / target=_blank navigations so that
  * external links open beside the current page instead of replacing it.
  */
-function spawnTab(siteId: string, url: string, proxy: string): string {
+function spawnTab(siteId: string, url: string, proxy: string, ownerTabId?: string): string {
   const safeUrl = validateResearchUrl(url).toString();
   const tabId = randomUUID();
   tabs.set(tabId, {
     tabId,
+    ownerTabId: ownerTabId ?? tabId,
     siteId,
     url: safeUrl,
     title: "",
@@ -374,16 +353,28 @@ export function hideResearchViews(): void {
 }
 
 export function registerResearchHandlers(): void {
-  handle(CH.researchOpen, (_e, siteId: string, url: string, proxy: string) => {
-    // Reuse an existing tab for the same site if present.
-    const existing = [...tabs.values()].find((t) => t.siteId === siteId);
-    if (existing) {
-      existing.proxy = proxy;
-      showTab(existing.tabId);
-      return existing.tabId;
-    }
-    return spawnTab(siteId, url, proxy);
-  });
+  handle(
+    CH.researchOpen,
+    (
+      _e,
+      siteId: string,
+      url: string,
+      proxy: string,
+      options?: { reuseExisting?: boolean },
+    ) => {
+      // Reuse an existing tab for the same site unless this is an isolated task.
+      const existing =
+        options?.reuseExisting === false
+          ? undefined
+          : [...tabs.values()].find((t) => t.siteId === siteId);
+      if (existing) {
+        existing.proxy = proxy;
+        showTab(existing.tabId);
+        return existing.tabId;
+      }
+      return spawnTab(siteId, url, proxy);
+    },
+  );
 
   handle(CH.researchActivate, (_e, tabId: string) => {
     showTab(tabId);
@@ -479,6 +470,7 @@ export function registerResearchHandlers(): void {
       writeFileSync(join(app.getPath("userData"), DOWNLOAD_SUBDIR, fileName), pdf);
       win?.webContents.send(EV.researchDownloadFinished, {
         tabId: tab.tabId,
+        ownerTabId: tab.ownerTabId,
         fileName,
         relPath,
         success: true,
@@ -491,13 +483,13 @@ export function registerResearchHandlers(): void {
   });
 
   handle(CH.researchClearSiteData, async (_e, siteId: string) => {
-    await session.fromPartition(partitionFor(siteId)).clearStorageData();
+    await session.fromPartition(researchPartition(siteId)).clearStorageData();
   });
 
   handle(CH.researchSiteData, async (_e, siteIds: string[]) => {
     const withData: string[] = [];
     for (const id of siteIds) {
-      const cookies = await session.fromPartition(partitionFor(id)).cookies.get({});
+      const cookies = await session.fromPartition(researchPartition(id)).cookies.get({});
       if (cookies.length > 0) withData.push(id);
     }
     return withData;

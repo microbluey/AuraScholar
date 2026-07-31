@@ -69,6 +69,14 @@ export interface IngestDraft {
    */
   targetWorkId?: string;
   targetTitle?: string;
+  /** Immutable handoff identity used to reject stale async completions. */
+  targetHandoffId?: string;
+  /**
+   * Existing work identified by DOI/content hash when it differs from the
+   * explicit full-text target. The confirmation UI must surface this conflict;
+   * it must never silently redirect the attachment.
+   */
+  targetConflict?: DedupHit;
 }
 
 /** Minimal work shape for OA lookup (subset of NormalizedWork fields). */

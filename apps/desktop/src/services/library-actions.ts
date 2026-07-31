@@ -1,16 +1,6 @@
-import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
-import { WorksRepo } from "@aurascholar/db/repos/works";
-import { getLibraryDb } from "./aura-db";
 import { auraFs } from "./aura-platform";
+import { libraryRepos as repos } from "./library-repos";
 import type { CommitIngestArgs, IngestResult, PendingPdf } from "./library-types";
-
-async function repos() {
-  const { db, libraryId } = await getLibraryDb();
-  return {
-    works: new WorksRepo(db, libraryId),
-    attachments: new AttachmentsRepo(db, libraryId),
-  };
-}
 
 /**
  * Commit a user-confirmed import: the ONLY place that writes works/attachments.

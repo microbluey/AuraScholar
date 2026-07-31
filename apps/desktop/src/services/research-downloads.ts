@@ -9,13 +9,21 @@
 import { auraFs } from "./aura-platform";
 import { describeSafeError } from "./sensitive-text";
 import type { IngestDraft } from "./library-types";
-import type { ScholarIdentity } from "../../electron/shared";
+import type {
+  DownloadFinishedPayload,
+  DownloadStartedPayload,
+  ScholarIdentity,
+} from "../../electron/shared";
 
 function hasIdentity(s?: ScholarIdentity): s is ScholarIdentity {
   return !!s && (!!s.doi || !!s.arxivId || !!s.title);
 }
 
 export interface CapturedDownload {
+  /** Research tab whose session initiated the captured file. */
+  tabId: string;
+  /** Root tab that owns the source tab chain. */
+  ownerTabId: string;
   kind: "pdf" | "references" | "ignored" | "error";
   title?: string;
   fileName: string;
@@ -35,6 +43,8 @@ function extOf(name: string): string {
 }
 
 async function ingestDownloadedFile(
+  tabId: string,
+  ownerTabId: string,
   relPath: string,
   fileName: string,
   scholar?: ScholarIdentity,
@@ -48,11 +58,11 @@ async function ingestDownloadedFile(
       // Analyze only — never auto-write. The page identity (citation_* meta) is
       // preferred over guessing a DOI from the PDF body. The temp file is kept
       // until the user confirms or cancels (handled by the caller).
-      const { analyzePdf, analyzePdfWithIdentity } = await import("./library");
+      const { analyzePdfWithIdentity, analyzeResearchDownloadPdf } = await import("./library");
       const draft = hasIdentity(scholar)
         ? await analyzePdfWithIdentity(display, bytes, scholar, relPath)
-        : await analyzePdf(display, bytes);
-      return { kind: "pdf", title: display, fileName: display, draft };
+        : await analyzeResearchDownloadPdf(display, bytes, relPath);
+      return { tabId, ownerTabId, kind: "pdf", title: display, fileName: display, draft };
     }
     if (REFERENCE_EXTS.includes(ext)) {
       const text = new TextDecoder().decode(bytes);
@@ -60,11 +70,13 @@ async function ingestDownloadedFile(
       // .txt / .json may not actually be references — bail quietly if nothing parses.
       if (previewReferences(text).length === 0) {
         void auraFs.deleteFile(relPath).catch(() => {});
-        return { kind: "ignored", fileName: display };
+        return { tabId, ownerTabId, kind: "ignored", fileName: display };
       }
       const summary = await importReferences(text);
       void auraFs.deleteFile(relPath).catch(() => {});
       return {
+        tabId,
+        ownerTabId,
         kind: "references",
         fileName: display,
         imported: summary.imported,
@@ -72,46 +84,128 @@ async function ingestDownloadedFile(
       };
     }
     void auraFs.deleteFile(relPath).catch(() => {});
-    return { kind: "ignored", fileName: display };
+    return { tabId, ownerTabId, kind: "ignored", fileName: display };
   } catch (e) {
     void auraFs.deleteFile(relPath).catch(() => {});
-    return { kind: "error", fileName: display, error: describeSafeError(e) };
+    return {
+      tabId,
+      ownerTabId,
+      kind: "error",
+      fileName: display,
+      error: describeSafeError(e),
+    };
   }
 }
 
+interface DownloadSubscriber {
+  onResult(result: CapturedDownload): void;
+  onStarted?(payload: DownloadStartedPayload): void;
+}
+
+const subscribers = new Set<DownloadSubscriber>();
+const bufferedResults: CapturedDownload[] = [];
+let brokerResearch: Window["aura"]["research"] | null = null;
+let brokerOffStarted: (() => void) | null = null;
+let brokerOffFinished: (() => void) | null = null;
+let brokerGeneration = 0;
+
+async function inspectFinishedDownload(
+  payload: DownloadFinishedPayload,
+): Promise<CapturedDownload> {
+  if (!payload.success) {
+    void auraFs.deleteFile(payload.relPath).catch(() => {});
+    return {
+      tabId: payload.tabId,
+      ownerTabId: payload.ownerTabId,
+      kind: "error",
+      fileName: payload.fileName.replace(/^\d+-/, ""),
+      error: "下载未完成",
+    };
+  }
+  return ingestDownloadedFile(
+    payload.tabId,
+    payload.ownerTabId,
+    payload.relPath,
+    payload.fileName,
+    payload.scholar,
+  );
+}
+
+function publishResult(result: CapturedDownload): void {
+  const subscriber = subscribers.values().next().value as DownloadSubscriber | undefined;
+  if (!subscriber) {
+    bufferedResults.push(result);
+    return;
+  }
+  try {
+    subscriber.onResult(result);
+  } catch {
+    bufferedResults.push(result);
+  }
+}
+
+function ensureDownloadBroker(): boolean {
+  if (!("aura" in window)) return false;
+  const research = window.aura.research;
+  if (brokerResearch === research) return true;
+  disposeResearchDownloadBroker();
+  brokerResearch = research;
+  const generation = ++brokerGeneration;
+  brokerOffStarted = research.onDownloadStarted((payload) => {
+    for (const subscriber of subscribers) subscriber.onStarted?.(payload);
+  });
+  brokerOffFinished = research.onDownloadFinished((payload) => {
+    void inspectFinishedDownload(payload).then((result) => {
+      if (generation !== brokerGeneration) {
+        if (result.draft?.pdf) {
+          void import("./library-actions").then(({ discardStagedPdf }) =>
+            discardStagedPdf(result.draft?.pdf),
+          ).catch(() => {});
+        }
+        return;
+      }
+      if (result.kind === "references") {
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
+      }
+      publishResult(result);
+    });
+  });
+  return true;
+}
+
 /**
- * Subscribe to research-browser downloads. Returns an unsubscribe function.
- * `onResult` fires once per captured file that produced (or attempted) an import.
+ * Subscribe to the app-lifetime download broker. Results that finish while
+ * Discovery is unmounted are buffered and replayed to the next subscriber.
  */
 export function subscribeResearchDownloads(
   onResult: (result: CapturedDownload) => void,
-  onStarted?: (fileName: string) => void,
+  onStarted?: (payload: DownloadStartedPayload) => void,
 ): () => void {
-  if (!("aura" in window)) return () => {};
-
-  const offStarted = onStarted
-    ? window.aura.research.onDownloadStarted((p) => onStarted(p.fileName))
-    : () => {};
-  const offFinished = window.aura.research.onDownloadFinished(async (payload) => {
-    if (!payload.success) {
-      onResult({
-        kind: "error",
-        fileName: payload.fileName.replace(/^\d+-/, ""),
-        error: "下载未完成",
-      });
-      return;
-    }
-    const result = await ingestDownloadedFile(payload.relPath, payload.fileName, payload.scholar);
-    // Reference files are imported directly here. PDFs are only staged (draft) —
-    // the page commits them after confirmation and dispatches the update itself.
-    if (result.kind === "references") {
-      window.dispatchEvent(new Event("aurascholar:library-updated"));
-    }
-    onResult(result);
-  });
-
+  if (!ensureDownloadBroker()) return () => {};
+  const subscriber: DownloadSubscriber = { onResult, onStarted };
+  subscribers.add(subscriber);
+  const buffered = bufferedResults.splice(0);
+  for (const result of buffered) publishResult(result);
   return () => {
-    offStarted();
-    offFinished();
+    subscribers.delete(subscriber);
   };
+}
+
+/** Primarily useful for renderer teardown and deterministic tests. */
+export function disposeResearchDownloadBroker(): void {
+  brokerGeneration += 1;
+  brokerOffStarted?.();
+  brokerOffFinished?.();
+  brokerOffStarted = null;
+  brokerOffFinished = null;
+  brokerResearch = null;
+  subscribers.clear();
+  const abandoned = bufferedResults.splice(0);
+  for (const result of abandoned) {
+    if (result.draft?.pdf) {
+      void import("./library-actions").then(({ discardStagedPdf }) =>
+        discardStagedPdf(result.draft?.pdf),
+      ).catch(() => {});
+    }
+  }
 }

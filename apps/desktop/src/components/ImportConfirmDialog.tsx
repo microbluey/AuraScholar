@@ -13,18 +13,13 @@ import type { NormalizedWork } from "@aurascholar/connectors";
 import type { WorkInput, WorkPatch } from "@aurascholar/db";
 import type { IngestDraft, LocalMatch, PdfFields, PendingPdf } from "../services/library-types";
 import { describeSafeError } from "../services/sensitive-text";
+import { waitForMinimumElapsed } from "../services/minimum-busy";
 import { toWorkInput } from "../services/work-input";
+import { ImportTargetConflictNotice } from "./ImportTargetConflictNotice";
 import { MetadataEditor, emptyDraft, normalizedWorkToDraft, type Draft } from "./MetadataEditor";
 import { useModalFocusTrap } from "./useModalFocusTrap";
 
 const MIN_IMPORT_CONFIRM_BUSY_MS = 250;
-
-async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
-  const remaining = minimumMs - (Date.now() - startedAt);
-  if (remaining > 0) {
-    await new Promise((resolve) => setTimeout(resolve, remaining));
-  }
-}
 
 /** What the user picked. Drives whether commit creates a new work or attaches. */
 type Selection =
@@ -211,6 +206,7 @@ export function ImportConfirmDialog({
             </div>
           </div>
         )}
+        <ImportTargetConflictNotice draft={draft} />
 
         {/* Find-full-text target */}
         {draft.targetWorkId && (

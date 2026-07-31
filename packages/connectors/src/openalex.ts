@@ -152,7 +152,7 @@ export function normalizeOpenAlex(w: OpenAlexWork): NormalizedWork {
     keywords: w.keywords?.length
       ? w.keywords.map((k) => k.display_name ?? k.keyword).filter((s): s is string => !!s)
       : undefined,
-    oaPdfUrl: w.best_oa_location?.pdf_url ?? w.open_access?.oa_url ?? undefined,
+    oaPdfUrl: w.best_oa_location?.pdf_url ?? w.primary_location?.pdf_url ?? undefined,
     citedByCount: w.cited_by_count,
     source: "openalex",
   };

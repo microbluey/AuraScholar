@@ -124,8 +124,17 @@ export interface ScholarIdentity {
   sourceUrl?: string;
 }
 
-export interface DownloadFinishedPayload {
+export interface DownloadStartedPayload {
+  /** Research tab whose session initiated the download. */
   tabId: string;
+  fileName: string;
+}
+
+export interface DownloadFinishedPayload {
+  /** Research tab whose session initiated the download. */
+  tabId: string;
+  /** Root tab that owns this tab chain; child windows inherit it. */
+  ownerTabId: string;
   fileName: string;
   relPath: string;
   success: boolean;

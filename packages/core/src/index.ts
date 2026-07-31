@@ -6,8 +6,8 @@ export {
   cluesFromPdfText,
   titleCandidatesFromPdfSource,
 } from "./ingest/clues.js";
-export type { ResolvedWork } from "./ingest/resolve.js";
-export { resolveClue, findOaPdf, titleSimilarity } from "./ingest/resolve.js";
+export type { OaPdfCandidate, OaPdfSource, ResolvedWork } from "./ingest/resolve.js";
+export { resolveClue, findOaPdf, findOaPdfCandidates, titleSimilarity } from "./ingest/resolve.js";
 export { buildCitationGraph } from "./graph/build.js";
 export type { CitationGraph, GraphNode, GraphEdge, GraphRelation } from "./graph/build.js";
 export { layoutTimeline } from "./graph/layout.js";

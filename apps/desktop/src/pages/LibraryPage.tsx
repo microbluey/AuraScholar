@@ -39,7 +39,8 @@ import { downloadBlob } from "../download";
 import { isImeComposing } from "../keyboard";
 import { isPlatformShortcut, shortcutLabel } from "../shortcut-labels";
 import { blobPath, sha256Hex, auraFs, isDesktopRuntime } from "../services/aura-platform";
-import { fulltextHandoffPath } from "../services/fulltext";
+import { fulltextWorkHandoffPath } from "../services/fulltext";
+import { waitForMinimumElapsed } from "../services/minimum-busy";
 import {
   PREVIEW_LIBRARY_WORK_SEEDS,
   type PreviewLibraryWorkSeed,
@@ -49,6 +50,11 @@ import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
 import { LibraryCollectionManagement } from "../features/library/LibraryCollectionManagement";
 import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
 import { LibrarySelectedWorkPanel } from "../features/library/LibrarySelectedWorkPanel";
+import {
+  hasDraggedFiles,
+  isPdfFile,
+  isSupportedImportFile,
+} from "../features/library/library-import-files";
 import { TagManager } from "../features/library/TagManager";
 import { TextPromptDialog, type TextPromptConfig } from "../features/library/TextPromptDialog";
 import { libraryTagTone, readingStatusLabel } from "../features/library/library-work-display";
@@ -133,7 +139,6 @@ const MIN_BULK_TAG_BUSY_MS = 250;
 const MIN_MOVE_ACTION_BUSY_MS = 250;
 const MIN_REFERENCE_IMPORT_BUSY_MS = 250;
 const MIN_WORK_ACTION_BUSY_MS = 350;
-const REFERENCE_FILE_EXTENSIONS = new Set(["bib", "ris", "nbib", "enw", "json"]);
 const REFERENCE_IMPORT_ACCEPT = ".bib,.ris,.nbib,.enw,.json,application/json,text/plain";
 const REFERENCE_IMPORT_FORMAT_LABEL = "BibTeX、RIS、PubMed NBIB、EndNote ENW 或 CSL-JSON";
 const CITATION_STYLES = [
@@ -582,34 +587,9 @@ function DialogLoading({ label }: { label: string }) {
   );
 }
 
-function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
-  return (
-    Array.from(dataTransfer.types).includes("Files") ||
-    Array.from(dataTransfer.items).some((item) => item.kind === "file")
-  );
-}
-
-function isPdfFile(file: File): boolean {
-  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-}
-
-function isReferenceFile(file: File): boolean {
-  const ext = file.name.toLowerCase().split(".").pop() ?? "";
-  return REFERENCE_FILE_EXTENSIONS.has(ext);
-}
-
-function isSupportedImportFile(file: File): boolean {
-  return isPdfFile(file) || isReferenceFile(file);
-}
-
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
-}
-
-async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
-  const remaining = minimumMs - (Date.now() - startedAt);
-  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
 async function waitForLibrarySmokeAfterReadDelay(): Promise<void> {
@@ -1388,13 +1368,16 @@ export function LibraryPage() {
     if (!selectedWork) return;
     if (!isDesktopRuntime()) {
       navigate(
-        fulltextHandoffPath({
-          arxivId: selectedWork.arxiv_id,
-          doi: selectedWork.doi,
-          id: selectedWork.id,
-          title: selectedWork.title,
-          url: selectedWork.url,
-        }),
+        fulltextWorkHandoffPath(
+          {
+            arxivId: selectedWork.arxiv_id,
+            doi: selectedWork.doi,
+            id: selectedWork.id,
+            title: selectedWork.title,
+            url: selectedWork.url,
+          },
+          "library",
+        ),
       );
       return;
     }
@@ -1418,13 +1401,16 @@ export function LibraryPage() {
       }
       // No OA copy — hand off to the browser at the publisher / search page.
       navigate(
-        fulltextHandoffPath({
-          arxivId: selectedWork.arxiv_id,
-          doi: selectedWork.doi,
-          id: selectedWork.id,
-          title: selectedWork.title,
-          url: selectedWork.url,
-        }),
+        fulltextWorkHandoffPath(
+          {
+            arxivId: selectedWork.arxiv_id,
+            doi: selectedWork.doi,
+            id: selectedWork.id,
+            title: selectedWork.title,
+            url: selectedWork.url,
+          },
+          "library",
+        ),
       );
     } catch (e) {
       setMessage(`查找全文失败:${describeSafeError(e)}`);

@@ -7,6 +7,7 @@ import {
   type Bounds,
   type CaptureResult,
   type DownloadFinishedPayload,
+  type DownloadStartedPayload,
   type HttpRequestDTO,
   type HttpResultDTO,
   type ResearchTab,
@@ -136,8 +137,13 @@ const api = {
     },
   },
   research: {
-    open(siteId: string, url: string, proxy?: string): Promise<string> {
-      return ipcRenderer.invoke(CH.researchOpen, siteId, url, proxy ?? "");
+    open(
+      siteId: string,
+      url: string,
+      proxy?: string,
+      options?: { reuseExisting?: boolean },
+    ): Promise<string> {
+      return ipcRenderer.invoke(CH.researchOpen, siteId, url, proxy ?? "", options);
     },
     activate(tabId: string): Promise<void> {
       return ipcRenderer.invoke(CH.researchActivate, tabId);
@@ -181,8 +187,8 @@ const api = {
     siteData(siteIds: string[]): Promise<string[]> {
       return ipcRenderer.invoke(CH.researchSiteData, siteIds);
     },
-    onDownloadStarted(cb: (p: { fileName: string }) => void): () => void {
-      const listener = (_: unknown, p: { fileName: string }) => cb(p);
+    onDownloadStarted(cb: (p: DownloadStartedPayload) => void): () => void {
+      const listener = (_: unknown, p: DownloadStartedPayload) => cb(p);
       ipcRenderer.on(EV.researchDownloadStarted, listener);
       return () => ipcRenderer.off(EV.researchDownloadStarted, listener);
     },

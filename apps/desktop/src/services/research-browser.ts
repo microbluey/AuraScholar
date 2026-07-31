@@ -18,9 +18,10 @@ export async function openResearchTab(
   siteId: string,
   url: string,
   proxy?: string,
+  options?: { reuseExisting?: boolean },
 ): Promise<string | null> {
   if (!ready()) return null;
-  return window.aura.research.open(siteId, url, proxy);
+  return window.aura.research.open(siteId, url, proxy, options);
 }
 
 export async function activateResearchTab(tabId: string): Promise<void> {
