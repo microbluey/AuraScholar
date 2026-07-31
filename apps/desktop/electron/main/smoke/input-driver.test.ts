@@ -11,22 +11,38 @@ function createMockWindow(
 ): {
   attach: ReturnType<typeof vi.fn>;
   detach: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
   sendCommand: typeof sendCommand;
+  show: ReturnType<typeof vi.fn>;
   win: BrowserWindow;
 } {
   let attached = false;
+  let focused = false;
+  let visible = false;
   const attach = vi.fn(() => {
     attached = true;
   });
   const detach = vi.fn(() => {
     attached = false;
   });
+  const focus = vi.fn(() => {
+    focused = true;
+  });
+  const show = vi.fn(() => {
+    visible = true;
+  });
   return {
     attach,
     detach,
+    focus,
     sendCommand,
+    show,
     win: {
+      focus,
       getContentSize: () => [640, 480],
+      isFocused: () => focused,
+      isVisible: () => visible,
+      show,
       webContents: {
         debugger: {
           attach,
@@ -34,6 +50,7 @@ function createMockWindow(
           isAttached: () => attached,
           sendCommand,
         },
+        focus,
         isDestroyed: () => false,
       },
     } as unknown as BrowserWindow,
@@ -139,6 +156,8 @@ describe("SmokeInputDriver", () => {
     ).resolves.toBe("double-click:sequence");
 
     expect(mock.attach).toHaveBeenCalledWith("1.3");
+    expect(mock.show).toHaveBeenCalledOnce();
+    expect(mock.focus).toHaveBeenCalled();
     expect(mock.sendCommand.mock.calls.map(([, params]) => params)).toMatchObject([
       { type: "mouseMoved", buttons: 0 },
       { type: "mousePressed", buttons: 1, clickCount: 1 },

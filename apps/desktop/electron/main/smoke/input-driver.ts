@@ -149,6 +149,7 @@ export class SmokeInputDriver {
     if (request.kind === "mouse-drag") {
       this.validatePoint(request.source, "source");
       this.validatePoint(request.through, "through");
+      await this.prepareWindowForInput();
       this.ensureAttached(browserDebugger);
       let pressed = false;
       let lastPoint = request.source;
@@ -172,6 +173,7 @@ export class SmokeInputDriver {
       return;
     }
 
+    await this.prepareWindowForInput();
     this.ensureAttached(browserDebugger);
     let pressed = false;
     let clickCount: 1 | 2 = 1;
@@ -194,6 +196,13 @@ export class SmokeInputDriver {
         await this.releaseMouse(browserDebugger, request.target, clickCount);
       }
     }
+  }
+
+  private async prepareWindowForInput(): Promise<void> {
+    if (!this.win.isVisible()) this.win.show();
+    if (!this.win.isFocused()) this.win.focus();
+    this.win.webContents.focus();
+    await wait(CLICK_PRESS_DELAY_MS);
   }
 
   private ensureAttached(browserDebugger: Debugger): void {
