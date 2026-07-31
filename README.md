@@ -29,8 +29,9 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 ### 🔍 Academic search
 
 - **Federated open-source search**: native aggregation across OpenAlex / Crossref / Semantic Scholar / arXiv with merged, deduplicated results, in-library markers, and one-click ingest (including OA PDF retrieval).
+- **Reliable full-text completion loop**: “Find full text” from Library, Reader, or a search result validates candidates in Unpaywall → arXiv → explicit OA-PDF order before falling back to the research browser. Each task carries a unique ID, target work, and origin; Reader/Library handoffs add a validated return route, while browser fallback binds the actual root tab and its child-tab chain. Late downloads therefore cannot attach to a newer target, and completion refreshes the full-text state before returning when a safe route exists.
 - **Built-in research browser**: open Google Scholar, Web of Science, Scopus, PubMed, CNKI, IEEE Xplore, ScienceDirect, SpringerLink, Wiley, ACM, JSTOR, ResearchGate, bioRxiv, DBLP, Baidu Scholar, Wanfang, VIP and more in in-app tabs (sites are customizable). Each site gets an isolated, persistent login session.
-  - **Download-to-library**: PDFs downloaded on site (including via institutional subscriptions) and exported citation files are captured and ingested automatically.
+  - **Captured downloads with confirmation**: PDFs downloaded on site (including via institutional subscriptions) are captured and analyzed. New files and cross-work DOI/content-hash conflicts wait for destination confirmation; an exact duplicate already belonging to the explicit target can attach idempotently. Exported citation files are still recognized and deduplicated automatically.
   - **Arc-style tab archiving**: inactive tabs hibernate to free memory and restore instantly on click.
   - **Flexible networking**: per-site proxy settings (campus VPN and personal proxies coexist), plus library EZproxy prefixes to open paywalled articles with your institution's subscription.
 

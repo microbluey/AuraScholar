@@ -26,6 +26,13 @@ export interface ResolvedWork {
   candidates?: NormalizedWork[];
 }
 
+export type OaPdfSource = "unpaywall" | "arxiv" | "openalex";
+
+export interface OaPdfCandidate {
+  url: string;
+  via: OaPdfSource;
+}
+
 export async function resolveClue(ctx: ConnectorContext, clue: Clue): Promise<ResolvedWork | null> {
   switch (clue.kind) {
     case "doi":
@@ -140,20 +147,67 @@ function levenshtein(a: string, b: string): number {
   return prev[b.length]!;
 }
 
-/** Finds a legal OA PDF for a resolved work: Unpaywall → arXiv → OpenAlex. */
+/**
+ * Finds legal OA PDF candidates in fallback order: Unpaywall → arXiv →
+ * OpenAlex. Duplicate URLs keep their first (highest-priority) source.
+ *
+ * Connector normalization only sets `oaPdfUrl` from an explicit PDF field.
+ * The consumer still validates the downloaded bytes because legitimate
+ * tokenized PDF endpoints do not always have a `.pdf`-shaped URL.
+ */
+export async function findOaPdfCandidates(
+  ctx: ConnectorContext,
+  work: NormalizedWork,
+): Promise<OaPdfCandidate[]> {
+  const candidates: OaPdfCandidate[] = [];
+  const seen = new Set<string>();
+  const append = (candidate: OaPdfCandidate) => {
+    if (!isHttpUrl(candidate.url)) return;
+    const key = canonicalCandidateKey(candidate.url);
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  if (work.doi) {
+    const oa = await unpaywallPdf(ctx, work.doi).catch(() => null);
+    if (oa) append({ url: oa.pdfUrl, via: "unpaywall" });
+  }
+  if (work.arxivId) {
+    append({ url: `https://arxiv.org/pdf/${work.arxivId}`, via: "arxiv" });
+  }
+  if (work.oaPdfUrl) {
+    append({ url: work.oaPdfUrl, via: "openalex" });
+  }
+  return candidates;
+}
+
+/** Finds the first legal OA PDF while preserving the original single-result API. */
 export async function findOaPdf(
   ctx: ConnectorContext,
   work: NormalizedWork,
 ): Promise<{ url: string; via: string } | null> {
-  if (work.doi) {
-    const oa = await unpaywallPdf(ctx, work.doi).catch(() => null);
-    if (oa) return { url: oa.pdfUrl, via: "unpaywall" };
+  return (await findOaPdfCandidates(ctx, work))[0] ?? null;
+}
+
+function isHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
-  if (work.arxivId) {
-    return { url: `https://arxiv.org/pdf/${work.arxivId}`, via: "arxiv" };
+}
+
+function canonicalCandidateKey(raw: string): string {
+  const url = new URL(raw);
+  url.hash = "";
+  url.protocol = url.protocol.toLowerCase();
+  url.hostname = url.hostname.toLowerCase();
+
+  // arXiv accepts both /pdf/<id> and /pdf/<id>.pdf for the same document.
+  if (url.hostname === "arxiv.org") {
+    url.pathname = url.pathname.replace(/\.pdf$/i, "").replace(/\/+$/, "");
   }
-  if (work.oaPdfUrl) {
-    return { url: work.oaPdfUrl, via: "openalex" };
-  }
-  return null;
+  return url.toString();
 }

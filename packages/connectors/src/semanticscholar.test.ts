@@ -17,6 +17,7 @@ const PAPER: S2Paper = {
   venue: "NeurIPS",
   publicationTypes: ["Conference"],
   authors: [{ name: "Ashish Vaswani" }, { name: "Noam Shazeer" }],
+  openAccessPdf: { url: "https://arxiv.org/pdf/1706.03762" },
 };
 
 describe("s2ByDoi", () => {
@@ -42,6 +43,9 @@ describe("s2SearchByTitle", () => {
     const results = await s2SearchByTitle(ctxWith(http), "attention");
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toContain("Attention");
+    expect(decodeURIComponent(http.requests[0]!.url)).toContain(
+      "fields=paperId,externalIds,title,abstract,year,publicationDate,venue,publicationTypes,authors,citationCount,openAccessPdf",
+    );
   });
 });
 
@@ -81,6 +85,7 @@ describe("normalizeS2", () => {
     expect(w.pmid).toBe("999");
     expect(w.s2Id).toBe("abc123");
     expect(w.venueType).toBe("conference");
+    expect(w.oaPdfUrl).toBe("https://arxiv.org/pdf/1706.03762");
     expect(w.source).toBe("s2");
     expect(w.authors.map((a) => a.displayName)).toEqual(["Ashish Vaswani", "Noam Shazeer"]);
   });

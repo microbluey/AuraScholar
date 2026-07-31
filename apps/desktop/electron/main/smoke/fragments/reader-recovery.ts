@@ -102,7 +102,11 @@ export const smokeReaderRecovery = String.raw`        location.hash = "#/reader?
             location.hash.includes("/discovery") &&
             Boolean(document.querySelector(".discovery-page--browser")) &&
             bodyIncludes("补全文目标") &&
-            bodyIncludes(MISSING_PDF.title),
+            bodyIncludes(MISSING_PDF.title) &&
+            (
+              bodyIncludes("正在检查开放全文并准备专属浏览标签") ||
+              bodyIncludes("仅从本次全文任务标签下载或抓取的 PDF 会优先挂回这篇文献")
+            ),
           5_000
         );
         readerFindFulltextHandoffHash = location.hash;
@@ -114,10 +118,14 @@ export const smokeReaderRecovery = String.raw`        location.hash = "#/reader?
         readerFindFulltextHandoffTargetVisible =
           bodyIncludes("补全文目标") &&
           bodyIncludes(MISSING_PDF.title) &&
-          bodyIncludes("下载或抓取到的 PDF 会优先挂回这篇文献");
-        readerFindFulltextHandoffStatusVisible = bodyIncludes(
-          "正在为《" + MISSING_PDF.title + "》打开全文来源"
-        );
+          (
+            bodyIncludes("正在检查开放全文并准备专属浏览标签") ||
+            bodyIncludes("下载或抓取到的 PDF 会优先挂回这篇文献")
+          );
+        readerFindFulltextHandoffStatusVisible =
+          bodyIncludes("正在为《" + MISSING_PDF.title + "》检查开放获取全文") ||
+          bodyIncludes("正在打开《" + MISSING_PDF.title + "》的全文来源") ||
+          bodyIncludes("已找到开放获取 PDF，请核对后挂载");
         location.hash = "#/reader?work=" + encodeURIComponent(MISSING_PDF.workId);
         await waitFor(
           () =>

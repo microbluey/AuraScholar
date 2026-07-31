@@ -61,7 +61,7 @@ import {
   updateReaderSessionOwnedValue,
   type ReaderSessionOwnedValue,
 } from "../features/reader/reader-session-state";
-import { fulltextLandingUrl } from "../services/fulltext";
+import { fulltextWorkHandoffPath } from "../services/fulltext";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { describeSafeError } from "../services/sensitive-text";
 import { resolveTranslator, loadTranslateConfig } from "../services/translate";
@@ -364,10 +364,6 @@ function libraryReaderLoadFailure(
         missingWork: null,
       };
   }
-}
-
-function fullTextLanding(work: MissingWorkContext): string {
-  return fulltextLandingUrl(work);
 }
 
 export function ReaderPage() {
@@ -727,12 +723,9 @@ export function ReaderPage() {
 
   const handleFindFulltext = () => {
     if (!missingWork) return;
-    const params = new URLSearchParams({
-      pendingWorkId: missingWork.id,
-      pendingTitle: missingWork.title,
-      url: fullTextLanding(missingWork),
-    });
-    navigate(`/discovery?${params.toString()}`);
+    navigate(
+      fulltextWorkHandoffPath(missingWork, "reader"),
+    );
   };
 
   const handleTranslate = (selection: ReaderTextSelection) => {

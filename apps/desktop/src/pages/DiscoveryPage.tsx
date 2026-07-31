@@ -36,9 +36,8 @@ import {
   type DiscoverySite,
 } from "../services/discovery-sites";
 import { subscribeResearchDownloads } from "../services/research-downloads";
-import type { IngestDraft } from "../services/library-types";
-import { openExternalUrl, auraFs, isDesktopRuntime } from "../services/aura-platform";
-import { fulltextLandingUrl } from "../services/fulltext";
+import { openExternalUrl, isDesktopRuntime } from "../services/aura-platform";
+import { initialFulltextTask } from "../services/fulltext";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { useConfirmDialog } from "../components/ConfirmDialog";
@@ -67,7 +66,18 @@ import {
 } from "../features/discovery/useDiscoverySearchController";
 import { useDiscoveryResultImportController } from "../features/discovery/useDiscoveryResultImportController";
 import { useDiscoverySavedSearchController } from "../features/discovery/useDiscoverySavedSearchController";
+import { useIngestDraftQueue } from "../features/discovery/useIngestDraftQueue";
+import { PendingFulltextTarget } from "../features/discovery/PendingFulltextTarget";
+import { planFulltextDownload } from "../features/discovery/fulltext-download-plan";
+import { useFulltextTaskController } from "../features/discovery/useFulltextTaskController";
+import { useFulltextImportCompletion } from "../features/discovery/useFulltextImportCompletion";
+import { useBrowserDownloadImport } from "../features/discovery/useBrowserDownloadImport";
+import {
+  createDiscoveryInitialState,
+  previewDiscoverySourceStatus,
+} from "../features/discovery/discovery-initial-state";
 import { isImeComposing } from "../keyboard";
+import { waitForMinimumElapsed } from "../services/minimum-busy";
 import { describeSafeError } from "../services/sensitive-text";
 
 const ImportConfirmDialog = lazy(() =>
@@ -98,11 +108,6 @@ const MIN_SITE_RESTORE_BUSY_MS = 250;
 const MIN_PROXY_CONFIG_SAVE_BUSY_MS = 250;
 const MIN_DISCOVERY_SITE_ADD_BUSY_MS = 350;
 const MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS = 350;
-
-async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Promise<void> {
-  const remaining = minimumMs - (Date.now() - startedAt);
-  if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
-}
 
 function hostOf(url: string): string {
   try {
@@ -202,64 +207,6 @@ const PREVIEW_DISCOVERY_RESULTS: DiscoveryResultWithLibrary[] = [
   },
 ];
 
-function previewDiscoverySourceStatus(
-  activeSources: readonly DiscoverySource[] = DEFAULT_DISCOVERY_SOURCES,
-): Record<DiscoverySource, DiscoverySourceStatus> {
-  const active = new Set(activeSources);
-  return Object.fromEntries(
-    SOURCES.map((source) => [
-      source.id,
-      active.has(source.id) ? (source.id === "arxiv" ? "empty" : "done") : "idle",
-    ]),
-  ) as Record<DiscoverySource, DiscoverySourceStatus>;
-}
-
-function initialDiscoveryMode(): Mode {
-  return isDesktopRuntime() ? "home" : "opensource";
-}
-
-function initialPendingFulltextTarget(): { id: string; title: string } | null {
-  if (isDesktopRuntime() || typeof window === "undefined") return null;
-  const hash = window.location.hash;
-  const queryIndex = hash.indexOf("?");
-  if (queryIndex < 0) return null;
-  const params = new URLSearchParams(hash.slice(queryIndex + 1));
-  const id = params.get("pendingWorkId");
-  if (!id) return null;
-  return { id, title: params.get("pendingTitle") ?? "" };
-}
-
-function initialDiscoveryQuery(): string {
-  const pending = initialPendingFulltextTarget();
-  if (pending?.title.trim()) return pending.title.trim();
-  return isDesktopRuntime() ? "" : PREVIEW_DISCOVERY_QUERY;
-}
-
-function initialDiscoveryResults(): DiscoveryResultWithLibrary[] {
-  if (initialPendingFulltextTarget()) return [];
-  return isDesktopRuntime() ? [] : PREVIEW_DISCOVERY_RESULTS;
-}
-
-function initialDiscoverySelectedId(): string | null {
-  if (initialPendingFulltextTarget()) return null;
-  return isDesktopRuntime() ? null : (PREVIEW_DISCOVERY_RESULTS[0]?.id ?? null);
-}
-
-function initialDiscoverySourceStatus(): Record<DiscoverySource, DiscoverySourceStatus> {
-  if (initialPendingFulltextTarget()) {
-    return Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
-      DiscoverySource,
-      DiscoverySourceStatus
-    >;
-  }
-  return isDesktopRuntime()
-    ? (Object.fromEntries(SOURCES.map((source) => [source.id, "idle"])) as Record<
-        DiscoverySource,
-        DiscoverySourceStatus
-      >)
-    : previewDiscoverySourceStatus();
-}
-
 interface SiteRemoveUndoState {
   message: string;
   site: DiscoverySite;
@@ -293,20 +240,21 @@ function consumeDiscoverySmokeRestoreSiteFailure(): Error | null {
   return failure instanceof Error ? failure : new Error(describeUnknownError(failure));
 }
 
-function PendingFulltextTarget({ detail, title }: { detail: string; title: string }) {
-  return (
-    <div className="research-pending-work" role="status" aria-live="polite">
-      <span>补全文目标</span>
-      <strong title={title}>{title || "待补全文文献"}</strong>
-      <small>{detail}</small>
-    </div>
-  );
-}
-
 export function DiscoveryPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>(() => initialDiscoveryMode());
-  const [query, setQuery] = useState(() => initialDiscoveryQuery());
+  const [initialState] = useState(() =>
+    createDiscoveryInitialState({
+      allSources: DEFAULT_DISCOVERY_SOURCES,
+      previewQuery: PREVIEW_DISCOVERY_QUERY,
+      previewResults: PREVIEW_DISCOVERY_RESULTS,
+    }),
+  );
+  const [mode, setMode] = useState<Mode>(initialState.mode);
+  const modeRef = useRef(mode);
+  const [query, setQuery] = useState(initialState.query);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   // Sites
   const [sites, setSites] = useState<DiscoverySite[]>([]);
@@ -364,13 +312,15 @@ export function DiscoveryPage() {
   const [browserToastKey, setBrowserToastKey] = useState(0);
   const { confirm, confirmDialog } = useConfirmDialog();
   // Pending import confirmation from a browser download (analyze → confirm).
-  const [confirmDraft, setConfirmDraft] = useState<IngestDraft | null>(null);
-  // "Find full text" target: a downloaded PDF should attach to this work.
-  const [pendingWork, setPendingWork] = useState<{ id: string; title: string } | null>(() =>
-    initialPendingFulltextTarget(),
-  );
-  // Mirror in a ref so the download subscription (deps: [mode]) reads it fresh.
-  const pendingWorkRef = useRef(pendingWork);
+  const {
+    activeDraft: confirmDraft,
+    activeKey: confirmDraftKey,
+    dismiss: dismissConfirmDraft,
+    enqueue: enqueueConfirmDraft,
+    pendingCount: pendingConfirmDraftCount,
+    remove: removeConfirmDraft,
+    snapshot: confirmDraftQueueSnapshot,
+  } = useIngestDraftQueue();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const openSourceSearchInputRef = useRef<HTMLInputElement>(null);
@@ -390,9 +340,9 @@ export function DiscoveryPage() {
   const discoverySearch = useDiscoverySearchController({
     allSources: DEFAULT_DISCOVERY_SOURCES,
     initialSnapshot: {
-      results: initialDiscoveryResults(),
-      selectedId: initialDiscoverySelectedId(),
-      sourceStatus: initialDiscoverySourceStatus(),
+      results: initialState.results,
+      selectedId: initialState.selectedId,
+      sourceStatus: initialState.sourceStatus,
     },
     onMessage: setMessage,
     preview: desktopRuntime
@@ -401,7 +351,8 @@ export function DiscoveryPage() {
           message:
             "浏览器预览正在展示一组聚合检索样例；桌面应用会实时查询 OpenAlex、Crossref、Semantic Scholar 和 arXiv。",
           results: PREVIEW_DISCOVERY_RESULTS,
-          sourceStatus: previewDiscoverySourceStatus,
+          sourceStatus: (sources) =>
+            previewDiscoverySourceStatus(DEFAULT_DISCOVERY_SOURCES, sources),
         },
   });
   const {
@@ -448,10 +399,6 @@ export function DiscoveryPage() {
   const showOpenSourceNoResults =
     !showOpenSourceSearchError && !searching && results.length === 0 && hasOpenSourceSearchRun;
 
-  useEffect(() => {
-    pendingWorkRef.current = pendingWork;
-  }, [pendingWork]);
-
   const hideBrowserViewsWithFeedback = useCallback(async (): Promise<boolean> => {
     try {
       await hideResearchViews();
@@ -471,16 +418,21 @@ export function DiscoveryPage() {
       siteId: string,
       url: string,
       tabProxy?: string,
-      options: { keepBrowserOnFailure?: boolean } = {},
+      options: {
+        keepBrowserOnFailure?: boolean;
+        onOpened?: (tabId: string) => void;
+        reuseExisting?: boolean;
+      } = {},
     ) => {
       setOpeningBrowserTab(true);
-      void openResearchTab(siteId, url, tabProxy)
+      void openResearchTab(siteId, url, tabProxy, { reuseExisting: options.reuseExisting })
         .then((tabId) => {
           if (!tabId) {
             setMessage("内置浏览器仅在桌面应用中可用");
             if (!options.keepBrowserOnFailure) setMode("home");
             return;
           }
+          options.onOpened?.(tabId);
           return listResearchTabs().then(setTabs);
         })
         .catch((error) => {
@@ -521,64 +473,38 @@ export function DiscoveryPage() {
     };
   }, [refreshSites]);
 
-  // Open the browser at a paper's landing page (publisher via DOI, else Scholar
-  // title search), remembering the target work so the download attaches to it.
-  const openFulltextBrowser = useCallback(
-    (target: { id: string; title: string; doi?: string; arxivId?: string; url?: string }) => {
-      const url = fulltextLandingUrl(target);
-      setPendingWork({ id: target.id, title: target.title });
-      if (!desktopRuntime) {
-        setMode("opensource");
-        setQuery(target.title);
-        clearDiscoverySearch();
-        setMessage(`已保留《${target.title}》的补全文目标；浏览器预览不会打开内置站点浏览器。`);
-        return;
-      }
-      setMode("browser");
-      setMessage(`正在为《${target.title}》打开全文来源...`);
-      const dest = ezproxy.trim() ? (ezproxyRewrite(ezproxy, url) ?? url) : url;
-      openResearchTabWithFeedback("_fulltext", dest, proxy, { keepBrowserOnFailure: true });
-    },
-    [clearDiscoverySearch, desktopRuntime, ezproxy, openResearchTabWithFeedback, proxy],
-  );
-
-  // "Find full text" hand-off from the library (via query params).
   const [searchParams, setSearchParams] = useSearchParams();
+  const {
+    openBrowser: openFulltextTaskBrowser,
+    openTarget: openFulltextBrowser,
+    replace: replacePendingFulltextTask,
+    start: startFulltextTask,
+    task: pendingFulltextTask,
+    taskRef: pendingFulltextTaskRef,
+  } = useFulltextTaskController({
+    clearSearch: clearDiscoverySearch,
+    desktopRuntime,
+    ezproxy,
+    initialTask: initialState.pendingTask,
+    onConfirmDraft: enqueueConfirmDraft,
+    onMessage: setMessage,
+    onMode: setMode,
+    onQuery: setQuery,
+    openResearchTab: openResearchTabWithFeedback,
+    proxy,
+  });
+
+  // "Find full text" hand-off from Reader/Library (via a shared task contract).
   useEffect(() => {
-    const workId = searchParams.get("pendingWorkId");
-    const url = searchParams.get("url");
-    if (!workId || !url) return;
-    const title = searchParams.get("pendingTitle") ?? "";
+    const task = initialFulltextTask(searchParams);
+    if (!task) return;
     const handoffId = window.setTimeout(() => {
-      setPendingWork({ id: workId, title });
-      if (!isDesktopRuntime()) {
-        setMode("opensource");
-        if (title.trim()) setQuery(title.trim());
-        clearDiscoverySearch();
-        setMessage(
-          title
-            ? `已保留《${title}》的补全文目标；浏览器预览不会打开内置站点浏览器。`
-            : "已保留补全文目标；浏览器预览不会打开内置站点浏览器。",
-        );
-        return;
-      }
-      setPendingWork({ id: workId, title });
-      setMode("browser");
-      setMessage(title ? `正在为《${title}》打开全文来源...` : "正在打开全文来源...");
-      const target = ezproxy.trim() ? (ezproxyRewrite(ezproxy, url) ?? url) : url;
-      openResearchTabWithFeedback("_fulltext", target, proxy, { keepBrowserOnFailure: true });
       // Consume the params so a refresh/back doesn't reopen.
       setSearchParams({}, { replace: true });
+      startFulltextTask(task);
     }, 0);
     return () => window.clearTimeout(handoffId);
-  }, [
-    clearDiscoverySearch,
-    ezproxy,
-    openResearchTabWithFeedback,
-    proxy,
-    searchParams,
-    setSearchParams,
-  ]);
+  }, [searchParams, setSearchParams, startFulltextTask]);
 
   const openViaLibrary = useCallback(async () => {
     if (!ezproxy.trim()) {
@@ -706,14 +632,25 @@ export function DiscoveryPage() {
   // Closing the last tab returns to the site grid rather than stranding the
   // user on an empty "opening..." spinner.
   useEffect(() => {
-    if (mode === "browser" && tabs.length === 0 && !openingBrowserTab && !pendingWork) {
+    if (
+      mode === "browser" &&
+      tabs.length === 0 &&
+      !openingBrowserTab &&
+      !pendingFulltextTask
+    ) {
       const closeId = window.setTimeout(() => {
         void hideBrowserViewsWithFeedback();
         setMode("home");
       }, 0);
       return () => window.clearTimeout(closeId);
     }
-  }, [hideBrowserViewsWithFeedback, mode, openingBrowserTab, pendingWork, tabs.length]);
+  }, [
+    hideBrowserViewsWithFeedback,
+    mode,
+    openingBrowserTab,
+    pendingFulltextTask,
+    tabs.length,
+  ]);
 
   // Report the content-area rectangle to main, which positions the active view
   // exactly there. This is the whole reason the embedded view never overlaps.
@@ -772,32 +709,60 @@ export function DiscoveryPage() {
     return () => document.body.classList.remove("research-fullscreen");
   }, [mode]);
 
-  // A downloaded PDF whose work is already in the library: attach + surface,
-  // no confirm card.
-  const handleBrowserDedup = useCallback(async (draft: IngestDraft) => {
-    if (!draft.dedup) return;
-    const { attachStagedPdf, restoreDedup } = await import("../services/library-actions");
-    await restoreDedup(draft.dedup.workId);
-    let pdfMessage: string | null = null;
-    let attached = false;
-    if (draft.pdf) {
-      try {
-        const attachment = await attachStagedPdf(draft.dedup.workId, draft.pdf);
-        attached = true;
-        pdfMessage = attachment.deduped ? "PDF 已经挂过" : "PDF 已挂到该文献";
-      } catch (e) {
-        pdfMessage = `PDF 挂载失败:${describeUnknownError(e)}`;
+  const markWorkFulltextReady = useCallback(
+    (workId: string) => {
+      for (const result of results) {
+        if (result.libraryWorkId !== workId) continue;
+        updateDiscoveryResultByIdentity(result, (current) => ({
+          ...current,
+          inLibrary: true,
+          libraryWorkId: workId,
+          needsFulltext: false,
+        }));
       }
-    }
-    if (draft.pdf?.relPath && attached) void auraFs.deleteFile(draft.pdf.relPath).catch(() => {});
-    setMessage(`已在库中:${draft.dedup.title}${pdfMessage ? `，${pdfMessage}` : ""}`);
-    window.dispatchEvent(new Event("aurascholar:library-updated"));
-  }, []);
+    },
+    [results, updateDiscoveryResultByIdentity],
+  );
+
+  const restoreActiveBrowserTab = useCallback(() => {
+    const active = tabs.find((tab) => tab.active);
+    if (active) runBrowserAction("恢复浏览器标签", () => activateResearchTab(active.tabId));
+  }, [runBrowserAction, tabs]);
+  const {
+    deferBrowserFallback,
+    finish: finishBrowserImport,
+    markLeaving: markFulltextImportLeaving,
+    resumeIfQueueEmpty,
+  } = useFulltextImportCompletion({
+    dismissDraft: dismissConfirmDraft,
+    hideBrowserViews: hideBrowserViewsWithFeedback,
+    markWorkReady: markWorkFulltextReady,
+    mode,
+    navigate,
+    onMessage: setMessage,
+    onMode: setMode,
+    openTaskBrowser: openFulltextTaskBrowser,
+    queueSnapshot: confirmDraftQueueSnapshot,
+    replaceTask: replacePendingFulltextTask,
+    restoreActiveBrowserTab,
+    taskRef: pendingFulltextTaskRef,
+  });
+
+  const {
+    handleDedup: handleBrowserDedup,
+    queueConfirmation: queueBrowserConfirmation,
+  } = useBrowserDownloadImport({
+    enqueueDraft: enqueueConfirmDraft,
+    finish: finishBrowserImport,
+    hideBrowserViews: hideBrowserViewsWithFeedback,
+    modeRef,
+    onMessage: setMessage,
+    removeDraft: removeConfirmDraft,
+    resumeIfQueueEmpty,
+  });
 
   // Subscribe to intercepted downloads while the browser view is active.
-  // PDFs are analyzed (not auto-written): a dedup hit attaches directly, anything
-  // else opens a confirm card — but only after detaching the native view, which
-  // would otherwise paint over the DOM overlay.
+  // A task target only applies to the exact research tab bound to that task.
   useEffect(() => {
     if (mode !== "browser") return;
     return subscribeResearchDownloads(
@@ -808,53 +773,38 @@ export function DiscoveryPage() {
         } else if (result.kind === "references") {
           setMessage(`引用文件已导入:新增 ${result.imported ?? 0} 篇`);
         } else if (result.kind === "pdf" && result.draft) {
-          let draft = result.draft;
-          // If this download was launched via "find full text", default the card
-          // to attaching the PDF to that work.
-          const target = pendingWorkRef.current;
-          if (target && !draft.dedup) {
-            draft = { ...draft, targetWorkId: target.id, targetTitle: target.title };
-          }
-          if (draft.dedup) {
-            void handleBrowserDedup(draft);
+          const plan = planFulltextDownload(
+            pendingFulltextTaskRef.current,
+            result.ownerTabId,
+            result.draft,
+          );
+          if (plan.kind === "attach-dedup") {
+            void handleBrowserDedup(plan.draft);
           } else {
-            void hideBrowserViewsWithFeedback().then((hidden) => {
-              if (hidden) setConfirmDraft(draft);
-            });
+            queueBrowserConfirmation(plan.draft);
           }
         }
       },
-      (fileName) => setMessage(`正在下载并识别:${fileName}…`),
+      (payload) => setMessage(`正在下载并识别:${payload.fileName}…`),
     );
-  }, [handleBrowserDedup, hideBrowserViewsWithFeedback, mode]);
-
-  const finishBrowserImport = useCallback(
-    (draft: IngestDraft | null) => {
-      void import("../services/library-actions")
-        .then(({ discardStagedPdf }) => discardStagedPdf(draft?.pdf))
-        .catch(() => {});
-      setConfirmDraft(null);
-      setPendingWork(null); // find-full-text target consumed
-      // Re-show the browser view we detached before opening the card.
-      if (mode === "browser") {
-        const active = tabs.find((t) => t.active);
-        if (active) {
-          runBrowserAction("恢复浏览器标签", () => activateResearchTab(active.tabId));
-        }
-      }
-    },
-    [mode, runBrowserAction, tabs],
-  );
+  }, [
+    handleBrowserDedup,
+    mode,
+    pendingFulltextTaskRef,
+    queueBrowserConfirmation,
+  ]);
 
   const handleBrowserCommit = useCallback(
     async (decision: ImportDecision) => {
       const draft = confirmDraft;
       const { attachStagedPdf, commitIngest, restoreDedup } =
         await import("../services/library-actions");
+      let completedWorkId: string;
       if (decision.mode === "attach") {
         await restoreDedup(decision.workId);
         if (decision.pdf) await attachStagedPdf(decision.workId, decision.pdf);
         setMessage("已将 PDF 挂到所选文献");
+        completedWorkId = decision.workId;
       } else {
         const result = await commitIngest({
           workInput: decision.workInput,
@@ -862,24 +812,41 @@ export function DiscoveryPage() {
           source: "browser",
         });
         setMessage(`已入库:${result.title}`);
+        completedWorkId = result.workId;
       }
       window.dispatchEvent(new Event("aurascholar:library-updated"));
-      finishBrowserImport(draft);
+      finishBrowserImport(draft, completedWorkId);
     },
     [confirmDraft, finishBrowserImport],
   );
 
   const handleBrowserCancel = useCallback(() => {
-    setMessage("已取消入库");
+    const task = pendingFulltextTaskRef.current;
+    const continueInBrowser =
+      Boolean(confirmDraft?.targetHandoffId) &&
+      confirmDraft?.targetHandoffId === task?.handoffId &&
+      !task?.targetTabId;
+    setMessage(confirmDraft?.targetWorkId ? "已取消本次挂载，补全文目标仍保留" : "已取消入库");
+    if (continueInBrowser && task) deferBrowserFallback(task);
     finishBrowserImport(confirmDraft);
-  }, [confirmDraft, finishBrowserImport]);
+  }, [
+    confirmDraft,
+    deferBrowserFallback,
+    finishBrowserImport,
+    pendingFulltextTaskRef,
+  ]);
 
   const exitBrowser = useCallback(() => {
+    markFulltextImportLeaving();
     setMessage(null);
-    setPendingWork(null);
+    replacePendingFulltextTask(null);
     void hideBrowserViewsWithFeedback();
     setMode("home");
-  }, [hideBrowserViewsWithFeedback]);
+  }, [
+    hideBrowserViewsWithFeedback,
+    markFulltextImportLeaving,
+    replacePendingFulltextTask,
+  ]);
 
   const runSearch = useCallback(
     async (options: { query?: string; sources?: DiscoverySource[] } = {}): Promise<boolean> => {
@@ -1116,11 +1083,11 @@ export function DiscoveryPage() {
         return;
       }
       setMessage(null);
-      setPendingWork(null);
+      replacePendingFulltextTask(null);
       setMode("browser");
       openResearchTabWithFeedback(site.id, url, site.useProxy ? proxy : "");
     },
-    [openResearchTabWithFeedback, query, proxy],
+    [openResearchTabWithFeedback, query, proxy, replacePendingFulltextTask],
   );
 
   const openPrimarySite = useCallback(() => {
@@ -1387,10 +1354,14 @@ export function DiscoveryPage() {
             }}
           />
         </div>
-        {pendingWork && (
+        {pendingFulltextTask && (
           <PendingFulltextTarget
-            title={pendingWork.title}
-            detail="下载或抓取到的 PDF 会优先挂回这篇文献。"
+            title={pendingFulltextTask.title}
+            detail={
+              pendingFulltextTask.targetTabId
+                ? "仅从本次全文任务标签下载或抓取的 PDF 会优先挂回这篇文献。"
+                : "正在检查开放全文并准备专属浏览标签。"
+            }
           />
         )}
         <div ref={hostRef} className="research-browser-host">
@@ -1409,10 +1380,16 @@ export function DiscoveryPage() {
             }
           >
             <ImportConfirmDialog
+              key={confirmDraftKey}
               draft={confirmDraft}
               onCommit={handleBrowserCommit}
               onCancel={handleBrowserCancel}
             />
+            {pendingConfirmDraftCount > 0 && (
+              <span className="sr-only" role="status">
+                另有 {pendingConfirmDraftCount} 个下载等待核对
+              </span>
+            )}
           </Suspense>
         )}
         {confirmDialog}
@@ -1428,9 +1405,9 @@ export function DiscoveryPage() {
           ← 返回学术检索
         </button>
 
-        {pendingWork && (
+        {pendingFulltextTask && (
           <PendingFulltextTarget
-            title={pendingWork.title}
+            title={pendingFulltextTask.title}
             detail={
               desktopRuntime
                 ? "可继续检索开放 PDF 线索，或切到站点浏览后把下载 PDF 挂回这篇文献。"
@@ -1734,7 +1711,7 @@ export function DiscoveryPage() {
                           title: result.work.title,
                           doi: result.work.doi,
                           arxivId: result.work.arxivId,
-                          url: result.work.url,
+                          url: result.work.oaPdfUrl ?? result.work.url,
                         });
                       }
                     }}
@@ -1800,7 +1777,7 @@ export function DiscoveryPage() {
                         title: selectedResult.work.title,
                         doi: selectedResult.work.doi,
                         arxivId: selectedResult.work.arxivId,
-                        url: selectedResult.work.url,
+                        url: selectedResult.work.oaPdfUrl ?? selectedResult.work.url,
                       });
                     }
                   }}

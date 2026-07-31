@@ -18,6 +18,7 @@ const FIELDS = [
   "publicationTypes",
   "authors",
   "citationCount",
+  "openAccessPdf",
 ].join(",");
 
 export interface S2Author {
@@ -36,6 +37,7 @@ export interface S2Paper {
   publicationTypes?: string[];
   authors?: S2Author[];
   citationCount?: number;
+  openAccessPdf?: { url?: string } | null;
 }
 
 /** Extra S2-only signals not carried by NormalizedWork — fetched on demand. */
@@ -173,6 +175,7 @@ export function normalizeS2(p: S2Paper): NormalizedWork {
       position: i,
     })),
     citedByCount: p.citationCount,
+    oaPdfUrl: p.openAccessPdf?.url ?? undefined,
     source: "s2",
   };
 }
