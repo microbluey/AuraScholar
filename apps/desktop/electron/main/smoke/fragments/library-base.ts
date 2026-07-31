@@ -39,10 +39,18 @@ export const smokeLibraryBase = String.raw`          window.dispatchEvent(new Ev
 
             await selectLibraryDetailTab("笔记");
             const canvasWorkspaceFixtureNow = Date.now();
+            const [canvasProjectFixture] = await window.aura.db.query(
+              "SELECT id FROM research_projects WHERE library_id = ? AND status = 'active' AND deleted_at IS NULL ORDER BY created_at, id LIMIT 1",
+              [libraryId]
+            );
+            if (!canvasProjectFixture?.id) {
+              throw new Error("Smoke Canvas fixture requires an active Research Project");
+            }
             await window.aura.db.run(
-              "INSERT OR IGNORE INTO canvas_workspaces (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)",
+              "INSERT OR IGNORE INTO canvas_workspaces (id, library_id, project_id, name, description, schema_version, viewport_json, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)",
               [
                 "canvas:default", libraryId,
+                canvasProjectFixture.id,
                 "研究画布",
                 1,
                 JSON.stringify({ x: 0, y: 0, zoom: 1 }),

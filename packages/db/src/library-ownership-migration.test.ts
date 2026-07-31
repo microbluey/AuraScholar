@@ -483,9 +483,15 @@ describe("v17 Library ownership", () => {
       [second, now, now],
     );
     await db.run(
+      `INSERT INTO research_projects (
+         id, library_id, name, status, created_at, updated_at
+       ) VALUES ('project-b', ?, 'Second project', 'active', ?, ?)`,
+      [second, now, now],
+    );
+    await db.run(
       `INSERT INTO canvas_workspaces (
-         id, library_id, name, viewport_json, created_at, updated_at
-       ) VALUES ('canvas-b', ?, 'Second canvas', '{}', ?, ?)`,
+         id, library_id, project_id, name, viewport_json, created_at, updated_at
+       ) VALUES ('canvas-b', ?, 'project-b', 'Second canvas', '{}', ?, ?)`,
       [second, now, now],
     );
 
@@ -552,6 +558,7 @@ describe("v17 Library ownership", () => {
       ["collections", "collection-a"],
       ["tags", "tag-a"],
       ["saved_searches", "search-a"],
+      ["research_projects", "project:default"],
       ["canvas_workspaces", "canvas-a"],
       ["sentinel_tasks", "sentinel-a"],
       ["ai_jobs", "job-a"],

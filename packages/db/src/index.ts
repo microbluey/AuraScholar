@@ -1,7 +1,7 @@
 export * as schema from "./schema.js";
 export { MIGRATIONS, runMigrations } from "./migrations.js";
 export type { SqlExecutor, Migration } from "./migrations.js";
-export { newId, workFingerprint, normalizeDoi } from "./ids.js";
+export { newId, normalizeDoi, projectWorkMembershipId, workFingerprint } from "./ids.js";
 export {
   ensureLocalFirstState,
   ensureLocalLibraryIdentity,
@@ -38,6 +38,21 @@ export { SnippetsRepo } from "./repos/snippets.js";
 export type { SnippetRow, SnippetInput, SnippetWithWork } from "./repos/snippets.js";
 export { SavedSearchesRepo } from "./repos/saved-searches.js";
 export type { SavedSearchRow, SavedSearchInput } from "./repos/saved-searches.js";
+export {
+  LastActiveResearchProjectError,
+  ResearchProjectScopeError,
+  ResearchProjectsRepo,
+} from "./repos/research-projects.js";
+export type {
+  ResearchProjectInput,
+  ResearchProjectRow,
+  ResearchProjectStatus,
+} from "./repos/research-projects.js";
+export {
+  DEFAULT_RESEARCH_PROJECT_ID,
+  DEFAULT_RESEARCH_PROJECT_NAME,
+  scopedDefaultResearchProjectId,
+} from "./research-project-defaults.js";
 export {
   CanvasRepo,
   DEFAULT_CANVAS_WORKSPACE_ID,

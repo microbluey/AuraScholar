@@ -2,7 +2,9 @@
 // lives in @aurascholar/core; this package intentionally exposes a structural
 // storage contract to avoid a core <-> db dependency cycle.
 import type { Database } from "../database.js";
+import { flattenLegacyCanvasGroups } from "../canvas-legacy-storage.js";
 import { newId } from "../ids.js";
+import { ResearchProjectsRepo } from "./research-projects.js";
 
 export const DEFAULT_CANVAS_WORKSPACE_ID = "canvas:default";
 export const DEFAULT_CANVAS_WORKSPACE_NAME = "研究画布";
@@ -86,6 +88,7 @@ export interface StoredCanvasWorkspaceDocument {
 export interface CanvasWorkspaceSummary {
   schemaVersion: number;
   workspaceId: string;
+  projectId?: string;
   name: string;
   description?: string;
   createdAt: number;
@@ -95,6 +98,7 @@ export interface CanvasWorkspaceSummary {
 interface CanvasWorkspaceRow {
   id: string;
   library_id: string;
+  project_id: string;
   name: string;
   description: string | null;
   schema_version: number;
@@ -170,38 +174,6 @@ function stringifyJson(value: unknown, label: string): string {
   } catch {
     throw new Error(`${label} must be JSON-serializable`);
   }
-}
-
-/**
- * Nested groups were never a supported Canvas interaction, but early storage
- * accepted them. Read those snapshots compatibly by moving every nested Group
- * into the root coordinate space; its ordinary child cards stay relative to
- * that Group and therefore keep their visual positions.
- */
-function flattenLegacyCanvasGroups(nodes: StoredCanvasNode[]): StoredCanvasNode[] {
-  const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  return nodes.map((node) => {
-    if (node.type !== "group" || node.groupId === undefined) return node;
-    let x = node.position.x;
-    let y = node.position.y;
-    let parentId: string | undefined = node.groupId;
-    const visited = new Set([node.id]);
-    while (parentId && !visited.has(parentId)) {
-      visited.add(parentId);
-      const parent = nodeById.get(parentId);
-      if (!parent || parent.type !== "group") break;
-      x += parent.position.x;
-      y += parent.position.y;
-      assertFiniteNumber(x, `Canvas group ${node.id} flattened position.x`);
-      assertFiniteNumber(y, `Canvas group ${node.id} flattened position.y`);
-      parentId = parent.groupId;
-    }
-    return {
-      ...node,
-      position: { x, y },
-      groupId: undefined,
-    };
-  });
 }
 
 function parseViewport(value: string, workspaceId: string): StoredCanvasViewport {
@@ -402,6 +374,7 @@ export class CanvasRepo {
   }
 
   async ensureDefault(): Promise<StoredCanvasWorkspaceDocument> {
+    const projectId = (await new ResearchProjectsRepo(this.db, this.libraryId).ensureDefault()).id;
     return this.withWriteLock(async () => {
       const legacyDefault = await this.db.query<{ id: string; library_id: string }>(
         `SELECT id, library_id
@@ -417,11 +390,12 @@ export class CanvasRepo {
       const now = Date.now();
       await this.db.run(
         `INSERT OR IGNORE INTO canvas_workspaces
-           (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, 1, ?, ?, ?)`,
+           (id, library_id, project_id, name, description, schema_version, viewport_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NULL, 1, ?, ?, ?)`,
         [
           workspaceId,
           this.libraryId,
+          projectId,
           DEFAULT_CANVAS_WORKSPACE_NAME,
           JSON.stringify({ x: 0, y: 0, zoom: 1 }),
           now,
@@ -435,12 +409,17 @@ export class CanvasRepo {
   }
 
   /** Creates an empty workspace with a generated, globally unique id. */
-  async create(name: string, description?: string): Promise<StoredCanvasWorkspaceDocument> {
+  async create(
+    name: string,
+    description?: string,
+    projectId?: string,
+  ): Promise<StoredCanvasWorkspaceDocument> {
     const trimmedName = name.trim();
     assertNonEmptyString(trimmedName, "Canvas workspace name");
     if (description !== undefined && typeof description !== "string") {
       throw new Error("Canvas workspace description must be a string");
     }
+    const resolvedProjectId = await this.resolveActiveProjectId(projectId);
 
     return this.withWriteLock(() =>
       this.withSavepoint("canvas_create", async () => {
@@ -448,11 +427,12 @@ export class CanvasRepo {
         const now = Date.now();
         await this.db.run(
           `INSERT INTO canvas_workspaces
-             (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+             (id, library_id, project_id, name, description, schema_version, viewport_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           [
             workspaceId,
             this.libraryId,
+            resolvedProjectId,
             trimmedName,
             description ?? null,
             JSON.stringify({ x: 0, y: 0, zoom: 1 }),
@@ -504,7 +484,7 @@ export class CanvasRepo {
 
   async list(): Promise<CanvasWorkspaceSummary[]> {
     const rows = await this.db.query<Omit<CanvasWorkspaceRow, "viewport_json">>(
-      `SELECT id, library_id, name, description, schema_version, created_at, updated_at
+      `SELECT id, library_id, project_id, name, description, schema_version, created_at, updated_at
        FROM canvas_workspaces
        WHERE library_id = ?
        ORDER BY updated_at DESC, created_at ASC, id ASC`,
@@ -513,6 +493,7 @@ export class CanvasRepo {
     return rows.map((row) => ({
       schemaVersion: row.schema_version,
       workspaceId: row.id,
+      projectId: row.project_id,
       name: row.name,
       ...(row.description === null ? {} : { description: row.description }),
       createdAt: row.created_at,
@@ -522,7 +503,7 @@ export class CanvasRepo {
 
   async load(workspaceId: string): Promise<StoredCanvasWorkspaceDocument | null> {
     const workspaces = await this.db.query<CanvasWorkspaceRow>(
-      `SELECT id, library_id, name, description, schema_version, viewport_json, created_at, updated_at
+      `SELECT id, library_id, project_id, name, description, schema_version, viewport_json, created_at, updated_at
        FROM canvas_workspaces
        WHERE id = ? AND library_id = ?
        LIMIT 1`,
@@ -645,10 +626,11 @@ export class CanvasRepo {
    */
   async save(document: StoredCanvasWorkspaceDocument): Promise<void> {
     validateDocument(document);
+    const fallbackProjectId = await this.resolveActiveProjectId();
     return this.withWriteLock(() =>
       this.withSavepoint("canvas_save", async () => {
-        const existingWorkspace = await this.db.query<{ library_id: string }>(
-          `SELECT library_id FROM canvas_workspaces WHERE id = ? LIMIT 1`,
+        const existingWorkspace = await this.db.query<{ library_id: string; project_id: string }>(
+          `SELECT library_id, project_id FROM canvas_workspaces WHERE id = ? LIMIT 1`,
           [document.workspaceId],
         );
         if (existingWorkspace[0] && existingWorkspace[0].library_id !== this.libraryId) {
@@ -662,8 +644,8 @@ export class CanvasRepo {
 
         const workspaceChanged = await this.db.run(
           `INSERT INTO canvas_workspaces
-             (id, library_id, name, description, schema_version, viewport_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             (id, library_id, project_id, name, description, schema_version, viewport_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              name = excluded.name,
              description = excluded.description,
@@ -674,6 +656,7 @@ export class CanvasRepo {
           [
             document.workspaceId,
             this.libraryId,
+            existingWorkspace[0]?.project_id ?? fallbackProjectId,
             document.name,
             document.description ?? null,
             document.schemaVersion,
@@ -747,6 +730,16 @@ export class CanvasRepo {
         }
       }),
     );
+  }
+
+  private async resolveActiveProjectId(projectId?: string): Promise<string> {
+    const projects = new ResearchProjectsRepo(this.db, this.libraryId);
+    if (!projectId) return (await projects.ensureDefault()).id;
+    const project = await projects.get(projectId);
+    if (!project || project.deleted_at !== null || project.status !== "active") {
+      throw new Error(`Research project ${projectId} is missing, removed, or archived`);
+    }
+    return project.id;
   }
 
   /** Hard-deletes only the workspace placement and incident canvas edges. */

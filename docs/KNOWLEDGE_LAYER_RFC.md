@@ -349,12 +349,12 @@ membership constraint and validates that both sides share a Library.
 Canvas workspaces, ResearchNotes, and Manuscripts store one non-null
 `project_id`; their Project supplies the Library boundary.
 
-The Library backfill begins after schema version 16. Because migrations currently
-run before `ensureLocalFirstState`, the implementation must not assume a Library
-row or `local.library_id` setting already exists. The migration PR must either
-add a programmatic data-migration phase or bootstrap the Library and setting
-inside the migration, then perform `nullable -> backfill -> table rebuild with
-NOT NULL` safely.
+Library ownership shipped in schema version 17. Schema version 18 adds
+ResearchProject, typed Work membership, and non-null Canvas Project ownership.
+Because migrations run before `ensureLocalFirstState`, neither migration assumes
+that `local.library_id` is already configured: v17 bootstraps Library identity,
+then v18 creates one default Project per Library and backfills Work membership
+and Canvas ownership before rebuilding constrained tables.
 
 ### 7.2 Assets and revisions
 

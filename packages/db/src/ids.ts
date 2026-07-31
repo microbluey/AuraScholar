@@ -5,11 +5,23 @@ export function newId(): string {
   return uuidv7();
 }
 
+/** Stable identity for the semantic `(project, work)` membership pair. */
+export function projectWorkMembershipId(projectId: string, workId: string): string {
+  if (!projectId.trim() || !workId.trim()) {
+    throw new Error("Project and work ids must be non-empty strings");
+  }
+  return `project-work:${projectId.length}:${projectId}:${workId.length}:${workId}`;
+}
+
 /**
  * Dedup fingerprint for works without a DOI:
  * normalized title + year + first author family name.
  */
-export function workFingerprint(title: string, year?: number | null, firstAuthorFamily?: string | null): string {
+export function workFingerprint(
+  title: string,
+  year?: number | null,
+  firstAuthorFamily?: string | null,
+): string {
   const normTitle = title
     .toLowerCase()
     .normalize("NFKD")

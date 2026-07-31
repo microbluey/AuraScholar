@@ -10,6 +10,11 @@ import {
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+import { libraries, works } from "./library-schema.js";
+import { researchProjects } from "./research-project-schema.js";
+
+export { libraries, works } from "./library-schema.js";
+export { projectWorks, researchProjects } from "./research-project-schema.js";
 
 // Convention: UUIDv7 string PKs (time-ordered, sync-friendly). Timestamps are
 // epoch milliseconds. deleted_at is a soft-delete tombstone required by the
@@ -19,85 +24,6 @@ const id = () => text("id").primaryKey();
 const createdAt = () => integer("created_at").notNull();
 const updatedAt = () => integer("updated_at").notNull();
 const deletedAt = () => integer("deleted_at");
-
-// A logical local-first library/vault. The local app can run without an
-// account; later cloud accounts attach to libraries through memberships.
-export const libraries = sqliteTable("libraries", {
-  id: id(),
-  name: text("name").notNull(),
-  kind: text("kind").notNull().default("personal"),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
-  deletedAt: deletedAt(),
-});
-
-// ---------------------------------------------------------------------------
-// Works (papers / preprints / book chapters)
-// ---------------------------------------------------------------------------
-
-export const works = sqliteTable(
-  "works",
-  {
-    id: id(),
-    libraryId: text("library_id")
-      .notNull()
-      .references(() => libraries.id),
-    doi: text("doi"),
-    title: text("title").notNull(),
-    abstract: text("abstract"),
-    year: integer("year"),
-    publicationDate: text("publication_date"), // ISO date when known
-    venueName: text("venue_name"),
-    venueType: text("venue_type"), // journal | conference | repository | book
-    type: text("type").notNull().default("article"), // article | preprint | book-chapter | ...
-    arxivId: text("arxiv_id"),
-    openalexId: text("openalex_id"),
-    s2Id: text("s2_id"),
-    pmid: text("pmid"),
-    // Normalized title+year+first-author hash for dedup when no DOI exists.
-    fingerprint: text("fingerprint"),
-    // Full CSL-JSON metadata — source of truth for citation formatting/export.
-    cslJson: text("csl_json", { mode: "json" }),
-    // Rich bibliographic fields (EndNote-style, CSL-aligned). See migration v6.
-    volume: text("volume"),
-    issue: text("issue"),
-    pages: text("pages"),
-    numberOfVolumes: text("number_of_volumes"),
-    edition: text("edition"),
-    section: text("section"),
-    publisher: text("publisher"),
-    placePublished: text("place_published"),
-    seriesTitle: text("series_title"),
-    shortTitle: text("short_title"),
-    originalTitle: text("original_title"),
-    issn: text("issn"),
-    isbn: text("isbn"),
-    url: text("url"),
-    accessedDate: text("accessed_date"),
-    language: text("language"),
-    callNumber: text("call_number"),
-    accessionNumber: text("accession_number"),
-    label: text("label"),
-    databaseName: text("database_name"),
-    // Author/index keywords as a JSON string array.
-    keywordsJson: text("keywords_json", { mode: "json" }),
-    readingStatus: text("reading_status").notNull().default("unread"), // unread | reading | read
-    starred: integer("starred", { mode: "boolean" }).notNull().default(false),
-    notesMd: text("notes_md"),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-    deletedAt: deletedAt(),
-  },
-  (t) => [
-    uniqueIndex("works_doi_uq").on(t.libraryId, t.doi),
-    index("works_fingerprint_idx").on(t.libraryId, t.fingerprint),
-    index("works_arxiv_idx").on(t.libraryId, t.arxivId),
-    index("works_openalex_idx").on(t.libraryId, t.openalexId),
-    index("works_s2_idx").on(t.libraryId, t.s2Id),
-    index("works_pmid_idx").on(t.libraryId, t.pmid),
-    index("works_year_idx").on(t.libraryId, t.year),
-  ],
-);
 
 export const authors = sqliteTable(
   "authors",
@@ -398,6 +324,9 @@ export const canvasWorkspaces = sqliteTable(
     libraryId: text("library_id")
       .notNull()
       .references(() => libraries.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProjects.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     schemaVersion: integer("schema_version").notNull().default(1),
@@ -407,6 +336,7 @@ export const canvasWorkspaces = sqliteTable(
   },
   (t) => [
     index("canvas_workspaces_library_updated_idx").on(t.libraryId, t.updatedAt),
+    index("canvas_workspaces_project_updated_idx").on(t.projectId, t.updatedAt),
     check("canvas_workspaces_schema_version_check", sql`${t.schemaVersion} >= 1`),
   ],
 );

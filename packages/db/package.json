@@ -56,6 +56,10 @@
       "types": "./dist/repos/saved-searches.d.ts",
       "default": "./dist/repos/saved-searches.js"
     },
+    "./repos/research-projects": {
+      "types": "./dist/repos/research-projects.d.ts",
+      "default": "./dist/repos/research-projects.js"
+    },
     "./repos/snippets": {
       "types": "./dist/repos/snippets.d.ts",
       "default": "./dist/repos/snippets.js"

@@ -54,6 +54,12 @@ export {
   CANVAS_TREE_VERTICAL_GAP,
   planCanvasLayout,
 } from "./canvas/layout.js";
+export { RESEARCH_PROJECT_STATUSES, isActiveResearchProject } from "./project/types.js";
+export type {
+  ProjectWorkMembership,
+  ResearchProject,
+  ResearchProjectStatus,
+} from "./project/types.js";
 export type {
   AISynthesisType,
   AISynthNode,
