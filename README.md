@@ -26,6 +26,12 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 - **Relationship-safe duplicate merging**: merging duplicate records runs as one Library-scoped main-process transaction. It unions valid folder and tag memberships, retargets PDFs, annotations, citations, Canvas references, derived data, and background tasks, and rolls every change back if any step fails.
 - **Metadata sources**: aggregates five open data sources — Crossref, OpenAlex, Semantic Scholar, Unpaywall, and arXiv.
 
+### 🗂️ Research projects
+
+- **Bounded project workspaces**: create, switch, and rename independent research projects at RESTful `/projects/:projectId` routes. Opening `/projects` resumes the most recently used active project, while first use creates a safe default scope.
+- **Project sources without duplication**: search the Library from a project and add multiple papers as project sources. Library single-paper and bulk actions use the same lightweight target picker; with one project, papers are added directly, while multiple projects default to the most recently active target and support creating one in place.
+- **Library-safe membership**: removing a source only removes its project membership. The canonical Library work, metadata, annotations, PDF attachments, and source files remain untouched.
+
 ### 🔍 Academic search
 
 - **Federated open-source search**: native aggregation across OpenAlex / Crossref / Semantic Scholar / arXiv with merged, deduplicated results, in-library markers, and one-click ingest (including OA PDF retrieval).
