@@ -1,6 +1,39 @@
+import { SMOKE_INPUT_REQUEST_PREFIX, SMOKE_INPUT_RESULT_EVENT } from "../input-driver";
+
 export const smokeHelpers = String.raw`        const smokeProgress = (stage) => {
           console.info("AURASCHOLAR_SMOKE_PROGRESS " + stage);
         };
+        let smokeInputRequestSequence = 0;
+        const requestSmokeMouseInput = (request) =>
+          new Promise((resolve) => {
+            smokeInputRequestSequence += 1;
+            const requestId =
+              "mouse:" + Date.now() + ":" + smokeInputRequestSequence;
+            let settled = false;
+            let timeoutId = 0;
+            const settle = (completed) => {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timeoutId);
+              window.removeEventListener(
+                ${JSON.stringify(SMOKE_INPUT_RESULT_EVENT)},
+                handleResult
+              );
+              resolve(completed);
+            };
+            const handleResult = (event) => {
+              if (event.detail?.id === requestId) settle(true);
+            };
+            window.addEventListener(
+              ${JSON.stringify(SMOKE_INPUT_RESULT_EVENT)},
+              handleResult
+            );
+            timeoutId = window.setTimeout(() => settle(false), 4_000);
+            console.info(
+              ${JSON.stringify(SMOKE_INPUT_REQUEST_PREFIX)} +
+                JSON.stringify({ ...request, id: requestId })
+            );
+          });
         const waitFor = async (predicate, timeoutMs = 8_000) => {
           const startedAt = Date.now();
           while (Date.now() - startedAt < timeoutMs) {

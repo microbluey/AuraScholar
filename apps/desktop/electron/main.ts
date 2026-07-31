@@ -35,6 +35,7 @@ async function createWindow(): Promise<void> {
     show: !SMOKE_MODE,
     title: "AuraScholar",
     webPreferences: {
+      backgroundThrottling: !SMOKE_MODE,
       preload: join(__dirname, "../preload/preload.mjs"),
       contextIsolation: true,
       nodeIntegration: false,

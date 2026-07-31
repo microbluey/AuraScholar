@@ -7,6 +7,11 @@ import { join } from "node:path";
 import { app, type BrowserWindow } from "electron";
 import { buildSmokeChecks } from "./smoke/checks";
 import type { SecretsFileSmoke, SmokeRendererResult } from "./smoke/contracts";
+import {
+  SmokeInputDriver,
+  SMOKE_INPUT_REQUEST_PREFIX,
+  SMOKE_INPUT_RESULT_EVENT,
+} from "./smoke/input-driver";
 import { buildRendererSmokeScript } from "./smoke/renderer-script";
 
 const SMOKE_MODE = process.env.AURASCHOLAR_SMOKE === "1";
@@ -58,6 +63,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
   const startedAt = Date.now();
   let lastProgress = "renderer-startup";
   let finished = false;
+  const smokeInputDriver = new SmokeInputDriver(win);
   const timeout = setTimeout(() => {
     finish(
       {
@@ -76,11 +82,31 @@ export function setupSmokeHarness(win: BrowserWindow): void {
     if (finished) return;
     finished = true;
     clearTimeout(timeout);
+    smokeInputDriver.dispose();
     emitSmokeResult(result, code);
   }
 
   win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     if (message.includes("AURASCHOLAR_SMOKE_ROUTE_CRASH")) return;
+    if (message.startsWith(SMOKE_INPUT_REQUEST_PREFIX)) {
+      void smokeInputDriver
+        .enqueue(message)
+        .then((requestId) => {
+          if (!requestId || finished || win.webContents.isDestroyed()) return;
+          return win.webContents.executeJavaScript(
+            `window.dispatchEvent(new CustomEvent(${JSON.stringify(
+              SMOKE_INPUT_RESULT_EVENT,
+            )}, { detail: ${JSON.stringify({ id: requestId })} })); true;`,
+            true,
+          );
+        })
+        .catch((error: unknown) => {
+          consoleErrors.push(
+            `Smoke input driver failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      return;
+    }
     if (message.startsWith(SMOKE_PROGRESS_PREFIX)) {
       lastProgress = message.slice(SMOKE_PROGRESS_PREFIX.length).trim() || lastProgress;
       console.log(`${SMOKE_PROGRESS_PREFIX}${lastProgress}`);
@@ -144,6 +170,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
       win.webContents
         .executeJavaScript(script, true)
         .then(async (renderer: SmokeRendererResult) => {
+          await smokeInputDriver.idle();
           const secretsFile = await inspectSecretsFile();
           const checks = buildSmokeChecks(renderer, secretsFile);
           const failed = checks.filter((check) => !check.pass);

@@ -64,6 +64,7 @@ import {
   CANVAS_KEYBOARD_DELETE_BLOCKING_SELECTOR,
   applyCanvasSelectionDeletion,
   clampCanvasMenuPoint,
+  isCanvasEdgeEditClick,
   isCanvasLayoutShortcut,
   isCanvasSelectionDeleteShortcut,
   planCanvasSelectionDeletion,
@@ -2574,20 +2575,18 @@ function CanvasWorkspaceInner({
             }
             event.preventDefault();
             event.stopPropagation();
+            if (isCanvasEdgeEditClick(event)) {
+              openEdgeLabelEditor(
+                edge.id,
+                { x: event.clientX, y: event.clientY },
+                event.target instanceof Element
+                  ? event.target.closest<SVGElement>(".react-flow__edge")
+                  : null,
+              );
+              return;
+            }
             selectEdge(
               edge.id,
-              event.target instanceof Element
-                ? event.target.closest<SVGElement>(".react-flow__edge")
-                : null,
-            );
-          }}
-          onEdgeDoubleClick={(event, edge) => {
-            if (tool !== "select" || connectionInProgress || event.button !== 0) return;
-            event.preventDefault();
-            event.stopPropagation();
-            openEdgeLabelEditor(
-              edge.id,
-              { x: event.clientX, y: event.clientY },
               event.target instanceof Element
                 ? event.target.closest<SVGElement>(".react-flow__edge")
                 : null,

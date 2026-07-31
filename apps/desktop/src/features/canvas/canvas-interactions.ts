@@ -37,6 +37,10 @@ export function shouldActivateCanvasNode(intent: CanvasNodeActivationIntent): bo
   );
 }
 
+export function isCanvasEdgeEditClick(input: { button: number; detail: number }): boolean {
+  return input.button === 0 && input.detail >= 2;
+}
+
 export function isCanvasContextMenuShortcut(input: {
   composing: boolean;
   key: string;
