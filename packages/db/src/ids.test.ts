@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { newId, workFingerprint, normalizeDoi } from "./ids";
+import { newId, normalizeDoi, projectWorkMembershipId, workFingerprint } from "./ids";
 
 describe("newId", () => {
   it("generates time-ordered unique ids", () => {
@@ -7,6 +7,18 @@ describe("newId", () => {
     const b = newId();
     expect(a).not.toBe(b);
     expect(a < b).toBe(true);
+  });
+});
+
+describe("projectWorkMembershipId", () => {
+  it("is deterministic and unambiguous across delimiter-shaped ids", () => {
+    expect(projectWorkMembershipId("a:b", "c")).toBe(projectWorkMembershipId("a:b", "c"));
+    expect(projectWorkMembershipId("a", "b:c")).not.toBe(projectWorkMembershipId("a:b", "c"));
+  });
+
+  it("rejects missing identities", () => {
+    expect(() => projectWorkMembershipId("", "work")).toThrow(/non-empty/);
+    expect(() => projectWorkMembershipId("project", " ")).toThrow(/non-empty/);
   });
 });
 

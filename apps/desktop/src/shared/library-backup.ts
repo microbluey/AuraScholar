@@ -1,17 +1,31 @@
-import { newId, type Database } from "@aurascholar/db";
+import { newId, projectWorkMembershipId, type Database } from "@aurascholar/db";
 import {
   isSensitiveKeyName,
   redactSensitiveText,
   redactSensitiveValue,
 } from "@aurascholar/platform";
 import {
-  SPATIAL_CANVAS_BACKUP_TABLES,
   assertSpatialCanvasBackupNodeGroups,
   assertSpatialCanvasBackupOrder,
   flattenSpatialCanvasBackupNodeGroups,
   remapSpatialCanvasBackupRow,
   type SpatialCanvasBackupTable,
 } from "@aurascholar/sync";
+import {
+  APP_GLOBAL_BACKUP_TABLES,
+  BACKUP_IDENTITY_COLUMNS,
+  BACKUP_SCOPE_SQL,
+  DIRECT_LIBRARY_BACKUP_TABLES,
+  GENERATED_BACKUP_ID_TABLES,
+  GENERATED_BACKUP_ID_TABLE_SET,
+  SCOPED_DERIVED_SOURCE_TABLES,
+  SPATIAL_CANVAS_BACKUP_TABLE_SET,
+  USER_BACKUP_TABLES,
+  USER_BACKUP_TABLE_SET,
+  type BackupIdTable,
+  type GeneratedBackupIdTable,
+  type UserBackupTable,
+} from "./library-backup-config";
 
 export interface LibraryBackupTablePreview {
   name: string;
@@ -43,171 +57,8 @@ export interface LibraryBackupImportSummary {
   totalRows: number;
 }
 
-export const LIBRARY_BACKUP_VERSION = 2;
-
-const USER_BACKUP_TABLES = [
-  "libraries",
-  "settings",
-  "works",
-  "authors",
-  "work_authors",
-  "attachments",
-  "collections",
-  "collection_items",
-  "tags",
-  "work_tags",
-  "annotations",
-  "annotation_comments",
-  "snippets",
-  ...SPATIAL_CANVAS_BACKUP_TABLES,
-  "flashcards",
-  "flashcard_srs",
-  "flashcard_reviews",
-  "citations",
-  "sentinel_tasks",
-  "sentinel_events",
-  "discovery_sites",
-  "saved_searches",
-  "cv_profiles",
-  "ai_jobs",
-  "derived_artifacts",
-] as const;
-const USER_BACKUP_TABLE_SET = new Set<string>(USER_BACKUP_TABLES);
-const GENERATED_BACKUP_ID_TABLES = [
-  "attachments",
-  "collections",
-  "annotations",
-  "annotation_comments",
-  "snippets",
-  ...SPATIAL_CANVAS_BACKUP_TABLES,
-  "flashcards",
-  "flashcard_reviews",
-  "sentinel_tasks",
-  "sentinel_events",
-  "discovery_sites",
-  "saved_searches",
-  "cv_profiles",
-  "ai_jobs",
-  "derived_artifacts",
-] as const satisfies readonly UserBackupTable[];
-const GENERATED_BACKUP_ID_TABLE_SET = new Set<UserBackupTable>(GENERATED_BACKUP_ID_TABLES);
-const SPATIAL_CANVAS_BACKUP_TABLE_SET = new Set<string>(SPATIAL_CANVAS_BACKUP_TABLES);
+export const LIBRARY_BACKUP_VERSION = 3;
 const EMPTY_BACKUP_ID_MAP = new Map<string, string>();
-
-type UserBackupTable = (typeof USER_BACKUP_TABLES)[number];
-type GeneratedBackupIdTable = (typeof GENERATED_BACKUP_ID_TABLES)[number];
-type BackupIdTable = "authors" | "tags" | "works" | GeneratedBackupIdTable;
-
-// These v17 tables are deliberately account/app scoped, not Library owned.
-// They are exported once in every whole-Library backup and never owner-remapped.
-const APP_GLOBAL_BACKUP_TABLES = new Set<UserBackupTable>([
-  "settings",
-  "discovery_sites",
-  "cv_profiles",
-]);
-const DIRECT_LIBRARY_BACKUP_TABLES = new Set<UserBackupTable>([
-  "works",
-  "authors",
-  "collections",
-  "tags",
-  "canvas_workspaces",
-  "sentinel_tasks",
-  "saved_searches",
-  "ai_jobs",
-  "derived_artifacts",
-]);
-
-const BACKUP_SCOPE_SQL: Partial<Record<UserBackupTable, string>> = {
-  works: `SELECT t.* FROM works t WHERE t.library_id = ?`,
-  authors: `SELECT t.* FROM authors t WHERE t.library_id = ?`,
-  work_authors: `SELECT t.* FROM work_authors t
-    JOIN works w ON w.id = t.work_id
-    JOIN authors a ON a.id = t.author_id
-    WHERE w.library_id = ? AND a.library_id = ?`,
-  attachments: `SELECT t.* FROM attachments t
-    JOIN works w ON w.id = t.work_id
-    WHERE w.library_id = ?`,
-  collections: `SELECT t.* FROM collections t WHERE t.library_id = ?`,
-  collection_items: `SELECT t.* FROM collection_items t
-    JOIN collections c ON c.id = t.collection_id
-    JOIN works w ON w.id = t.work_id
-    WHERE c.library_id = ? AND w.library_id = ?`,
-  tags: `SELECT t.* FROM tags t WHERE t.library_id = ?`,
-  work_tags: `SELECT t.* FROM work_tags t
-    JOIN works w ON w.id = t.work_id
-    JOIN tags tag ON tag.id = t.tag_id
-    WHERE w.library_id = ? AND tag.library_id = ?`,
-  annotations: `SELECT t.* FROM annotations t
-    JOIN works w ON w.id = t.work_id
-    JOIN attachments att ON att.id = t.attachment_id AND att.work_id = w.id
-    WHERE w.library_id = ?`,
-  annotation_comments: `SELECT t.* FROM annotation_comments t
-    JOIN annotations ann ON ann.id = t.annotation_id
-    JOIN works w ON w.id = ann.work_id
-    WHERE w.library_id = ?`,
-  snippets: `SELECT t.* FROM snippets t
-    JOIN works w ON w.id = t.work_id
-    WHERE w.library_id = ?`,
-  canvas_workspaces: `SELECT t.* FROM canvas_workspaces t WHERE t.library_id = ?`,
-  canvas_nodes: `SELECT t.* FROM canvas_nodes t
-    JOIN canvas_workspaces cw ON cw.id = t.workspace_id
-    WHERE cw.library_id = ?`,
-  canvas_edges: `SELECT t.* FROM canvas_edges t
-    JOIN canvas_workspaces cw ON cw.id = t.workspace_id
-    WHERE cw.library_id = ?`,
-  flashcards: `SELECT t.* FROM flashcards t
-    JOIN works w ON w.id = t.work_id
-    WHERE w.library_id = ?`,
-  flashcard_srs: `SELECT t.* FROM flashcard_srs t
-    JOIN flashcards f ON f.id = t.flashcard_id
-    JOIN works w ON w.id = f.work_id
-    WHERE w.library_id = ?`,
-  flashcard_reviews: `SELECT t.* FROM flashcard_reviews t
-    JOIN flashcards f ON f.id = t.flashcard_id
-    JOIN works w ON w.id = f.work_id
-    WHERE w.library_id = ?`,
-  citations: `SELECT t.* FROM citations t
-    JOIN works citing ON citing.id = t.citing_work_id
-    JOIN works cited ON cited.id = t.cited_work_id
-    WHERE citing.library_id = ? AND cited.library_id = ?`,
-  sentinel_tasks: `SELECT t.* FROM sentinel_tasks t WHERE t.library_id = ?`,
-  sentinel_events: `SELECT t.* FROM sentinel_events t
-    JOIN sentinel_tasks st ON st.id = t.task_id
-    WHERE st.library_id = ?`,
-  saved_searches: `SELECT t.* FROM saved_searches t WHERE t.library_id = ?`,
-  ai_jobs: `SELECT t.* FROM ai_jobs t WHERE t.library_id = ?`,
-  derived_artifacts: `SELECT t.* FROM derived_artifacts t WHERE t.library_id = ?`,
-};
-
-const BACKUP_IDENTITY_COLUMNS: Record<UserBackupTable, readonly string[]> = {
-  libraries: ["id"],
-  settings: ["key"],
-  works: ["id"],
-  authors: ["id"],
-  work_authors: ["work_id", "author_id"],
-  attachments: ["id"],
-  collections: ["id"],
-  collection_items: ["collection_id", "work_id"],
-  tags: ["id"],
-  work_tags: ["work_id", "tag_id"],
-  annotations: ["id"],
-  annotation_comments: ["id"],
-  snippets: ["id"],
-  canvas_workspaces: ["id"],
-  canvas_nodes: ["id"],
-  canvas_edges: ["id"],
-  flashcards: ["id"],
-  flashcard_srs: ["flashcard_id"],
-  flashcard_reviews: ["id"],
-  citations: ["citing_work_id", "cited_work_id"],
-  sentinel_tasks: ["id"],
-  sentinel_events: ["id"],
-  discovery_sites: ["id"],
-  saved_searches: ["id"],
-  cv_profiles: ["id"],
-  ai_jobs: ["id"],
-  derived_artifacts: ["id"],
-};
 
 // Keep the executable import loop honest when new backup tables are added.
 assertSpatialCanvasBackupOrder(USER_BACKUP_TABLES);
@@ -233,6 +84,7 @@ interface BackupImportIdMaps {
   generated: Partial<Record<GeneratedBackupIdTable, Map<string, string>>>;
   libraries: Map<string, string>;
   tags: Map<string, string>;
+  targetDefaultProjectId: string | null;
   targetLibraryId: string;
   works: Map<string, string>;
   version: number;
@@ -427,7 +279,7 @@ function prepareBackupRowForImport(
     if (!current) return;
     const mapped = idMaps.libraries.get(current);
     if (!mapped && idMaps.version >= 2) {
-      throw new Error(`v2 备份包含未知的 Library owner：${table}.${field}`);
+      throw new Error(`v${idMaps.version} 备份包含未知的 Library owner：${table}.${field}`);
     }
     const target = mapped ?? idMaps.targetLibraryId;
     if (target !== current) {
@@ -471,6 +323,7 @@ function prepareBackupRowForImport(
   remap("tag_id", idMaps.tags);
   remapGenerated("collection_id", "collections");
   remapGenerated("parent_id", "collections");
+  remapGenerated("project_id", "research_projects");
   remapGenerated("attachment_id", "attachments");
   remapGenerated("annotation_id", "annotations");
   remapGenerated("flashcard_id", "flashcards");
@@ -484,6 +337,18 @@ function prepareBackupRowForImport(
     GENERATED_BACKUP_ID_TABLE_SET.has(next.source_table as UserBackupTable)
   ) {
     remapGenerated("source_id", next.source_table as GeneratedBackupIdTable);
+  }
+
+  if (
+    table === "canvas_workspaces" &&
+    !stringValue(next.project_id) &&
+    idMaps.version < LIBRARY_BACKUP_VERSION
+  ) {
+    if (!idMaps.targetDefaultProjectId) {
+      throw new Error("无法导入旧版白板：目标 Library 缺少默认研究项目。");
+    }
+    update("project_id", idMaps.targetDefaultProjectId);
+    redirectedRow = true;
   }
 
   if (table === "ai_jobs" && !isPortableAiJobStatus(next.status)) {
@@ -593,6 +458,19 @@ async function buildBackupImportIdMaps(
   if (target.length !== 1) {
     throw new Error("无法导入：目标 Library 不存在或已删除。");
   }
+  const works = await buildScopedUniqueIdMap(
+    db,
+    backup.tables.works ?? [],
+    "works",
+    ["doi", "arxiv_id", "openalex_id", "s2_id", "pmid", "fingerprint"],
+    targetLibraryId,
+  );
+  const generated = await buildGeneratedBackupIdMaps(db, backup);
+  generated.project_works = buildProjectWorkMembershipIdMap(
+    backup.tables.project_works ?? [],
+    generated.research_projects ?? EMPTY_BACKUP_ID_MAP,
+    works,
+  );
   return {
     authors: await buildScopedUniqueIdMap(
       db,
@@ -601,7 +479,7 @@ async function buildBackupImportIdMaps(
       ["orcid"],
       targetLibraryId,
     ),
-    generated: await buildGeneratedBackupIdMaps(db, backup),
+    generated,
     libraries: buildLibraryIdMap(backup, targetLibraryId),
     tags: await buildScopedUniqueIdMap(
       db,
@@ -610,15 +488,13 @@ async function buildBackupImportIdMaps(
       ["name"],
       targetLibraryId,
     ),
+    targetDefaultProjectId:
+      backup.version < LIBRARY_BACKUP_VERSION && (backup.tables.canvas_workspaces?.length ?? 0) > 0
+        ? await findDefaultResearchProjectId(db, targetLibraryId)
+        : null,
     targetLibraryId,
     version: backup.version,
-    works: await buildScopedUniqueIdMap(
-      db,
-      backup.tables.works ?? [],
-      "works",
-      ["doi", "arxiv_id", "openalex_id", "s2_id", "pmid", "fingerprint"],
-      targetLibraryId,
-    ),
+    works,
   };
 }
 
@@ -641,10 +517,44 @@ async function buildGeneratedBackupIdMaps(
 ): Promise<BackupImportIdMaps["generated"]> {
   const maps: BackupImportIdMaps["generated"] = {};
   for (const table of GENERATED_BACKUP_ID_TABLES) {
+    if (table === "project_works") continue;
     const map = await buildConflictingPrimaryIdMap(db, backup.tables[table] ?? [], table);
     if (map.size > 0) maps[table] = map;
   }
   return maps;
+}
+
+function buildProjectWorkMembershipIdMap(
+  rows: readonly Record<string, unknown>[],
+  projects: ReadonlyMap<string, string>,
+  works: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const id = stringValue(row.id);
+    const sourceProjectId = stringValue(row.project_id);
+    const sourceWorkId = stringValue(row.work_id);
+    if (!id || !sourceProjectId || !sourceWorkId) continue;
+    const projectId = projects.get(sourceProjectId) ?? sourceProjectId;
+    const workId = works.get(sourceWorkId) ?? sourceWorkId;
+    const targetId = projectWorkMembershipId(projectId, workId);
+    if (targetId !== id) map.set(id, targetId);
+  }
+  return map;
+}
+
+async function findDefaultResearchProjectId(
+  db: Database,
+  libraryId: string,
+): Promise<string | null> {
+  const rows = await db.query<{ id: string }>(
+    `SELECT id FROM research_projects
+     WHERE library_id = ? AND status = 'active' AND deleted_at IS NULL
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1`,
+    [libraryId],
+  );
+  return rows[0]?.id ?? null;
 }
 
 async function buildConflictingPrimaryIdMap(
@@ -786,6 +696,7 @@ export function parseLibraryBackupJson(text: string): LibraryBackupFile {
   }
   assertSpatialCanvasBackupNodeGroups(tables.canvas_nodes ?? []);
   validateBackupIdentities(tables);
+  validateProjectWorkMembershipIdentities(tables, version);
   const sourceLibraryId =
     version >= 2
       ? stringValue(parsed.sourceLibraryId)
@@ -794,9 +705,9 @@ export function parseLibraryBackupJson(text: string): LibraryBackupFile {
     if (!sourceLibraryId) {
       throw new Error("备份文件缺少 sourceLibraryId。");
     }
-    validateV2BackupOwnership(tables, sourceLibraryId);
+    validateScopedBackupOwnership(tables, sourceLibraryId, version);
   }
-  validateBackupRelationships(tables);
+  validateBackupRelationships(tables, version);
   return {
     exportedAt: typeof parsed.exportedAt === "string" ? parsed.exportedAt : null,
     ignoredTables,
@@ -827,29 +738,51 @@ function validateBackupIdentities(tables: LibraryBackupFile["tables"]): void {
   }
 }
 
+function validateProjectWorkMembershipIdentities(
+  tables: LibraryBackupFile["tables"],
+  version: number,
+): void {
+  const memberships = new Set<string>();
+  for (const row of tables.project_works ?? []) {
+    const id = stringValue(row.id);
+    const projectId = stringValue(row.project_id);
+    const workId = stringValue(row.work_id);
+    if (!id || !projectId || !workId) continue;
+    const membership = JSON.stringify([projectId, workId]);
+    if (memberships.has(membership)) {
+      throw new Error("备份包含重复的行标识：project_works.project_id+work_id");
+    }
+    memberships.add(membership);
+    if (version >= LIBRARY_BACKUP_VERSION && id !== projectWorkMembershipId(projectId, workId)) {
+      throw new Error("v3 备份包含无效的研究项目文献关系标识。");
+    }
+  }
+}
+
 function inferLegacyBackupLibraryId(rows: readonly Record<string, unknown>[]): string | null {
   const ids = new Set(rows.map((row) => stringValue(row.id)).filter(Boolean) as string[]);
   return ids.size === 1 ? [...ids][0]! : null;
 }
 
-function validateV2BackupOwnership(
+function validateScopedBackupOwnership(
   tables: LibraryBackupFile["tables"],
   sourceLibraryId: string,
+  version: number,
 ): void {
   const libraryRows = tables.libraries ?? [];
   if (libraryRows.length !== 1 || stringValue(libraryRows[0]?.id) !== sourceLibraryId) {
-    throw new Error("v2 备份必须且只能包含 sourceLibraryId 对应的 Library。");
+    throw new Error(`v${version} 备份必须且只能包含 sourceLibraryId 对应的 Library。`);
   }
   for (const table of DIRECT_LIBRARY_BACKUP_TABLES) {
     for (const row of tables[table] ?? []) {
       if (stringValue(row.library_id) !== sourceLibraryId) {
-        throw new Error(`v2 备份包含混合或缺失的 Library owner：${table}`);
+        throw new Error(`v${version} 备份包含混合或缺失的 Library owner：${table}`);
       }
     }
   }
 }
 
-function validateBackupRelationships(tables: LibraryBackupFile["tables"]): void {
+function validateBackupRelationships(tables: LibraryBackupFile["tables"], version: number): void {
   const ids = new Map<UserBackupTable, Set<string>>();
   const tableIds = (table: UserBackupTable): Set<string> => {
     const cached = ids.get(table);
@@ -871,16 +804,18 @@ function validateBackupRelationships(tables: LibraryBackupFile["tables"]): void 
       const value = stringValue(row[field]);
       if (!value) {
         if (!required) continue;
-        throw new Error(`v2 备份包含缺失的 Library 关系：${table}.${field}`);
+        throw new Error(`v${version} 备份包含缺失的 Library 关系：${table}.${field}`);
       }
       if (!targetIds.has(value)) {
-        throw new Error(`v2 备份包含跨 Library 关系：${table}.${field}`);
+        throw new Error(`v${version} 备份包含跨 Library 关系：${table}.${field}`);
       }
     }
   };
 
   assertReference("work_authors", "work_id", "works");
   assertReference("work_authors", "author_id", "authors");
+  assertReference("project_works", "project_id", "research_projects");
+  assertReference("project_works", "work_id", "works");
   assertReference("attachments", "work_id", "works");
   assertReference("collections", "parent_id", "collections", false);
   assertReference("collection_items", "collection_id", "collections");
@@ -891,6 +826,12 @@ function validateBackupRelationships(tables: LibraryBackupFile["tables"]): void 
   assertReference("annotations", "attachment_id", "attachments");
   assertReference("annotation_comments", "annotation_id", "annotations");
   assertReference("snippets", "work_id", "works");
+  assertReference(
+    "canvas_workspaces",
+    "project_id",
+    "research_projects",
+    version >= LIBRARY_BACKUP_VERSION,
+  );
   assertReference("canvas_nodes", "workspace_id", "canvas_workspaces");
   assertReference("canvas_nodes", "work_id", "works", false);
   assertReference("canvas_nodes", "group_id", "canvas_nodes", false);
@@ -906,27 +847,6 @@ function validateBackupRelationships(tables: LibraryBackupFile["tables"]): void 
   assertReference("sentinel_events", "task_id", "sentinel_tasks");
   assertReference("ai_jobs", "work_id", "works", false);
 
-  const scopedDerivedSources = new Set<UserBackupTable>([
-    "libraries",
-    "works",
-    "authors",
-    "attachments",
-    "collections",
-    "tags",
-    "annotations",
-    "annotation_comments",
-    "snippets",
-    "canvas_workspaces",
-    "canvas_nodes",
-    "canvas_edges",
-    "flashcards",
-    "flashcard_reviews",
-    "sentinel_tasks",
-    "sentinel_events",
-    "saved_searches",
-    "ai_jobs",
-    "derived_artifacts",
-  ]);
   for (const row of tables.derived_artifacts ?? []) {
     const sourceTable = stringValue(row.source_table);
     const sourceId = stringValue(row.source_id);
@@ -934,7 +854,7 @@ function validateBackupRelationships(tables: LibraryBackupFile["tables"]): void 
       throw new Error("备份包含缺失的 Library 关系：derived_artifacts.source_id");
     }
     if (
-      scopedDerivedSources.has(sourceTable as UserBackupTable) &&
+      SCOPED_DERIVED_SOURCE_TABLES.has(sourceTable as UserBackupTable) &&
       !tableIds(sourceTable as UserBackupTable).has(sourceId)
     ) {
       throw new Error("备份包含跨 Library 关系：derived_artifacts.source_id");

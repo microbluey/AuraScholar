@@ -1,5 +1,10 @@
 import type { Database } from "../database.js";
 import { buildWorksFtsQuery } from "../fts.js";
+import { isUniqueConstraint } from "../sqlite-errors.js";
+import {
+  mergeProjectWorkMemberships,
+  purgeProjectWorkMemberships,
+} from "./project-work-lifecycle.js";
 import { newId, normalizeDoi, workFingerprint } from "../ids.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
 
@@ -181,14 +186,6 @@ function inputDoi(input: WorkInput | WorkPatch): string | null {
   const trimmed = input.doi.trim();
   if (!trimmed) return null;
   return normalizeDoi(trimmed) ?? trimmed.toLowerCase();
-}
-
-function isUniqueConstraint(error: unknown): boolean {
-  const e = error as { code?: unknown; message?: unknown };
-  return (
-    e.code === "SQLITE_CONSTRAINT_UNIQUE" ||
-    String(e.message ?? "").includes("UNIQUE constraint failed")
-  );
 }
 
 export class WorksRepo {
@@ -512,6 +509,7 @@ export class WorksRepo {
     await this.moveCitations(primaryId, duplicateId);
     await this.moveGraphCache(primaryId, duplicateId);
     await this.moveCanvasReferences(primaryId, duplicateId, now);
+    await mergeProjectWorkMemberships(this.db, this.libraryId, primaryId, duplicateId, now);
 
     // Annotations move with their attachment above. Keeping annotations that
     // belong to already-retired attachments on the duplicate preserves a
@@ -1453,6 +1451,7 @@ export class WorksRepo {
     ]);
     await this.db.run(`DELETE FROM graph_cache WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM collection_items WHERE work_id = ?`, [workId]);
+    await purgeProjectWorkMemberships(this.db, workId);
     await this.db.run(`DELETE FROM work_tags WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM work_authors WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM annotations WHERE work_id = ?`, [workId]);
