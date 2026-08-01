@@ -103,7 +103,7 @@ function v3Backup(tables: Record<string, unknown[]>): string {
 }
 
 describe("Research Project Library backup", () => {
-  it("exports only the selected Library project graph in v3 dependency order", async () => {
+  it("exports only the selected Library project graph in v4 dependency order", async () => {
     const db = await createNodeDatabase(":memory:");
     await runMigrations(db);
     await addLibrary(db, "library-a");
@@ -123,7 +123,7 @@ describe("Research Project Library backup", () => {
       tables: Record<string, Array<Record<string, unknown>>>;
     };
 
-    expect(backup.version).toBe(3);
+    expect(backup.version).toBe(4);
     expect(Object.keys(backup.tables).indexOf("works")).toBeLessThan(
       Object.keys(backup.tables).indexOf("research_projects"),
     );
@@ -144,7 +144,7 @@ describe("Research Project Library backup", () => {
     expect(backup.tables.canvas_workspaces).toEqual([
       expect.objectContaining({ id: "canvas-a", project_id: "project-a" }),
     ]);
-    expect(previewLibraryBackupJson(text).version).toBe(3);
+    expect(previewLibraryBackupJson(text).version).toBe(4);
   });
 
   it("strictly rejects invalid v3 Project ownership, memberships, and Canvas links", () => {

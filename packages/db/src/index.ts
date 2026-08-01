@@ -1,7 +1,16 @@
 export * as schema from "./schema.js";
 export { MIGRATIONS, runMigrations } from "./migrations.js";
 export type { SqlExecutor, Migration } from "./migrations.js";
-export { newId, normalizeDoi, projectWorkMembershipId, workFingerprint } from "./ids.js";
+export {
+  documentAssetIdFromAttachment,
+  documentRevisionIdFromAttachment,
+  newId,
+  normalizeDoi,
+  projectAssetMembershipId,
+  projectEvidenceMembershipId,
+  projectWorkMembershipId,
+  workFingerprint,
+} from "./ids.js";
 export {
   ensureLocalFirstState,
   ensureLocalLibraryIdentity,
@@ -26,6 +35,24 @@ export { AnnotationsRepo } from "./repos/annotations.js";
 export type { AnnotationInput, AnnotationRow } from "./repos/annotations.js";
 export { AttachmentsRepo } from "./repos/attachments.js";
 export type { AttachmentInput, AttachmentRow } from "./repos/attachments.js";
+export { DocumentAssetScopeError, DocumentAssetsRepo } from "./repos/document-assets.js";
+export type {
+  AttachmentRevisionSource,
+  CreateDocumentAssetInput,
+  CreateDocumentRevisionInput,
+  DocumentAssetKind,
+  DocumentAssetRow,
+  DocumentAvailabilityStatus,
+  DocumentExtractionStatus,
+  DocumentRevisionRow,
+} from "./repos/document-assets.js";
+export { EvidenceRepo, EvidenceScopeError } from "./repos/evidence.js";
+export type {
+  CreateTextEvidenceInput,
+  EvidenceKind,
+  EvidenceRecord,
+  PdfTextEvidenceAnchorInput,
+} from "./repos/evidence.js";
 export { FlashcardsRepo, Rating } from "./repos/flashcards.js";
 export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards.js";
 export { SentinelRepo } from "./repos/sentinel.js";

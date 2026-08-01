@@ -265,7 +265,7 @@ describe("Library-scoped sync storage", () => {
     await expect(
       db.query<{ key: string }>(
         `SELECT key FROM settings
-         WHERE key = 'sync.library-a.provider.library-scope-v2.last_pushed_at'`,
+         WHERE key = 'sync.library-a.provider.library-scope-v3-evidence.last_pushed_at'`,
       ),
     ).resolves.toEqual([]);
   });
@@ -308,7 +308,7 @@ describe("Library-scoped sync storage", () => {
     await expect(
       db.query<{ key: string }>(
         `SELECT key FROM settings
-         WHERE key = 'sync.library-a.provider.library-scope-v2.last_pushed_at'`,
+         WHERE key = 'sync.library-a.provider.library-scope-v3-evidence.last_pushed_at'`,
       ),
     ).resolves.toEqual([]);
 
@@ -344,7 +344,7 @@ describe("Library-scoped sync storage", () => {
     await expect(
       db.query<{ key: string }>(
         `SELECT key FROM settings
-         WHERE key = 'sync.library-a.provider.library-scope-v2.last_pushed_at'`,
+         WHERE key = 'sync.library-a.provider.library-scope-v3-evidence.last_pushed_at'`,
       ),
     ).resolves.toEqual([]);
 
@@ -401,7 +401,7 @@ describe("Library-scoped sync storage", () => {
 });
 
 describe("Library backup ownership", () => {
-  it("exports v3 with only the selected Library graph and explicit app-global rows", async () => {
+  it("exports v4 with only the selected Library graph and explicit app-global rows", async () => {
     const db = await createNodeDatabase(":memory:");
     await runMigrations(db);
     await addLibrary(db, "library-a");
@@ -455,7 +455,7 @@ describe("Library backup ownership", () => {
       version: number;
     };
 
-    expect(backup.version).toBe(3);
+    expect(backup.version).toBe(4);
     expect(backup.sourceLibraryId).toBe("library-a");
     expect(backup.tables.libraries?.map((row) => row.id)).toEqual(["library-a"]);
     expect(backup.tables.works?.map((row) => row.id)).toEqual(["work-a"]);

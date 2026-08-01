@@ -573,7 +573,9 @@ describe("v17 Library ownership", () => {
       `SELECT name FROM sqlite_master
        WHERE type = 'trigger' AND name LIKE '%_library_immutable'`,
     );
-    expect(immutableTriggers).toHaveLength(immutableRoots.length);
+    expect(immutableTriggers.map((trigger) => trigger.name)).toEqual(
+      expect.arrayContaining(immutableRoots.map(([table]) => `${table}_library_immutable`)),
+    );
     expect(
       await db.query<{ library_id: string }>(`SELECT library_id FROM works WHERE id = 'work-a'`),
     ).toEqual([{ library_id: first }]);

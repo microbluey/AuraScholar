@@ -1,10 +1,6 @@
-import { newId, projectWorkMembershipId, type Database } from "@aurascholar/db";
+import { newId, type Database } from "@aurascholar/db";
 import {
-  isSensitiveKeyName,
-  redactSensitiveText,
-  redactSensitiveValue,
-} from "@aurascholar/platform";
-import {
+  assertDocumentEvidenceBackupOrder,
   assertSpatialCanvasBackupNodeGroups,
   assertSpatialCanvasBackupOrder,
   flattenSpatialCanvasBackupNodeGroups,
@@ -26,6 +22,19 @@ import {
   type GeneratedBackupIdTable,
   type UserBackupTable,
 } from "./library-backup-config";
+import {
+  assertKnowledgeTablesMatchVersion,
+  buildProjectWorkMembershipIdMap,
+  DOCUMENT_EVIDENCE_BACKUP_VERSION,
+  finalizeKnowledgeImportIdMaps,
+  knowledgeIdMaps,
+  remapKnowledgeBackupRow,
+  RESEARCH_PROJECT_BACKUP_VERSION,
+  validateKnowledgeBackupGraph,
+  validateProjectWorkMembershipIdentities,
+} from "./library-backup-evidence";
+import { finalizeImportedDocumentEvidence } from "../services/library-backup-evidence";
+import { sanitizeBackupRow, sanitizeBackupRows } from "./library-backup-sanitizer";
 
 export interface LibraryBackupTablePreview {
   name: string;
@@ -57,11 +66,12 @@ export interface LibraryBackupImportSummary {
   totalRows: number;
 }
 
-export const LIBRARY_BACKUP_VERSION = 3;
+export const LIBRARY_BACKUP_VERSION = DOCUMENT_EVIDENCE_BACKUP_VERSION;
 const EMPTY_BACKUP_ID_MAP = new Map<string, string>();
 
 // Keep the executable import loop honest when new backup tables are added.
 assertSpatialCanvasBackupOrder(USER_BACKUP_TABLES);
+assertDocumentEvidenceBackupOrder(USER_BACKUP_TABLES);
 
 /**
  * Parsed and fully validated backup payload. Callers should treat this as an
@@ -224,6 +234,13 @@ export async function importParsedLibraryBackupIntoDatabase(
     });
   }
 
+  await finalizeImportedDocumentEvidence(db, {
+    assetRows: backup.tables.document_assets ?? [],
+    libraryId,
+    maps: knowledgeIdMaps(idMaps.generated, idMaps.works),
+    version: backup.version,
+  });
+
   return {
     deactivatedAttachments,
     ignoredTables: backup.ignoredTables,
@@ -311,6 +328,17 @@ function prepareBackupRowForImport(
     remapGenerated("id", table as GeneratedBackupIdTable);
   }
 
+  const knowledgeRemap = remapKnowledgeBackupRow(
+    table,
+    next,
+    knowledgeIdMaps(idMaps.generated, idMaps.works),
+    deactivatedAt,
+  );
+  if (knowledgeRemap.redirected) {
+    next = knowledgeRemap.row;
+    redirectedRow = true;
+  }
+
   remapLibraryId("library_id");
   if (DIRECT_LIBRARY_BACKUP_TABLES.has(table) && next.library_id !== idMaps.targetLibraryId) {
     update("library_id", idMaps.targetLibraryId);
@@ -342,7 +370,7 @@ function prepareBackupRowForImport(
   if (
     table === "canvas_workspaces" &&
     !stringValue(next.project_id) &&
-    idMaps.version < LIBRARY_BACKUP_VERSION
+    idMaps.version < RESEARCH_PROJECT_BACKUP_VERSION
   ) {
     if (!idMaps.targetDefaultProjectId) {
       throw new Error("无法导入旧版白板：目标 Library 缺少默认研究项目。");
@@ -376,76 +404,6 @@ function isPortableAiJobStatus(status: unknown): boolean {
   return status === "done" || status === "error";
 }
 
-function sanitizeBackupRows(
-  table: UserBackupTable,
-  rows: Record<string, unknown>[],
-): Record<string, unknown>[] {
-  return rows.flatMap((row) => {
-    const sanitized = sanitizeBackupRow(table, row);
-    return sanitized ? [sanitized] : [];
-  });
-}
-
-function sanitizeBackupRow(
-  table: UserBackupTable,
-  row: Record<string, unknown>,
-): Record<string, unknown> | null {
-  if (table === "settings") return sanitizeSettingsBackupRow(row);
-  return sanitizePortableBackupRow(row);
-}
-
-function sanitizePortableBackupRow(row: Record<string, unknown>): Record<string, unknown> {
-  return sanitizePortableBackupValue(row) as Record<string, unknown>;
-}
-
-function sanitizePortableBackupValue(value: unknown, fieldName = ""): unknown {
-  if (fieldName && isSensitiveKeyName(fieldName)) return "";
-  if (typeof value === "string") {
-    if (fieldName.endsWith("_json")) return sanitizePortableJsonField(value);
-    return redactSensitiveText(value);
-  }
-  if (Array.isArray(value)) return value.map((item) => sanitizePortableBackupValue(item));
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, nested]) => [key, sanitizePortableBackupValue(nested, key)]),
-  );
-}
-
-function sanitizePortableJsonField(valueJson: string): string {
-  try {
-    return JSON.stringify(sanitizePortableBackupValue(JSON.parse(valueJson)));
-  } catch {
-    return redactSensitiveText(valueJson);
-  }
-}
-
-function sanitizeSettingsBackupRow(row: Record<string, unknown>): Record<string, unknown> | null {
-  const key = typeof row.key === "string" ? row.key : "";
-  if (!key || isSensitiveKeyName(key) || isRuntimeSettingKey(key)) return null;
-  if (typeof row.value_json !== "string") return row;
-  return {
-    ...row,
-    value_json: sanitizeSettingsValueJson(row.value_json),
-  };
-}
-
-function sanitizeSettingsValueJson(valueJson: string): string {
-  try {
-    return JSON.stringify(redactSensitiveValue(JSON.parse(valueJson)));
-  } catch {
-    return JSON.stringify(redactSensitiveText(valueJson));
-  }
-}
-
-function isRuntimeSettingKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
-  return (
-    normalized === "local.library_id" ||
-    normalized === "local.device_id" ||
-    normalized.startsWith("sync.")
-  );
-}
-
 async function buildBackupImportIdMaps(
   db: Database,
   backup: LibraryBackupFile,
@@ -471,6 +429,7 @@ async function buildBackupImportIdMaps(
     generated.research_projects ?? EMPTY_BACKUP_ID_MAP,
     works,
   );
+  finalizeKnowledgeImportIdMaps(backup.tables, knowledgeIdMaps(generated, works));
   return {
     authors: await buildScopedUniqueIdMap(
       db,
@@ -489,7 +448,8 @@ async function buildBackupImportIdMaps(
       targetLibraryId,
     ),
     targetDefaultProjectId:
-      backup.version < LIBRARY_BACKUP_VERSION && (backup.tables.canvas_workspaces?.length ?? 0) > 0
+      backup.version < RESEARCH_PROJECT_BACKUP_VERSION &&
+      (backup.tables.canvas_workspaces?.length ?? 0) > 0
         ? await findDefaultResearchProjectId(db, targetLibraryId)
         : null,
     targetLibraryId,
@@ -522,25 +482,6 @@ async function buildGeneratedBackupIdMaps(
     if (map.size > 0) maps[table] = map;
   }
   return maps;
-}
-
-function buildProjectWorkMembershipIdMap(
-  rows: readonly Record<string, unknown>[],
-  projects: ReadonlyMap<string, string>,
-  works: ReadonlyMap<string, string>,
-): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const row of rows) {
-    const id = stringValue(row.id);
-    const sourceProjectId = stringValue(row.project_id);
-    const sourceWorkId = stringValue(row.work_id);
-    if (!id || !sourceProjectId || !sourceWorkId) continue;
-    const projectId = projects.get(sourceProjectId) ?? sourceProjectId;
-    const workId = works.get(sourceWorkId) ?? sourceWorkId;
-    const targetId = projectWorkMembershipId(projectId, workId);
-    if (targetId !== id) map.set(id, targetId);
-  }
-  return map;
 }
 
 async function findDefaultResearchProjectId(
@@ -682,6 +623,7 @@ export function parseLibraryBackupJson(text: string): LibraryBackupFile {
     );
   }
   if (!isRecord(parsed.tables)) throw new Error("备份文件缺少 tables 数据。");
+  assertKnowledgeTablesMatchVersion(version, parsed.tables);
   const tables: LibraryBackupFile["tables"] = {};
   const ignoredTables: string[] = [];
   for (const [name, value] of Object.entries(parsed.tables)) {
@@ -696,7 +638,7 @@ export function parseLibraryBackupJson(text: string): LibraryBackupFile {
   }
   assertSpatialCanvasBackupNodeGroups(tables.canvas_nodes ?? []);
   validateBackupIdentities(tables);
-  validateProjectWorkMembershipIdentities(tables, version);
+  validateProjectWorkMembershipIdentities(tables.project_works ?? [], version);
   const sourceLibraryId =
     version >= 2
       ? stringValue(parsed.sourceLibraryId)
@@ -734,27 +676,6 @@ function validateBackupIdentities(tables: LibraryBackupFile["tables"]): void {
         throw new Error(`备份包含重复的行标识：${table}.${identityColumns.join("+")}`);
       }
       identities.add(identity);
-    }
-  }
-}
-
-function validateProjectWorkMembershipIdentities(
-  tables: LibraryBackupFile["tables"],
-  version: number,
-): void {
-  const memberships = new Set<string>();
-  for (const row of tables.project_works ?? []) {
-    const id = stringValue(row.id);
-    const projectId = stringValue(row.project_id);
-    const workId = stringValue(row.work_id);
-    if (!id || !projectId || !workId) continue;
-    const membership = JSON.stringify([projectId, workId]);
-    if (memberships.has(membership)) {
-      throw new Error("备份包含重复的行标识：project_works.project_id+work_id");
-    }
-    memberships.add(membership);
-    if (version >= LIBRARY_BACKUP_VERSION && id !== projectWorkMembershipId(projectId, workId)) {
-      throw new Error("v3 备份包含无效的研究项目文献关系标识。");
     }
   }
 }
@@ -830,7 +751,7 @@ function validateBackupRelationships(tables: LibraryBackupFile["tables"], versio
     "canvas_workspaces",
     "project_id",
     "research_projects",
-    version >= LIBRARY_BACKUP_VERSION,
+    version >= RESEARCH_PROJECT_BACKUP_VERSION,
   );
   assertReference("canvas_nodes", "workspace_id", "canvas_workspaces");
   assertReference("canvas_nodes", "work_id", "works", false);
@@ -862,6 +783,7 @@ function validateBackupRelationships(tables: LibraryBackupFile["tables"], versio
   }
 
   validateCanvasNodeDataReferences(tables, tableIds);
+  validateKnowledgeBackupGraph(tables, version, tableIds);
 }
 
 function validateCanvasNodeDataReferences(

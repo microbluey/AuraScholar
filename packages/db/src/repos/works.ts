@@ -7,6 +7,10 @@ import {
 } from "./project-work-lifecycle.js";
 import { newId, normalizeDoi, workFingerprint } from "../ids.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
+import {
+  mergeWorkKnowledgeRecords,
+  purgeWorkKnowledgeRecords,
+} from "./work-knowledge-lifecycle.js";
 
 export type AuthorRole = "author" | "editor" | "translator";
 export type ReadingStatus = "unread" | "reading" | "read";
@@ -510,11 +514,7 @@ export class WorksRepo {
     await this.moveGraphCache(primaryId, duplicateId);
     await this.moveCanvasReferences(primaryId, duplicateId, now);
     await mergeProjectWorkMemberships(this.db, this.libraryId, primaryId, duplicateId, now);
-
-    // Annotations move with their attachment above. Keeping annotations that
-    // belong to already-retired attachments on the duplicate preserves a
-    // coherent attachment/work pair and avoids manufacturing a cross-work
-    // annotation link.
+    await mergeWorkKnowledgeRecords(this.db, this.libraryId, primaryId, duplicateId, now);
     for (const table of ["flashcards", "snippets"]) {
       const expected = await this.countRows(
         `SELECT COUNT(*) AS n FROM ${table} WHERE work_id = ?`,
@@ -1321,11 +1321,7 @@ export class WorksRepo {
     return uniqueIds.length;
   }
 
-  /**
-   * Permanently removes a work that is already in the recycle bin.
-   * Blob files stay on disk because attachments are content-addressed and may
-   * be shared; a future blob compactor can remove unreferenced files safely.
-   */
+  /** Permanently removes a recycled Work; shared content-addressed blobs remain on disk. */
   async purgeDeleted(id: string): Promise<void> {
     await this.purgeDeletedMany([id]);
   }
@@ -1452,6 +1448,7 @@ export class WorksRepo {
     await this.db.run(`DELETE FROM graph_cache WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM collection_items WHERE work_id = ?`, [workId]);
     await purgeProjectWorkMemberships(this.db, workId);
+    await purgeWorkKnowledgeRecords(this.db, this.libraryId, workId);
     await this.db.run(`DELETE FROM work_tags WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM work_authors WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM annotations WHERE work_id = ?`, [workId]);

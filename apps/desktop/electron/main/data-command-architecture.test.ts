@@ -341,6 +341,7 @@ describe("main-process data command architecture", () => {
     const router = source("src/main.tsx");
     const libraryBackup = source("src/shared/library-backup.ts");
     const syncStorage = source("src/shared/sqlite-sync-storage.ts");
+    const syncScope = source("src/services/document-evidence-sync-scope.ts");
 
     for (const renderer of [canvasPage, citationGraph]) {
       expect(renderer).not.toContain("getLibraryDb");
@@ -361,8 +362,9 @@ describe("main-process data command architecture", () => {
     for (const legacyTable of ["flashcards", "flashcard_srs", "flashcard_reviews"]) {
       expect(libraryBackup).toContain(`"${legacyTable}"`);
     }
-    expect(syncStorage).toContain("flashcards: [");
-    expect(syncStorage).toContain('table === "annotations" || table === "flashcards"');
+    expect(syncScope).toContain("flashcards: columns(");
+    expect(syncScope).toContain('table === "annotations" || table === "flashcards"');
+    expect(syncStorage).toContain("syncedColumnsForTable");
   });
 
   it("keeps Library collection workflows inside the feature controller", () => {

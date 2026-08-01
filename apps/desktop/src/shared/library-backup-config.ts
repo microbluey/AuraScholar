@@ -9,6 +9,11 @@ export const USER_BACKUP_TABLES = [
   "authors",
   "work_authors",
   "attachments",
+  "document_assets",
+  "document_revisions",
+  "project_assets",
+  "evidence_items",
+  "project_evidence",
   "collections",
   "collection_items",
   "tags",
@@ -38,6 +43,11 @@ export const GENERATED_BACKUP_ID_TABLES = [
   "research_projects",
   "project_works",
   "attachments",
+  "document_assets",
+  "document_revisions",
+  "project_assets",
+  "evidence_items",
+  "project_evidence",
   "collections",
   "annotations",
   "annotation_comments",
@@ -73,6 +83,8 @@ export const DIRECT_LIBRARY_BACKUP_TABLES = new Set<UserBackupTable>([
   "works",
   "research_projects",
   "authors",
+  "document_assets",
+  "evidence_items",
   "collections",
   "tags",
   "canvas_workspaces",
@@ -97,6 +109,19 @@ export const BACKUP_SCOPE_SQL: Partial<Record<UserBackupTable, string>> = {
   attachments: `SELECT t.* FROM attachments t
     JOIN works w ON w.id = t.work_id
     WHERE w.library_id = ?`,
+  document_assets: `SELECT t.* FROM document_assets t WHERE t.library_id = ?`,
+  document_revisions: `SELECT t.* FROM document_revisions t
+    JOIN document_assets asset ON asset.id = t.asset_id
+    WHERE asset.library_id = ?`,
+  project_assets: `SELECT t.* FROM project_assets t
+    JOIN research_projects project ON project.id = t.project_id
+    JOIN document_assets asset ON asset.id = t.asset_id
+    WHERE project.library_id = ? AND asset.library_id = ?`,
+  evidence_items: `SELECT t.* FROM evidence_items t WHERE t.library_id = ?`,
+  project_evidence: `SELECT t.* FROM project_evidence t
+    JOIN research_projects project ON project.id = t.project_id
+    JOIN evidence_items evidence ON evidence.id = t.evidence_id
+    WHERE project.library_id = ? AND evidence.library_id = ?`,
   collections: `SELECT t.* FROM collections t WHERE t.library_id = ?`,
   collection_items: `SELECT t.* FROM collection_items t
     JOIN collections c ON c.id = t.collection_id
@@ -160,6 +185,11 @@ export const BACKUP_IDENTITY_COLUMNS: Record<UserBackupTable, readonly string[]>
   authors: ["id"],
   work_authors: ["work_id", "author_id"],
   attachments: ["id"],
+  document_assets: ["id"],
+  document_revisions: ["id"],
+  project_assets: ["id"],
+  evidence_items: ["id"],
+  project_evidence: ["id"],
   collections: ["id"],
   collection_items: ["collection_id", "work_id"],
   tags: ["id"],
@@ -190,6 +220,11 @@ export const SCOPED_DERIVED_SOURCE_TABLES = new Set<UserBackupTable>([
   "project_works",
   "authors",
   "attachments",
+  "document_assets",
+  "document_revisions",
+  "project_assets",
+  "evidence_items",
+  "project_evidence",
   "collections",
   "tags",
   "annotations",

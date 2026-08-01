@@ -12,9 +12,18 @@ import {
 import { sql } from "drizzle-orm";
 import { libraries, works } from "./library-schema.js";
 import { researchProjects } from "./research-project-schema.js";
+import { attachments } from "./document-evidence-schema.js";
 
 export { libraries, works } from "./library-schema.js";
 export { projectWorks, researchProjects } from "./research-project-schema.js";
+export {
+  attachments,
+  documentAssets,
+  documentRevisions,
+  evidenceItems,
+  projectAssets,
+  projectEvidence,
+} from "./document-evidence-schema.js";
 
 // Convention: UUIDv7 string PKs (time-ordered, sync-friendly). Timestamps are
 // epoch milliseconds. deleted_at is a soft-delete tombstone required by the
@@ -60,30 +69,6 @@ export const workAuthors = sqliteTable(
     role: text("role").notNull().default("author"), // author | editor | translator
   },
   (t) => [primaryKey({ columns: [t.workId, t.authorId] })],
-);
-
-// Attachments are content-addressed: the PDF bytes live at
-// blobs/<sha256[0..2]>/<sha256>.pdf, never inside the database.
-export const attachments = sqliteTable(
-  "attachments",
-  {
-    id: id(),
-    workId: text("work_id")
-      .notNull()
-      .references(() => works.id),
-    kind: text("kind").notNull().default("pdf"), // pdf | supplement
-    sha256: text("sha256").notNull(),
-    byteSize: integer("byte_size").notNull(),
-    originalFilename: text("original_filename"),
-    sourceUrl: text("source_url"),
-    fetchedVia: text("fetched_via"), // unpaywall | arxiv | openalex | manual
-    pageCount: integer("page_count"),
-    textExtractedAt: integer("text_extracted_at"),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-    deletedAt: deletedAt(),
-  },
-  (t) => [index("attachments_work_idx").on(t.workId), index("attachments_sha_idx").on(t.sha256)],
 );
 
 // ---------------------------------------------------------------------------

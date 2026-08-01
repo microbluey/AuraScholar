@@ -1,6 +1,6 @@
 # AuraScholar Research Knowledge Layer RFC
 
-> Status: Proposed
+> Status: Accepted; implementation in progress
 >
 > Date: 2026-07-27
 >
@@ -358,8 +358,10 @@ and Canvas ownership before rebuilding constrained tables.
 
 ### 7.2 Assets and revisions
 
-To avoid a destructive first migration, the existing `attachments` table remains
-compatible while the domain is introduced.
+Schema version 19 introduces dedicated logical assets and immutable revisions.
+To avoid a destructive migration, the existing `attachments` table remains a
+compatibility bridge for legacy PDF storage rather than serving as the revision
+record itself.
 
 ```text
 document_assets
@@ -367,15 +369,21 @@ document_assets
   current_revision_id?, created_at, updated_at, deleted_at
 
 document_revisions
-  id, asset_id, revision_no, mime_type,
+  id, asset_id, attachment_id?, revision_no, mime_type,
   blob_sha256, byte_size, source_url?,
   extractor_profile?, extraction_status,
   created_at, deleted_at
 ```
 
-An implementation may initially extend `attachments` as the physical revision
-record rather than rename it. Existing attachments backfill to one asset and
-revision 1. The current revision switches only after validation succeeds.
+Existing attachments backfill to one asset and revision 1. Each backfilled
+revision references its legacy attachment through a nullable, unique
+`attachment_id`; revisions for other document sources do not require an
+attachment row. A revision's immutable `id` is its cross-device identity.
+`revision_no` is only a locally allocated display ordinal, so concurrent
+offline branches may legitimately share the same number. Revision histories
+therefore sort by `revision_no`, then `created_at`, then `id`; sync preserves
+every branch rather than collapsing one behind a uniqueness constraint. The
+current revision switches only after validation succeeds.
 
 `blob_sha256` resolves through the content-addressed BlobStore for every local
 format, including captured HTML, DOCX, EPUB, and notebooks. Revision insertion
@@ -1285,31 +1293,30 @@ version 16. Each migration is tested for:
 
 ## 18. Decision log
 
-| Decision                     | Default                                                                      |
-| ---------------------------- | ---------------------------------------------------------------------------- |
-| Primary working scope        | Research Project                                                             |
-| Project membership           | Work/logical Asset; current revision searched, historical Evidence preserved |
-| Whole-Library search         | Explicit opt-in per query/session                                            |
-| First product                | Anchored full-text evidence search, followed by semantic hybrid search       |
-| First indexed sources        | Born-digital PDF text, annotations, text Evidence                            |
-| Notes/manuscript retrieval   | Indexed later; excluded by default and clearly labeled                       |
-| Generated content authority  | Non-authoritative by default                                                 |
-| Recoverable source removal   | Evidence snapshot retained and marked unavailable                            |
-| Permanent erasure            | Source payload and every captured/derived copy removed                       |
-| Index sync                   | Rebuild locally; do not sync initially                                       |
-| Embedding mode               | Local preferred after spike; remote embedding separately authorized          |
-| Vector engine                | Adapter plus benchmark; no engine committed in this RFC                      |
-| GraphRAG                     | Deferred until measured need                                                 |
-| Bibliographic citation       | Work + optional locator; Evidence not required                               |
-| Claim-to-evidence provenance | ClaimEvidenceLink to EvidenceItem + canonical SourceAnchor                   |
+| Decision                     | Default                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------ |
+| Primary working scope        | Research Project                                                                           |
+| Project membership           | Work/logical Asset; current revision searched, historical Evidence preserved               |
+| Whole-Library search         | Explicit opt-in per query/session                                                          |
+| First product                | Anchored full-text evidence search, followed by semantic hybrid search                     |
+| First indexed sources        | Born-digital PDF text, annotations, text Evidence                                          |
+| Notes/manuscript retrieval   | Indexed later; excluded by default and clearly labeled                                     |
+| Generated content authority  | Non-authoritative by default                                                               |
+| Recoverable source removal   | Evidence snapshot retained and marked unavailable                                          |
+| Permanent erasure            | Source payload and every captured/derived copy removed                                     |
+| Index sync                   | Rebuild locally; do not sync initially                                                     |
+| Embedding mode               | Local preferred after spike; remote embedding separately authorized                        |
+| Vector engine                | Adapter plus benchmark; no engine committed in this RFC                                    |
+| GraphRAG                     | Deferred until measured need                                                               |
+| Bibliographic citation       | Work + optional locator; Evidence not required                                             |
+| Claim-to-evidence provenance | ClaimEvidenceLink to EvidenceItem + canonical SourceAnchor                                 |
+| Physical document versions   | Dedicated immutable `document_revisions`; `attachments` remains a PDF compatibility bridge |
 
 ## 19. Open implementation decisions
 
 The following are decided by focused implementation spikes without changing the
 invariants above:
 
-- extend `attachments` as physical revisions or introduce a new physical
-  `document_revisions` table immediately;
 - SQLite exact scan / `sqlite-vec` versus LanceDB for the first vector adapter;
 - local embedding runtime and bilingual model profile;
 - Chinese full-text tokenizer/segmentation profile;

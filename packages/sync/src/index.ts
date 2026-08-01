@@ -39,3 +39,15 @@ export type {
   SpatialCanvasBackupRemapResult,
   SpatialCanvasBackupTable,
 } from "./canvas-backup.js";
+export {
+  DOCUMENT_EVIDENCE_BACKUP_TABLES,
+  assertDocumentEvidenceBackupOrder,
+  assertDocumentEvidenceBackupRelationships,
+  remapDocumentEvidenceBackupRow,
+} from "./document-evidence-backup.js";
+export type {
+  DocumentEvidenceBackupIdMaps,
+  DocumentEvidenceBackupRemapResult,
+  DocumentEvidenceBackupRows,
+  DocumentEvidenceBackupTable,
+} from "./document-evidence-backup.js";

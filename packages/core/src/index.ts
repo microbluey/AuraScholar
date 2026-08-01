@@ -60,6 +60,44 @@ export type {
   ResearchProject,
   ResearchProjectStatus,
 } from "./project/types.js";
+export {
+  DOCUMENT_ASSET_KINDS,
+  DOCUMENT_AVAILABILITY_STATUSES,
+  DOCUMENT_EXTRACTION_STATUSES,
+} from "./document/types.js";
+export type {
+  DocumentAsset,
+  DocumentAssetKind,
+  DocumentAvailabilityStatus,
+  DocumentExtractionStatus,
+  DocumentRevision,
+  DocumentRevisionPosition,
+  ResolvedDocumentRevision,
+} from "./document/types.js";
+export { EVIDENCE_KINDS, EVIDENCE_PAYLOAD_KINDS } from "./evidence/types.js";
+export type {
+  EvidenceItem,
+  EvidenceKind,
+  EvidencePayload,
+  EvidencePayloadKind,
+  EvidenceProvenance,
+  EvidenceRevisionState,
+  EvidenceSourceKind,
+  EvidenceTextPayload,
+} from "./evidence/types.js";
+export { parseSourceAnchor } from "./evidence/source-anchor.js";
+export type {
+  CanvasSourceAnchor,
+  EpubSourceAnchor,
+  ManuscriptSourceAnchor,
+  PdfQuadRect,
+  PdfQuadSelector,
+  PdfSourceAnchor,
+  SourceAnchor,
+  StructuralTextSourceAnchor,
+  TextPositionSelector,
+  TextQuoteSelector,
+} from "./evidence/source-anchor.js";
 export type {
   AISynthesisType,
   AISynthNode,

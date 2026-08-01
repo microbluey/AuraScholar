@@ -32,6 +32,7 @@ pnpm --filter @aurascholar/desktop dev
 | `packages/db`         | SQLite schema、迁移、Repository 层                      |
 | `packages/platform`   | 平台能力抽象接口(HTTP/FS/通知/密钥/调度)                |
 | `packages/connectors` | Crossref / OpenAlex / Unpaywall / arXiv 客户端          |
+| `packages/anchors`    | 版本化 SourceAnchor 规范与无依赖运行时校验             |
 | `packages/core`       | 领域逻辑:入库管线、哨兵状态机、引文图谱                 |
 | `packages/reader`     | PDF 阅读器与批注锚定引擎                                |
 | `packages/ai`         | AIProvider 抽象 + BYOK 实现                             |

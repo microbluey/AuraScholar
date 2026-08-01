@@ -23,6 +23,7 @@ export interface Migration {
 import { DDL_V1 } from "./ddl.js";
 import { ensureLocalLibraryIdentity } from "./local-first.js";
 import { createLibraryBoundaryTriggers } from "./migration-library-boundary-triggers.js";
+import { applyDocumentEvidenceV19 } from "./migration-document-evidence.js";
 import { applyResearchProjectsV18 } from "./migration-research-projects.js";
 
 export const MIGRATIONS: Migration[] = [
@@ -388,9 +389,7 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    // Establish Library as the mandatory ownership boundary for canonical
-    // research data and sync metadata. SQLite cannot add a NOT NULL foreign-key
-    // column in place, so this migration uses transactional table rebuilds.
+    // Establish Library ownership through transactional SQLite table rebuilds.
     version: 17,
     name: "library_ownership",
     sql: "",
@@ -404,6 +403,7 @@ export const MIGRATIONS: Migration[] = [
     apply: applyResearchProjectsV18,
     disableForeignKeys: true,
   },
+  { version: 19, name: "document_evidence", sql: "", apply: applyDocumentEvidenceV19 },
 ];
 
 async function applyLibraryOwnershipV17(db: SqlExecutor): Promise<void> {
