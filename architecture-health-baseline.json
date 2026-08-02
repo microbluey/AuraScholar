@@ -10,7 +10,7 @@
       "byExtension": {
         ".css": 18771,
         ".ts": 48499,
-        ".tsx": 34690
+        ".tsx": 34720
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 455,
@@ -121,7 +121,7 @@
         "apps/desktop/src/features/evidence/EvidenceInboxToolbar.tsx": 138,
         "apps/desktop/src/features/evidence/EvidenceInspector.tsx": 225,
         "apps/desktop/src/features/evidence/EvidenceProjectPicker.tsx": 167,
-        "apps/desktop/src/features/evidence/SaveEvidencePopover.tsx": 216,
+        "apps/desktop/src/features/evidence/SaveEvidencePopover.tsx": 246,
         "apps/desktop/src/features/evidence/evidence-inbox-request-coordinator.ts": 101,
         "apps/desktop/src/features/evidence/evidence-inbox-service.ts": 330,
         "apps/desktop/src/features/evidence/evidence-inbox.css": 453,
@@ -375,12 +375,12 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 101960
+      "totalLines": 101990
     },
     "tests": {
       "byExtension": {
         ".ts": 54618,
-        ".tsx": 741
+        ".tsx": 777
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
@@ -498,7 +498,7 @@
         "apps/desktop/src/features/discovery/useDiscoverySearchController.test.ts": 44,
         "apps/desktop/src/features/discovery/useIngestDraftQueue.test.ts": 37,
         "apps/desktop/src/features/evidence/EvidenceInboxViews.test.tsx": 160,
-        "apps/desktop/src/features/evidence/SaveEvidencePopover.test.tsx": 47,
+        "apps/desktop/src/features/evidence/SaveEvidencePopover.test.tsx": 83,
         "apps/desktop/src/features/evidence/model.test.ts": 90,
         "apps/desktop/src/features/evidence/reader-evidence-capture.test.ts": 106,
         "apps/desktop/src/features/evidence/useEvidenceInboxController.test.ts": 162,
@@ -608,7 +608,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 55359
+      "totalLines": 55395
     }
   },
   "uiDatabaseBoundary": {}

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ReaderEvidenceSelection } from "@aurascholar/reader";
-import { SaveEvidencePopover } from "./SaveEvidencePopover";
+import { SaveEvidencePopover, shouldSubmitEvidenceShortcut } from "./SaveEvidencePopover";
 
 const selection: ReaderEvidenceSelection = {
   anchor: {
@@ -42,6 +42,42 @@ describe("SaveEvidencePopover", () => {
     expect(markup).toContain('aria-pressed="true"');
     expect(markup).toContain("背景");
     expect(markup).toContain("仅存入证据收件箱");
-    expect(markup).toContain("Enter 保存 · Esc 取消");
+    expect(markup).toContain("⌘/Ctrl + Enter 保存 · Esc 取消");
+  });
+
+  it("preserves native Enter behavior for kind buttons and project selects", () => {
+    const closest = vi.fn(() => ({ tagName: "BUTTON" }));
+    const interactiveTarget = { closest } as unknown as EventTarget;
+
+    expect(
+      shouldSubmitEvidenceShortcut({
+        ctrlKey: false,
+        key: "Enter",
+        metaKey: false,
+        target: interactiveTarget,
+      }),
+    ).toBe(false);
+    expect(closest).toHaveBeenCalledWith(expect.stringContaining("button, select"));
+  });
+
+  it("keeps an explicit modifier shortcut without hijacking other keys", () => {
+    const genericTarget = { closest: vi.fn(() => null) } as unknown as EventTarget;
+
+    expect(
+      shouldSubmitEvidenceShortcut({
+        ctrlKey: true,
+        key: "Enter",
+        metaKey: false,
+        target: genericTarget,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSubmitEvidenceShortcut({
+        ctrlKey: false,
+        key: "ArrowDown",
+        metaKey: false,
+        target: genericTarget,
+      }),
+    ).toBe(false);
   });
 });

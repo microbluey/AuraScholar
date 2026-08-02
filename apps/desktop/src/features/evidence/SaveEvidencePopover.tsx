@@ -127,17 +127,21 @@ export function SaveEvidencePopover({
           event.preventDefault();
           event.stopPropagation();
           onCancel();
-        } else if (event.key === "Enter") {
+        } else if (shouldSubmitEvidenceShortcut(event)) {
           event.preventDefault();
           void submit();
         }
       }}
     >
       <header className="save-evidence-popover__header">
-        <span aria-hidden="true"><Database size={17} weight="duotone" /></span>
+        <span aria-hidden="true">
+          <Database size={17} weight="duotone" />
+        </span>
         <div>
           <strong id={titleId}>保存为证据</strong>
-          <small>{source.workTitle} · 第 {selection.pageIndex + 1} 页</small>
+          <small>
+            {source.workTitle} · 第 {selection.pageIndex + 1} 页
+          </small>
         </div>
         <button type="button" aria-label="取消保存证据" disabled={busy} onClick={onCancel}>
           <X size={15} weight="bold" />
@@ -166,7 +170,9 @@ export function SaveEvidencePopover({
       </fieldset>
 
       <label className="save-evidence-popover__project">
-        <span>研究项目 <small>可选</small></span>
+        <span>
+          研究项目 <small>可选</small>
+        </span>
         <select
           value={projectId}
           disabled={busy || loading}
@@ -174,15 +180,21 @@ export function SaveEvidencePopover({
         >
           <option value="">仅存入证据收件箱</option>
           {scope?.projects.map((project) => (
-            <option key={project.id} value={project.id}>{project.name}</option>
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
           ))}
         </select>
       </label>
 
-      {error ? <p className="save-evidence-popover__error" role="alert">{error}</p> : null}
+      {error ? (
+        <p className="save-evidence-popover__error" role="alert">
+          {error}
+        </p>
+      ) : null}
 
       <footer>
-        <span>Enter 保存 · Esc 取消</span>
+        <span>⌘/Ctrl + Enter 保存 · Esc 取消</span>
         <button type="submit" disabled={busy || loading || !scope}>
           {busy ? <CircleNotch className="save-evidence-popover__spinner" size={14} /> : null}
           {busy ? "保存中" : "保存证据"}
@@ -192,11 +204,29 @@ export function SaveEvidencePopover({
   );
 }
 
+const INTERACTIVE_EVIDENCE_SELECTOR =
+  "button, select, input, textarea, a[href], [contenteditable='true'], [role='button'], [role='combobox'], [role='option']";
+
+export function shouldSubmitEvidenceShortcut(event: {
+  ctrlKey: boolean;
+  key: string;
+  metaKey: boolean;
+  target: EventTarget | null;
+}): boolean {
+  if (event.key !== "Enter") return false;
+  if (event.metaKey || event.ctrlKey) return true;
+  const target = event.target as { closest?: (selector: string) => unknown } | null;
+  return !target?.closest?.(INTERACTIVE_EVIDENCE_SELECTOR);
+}
+
 function popoverPosition(rect: ReaderEvidenceSelection["clientRect"]): CSSProperties {
   const viewportWidth = typeof window === "undefined" ? 1200 : window.innerWidth;
   const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
   const width = Math.min(340, Math.max(260, viewportWidth - 24));
-  const left = Math.max(12, Math.min(viewportWidth - width - 12, rect.x + rect.width / 2 - width / 2));
+  const left = Math.max(
+    12,
+    Math.min(viewportWidth - width - 12, rect.x + rect.width / 2 - width / 2),
+  );
   const below = rect.y + rect.height + 12;
   const top = below + 360 < viewportHeight ? below : Math.max(12, rect.y - 372);
   return { left, top, width };
