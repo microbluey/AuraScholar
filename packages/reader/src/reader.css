@@ -161,7 +161,8 @@
   opacity: 0.62;
 }
 
-.au-reader__tool--snippet[aria-busy="true"] {
+.au-reader__tool--snippet[aria-busy="true"],
+.au-reader__tool--evidence[aria-busy="true"] {
   color: var(--color-accent);
 }
 

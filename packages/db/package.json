@@ -48,6 +48,10 @@
       "types": "./dist/repos/evidence.d.ts",
       "default": "./dist/repos/evidence.js"
     },
+    "./repos/evidence-inbox": {
+      "types": "./dist/repos/evidence-inbox.d.ts",
+      "default": "./dist/repos/evidence-inbox.js"
+    },
     "./repos/collections": {
       "types": "./dist/repos/collections.d.ts",
       "default": "./dist/repos/collections.js"

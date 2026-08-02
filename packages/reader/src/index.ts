@@ -13,6 +13,11 @@ export { PdfDocument, configureWorker, extractFullText } from "./document.js";
 export type { PageTextIndex, PdfDocumentMetadata } from "./document.js";
 export { rectsForTextRange, textRangeFromDomSelection } from "./quads.js";
 export type { ReaderAnnotation, AnnotationType, PendingSelection } from "./annotations.js";
+export { buildPdfSelectionAnchor, buildReaderEvidenceSelection } from "./selection-anchor.js";
+export type {
+  ReaderEvidenceSelection,
+  ReaderPdfEvidenceAnchor,
+} from "./selection-anchor.js";
 export { PdfReader } from "./PdfReader.js";
 export type { PdfReaderProps, ReaderTextSelection } from "./PdfReader.js";
 export { PdfPage } from "./PdfPage.js";

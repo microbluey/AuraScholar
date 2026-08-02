@@ -427,6 +427,8 @@ describe("main-process data command architecture", () => {
     const savedSearchCommands = source("electron/main/saved-search-commands.ts");
     const sentinelCommands = source("electron/main/sentinel-commands.ts");
     const projectCommands = source("electron/main/research-project-commands.ts");
+    const evidenceCommands = source("electron/main/evidence-commands.ts");
+    const evidenceInboxCommands = source("electron/main/evidence-inbox-commands.ts");
 
     expect(runtime).toContain("DataCommandOutput<NoInfer<K>>");
     expect(dispatcher).not.toContain("): Promise<unknown>");
@@ -435,6 +437,8 @@ describe("main-process data command architecture", () => {
     expect(savedSearchCommands).not.toContain("): Promise<unknown>");
     expect(sentinelCommands).not.toContain("): Promise<unknown>");
     expect(projectCommands).not.toContain("): Promise<unknown>");
+    expect(evidenceCommands).not.toContain("): Promise<unknown>");
+    expect(evidenceInboxCommands).not.toContain("): Promise<unknown>");
   });
 
   it("routes every raw database IPC method through the connection coordinator", () => {
@@ -447,16 +451,21 @@ describe("main-process data command architecture", () => {
 
   it("keeps the typed command contract, runtime dispatcher, and main registration in lockstep", () => {
     const contract = source("electron/data-command-contract.ts");
+    const evidenceContract = source("electron/evidence-command-contract.ts");
     const dispatcher = source("electron/main/data-commands.ts");
     const main = source("electron/main.ts");
 
-    const contractNames = [...contract.matchAll(/^\s*"([^"]+)":\s*\{/gm)]
-      .map((match) => match[1])
+    const contractNames = [contract, evidenceContract]
+      .flatMap((contractSource) =>
+        [...contractSource.matchAll(/^\s*"([^"]+)":\s*\{/gm)].map((match) => match[1]),
+      )
       .sort();
     const dispatchedNames = [...dispatcher.matchAll(/^\s*case "([^"]+)":/gm)]
       .map((match) => match[1])
       .sort();
 
+    expect(new Set(contractNames).size).toBe(contractNames.length);
+    expect(contract).toContain("DataCommandMap extends EvidenceDataCommandMap");
     expect(dispatchedNames).toEqual(contractNames);
     for (const commandName of contractNames) {
       expect(dispatcher).toContain(`value.name !== "${commandName}"`);

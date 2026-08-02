@@ -24,6 +24,7 @@ export const CH = {
   dbExec: "db:exec",
   dbScalar: "db:scalar",
   dataCommand: "data:command",
+  evidenceRecoverSource: "evidence:recoverSource",
 
   appCloseHold: "app:close:hold",
   appCloseRespond: "app:close:respond",
@@ -150,4 +151,20 @@ export interface CaptureResult {
   relPath?: string;
   fileName?: string;
   error?: string;
+}
+
+export interface RecoverEvidenceSourceInput {
+  bytes: Uint8Array;
+  evidenceId: string;
+  fileName: string;
+  libraryId: string;
+}
+
+export interface RecoverEvidenceSourceResult {
+  attachmentId: string;
+  evidenceId: string;
+  pageIndex: number;
+  reusedAttachment: boolean;
+  revisionId: string;
+  workId: string;
 }

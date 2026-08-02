@@ -7,6 +7,7 @@ import { attachCloseLifecycle, registerCloseLifecycleHandlers } from "./main/clo
 import { openExternalUrl, registerPlatformHandlers } from "./main/platform";
 import { registerDbHandlers } from "./main/db";
 import { registerDataCommandHandlers } from "./main/data-commands";
+import { registerEvidenceSourceRecoveryHandlers } from "./main/evidence-source-recovery";
 import { initResearchBrowser, registerResearchHandlers } from "./main/research-browser";
 import { startCitationBridge, citationBridgePort } from "./main/citation-bridge";
 
@@ -82,6 +83,7 @@ if (!hasSingleInstanceLock) {
     registerPlatformHandlers();
     registerDbHandlers();
     registerDataCommandHandlers();
+    registerEvidenceSourceRecoveryHandlers();
     registerResearchHandlers();
     registerCloseLifecycleHandlers();
     handle(CH.citationBridgePort, () => citationBridgePort());

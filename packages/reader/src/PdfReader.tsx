@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PageTextIndex, PdfDocument } from "./document.js";
 import type { PendingSelection, ReaderAnnotation, AnnotationType } from "./annotations.js";
-import type { AnnotationAnchor } from "./anchor-types.js";
-import { makeQuoteSelector } from "./anchoring.js";
-import { rectsForTextRange, textRangeFromDomSelection } from "./quads.js";
+import { textRangeFromDomSelection } from "./quads.js";
+import {
+  buildPdfSelectionAnchor,
+  buildReaderEvidenceSelection,
+  type ReaderEvidenceSelection,
+} from "./selection-anchor.js";
 import { PdfPage } from "./PdfPage.js";
 
 export interface ReaderTextSelection {
@@ -25,6 +28,10 @@ export interface PdfReaderProps {
   onTranslate?: (selection: ReaderTextSelection) => void;
   /** Invoked with the selected text + page when the user saves a writing snippet. */
   onSaveSnippet?: (text: string, pageIndex: number) => boolean | void | Promise<boolean | void>;
+  /** Invoked with a complete immutable PDF anchor when the user captures Evidence. */
+  onSaveEvidence?: (
+    selection: ReaderEvidenceSelection,
+  ) => boolean | void | Promise<boolean | void>;
   /** Highlight palette: name → CSS color. */
   palette?: Record<string, string>;
   pageFilter?: "none" | "sepia" | "invert";
@@ -53,6 +60,7 @@ export function PdfReader({
   onAnnotationClick,
   onTranslate,
   onSaveSnippet,
+  onSaveEvidence,
   palette = DEFAULT_PALETTE,
   pageFilter = "none",
   scrollToPage = null,
@@ -162,16 +170,7 @@ export function PdfReader({
       let shouldClear: boolean;
       try {
         const index = await doc.getPageText(pending.pageIndex);
-        const anchor: AnnotationAnchor = {
-          version: 1,
-          pageIndex: pending.pageIndex,
-          quote: makeQuoteSelector(index.text, pending.start, pending.end),
-          position: { start: pending.start, end: pending.end },
-          quads: {
-            pageIndex: pending.pageIndex,
-            rects: rectsForTextRange(index, pending.start, pending.end),
-          },
-        };
+        const anchor = buildPdfSelectionAnchor(index, pending);
         const result = await onCreateAnnotation({
           type,
           color,
@@ -205,6 +204,23 @@ export function PdfReader({
       setSnippetSaving(false);
     }
   }, [onSaveSnippet, pending, snippetSaving]);
+
+  const saveEvidenceFromPending = useCallback(async () => {
+    if (!pending || !onSaveEvidence || snippetSaving) return;
+    setSnippetSaving(true);
+    try {
+      const index = await doc.getPageText(pending.pageIndex);
+      const result = await onSaveEvidence(buildReaderEvidenceSelection(index, pending));
+      if (result !== false) {
+        setPending(null);
+        window.getSelection()?.removeAllRanges();
+      }
+    } catch {
+      // The PDF worker may be destroyed while a side-by-side Reader is closing.
+    } finally {
+      setSnippetSaving(false);
+    }
+  }, [doc, onSaveEvidence, pending, snippetSaving]);
 
   const pages = useMemo(() => {
     const maxPage = doc.pageCount - 1;
@@ -343,6 +359,19 @@ export function PdfReader({
               onClick={() => void saveSnippetFromPending()}
             >
               {snippetSaving ? "…" : "✦"}
+            </button>
+          )}
+          {onSaveEvidence && (
+            <button
+              type="button"
+              className="au-reader__tool au-reader__tool--evidence"
+              aria-busy={snippetSaving}
+              aria-label={snippetSaving ? "正在准备证据" : "保存为证据"}
+              disabled={snippetSaving}
+              title={snippetSaving ? "正在准备证据" : "保存为证据"}
+              onClick={() => void saveEvidenceFromPending()}
+            >
+              {snippetSaving ? "…" : "证"}
             </button>
           )}
         </div>

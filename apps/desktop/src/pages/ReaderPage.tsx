@@ -7,7 +7,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type CSSProperties,
   type Dispatch,
   type SetStateAction,
 } from "react";
@@ -19,6 +18,7 @@ import {
   annotationsToMarkdown,
   configureWorker,
   type ReaderAnnotation,
+  type ReaderEvidenceSelection,
   type ReaderTextSelection,
 } from "@aurascholar/reader";
 import { newId } from "@aurascholar/db/ids";
@@ -29,12 +29,20 @@ import { writeClipboardText } from "../clipboard";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { downloadBlob } from "../download";
 import { useCanvasIngress, type CanvasIngressRequest } from "../features/canvas/useCanvasIngress";
+import { SaveEvidencePopover } from "../features/evidence/SaveEvidencePopover";
 import {
   ReaderCommentDraftNavigationGuard,
   ReaderEmptyState,
   ReaderPageNavigator,
   type ReaderWorkContext,
 } from "../features/reader/ReaderPageChrome";
+import {
+  SelectionTranslationPopover,
+  translationSettingsCta,
+} from "../features/reader/SelectionTranslationPopover";
+import { useReaderEvidenceDeepLink } from "../features/reader/useReaderEvidenceDeepLink";
+import { resolveReaderScrollPage } from "../features/reader/evidence-deep-link";
+import { recoverReaderEvidenceSource } from "../features/reader/reader-evidence-recovery";
 import {
   createLibraryReaderAnnotation,
   deleteLibraryReaderAnnotation,
@@ -107,23 +115,6 @@ interface ReaderSmokeWindow extends Window {
 
 function normalizePanelTab(value: string | null): PanelTab | null {
   return value && PANEL_TABS.has(value as PanelTab) ? (value as PanelTab) : null;
-}
-
-const AI_CONFIGURATION_ERROR_RE = /配置 AI 服务|配置.*AI/;
-const TRANSLATION_CONFIGURATION_ERROR_RE = /填写 DeepL|填写百度翻译|配置.*翻译/;
-
-function isAiConfigurationError(message: string | null): boolean {
-  return Boolean(message && AI_CONFIGURATION_ERROR_RE.test(message));
-}
-
-function translationSettingsCta(message: string | null): { label: string; path: string } | null {
-  if (isAiConfigurationError(message)) {
-    return { label: "去配置 AI", path: "/settings?section=ai" };
-  }
-  if (message && TRANSLATION_CONFIGURATION_ERROR_RE.test(message)) {
-    return { label: "去配置翻译", path: "/settings?section=translate" };
-  }
-  return null;
 }
 
 const PAGE_FILTERS: Array<{ value: PageFilter; label: string; title: string }> = [
@@ -255,6 +246,7 @@ function consumeReaderSmokeSnippetSaveFailure(): Error | null {
 interface OpenContext {
   doc: PdfDocument;
   fileName: string;
+  sessionLease: ReaderSessionLease;
   sessionGeneration: ReaderSessionGeneration;
   routeRequestKey?: string;
   librarySession?: LibraryReaderSession;
@@ -283,6 +275,12 @@ interface AnnotationDeleteUndoState {
   sessionGeneration: ReaderSessionGeneration;
 }
 
+interface ReaderEvidenceCaptureDraft {
+  evidenceId: string;
+  selection: ReaderEvidenceSelection;
+  sessionGeneration: ReaderSessionGeneration;
+}
+
 function workToMissingContext(
   workId: string,
   work: LibraryReaderSession["work"] | null | undefined,
@@ -299,13 +297,14 @@ function workToMissingContext(
 
 function librarySessionToOpenContext(
   session: LibraryReaderSession,
-  sessionGeneration: ReaderSessionGeneration,
+  sessionLease: ReaderSessionLease,
   routeRequestKey: string,
 ): OpenContext {
   return {
     doc: session.doc,
     fileName: session.work.title ?? "文献库文档",
-    sessionGeneration,
+    sessionLease,
+    sessionGeneration: sessionLease.generation,
     routeRequestKey,
     librarySession: session,
     workId: session.work.id,
@@ -372,6 +371,7 @@ export function ReaderPage() {
   const workIdParam = params.get("work");
   const rawTabParam = params.get("tab");
   const annotationIdParam = params.get("annotation");
+  const evidenceIdParam = params.get("evidence")?.trim() || undefined;
   const attachmentIdParam = params.get("attachment")?.trim() || undefined;
   const pageParam = params.get("page");
   const tabParam = normalizePanelTab(rawTabParam);
@@ -401,6 +401,7 @@ export function ReaderPage() {
     sessionGeneration: ReaderSessionGeneration;
   } | null>(null);
   const [snippetToast, setSnippetToast] = useState<string | null>(null);
+  const [evidenceCapture, setEvidenceCapture] = useState<ReaderEvidenceCaptureDraft | null>(null);
   const [graphMounted, setGraphMounted] = useState(tabParam === "graph");
   const [commentDraftDirty, setCommentDraftDirty] = useState(false);
   const [fileActionBusy, setFileActionBusy] = useState(false);
@@ -465,7 +466,7 @@ export function ReaderPage() {
 
   const activeLeaseForContext = useCallback(
     (context: OpenContext | null): ReaderSessionLease | null => {
-      const lease = activeReaderSessionLeaseRef.current;
+      const lease = context?.sessionLease;
       if (!context || !lease || context.sessionGeneration !== lease.generation) return null;
       if (
         context.workId &&
@@ -478,6 +479,13 @@ export function ReaderPage() {
     },
     [readerRouteRequestKey],
   );
+  const evidenceDeepLink = useReaderEvidenceDeepLink({
+    attachmentId: ctx?.attachmentId,
+    evidenceId: evidenceIdParam,
+    lease: activeLeaseForContext(ctx),
+    onError: reportCanvasIngressError,
+    workId: ctx?.workId,
+  });
 
   useLayoutEffect(() => {
     activeReaderSessionLeaseRef.current?.abort();
@@ -658,7 +666,7 @@ export function ReaderPage() {
         setArchivedWork(null);
         setArchivedWorkId(null);
         setAllowRetryOpen(false);
-        setCtx(librarySessionToOpenContext(session, lease.generation, readerRouteRequestKey!));
+        setCtx(librarySessionToOpenContext(session, lease, readerRouteRequestKey!));
         const pendingRepair = pendingAttachmentRepairRef.current;
         if (
           pendingRepair?.workId === workIdParam &&
@@ -731,6 +739,7 @@ export function ReaderPage() {
   const handleTranslate = (selection: ReaderTextSelection) => {
     const lease = activeLeaseForContext(ctx);
     if (!lease) return;
+    setEvidenceCapture(null);
     setSelectionTranslation((current) => ({
       selection,
       seq: (current?.seq ?? 0) + 1,
@@ -845,6 +854,26 @@ export function ReaderPage() {
     setTranslatedPagesState(EMPTY_SESSION_TRANSLATED_PAGES);
     try {
       setLoadError(null);
+      if (!lease.isCurrent()) return;
+      if (missingWorkSnapshot && evidenceIdParam && isDesktopRuntime()) {
+        setSnippetToast("正在校验 Evidence 的原始 PDF...");
+        const recovery = await recoverReaderEvidenceSource({
+          evidenceId: evidenceIdParam,
+          expectedWorkId: missingWorkSnapshot.id,
+          file,
+          signal: lease.signal,
+        });
+        if (!lease.isCurrent()) return;
+        pendingAttachmentRepairRef.current = {
+          attachmentId: recovery.attachmentId,
+          message: `已恢复《${missingWorkSnapshot.title}》中这条 Evidence 的原始修订`,
+          workId: recovery.workId,
+        };
+        const nextParams = withReaderAttachmentSearchParam(params, recovery.attachmentId);
+        nextParams.set("page", String(recovery.pageIndex + 1));
+        navigate({ search: nextParams.toString() }, { replace: true });
+        return;
+      }
       const data = new Uint8Array(await file.arrayBuffer());
       if (!lease.isCurrent()) return;
       if (missingWorkSnapshot && isDesktopRuntime()) {
@@ -884,6 +913,7 @@ export function ReaderPage() {
         setCtx({
           doc: loaded,
           fileName: file.name,
+          sessionLease: lease,
           sessionGeneration: lease.generation,
         });
         setSnippetToast("已打开本地 PDF。未入库文件的批注只保存在本次会话。");
@@ -894,7 +924,9 @@ export function ReaderPage() {
       }
     } catch (e) {
       if (!isLibraryReaderAbort(e) && lease.isCurrent()) {
-        setLoadError(`打开 PDF 失败:${describeSafeError(e)}`);
+        setLoadError(
+          `${evidenceIdParam ? "恢复 Evidence 原始来源失败" : "打开 PDF 失败"}:${describeSafeError(e)}`,
+        );
       }
     } finally {
       if (lease.isCurrent()) setFileActionBusy(false);
@@ -1102,6 +1134,31 @@ export function ReaderPage() {
     }
   };
 
+  const handleSaveEvidence = useCallback(
+    (selection: ReaderEvidenceSelection): boolean => {
+      const context = ctx;
+      const lease = activeLeaseForContext(context);
+      if (!context?.librarySession || !lease) {
+        setSnippetToast("请从文献库打开当前 PDF 后再保存为证据。");
+        return false;
+      }
+      setSelectionTranslation(null);
+      setEvidenceCapture({
+        evidenceId: newId(),
+        selection,
+        sessionGeneration: lease.generation,
+      });
+      return true;
+    },
+    [
+      activeLeaseForContext,
+      ctx,
+      setEvidenceCapture,
+      setSelectionTranslation,
+      setSnippetToast,
+    ],
+  );
+
   const handleExport = () => {
     if (!ctx) return;
     if (commentDraftDirty) {
@@ -1160,20 +1217,31 @@ export function ReaderPage() {
   ];
   const visibleAnnotationDeleteUndo =
     annotationDeleteUndo?.sessionGeneration === ctx.sessionGeneration ? annotationDeleteUndo : null;
+  const evidenceLease = activeLeaseForContext(ctx);
+  const visibleEvidenceCapture =
+    evidenceCapture?.sessionGeneration === ctx.sessionGeneration ? evidenceCapture : null;
   const renderSourceReader = () => (
     <PdfReader
       doc={ctx.doc}
-      annotations={annotations}
+      annotations={
+        evidenceDeepLink ? [...annotations, evidenceDeepLink.annotation] : annotations
+      }
       onCreateAnnotation={handleCreate}
       onAnnotationClick={(id) => {
+        if (id === evidenceDeepLink?.annotation.id) return;
         setActiveId(id);
         setTab("annotations");
         setPanelOpen(true);
       }}
       onTranslate={handleTranslate}
       onSaveSnippet={handleSaveSnippet}
+      onSaveEvidence={ctx.librarySession ? handleSaveEvidence : undefined}
       pageFilter={pageFilter}
-      scrollToPage={jumpPage ?? translationJumpPage}
+      scrollToPage={resolveReaderScrollPage({
+        evidencePage: evidenceDeepLink?.pageIndex,
+        page: jumpPage,
+        translationPage: translationJumpPage,
+      })}
       onVisiblePageChange={handleVisibleReaderPageChange}
     />
   );
@@ -1436,6 +1504,26 @@ export function ReaderPage() {
           onClose={() => setSelectionTranslation(null)}
         />
       )}
+      {visibleEvidenceCapture && evidenceLease && ctx.librarySession ? (
+        <SaveEvidencePopover
+          key={visibleEvidenceCapture.evidenceId}
+          evidenceId={visibleEvidenceCapture.evidenceId}
+          selection={visibleEvidenceCapture.selection}
+          session={evidenceLease}
+          source={{
+            attachmentId: ctx.librarySession.attachment.id,
+            expectedBlobSha256: ctx.librarySession.attachment.sha256,
+            workId: ctx.librarySession.work.id,
+            workTitle: ctx.librarySession.work.title,
+          }}
+          onCancel={() => setEvidenceCapture(null)}
+          onSaved={(message) => {
+            if (!evidenceLease.isCurrent()) return;
+            setEvidenceCapture(null);
+            setSnippetToast(message);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1482,145 +1570,6 @@ async function pageParagraphsForTranslation(
   flush();
   signal?.throwIfAborted();
   return paragraphs;
-}
-
-function selectionPopoverPosition(rect: ReaderTextSelection["clientRect"]): CSSProperties {
-  const margin = 12;
-  const width = Math.min(360, Math.max(260, window.innerWidth - margin * 2));
-  const estimatedHeight = 230;
-  const centeredLeft = rect.x + rect.width / 2 - width / 2;
-  const left = Math.min(window.innerWidth - width - margin, Math.max(margin, centeredLeft));
-  const below = rect.y + rect.height + 10;
-  const top =
-    below + estimatedHeight <= window.innerHeight
-      ? below
-      : Math.max(margin, rect.y - estimatedHeight - 10);
-  return { left, top, width };
-}
-
-function SelectionTranslationPopover({
-  selection,
-  onClose,
-}: {
-  selection: ReaderTextSelection;
-  onClose: () => void;
-}) {
-  const navigate = useNavigate();
-  const popoverRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<CSSProperties>(() =>
-    selectionPopoverPosition(selection.clientRect),
-  );
-  const [result, setResult] = useState<string | null>(null);
-  const [engine, setEngine] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [copyStatus, setCopyStatus] = useState<string | null>(null);
-  const [config, setConfig] = useState<TranslateConfig>({ engine: "llm", targetLang: "zh" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setResult(null);
-    setError(null);
-    setEngine(null);
-    void (async () => {
-      try {
-        const nextConfig = await loadTranslateConfig();
-        if (controller.signal.aborted) return;
-        setConfig(nextConfig);
-        const resolved = await resolveTranslator();
-        if (controller.signal.aborted) return;
-        if ("error" in resolved) {
-          setError(resolved.error);
-          return;
-        }
-        const translated = await resolved.translator.translate(
-          { text: selection.text, targetLang: nextConfig.targetLang },
-          { signal: controller.signal },
-        );
-        if (controller.signal.aborted) return;
-        setResult(translated.text);
-        setEngine(translated.engine);
-      } catch (e) {
-        if (!controller.signal.aborted) setError(describeSafeError(e));
-      }
-    })();
-    return () => controller.abort();
-  }, [selection.text]);
-
-  useEffect(() => {
-    const updatePosition = () => setPosition(selectionPopoverPosition(selection.clientRect));
-    window.addEventListener("resize", updatePosition);
-    return () => window.removeEventListener("resize", updatePosition);
-  }, [selection.clientRect]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (!popoverRef.current?.contains(event.target as Node)) onClose();
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [onClose]);
-
-  useEffect(() => {
-    if (!copyStatus) return;
-    const timer = window.setTimeout(() => setCopyStatus(null), 2200);
-    return () => window.clearTimeout(timer);
-  }, [copyStatus]);
-
-  const settingsCta = translationSettingsCta(error);
-
-  return (
-    <div
-      ref={popoverRef}
-      className="reader-selection-translation"
-      style={position}
-      role="dialog"
-      aria-label="划词翻译"
-      aria-busy={!result && !error}
-    >
-      <div className="reader-selection-translation__head">
-        <div>
-          <strong>划词翻译</strong>
-          <span>
-            {langLabel(config.targetLang)}
-            {engine ? ` · ${engine}` : ""}
-          </span>
-        </div>
-        <button type="button" onClick={onClose} aria-label="关闭划词翻译" title="关闭">
-          ×
-        </button>
-      </div>
-      <p className="reader-selection-translation__source">{selection.text}</p>
-      <div className="reader-selection-translation__result" aria-live="polite">
-        {error ? (
-          <span className="reader-selection-translation__error">{error}</span>
-        ) : result ? (
-          result
-        ) : (
-          <span className="reader-selection-translation__loading">翻译中...</span>
-        )}
-      </div>
-      <div className="reader-selection-translation__actions">
-        {copyStatus && <span role="status">{copyStatus}</span>}
-        {settingsCta && (
-          <button type="button" onClick={() => navigate(settingsCta.path)}>
-            {settingsCta.label}
-          </button>
-        )}
-        {result && (
-          <button
-            type="button"
-            onClick={() =>
-              void writeClipboardText(result)
-                .then(() => setCopyStatus("已复制"))
-                .catch((e) => setCopyStatus(`复制失败:${describeSafeError(e)}`))
-            }
-          >
-            复制译文
-          </button>
-        )}
-      </div>
-    </div>
-  );
 }
 
 interface TranslationDocumentPaneProps {

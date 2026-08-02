@@ -53,6 +53,17 @@ export type {
   EvidenceRecord,
   PdfTextEvidenceAnchorInput,
 } from "./repos/evidence.js";
+export { EvidenceInboxRepo } from "./repos/evidence-inbox.js";
+export type {
+  EvidenceAvailabilityStatus,
+  EvidenceCanonicalStatus,
+  EvidenceInboxItemDto,
+  EvidenceProjectMembershipDto,
+  EvidenceRevisionStatus,
+  EvidenceSearchScope,
+  SearchEvidenceInput,
+  SearchEvidenceResult,
+} from "./repos/evidence-inbox.js";
 export { FlashcardsRepo, Rating } from "./repos/flashcards.js";
 export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards.js";
 export { SentinelRepo } from "./repos/sentinel.js";

@@ -116,10 +116,23 @@ export async function executeEvidenceCommand(
           captureMethod: input.captureMethod,
           annotationId: input.annotationId,
         });
+        await new DocumentAssetsRepo(database, input.libraryId).setAvailability(
+          saved.evidence.revisionId,
+          "available",
+        );
+        const availableEvidence = await repository.get(saved.evidence.id);
+        if (!availableEvidence) {
+          throw new Error(`Evidence ${saved.evidence.id} disappeared after source verification`);
+        }
         const projectMembershipAdded = input.projectId
-          ? await repository.addToProject(input.projectId, saved.evidence.id)
+          ? await repository.addToProject(input.projectId, availableEvidence.id)
           : false;
-        return { ...saved, projectMembershipAdded, sourceMembershipAdded };
+        return {
+          ...saved,
+          evidence: availableEvidence,
+          projectMembershipAdded,
+          sourceMembershipAdded,
+        };
       });
     }
   }

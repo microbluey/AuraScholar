@@ -1,0 +1,306 @@
+.evidence-undo {
+  position: fixed;
+  z-index: 1200;
+  right: 28px;
+  bottom: 42px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 9px;
+  align-items: center;
+  width: min(480px, calc(100vw - 32px));
+  padding: 11px 12px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--color-surface-raised) 94%, transparent);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: 13px;
+  box-shadow: var(--shadow-overlay);
+  backdrop-filter: blur(16px);
+  animation: evidence-toast-in 170ms ease-out;
+}
+
+.evidence-undo > svg {
+  color: var(--color-success);
+}
+
+.evidence-undo button:nth-last-child(2) {
+  padding: 5px 8px;
+  color: var(--color-accent-strong);
+  font: inherit;
+  font-weight: 740;
+  background: var(--color-accent-subtle);
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.evidence-project-picker__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--color-text) 22%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.evidence-project-picker {
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 48px));
+  overflow: auto;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 19px;
+  box-shadow: var(--shadow-overlay);
+  animation: evidence-dialog-in 170ms ease-out;
+}
+
+.evidence-project-picker > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 20px 20px 14px;
+}
+
+.evidence-project-picker > header > span {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--color-accent-strong);
+  background: var(--color-accent-subtle);
+  border-radius: 12px;
+}
+
+.evidence-project-picker header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.evidence-project-picker header small {
+  display: block;
+  margin-top: 5px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.evidence-project-picker > header > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.evidence-project-picker__list {
+  display: grid;
+  gap: 7px;
+  max-height: 300px;
+  padding: 4px 16px 12px;
+  overflow: auto;
+}
+
+.evidence-project-picker__list > button {
+  display: grid;
+  grid-template-columns: 21px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 53px;
+  padding: 9px 11px;
+  color: var(--color-text-secondary);
+  text-align: left;
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.evidence-project-picker__list > button.is-selected {
+  color: var(--color-accent-strong);
+  background: var(--evidence-accent-soft);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-subtle);
+}
+
+.evidence-project-picker__list > button > span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--color-accent-contrast);
+  background: var(--color-surface-sunken);
+  border: var(--border-width) solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+}
+
+.evidence-project-picker__list > button.is-selected > span {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.evidence-project-picker__empty {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  margin: 4px 16px 12px;
+  padding: 24px 16px;
+  color: var(--color-success);
+  text-align: center;
+  background: color-mix(in srgb, var(--color-success) 6%, var(--color-surface));
+  border: var(--border-width) dashed
+    color-mix(in srgb, var(--color-success) 30%, var(--color-border));
+  border-radius: 13px;
+}
+
+.evidence-project-picker__empty span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.evidence-project-picker__error {
+  margin: 0 16px 10px;
+  color: var(--color-danger);
+  font-size: 11px;
+}
+
+.evidence-project-picker > footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 13px 16px 16px;
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.evidence-spin {
+  animation: evidence-spin 900ms linear infinite;
+}
+
+@keyframes evidence-shimmer {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+@keyframes evidence-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes evidence-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes evidence-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+@media (max-width: 1120px) {
+  .evidence-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-toolbar__filters {
+    justify-content: stretch;
+  }
+
+  .evidence-toolbar__search {
+    max-width: none;
+  }
+
+  .evidence-workspace {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+
+  .evidence-results__list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .evidence-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-workspace--list .evidence-inspector,
+  .evidence-workspace--detail .evidence-results {
+    display: none;
+  }
+
+  .evidence-inspector {
+    position: static;
+    max-height: none;
+  }
+
+  .evidence-inspector__back {
+    display: inline-flex;
+  }
+
+  .evidence-inspector--empty {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .evidence-page {
+    padding: 0;
+  }
+
+  .evidence-page__header {
+    display: grid;
+  }
+
+  .evidence-page__summary {
+    width: fit-content;
+  }
+
+  .evidence-toolbar__scope,
+  .evidence-toolbar__filters {
+    flex-wrap: wrap;
+  }
+
+  .evidence-toolbar__scope {
+    width: 100%;
+  }
+
+  .evidence-toolbar__search {
+    flex-basis: 100%;
+  }
+
+  .evidence-toolbar__filters > label:not(.evidence-toolbar__search) {
+    flex: 1;
+  }
+
+  .evidence-toolbar__filters select {
+    width: 100%;
+  }
+
+  .evidence-undo {
+    right: 16px;
+    bottom: 76px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evidence-card,
+  .evidence-skeleton span,
+  .evidence-spin,
+  .evidence-undo,
+  .evidence-project-picker {
+    animation: none;
+    transition: none;
+  }
+}

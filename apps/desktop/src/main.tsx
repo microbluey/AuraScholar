@@ -21,6 +21,9 @@ const ResearchProjectsIndexPage = lazy(() =>
 const ResearchProjectPage = lazy(() =>
   import("./pages/ResearchProjectPage").then((m) => ({ default: m.ResearchProjectPage })),
 );
+const EvidenceInboxPage = lazy(() =>
+  import("./pages/EvidenceInboxPage").then((m) => ({ default: m.EvidenceInboxPage })),
+);
 const DiscoveryPage = lazy(() =>
   import("./pages/DiscoveryPage").then((m) => ({ default: m.DiscoveryPage })),
 );
@@ -92,6 +95,7 @@ const router = createHashRouter([
         path: "projects/:projectId",
         element: routeElement(<ResearchProjectPage />, "研究项目"),
       },
+      { path: "evidence", element: routeElement(<EvidenceInboxPage />, "证据收件箱") },
       { path: "discovery", element: routeElement(<DiscoveryPage />, "学术检索") },
       { path: "reader", element: routeElement(<ReaderPage />, "PDF 阅读器") },
       { path: "graph", element: routeElement(<GraphPage />, "引文脉络") },

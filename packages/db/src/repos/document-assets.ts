@@ -254,10 +254,9 @@ export class DocumentAssetsRepo {
       const now = Date.now();
       await this.db.run(
         `UPDATE document_revisions
-         SET availability_status = ?, availability_checked_at = ?,
-             updated_at = MAX(updated_at + 1, ?)
+         SET availability_status = ?, availability_checked_at = ?
          WHERE id = ? AND deleted_at IS NULL`,
-        [status, now, now, revisionId],
+        [status, now, revisionId],
       );
       return this.requireRevision(revisionId, { includeDeleted: false });
     });
