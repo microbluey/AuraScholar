@@ -7,6 +7,24 @@ import type {
 } from "@aurascholar/db/repos/sentinel";
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
+import type {
+  DocumentRevisionCommandInput,
+  EvidenceCommandInput,
+  ListEvidenceCommandInput,
+  ResolvedDocumentRevisionDto,
+  SaveTextEvidenceCommandInput,
+  SaveTextEvidenceCommandResult,
+} from "./evidence-command-contract";
+import type { EvidenceRecord } from "@aurascholar/db/repos/evidence";
+
+export type {
+  DocumentRevisionCommandInput,
+  EvidenceCommandInput,
+  ListEvidenceCommandInput,
+  ResolvedDocumentRevisionDto,
+  SaveTextEvidenceCommandInput,
+  SaveTextEvidenceCommandResult,
+} from "./evidence-command-contract";
 
 export interface SetWorkReadingStatusCommandInput {
   libraryId: string;
@@ -263,6 +281,22 @@ export interface ResearchProjectMutationResult {
 export type ResearchProjectScopeCommandInput = Record<string, never>;
 
 export interface DataCommandMap {
+  "document.resolveAttachmentRevision": {
+    input: DocumentRevisionCommandInput;
+    output: { revision: ResolvedDocumentRevisionDto | null };
+  };
+  "evidence.get": {
+    input: EvidenceCommandInput;
+    output: { evidence: EvidenceRecord | null };
+  };
+  "evidence.list": {
+    input: ListEvidenceCommandInput;
+    output: { evidence: EvidenceRecord[] };
+  };
+  "evidence.saveText": {
+    input: SaveTextEvidenceCommandInput;
+    output: SaveTextEvidenceCommandResult;
+  };
   "library.addTagToWorks": {
     input: AddTagToWorksCommandInput;
     output: TagMutationResult;

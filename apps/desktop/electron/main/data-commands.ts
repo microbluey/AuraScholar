@@ -25,6 +25,7 @@ import { getStableDeviceId } from "./platform";
 import { executeLibraryCollectionCommand } from "./library-collection-commands";
 import { executeLibraryTagCommand } from "./library-tag-commands";
 import { executeResearchProjectCommand } from "./research-project-commands";
+import { executeEvidenceCommand } from "./evidence-commands";
 import { executeSavedSearchCommand } from "./saved-search-commands";
 import { executeSentinelCommand } from "./sentinel-commands";
 import {
@@ -59,6 +60,11 @@ export async function executeDataCommand(
 ): Promise<DataCommandOutput<DataCommandName>> {
   const envelope = parseEnvelope(request);
   switch (envelope.name) {
+    case "document.resolveAttachmentRevision":
+    case "evidence.get":
+    case "evidence.list":
+    case "evidence.saveText":
+      return executeEvidenceCommand(envelope, dependencies);
     case "library.addTagToWorks":
     case "library.createTag":
     case "library.deleteTag":
@@ -210,6 +216,10 @@ function parseEnvelope(value: unknown): DataCommandRequest {
   }
   if (
     value.name !== "library.addTagToWorks" &&
+    value.name !== "document.resolveAttachmentRevision" &&
+    value.name !== "evidence.get" &&
+    value.name !== "evidence.list" &&
+    value.name !== "evidence.saveText" &&
     value.name !== "library.createCollection" &&
     value.name !== "library.createTag" &&
     value.name !== "library.deleteCollection" &&

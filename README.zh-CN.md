@@ -88,7 +88,7 @@ AuraScholar 帮助硕士生、博士生、博士后与青年教师把日常科�
 ## 设计理念
 
 - **本地优先**:数据存在你自己的设备上(SQLite),可备份到任意位置。
-- **全功能免费**:文献记录、批注与检索状态可通过自己的 WebDAV 服务同步,也可使用提供 WebDAV 接口的 NAS 或网盘(混合逻辑时钟 + 逐字段 LWW 冲突解决);空间白板当前通过整库 JSON 备份迁移。AI 使用你自己的模型服务与 API Key(OpenAI 兼容 / Anthropic)。
+- **全功能免费**:文献记录、文档/修订元数据、Evidence、批注与检索状态可通过自己的 WebDAV 服务同步,也可使用提供 WebDAV 接口的 NAS 或网盘(混合逻辑时钟 + 逐字段 LWW 冲突解决);文档文件本体需显式重新挂载,空间白板当前通过整库 JSON 备份迁移。AI 使用你自己的模型服务与 API Key(OpenAI 兼容 / Anthropic)。
 - **付费买省心**:官方云同步、官方 AI 服务、7×24 云端哨兵与主页托管,作为可选会员服务,供不想折腾的用户使用。
 - **双主题**:日间「Dawn」学术极简冷淡风,夜间「Nocturne」极客暗黑科技风。
 
@@ -106,6 +106,7 @@ packages/
   db/         # Drizzle ORM schema 与迁移
   platform/   # 平台能力抽象(HTTP / FS / 通知 / 钥匙串 / 调度)
   connectors/ # Crossref / OpenAlex / Semantic Scholar / Unpaywall / arXiv 客户端
+  anchors/    # 无运行时依赖的版本化 SourceAnchor 规范与校验
   core/       # 领域逻辑:入库管线、聚合检索、哨兵状态机、空间白板模型、引文图谱
   reader/     # PDF 阅读器与批注引擎(多级锚定)
   translate/  # 翻译抽象与实现(大模型 / DeepL / 百度)
@@ -117,7 +118,7 @@ packages/
 
 桌面壳采用 Electron。共享且平台无关的领域逻辑位于 `packages/`,Electron 专属编排与 UI 位于 `apps/desktop/`。Electron 主进程提供 SQLite / 无 CORS HTTP / 文件系统 / 通知 / 内置浏览器,经 preload 的 `window.aura` 桥接给渲染进程。架构详见 [apps/desktop/README.md](./apps/desktop/README.md)。
 
-本地优先研究语料、混合检索、可信 RAG 与写作联动的拟议架构独立记录在[研究知识层 RFC](./docs/KNOWLEDGE_LAYER_RFC.md)中。这些能力仍处于规划阶段,尚不属于上文列出的已实现功能。
+研究知识层的规范化地基已经落地:Library 级研究项目、逻辑文档资产、不可变文档修订、版本化 SourceAnchor 领域类型基础,以及绑定精确修订的 PDF 文本 Evidence 持久化,并纳入隔离的备份/同步链路。面向用户的 Evidence Inbox、锚定检索、混合 RAG、全能阅读器与论文写作工作流仍按[研究知识层 RFC](./docs/KNOWLEDGE_LAYER_RFC.md)分阶段推进。
 
 ## 开发
 

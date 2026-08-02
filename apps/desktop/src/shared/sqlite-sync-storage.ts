@@ -1,6 +1,6 @@
 // DOM-free SQLite sync adapter shared by the renderer and Electron main.
 import {
-  columnsForSyncedTable,
+  hlcCompare,
   safeSnapshotWatermark,
   type ApplyRemoteSegmentCommand,
   type ApplyRemoteSegmentResult,
@@ -10,103 +10,39 @@ import {
   type ConflictRecord,
 } from "@aurascholar/sync";
 import type { Database } from "@aurascholar/db";
+import {
+  assertSyncParentScope,
+  DOCUMENT_EVIDENCE_SYNC_SCOPE_VERSION as SYNC_SCOPE_STATE_VERSION,
+  documentRevisionLocalInsertDefaults,
+  isDirectLibraryOwnedSyncTable,
+  partitionSyncApplyValues,
+  SYNC_OWNER_COLUMN,
+  SYNCED_TABLE_COLUMNS as SYNCED_TABLES,
+  syncedColumnsForTable,
+  syncScopePredicate,
+} from "../services/document-evidence-sync-scope";
+import { documentRevisionBridgeRepairStatement } from "./document-revision-sync-repair";
+import {
+  assertSupportedSyncLogColumns,
+  parseStoredNumber,
+  parseStoredRecord,
+  parseStoredStringRecord,
+  parseSyncLogRecord,
+  parseSyncLogStringRecord,
+  quoteIdentifier,
+} from "./sqlite-sync-values";
 
-/** Tables included in row-level sync, with their synced columns. */
-const SYNCED_TABLES: Record<string, string[]> = {
-  works: [
-    "doi",
-    "title",
-    "abstract",
-    "year",
-    "publication_date",
-    "venue_name",
-    "venue_type",
-    "type",
-    "arxiv_id",
-    "openalex_id",
-    "s2_id",
-    "pmid",
-    "fingerprint",
-    "csl_json",
-    "volume",
-    "issue",
-    "pages",
-    "number_of_volumes",
-    "edition",
-    "section",
-    "publisher",
-    "place_published",
-    "series_title",
-    "short_title",
-    "original_title",
-    "issn",
-    "isbn",
-    "url",
-    "accessed_date",
-    "language",
-    "call_number",
-    "accession_number",
-    "label",
-    "database_name",
-    "keywords_json",
-    "reading_status",
-    "starred",
-    "notes_md",
-    "created_at",
-    "updated_at",
-    "deleted_at",
-  ],
-  annotations: [
-    "attachment_id",
-    "work_id",
-    "type",
-    "color",
-    "page_index",
-    "anchor_json",
-    "content_md",
-    "ink_paths_json",
-    "sort_key",
-    "orphaned",
-    "created_at",
-    "updated_at",
-    "deleted_at",
-  ],
-  flashcards: [
-    "work_id",
-    "front_md",
-    "back_md",
-    "card_type",
-    "source",
-    "ai_model",
-    "generation_id",
-    "created_at",
-    "updated_at",
-    "deleted_at",
-  ],
-  sentinel_tasks: [
-    "work_id",
-    "doi",
-    "title",
-    "current_state",
-    "target_flags",
-    "poll_interval_s",
-    "next_poll_at",
-    "last_polled_at",
-    "error_count",
-    "last_error",
-    "status",
-    "created_at",
-    "updated_at",
-    "deleted_at",
-  ],
-};
+interface DeferredCurrentRevisionIntent {
+  version: 1;
+  revisionId: string;
+  intentHlc: string;
+  expectedCurrentRevisionId: string | null;
+}
 
-const SYNC_OWNER_COLUMN = "library_id";
-const SYNC_SCOPE_STATE_VERSION = "library-scope-v2";
-
-function syncedColumnsForTable(table: string): string[] | null {
-  const columns = columnsForSyncedTable(SYNCED_TABLES, table);
-  return columns ? [...columns] : null;
+interface ParsedDeferredCurrentRevisionIntent {
+  revisionId: string;
+  intentHlc: string | null;
+  expectedCurrentRevisionId?: string | null;
 }
 
 function supportsSyncedColumn(table: string, column: string): boolean {
@@ -162,16 +98,7 @@ export class SqliteSyncStorage implements SyncStorage {
   }
 
   private scopePredicate(table: string, alias: string): string {
-    if (table === "works" || table === "sentinel_tasks") {
-      return `${alias}.library_id = ?`;
-    }
-    if (table === "annotations" || table === "flashcards") {
-      return `EXISTS (
-        SELECT 1 FROM works scope_work
-        WHERE scope_work.id = ${alias}.work_id AND scope_work.library_id = ?
-      )`;
-    }
-    throw new Error(`Unsupported sync table "${table}"`);
+    return syncScopePredicate(table, alias);
   }
 
   private assertRemoteOwner(table: string, values: Record<string, unknown>): void {
@@ -204,82 +131,6 @@ export class SqliteSyncStorage implements SyncStorage {
       scoped ? [rowId, this.libraryId] : [rowId],
     );
     return rows.length > 0;
-  }
-
-  private async assertParentScope(
-    table: string,
-    rowId: string,
-    values: Record<string, unknown>,
-    exists: boolean,
-  ): Promise<void> {
-    if (table === "sentinel_tasks") {
-      const hasIncomingWorkId = Object.hasOwn(values, "work_id");
-      const incomingWorkId = values.work_id;
-      if (
-        hasIncomingWorkId &&
-        incomingWorkId !== null &&
-        (typeof incomingWorkId !== "string" || !incomingWorkId.trim())
-      ) {
-        throw new Error("Rejected invalid sentinel_tasks.work_id");
-      }
-      let workId = stringValue(incomingWorkId);
-      if (exists && !hasIncomingWorkId) {
-        const current = await this.db.query<{ work_id: string | null }>(
-          `SELECT work_id FROM sentinel_tasks t
-           WHERE t.id = ? AND t.library_id = ?
-           LIMIT 1`,
-          [rowId, this.libraryId],
-        );
-        workId = current[0]?.work_id ?? null;
-      }
-      if (!workId) return;
-      const works = await this.db.query<{ id: string }>(
-        `SELECT id FROM works WHERE id = ? AND library_id = ? LIMIT 1`,
-        [workId, this.libraryId],
-      );
-      if (works.length === 0) {
-        throw new Error("Rejected cross-library sentinel_tasks.work_id");
-      }
-      return;
-    }
-    if (table !== "annotations" && table !== "flashcards") return;
-
-    let workId = stringValue(values.work_id);
-    let attachmentId = table === "annotations" ? stringValue(values.attachment_id) : null;
-    if (exists && (!workId || (table === "annotations" && !attachmentId))) {
-      const current = await this.db.query<{ attachment_id?: string; work_id: string }>(
-        `SELECT work_id${table === "annotations" ? ", attachment_id" : ""}
-         FROM ${quoteIdentifier(table)} t
-         WHERE t.id = ? AND ${this.scopePredicate(table, "t")}`,
-        [rowId, this.libraryId],
-      );
-      workId ??= current[0]?.work_id ?? null;
-      attachmentId ??= current[0]?.attachment_id ?? null;
-    }
-    if (!workId) {
-      throw new Error(`Rejected unowned ${table} sync row`);
-    }
-    const works = await this.db.query<{ id: string }>(
-      `SELECT id FROM works WHERE id = ? AND library_id = ? LIMIT 1`,
-      [workId, this.libraryId],
-    );
-    if (works.length === 0) {
-      throw new Error(`Rejected cross-library ${table}.work_id`);
-    }
-    if (table !== "annotations" || !attachmentId) {
-      if (table === "annotations") throw new Error("Rejected unowned annotations sync row");
-      return;
-    }
-    const attachments = await this.db.query<{ id: string }>(
-      `SELECT att.id FROM attachments att
-       JOIN works w ON w.id = att.work_id
-       WHERE att.id = ? AND att.work_id = ? AND w.library_id = ?
-       LIMIT 1`,
-      [attachmentId, workId, this.libraryId],
-    );
-    if (attachments.length === 0) {
-      throw new Error("Rejected cross-library annotations.attachment_id");
-    }
   }
 
   /**
@@ -494,39 +345,236 @@ export class SqliteSyncStorage implements SyncStorage {
     this.assertRemoteOwner(table, values);
     const portableValues = this.withoutOwner(values);
     const portableHlcs = this.withoutOwner(columnHlcs);
-    const cols = Object.keys(portableValues).filter((c) => tableColumns.includes(c));
-    if (cols.length === 0) return;
+    const syncedValues = Object.fromEntries(
+      Object.entries(portableValues).filter(([column]) => tableColumns.includes(column)),
+    );
+    const hasCurrentRevisionIntent =
+      table === "document_assets" && Object.hasOwn(syncedValues, "current_revision_id");
+    const desiredCurrentRevision = syncedValues.current_revision_id;
+    const { immediate, deferred } = partitionSyncApplyValues(table, syncedValues);
+    const cols = Object.keys(immediate);
+    if (cols.length === 0 && !hasCurrentRevisionIntent) return;
     const quotedTable = quoteIdentifier(table);
     const exists = await this.rowExists(table, rowId, true);
     if (!exists && (await this.rowExists(table, rowId, false))) {
       throw new Error(`Rejected cross-library sync row ${table}.${rowId}`);
     }
-    await this.assertParentScope(table, rowId, portableValues, exists);
-    if (exists) {
+    await assertSyncParentScope({
+      db: this.db,
+      table,
+      rowId,
+      values: immediate,
+      exists,
+      libraryId: this.libraryId,
+    });
+    if (exists && table === "document_assets" && Object.hasOwn(immediate, "work_id")) {
+      const repair = documentRevisionBridgeRepairStatement({
+        assetId: rowId,
+        libraryId: this.libraryId,
+        targetWorkId: immediate.work_id,
+      });
+      await this.db.run(repair.sql, repair.params);
+    }
+    if (exists && cols.length > 0) {
       const sets = cols.map((c) => `${quoteIdentifier(c)} = ?`).join(", ");
       await this.db.run(
         `UPDATE ${quotedTable} AS t SET ${sets}
          WHERE t.id = ? AND ${this.scopePredicate(table, "t")}`,
-        [...cols.map((c) => portableValues[c] ?? null), rowId, this.libraryId],
+        [...cols.map((c) => immediate[c] ?? null), rowId, this.libraryId],
       );
-    } else if (table === "works" || table === "sentinel_tasks") {
-      const placeholders = ["?", ...cols.map(() => "?"), "?"].join(", ");
+    } else if (!exists && isDirectLibraryOwnedSyncTable(table)) {
+      const localDefaults =
+        table === "document_revisions" ? documentRevisionLocalInsertDefaults(Date.now()) : {};
+      const insertValues = { ...immediate, ...localDefaults };
+      const insertColumns = Object.keys(insertValues);
+      const placeholders = ["?", ...insertColumns.map(() => "?"), "?"].join(", ");
       await this.db.run(
-        `INSERT INTO ${quotedTable} (${["id", ...cols, SYNC_OWNER_COLUMN]
+        `INSERT INTO ${quotedTable} (${["id", ...insertColumns, SYNC_OWNER_COLUMN]
           .map(quoteIdentifier)
           .join(", ")}) VALUES (${placeholders})`,
-        [rowId, ...cols.map((c) => portableValues[c] ?? null), this.libraryId],
+        [rowId, ...insertColumns.map((c) => insertValues[c] ?? null), this.libraryId],
       );
-    } else {
-      const placeholders = cols.map(() => "?").join(", ");
+    } else if (!exists) {
+      const localDefaults =
+        table === "document_revisions" ? documentRevisionLocalInsertDefaults(Date.now()) : {};
+      const insertValues = { ...immediate, ...localDefaults };
+      const insertColumns = Object.keys(insertValues);
+      const placeholders = insertColumns.map(() => "?").join(", ");
       await this.db.run(
-        `INSERT INTO ${quotedTable} (${["id", ...cols]
+        `INSERT INTO ${quotedTable} (${["id", ...insertColumns]
           .map(quoteIdentifier)
           .join(", ")}) VALUES (?, ${placeholders})`,
-        [rowId, ...cols.map((c) => portableValues[c] ?? null)],
+        [rowId, ...insertColumns.map((c) => insertValues[c] ?? null)],
       );
     }
+    if (hasCurrentRevisionIntent) {
+      await this.applyOrDeferCurrentRevision(
+        rowId,
+        desiredCurrentRevision,
+        deferred !== null,
+        portableHlcs.current_revision_id,
+      );
+    }
+    if (table === "document_revisions") {
+      await this.resolveDeferredCurrentRevisionForRevision(rowId);
+    }
     await this.writeRowClocks(table, rowId, portableHlcs as Record<string, string>);
+  }
+
+  private async applyOrDeferCurrentRevision(
+    assetId: string,
+    revisionId: unknown,
+    requiresRevision: boolean,
+    intentHlc: unknown,
+  ): Promise<void> {
+    if (!requiresRevision) {
+      if (revisionId !== null) {
+        throw new Error("Rejected invalid document_assets.current_revision_id");
+      }
+      await this.clearDeferredCurrentRevision(assetId);
+      return;
+    }
+    if (typeof revisionId !== "string" || !revisionId.trim()) {
+      throw new Error("Rejected invalid document_assets.current_revision_id");
+    }
+    if (typeof intentHlc !== "string" || !intentHlc.trim()) {
+      throw new Error("Rejected missing document_assets.current_revision_id HLC");
+    }
+    const matching = await this.db.query<{ id: string }>(
+      `SELECT revision.id FROM document_revisions revision
+       JOIN document_assets asset ON asset.id = revision.asset_id
+       WHERE revision.id = ? AND revision.asset_id = ? AND asset.library_id = ?
+       LIMIT 1`,
+      [revisionId, assetId, this.libraryId],
+    );
+    if (matching[0]) {
+      await this.setCurrentRevision(assetId, revisionId);
+      await this.clearDeferredCurrentRevision(assetId);
+      return;
+    }
+    const foreign = await this.db.query<{ id: string }>(
+      `SELECT id FROM document_revisions WHERE id = ? LIMIT 1`,
+      [revisionId],
+    );
+    if (foreign[0]) {
+      throw new Error("Rejected cross-library document_assets.current_revision_id");
+    }
+    const assets = await this.db.query<{ current_revision_id: string | null }>(
+      `SELECT current_revision_id FROM document_assets
+       WHERE id = ? AND library_id = ? LIMIT 1`,
+      [assetId, this.libraryId],
+    );
+    if (!assets[0]) throw new Error("Deferred current revision asset is unavailable");
+    const pending: DeferredCurrentRevisionIntent = {
+      version: 1,
+      revisionId,
+      intentHlc,
+      expectedCurrentRevisionId: assets[0].current_revision_id,
+    };
+    await this.db.run(
+      `INSERT INTO settings (key, value_json, scope, updated_at)
+       VALUES (?, ?, 'local', ?)
+       ON CONFLICT(key) DO UPDATE SET
+         value_json = excluded.value_json,
+         scope = 'local',
+         updated_at = excluded.updated_at`,
+      [this.deferredCurrentRevisionKey(assetId), JSON.stringify(pending), Date.now()],
+    );
+  }
+
+  private async resolveDeferredCurrentRevisionForRevision(revisionId: string): Promise<void> {
+    const revisions = await this.db.query<{ asset_id: string }>(
+      `SELECT revision.asset_id FROM document_revisions revision
+       JOIN document_assets asset ON asset.id = revision.asset_id
+       WHERE revision.id = ? AND asset.library_id = ? LIMIT 1`,
+      [revisionId, this.libraryId],
+    );
+    const assetId = revisions[0]?.asset_id;
+    if (!assetId) return;
+    const pending = await this.db.query<{ value_json: string }>(
+      `SELECT value_json FROM settings WHERE key = ? LIMIT 1`,
+      [this.deferredCurrentRevisionKey(assetId)],
+    );
+    if (!pending[0]) return;
+    let rawPending: unknown;
+    try {
+      rawPending = JSON.parse(pending[0].value_json);
+    } catch {
+      await this.clearDeferredCurrentRevision(assetId);
+      return;
+    }
+    const intent = parseDeferredCurrentRevisionIntent(rawPending);
+    if (!intent) {
+      await this.clearDeferredCurrentRevision(assetId);
+      return;
+    }
+    if (intent.revisionId !== revisionId) return;
+    const assets = await this.db.query<{
+      current_revision_id: string | null;
+    }>(
+      `SELECT current_revision_id FROM document_assets
+       WHERE id = ? AND library_id = ? LIMIT 1`,
+      [assetId, this.libraryId],
+    );
+    const asset = assets[0];
+    if (!asset) throw new Error("Deferred current revision asset is unavailable");
+
+    if (intent.intentHlc !== null) {
+      const clocks = await this.rowClocks("document_assets", assetId);
+      const currentClock = clocks?.current_revision_id;
+      if (currentClock && hlcCompare(currentClock, intent.intentHlc) > 0) {
+        await this.clearDeferredCurrentRevision(assetId);
+        return;
+      }
+    }
+
+    // The persisted expected value is a compare-and-swap guard across pull
+    // segments and adapter restarts. A local selection made after the remote
+    // intent was deferred must not be overwritten when its revision arrives.
+    const expected = intent.expectedCurrentRevisionId;
+    if (expected === undefined && asset.current_revision_id !== null) {
+      await this.clearDeferredCurrentRevision(assetId);
+      return;
+    }
+    const changed = await this.setCurrentRevisionIfUnchanged(assetId, revisionId, expected ?? null);
+    await this.clearDeferredCurrentRevision(assetId);
+    if (!changed) return;
+  }
+
+  private async setCurrentRevision(assetId: string, revisionId: string): Promise<void> {
+    const changed = await this.db.run(
+      `UPDATE document_assets AS asset SET current_revision_id = ?
+       WHERE asset.id = ? AND asset.library_id = ?`,
+      [revisionId, assetId, this.libraryId],
+    );
+    if (changed !== 1) throw new Error("Deferred current revision asset is unavailable");
+  }
+
+  private async setCurrentRevisionIfUnchanged(
+    assetId: string,
+    revisionId: string,
+    expectedCurrentRevisionId: string | null,
+  ): Promise<boolean> {
+    const changed = await this.db.run(
+      `UPDATE document_assets AS asset SET current_revision_id = ?
+       WHERE asset.id = ? AND asset.library_id = ?
+         AND asset.current_revision_id IS ?`,
+      [revisionId, assetId, this.libraryId, expectedCurrentRevisionId],
+    );
+    if (changed === 1) return true;
+    const exists = await this.rowExists("document_assets", assetId, true);
+    if (!exists) throw new Error("Deferred current revision asset is unavailable");
+    return false;
+  }
+
+  private async clearDeferredCurrentRevision(assetId: string): Promise<void> {
+    await this.db.run(`DELETE FROM settings WHERE key = ?`, [
+      this.deferredCurrentRevisionKey(assetId),
+    ]);
+  }
+
+  private deferredCurrentRevisionKey(assetId: string): string {
+    return `sync.${this.libraryId}.${this.providerScope}.${SYNC_SCOPE_STATE_VERSION}.pending-current-revision.${assetId}`;
   }
 
   async applyDelete(table: string, rowId: string, hlc: string): Promise<void> {
@@ -696,88 +744,34 @@ export class SqliteSyncStorage implements SyncStorage {
   }
 }
 
-function parseSyncLogRecord(
-  seq: number,
-  field: string,
-  value: string | null,
-): Record<string, unknown> {
-  if (!value) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error(`Invalid local sync log entry ${seq}: malformed ${field}`);
+function parseDeferredCurrentRevisionIntent(
+  value: unknown,
+): ParsedDeferredCurrentRevisionIntent | null {
+  // Compatibility with pending state written by the first v3 implementation.
+  // It did not persist a CAS baseline, so only a still-null pointer is safe to
+  // resolve (enforced by the caller via `expectedCurrentRevisionId` undefined).
+  if (typeof value === "string" && value.trim()) {
+    return {
+      revisionId: value,
+      intentHlc: null,
+    };
   }
-  if (!isRecord(parsed)) {
-    throw new Error(`Invalid local sync log entry ${seq}: malformed ${field}`);
-  }
-  return parsed;
-}
-
-function parseStoredNumber(value: string): number {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    const number = Number(parsed);
-    return Number.isFinite(number) && number >= 0 ? number : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function parseStoredRecord(value: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.version !== 1 ||
+    typeof candidate.revisionId !== "string" ||
+    !candidate.revisionId.trim() ||
+    typeof candidate.intentHlc !== "string" ||
+    !candidate.intentHlc.trim() ||
+    (candidate.expectedCurrentRevisionId !== null &&
+      typeof candidate.expectedCurrentRevisionId !== "string")
+  ) {
     return null;
   }
-}
-
-function parseStoredStringRecord(value: string): Record<string, string> | null {
-  const parsed = parseStoredRecord(value);
-  if (!parsed) return null;
-  if (!Object.values(parsed).every((item) => typeof item === "string")) return null;
-  return parsed as Record<string, string>;
-}
-
-function parseSyncLogStringRecord(
-  seq: number,
-  field: string,
-  value: string | null,
-): Record<string, string> {
-  const parsed = parseSyncLogRecord(seq, field, value);
-  if (!Object.values(parsed).every((item) => typeof item === "string")) {
-    throw new Error(`Invalid local sync log entry ${seq}: malformed ${field}`);
-  }
-  return parsed as Record<string, string>;
-}
-
-function assertSupportedSyncLogColumns(
-  seq: number,
-  table: string,
-  tableColumns: readonly string[],
-  values: Record<string, unknown>,
-  columnHlcs: Record<string, string>,
-): void {
-  const supported = new Set(tableColumns);
-  const columns = new Set([...Object.keys(values), ...Object.keys(columnHlcs)]);
-  for (const column of columns) {
-    if (!supported.has(column)) {
-      throw new Error(
-        `Unsupported sync column "${table}.${column}" in local sync log entry ${seq}; update AuraScholar before syncing this library`,
-      );
-    }
-  }
-}
-
-function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replace(/"/g, '""')}"`;
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return {
+    revisionId: candidate.revisionId,
+    intentHlc: candidate.intentHlc,
+    expectedCurrentRevisionId: candidate.expectedCurrentRevisionId,
+  };
 }

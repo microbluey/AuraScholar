@@ -182,7 +182,7 @@ describe("v18 Research Project migration", () => {
       `PRAGMA table_info(canvas_workspaces)`,
     );
     expect(canvasColumns.find((column) => column.name === "project_id")?.notnull).toBe(1);
-    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(18);
+    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(19);
     expect(await db.query(`PRAGMA foreign_key_check`)).toEqual([]);
     expect(Number(await db.queryScalar(`PRAGMA foreign_keys`))).toBe(1);
   });
@@ -316,7 +316,7 @@ describe("v18 Research Project migration", () => {
 
     await runMigrations(db);
 
-    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(18);
+    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(19);
     expect(
       await db.query<{ id: string; project_id: string }>(
         `SELECT id, project_id FROM canvas_workspaces ORDER BY id`,

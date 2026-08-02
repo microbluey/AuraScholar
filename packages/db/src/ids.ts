@@ -13,6 +13,34 @@ export function projectWorkMembershipId(projectId: string, workId: string): stri
   return `project-work:${projectId.length}:${projectId}:${workId.length}:${workId}`;
 }
 
+export function documentAssetIdFromAttachment(attachmentId: string): string {
+  assertStableId(attachmentId, "Attachment id");
+  return `document-asset:${attachmentId.length}:${attachmentId}`;
+}
+
+export function documentRevisionIdFromAttachment(attachmentId: string): string {
+  assertStableId(attachmentId, "Attachment id");
+  return `document-revision:${attachmentId.length}:${attachmentId}`;
+}
+
+export function projectAssetMembershipId(projectId: string, assetId: string): string {
+  assertStableId(projectId, "Research project id");
+  assertStableId(assetId, "Document asset id");
+  return `project-asset:${projectId.length}:${projectId}:${assetId.length}:${assetId}`;
+}
+
+export function projectEvidenceMembershipId(projectId: string, evidenceId: string): string {
+  assertStableId(projectId, "Research project id");
+  assertStableId(evidenceId, "Evidence id");
+  return `project-evidence:${projectId.length}:${projectId}:${evidenceId.length}:${evidenceId}`;
+}
+
+function assertStableId(value: string, label: string): void {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+}
+
 /**
  * Dedup fingerprint for works without a DOI:
  * normalized title + year + first author family name.

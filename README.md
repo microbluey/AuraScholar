@@ -90,7 +90,7 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 ## Design principles
 
 - **Local-first**: your data lives on your device (SQLite) and can be backed up anywhere.
-- **Fully functional for free**: sync supported paper records, annotations, and indexing state through your own WebDAV endpoint, including WebDAV-compatible NAS or cloud storage (hybrid logical clocks + per-field LWW conflict resolution); Spatial Canvas currently moves between devices through whole-library JSON export/import. AI runs on your own model service and API key (OpenAI-compatible / Anthropic).
+- **Fully functional for free**: sync supported paper records, document/revision metadata, Evidence, annotations, and indexing state through your own WebDAV endpoint, including WebDAV-compatible NAS or cloud storage (hybrid logical clocks + per-field LWW conflict resolution); document blobs remain device-local and require explicit reattachment, while Spatial Canvas currently moves through whole-library JSON export/import. AI runs on your own model service and API key (OpenAI-compatible / Anthropic).
 - **Pay for convenience**: official cloud sync, hosted AI, 24/7 cloud sentinel, and homepage hosting are optional paid services for users who prefer zero setup.
 - **Two themes**: a calm scholarly "Dawn" light theme and a technical "Nocturne" dark theme.
 
@@ -108,6 +108,7 @@ packages/
   db/         # Drizzle ORM schema and migrations
   platform/   # Platform abstractions (HTTP / FS / notifications / keychain / scheduling)
   connectors/ # Crossref / OpenAlex / Semantic Scholar / Unpaywall / arXiv clients
+  anchors/    # Dependency-free, versioned SourceAnchor schema and validation
   core/       # Domain logic: ingest pipeline, federated search, sentinel state machine, spatial canvas types, citation graph
   reader/     # PDF reader and annotation engine (multi-level anchoring)
   translate/  # Translation abstraction and providers (LLM / DeepL / Baidu)
@@ -119,7 +120,7 @@ packages/
 
 The desktop shell is Electron. Shared, platform-agnostic domain logic lives in `packages/`; Electron-specific orchestration and UI live in `apps/desktop/`. The Electron main process provides SQLite / CORS-free HTTP / file system / notifications / the built-in browser, bridged to the renderer through the preload `window.aura` API. See [apps/desktop/README.md](./apps/desktop/README.md) for the architecture.
 
-The proposed local-first research corpus, hybrid retrieval, evidence-grounded RAG, and writing integration are specified separately in the [Research Knowledge Layer RFC](./docs/KNOWLEDGE_LAYER_RFC.md). These capabilities are planned and are not yet part of the implemented feature set above.
+The canonical foundation for the proposed Research Knowledge Layer is now in place: Library-scoped Research Projects, logical document assets, immutable document revisions, versioned SourceAnchor domain types, and revision-bound PDF text Evidence persistence with backup/sync isolation. The user-facing Evidence Inbox, anchored retrieval, hybrid RAG, universal reading, and manuscript-writing workflows remain staged work in the [Research Knowledge Layer RFC](./docs/KNOWLEDGE_LAYER_RFC.md).
 
 ## Development
 

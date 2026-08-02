@@ -40,6 +40,14 @@
       "types": "./dist/repos/attachments.d.ts",
       "default": "./dist/repos/attachments.js"
     },
+    "./repos/document-assets": {
+      "types": "./dist/repos/document-assets.d.ts",
+      "default": "./dist/repos/document-assets.js"
+    },
+    "./repos/evidence": {
+      "types": "./dist/repos/evidence.d.ts",
+      "default": "./dist/repos/evidence.js"
+    },
     "./repos/collections": {
       "types": "./dist/repos/collections.d.ts",
       "default": "./dist/repos/collections.js"

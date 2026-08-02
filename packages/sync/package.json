@@ -16,6 +16,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@aurascholar/anchors": "workspace:*",
     "@aurascholar/platform": "workspace:*"
   },
   "devDependencies": {

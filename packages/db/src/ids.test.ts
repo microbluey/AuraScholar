@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { newId, normalizeDoi, projectWorkMembershipId, workFingerprint } from "./ids";
+import {
+  documentAssetIdFromAttachment,
+  documentRevisionIdFromAttachment,
+  newId,
+  normalizeDoi,
+  projectAssetMembershipId,
+  projectEvidenceMembershipId,
+  projectWorkMembershipId,
+  workFingerprint,
+} from "./ids";
 
 describe("newId", () => {
   it("generates time-ordered unique ids", () => {
@@ -19,6 +28,29 @@ describe("projectWorkMembershipId", () => {
   it("rejects missing identities", () => {
     expect(() => projectWorkMembershipId("", "work")).toThrow(/non-empty/);
     expect(() => projectWorkMembershipId("project", " ")).toThrow(/non-empty/);
+  });
+});
+
+describe("knowledge identity helpers", () => {
+  it("derives stable, collision-resistant compatibility and membership ids", () => {
+    expect(documentAssetIdFromAttachment("attachment:one")).toBe(
+      "document-asset:14:attachment:one",
+    );
+    expect(documentRevisionIdFromAttachment("attachment:one")).toBe(
+      "document-revision:14:attachment:one",
+    );
+    expect(projectAssetMembershipId("project:a", "asset:b")).toBe(
+      "project-asset:9:project:a:7:asset:b",
+    );
+    expect(projectEvidenceMembershipId("project:a", "evidence:b")).toBe(
+      "project-evidence:9:project:a:10:evidence:b",
+    );
+  });
+
+  it("rejects empty identity parts", () => {
+    expect(() => documentAssetIdFromAttachment(" ")).toThrow(/Attachment id/);
+    expect(() => projectAssetMembershipId("project:a", "")).toThrow(/Document asset id/);
+    expect(() => projectEvidenceMembershipId("", "evidence:b")).toThrow(/Research project id/);
   });
 });
 

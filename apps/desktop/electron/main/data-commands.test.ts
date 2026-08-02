@@ -1070,7 +1070,7 @@ describe("main-process data commands", () => {
          WHERE library_id = ? AND provider_id = ?`,
         [
           target.libraryId,
-          `webdav:${PROVIDER_SCOPE}:${target.libraryId}:library-scope-v2:remote-device`,
+          `webdav:${PROVIDER_SCOPE}:${target.libraryId}:library-scope-v3-evidence:remote-device`,
         ],
       ),
     ).resolves.toEqual([{ last_pulled_cursor: "1" }]);
@@ -1161,7 +1161,7 @@ describe("main-process data commands", () => {
            AND provider_id = ?`,
         [
           target.libraryId,
-          `webdav:${PROVIDER_SCOPE}:${target.libraryId}:library-scope-v2:remote-device`,
+          `webdav:${PROVIDER_SCOPE}:${target.libraryId}:library-scope-v3-evidence:remote-device`,
         ],
       ),
     ).resolves.toEqual([]);
