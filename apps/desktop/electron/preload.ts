@@ -10,6 +10,8 @@ import {
   type DownloadStartedPayload,
   type HttpRequestDTO,
   type HttpResultDTO,
+  type RecoverEvidenceSourceInput,
+  type RecoverEvidenceSourceResult,
   type ResearchTab,
 } from "./shared";
 import type { DataCommandInput, DataCommandName, DataCommandOutput } from "./data-command-contract";
@@ -134,6 +136,11 @@ const api = {
       input: DataCommandInput<K>,
     ): Promise<DataCommandOutput<K>> {
       return ipcRenderer.invoke(CH.dataCommand, { name, input });
+    },
+  },
+  evidence: {
+    recoverSource(input: RecoverEvidenceSourceInput): Promise<RecoverEvidenceSourceResult> {
+      return ipcRenderer.invoke(CH.evidenceRecoverSource, input);
     },
   },
   research: {

@@ -10,9 +10,7 @@ export async function loadPdfForWork(
   const { db, libraryId } = await getLibraryDb();
   const attachments = new AttachmentsRepo(db, libraryId);
   const list = await attachments.forWork(workId);
-  let pdfs = list
-    .filter((a) => a.kind === "pdf")
-    .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+  let pdfs = list.filter((attachment) => attachment.kind === "pdf");
   if (pdfs.length === 0) return null;
   if (preferredAttachmentId) {
     const preferred = pdfs.find((pdf) => pdf.id === preferredAttachmentId);

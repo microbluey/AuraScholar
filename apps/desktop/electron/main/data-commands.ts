@@ -26,6 +26,7 @@ import { executeLibraryCollectionCommand } from "./library-collection-commands";
 import { executeLibraryTagCommand } from "./library-tag-commands";
 import { executeResearchProjectCommand } from "./research-project-commands";
 import { executeEvidenceCommand } from "./evidence-commands";
+import { executeEvidenceInboxCommand } from "./evidence-inbox-commands";
 import { executeSavedSearchCommand } from "./saved-search-commands";
 import { executeSentinelCommand } from "./sentinel-commands";
 import {
@@ -65,6 +66,12 @@ export async function executeDataCommand(
     case "evidence.list":
     case "evidence.saveText":
       return executeEvidenceCommand(envelope, dependencies);
+    case "evidence.search":
+    case "evidence.addToProject":
+    case "evidence.removeFromProject":
+    case "evidence.softDelete":
+    case "evidence.restore":
+      return executeEvidenceInboxCommand(envelope, dependencies);
     case "library.addTagToWorks":
     case "library.createTag":
     case "library.deleteTag":
@@ -219,6 +226,11 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     value.name !== "document.resolveAttachmentRevision" &&
     value.name !== "evidence.get" &&
     value.name !== "evidence.list" &&
+    value.name !== "evidence.search" &&
+    value.name !== "evidence.addToProject" &&
+    value.name !== "evidence.removeFromProject" &&
+    value.name !== "evidence.softDelete" &&
+    value.name !== "evidence.restore" &&
     value.name !== "evidence.saveText" &&
     value.name !== "library.createCollection" &&
     value.name !== "library.createTag" &&

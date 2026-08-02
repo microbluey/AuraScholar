@@ -120,7 +120,7 @@ packages/
 
 The desktop shell is Electron. Shared, platform-agnostic domain logic lives in `packages/`; Electron-specific orchestration and UI live in `apps/desktop/`. The Electron main process provides SQLite / CORS-free HTTP / file system / notifications / the built-in browser, bridged to the renderer through the preload `window.aura` API. See [apps/desktop/README.md](./apps/desktop/README.md) for the architecture.
 
-The canonical foundation for the proposed Research Knowledge Layer is now in place: Library-scoped Research Projects, logical document assets, immutable document revisions, versioned SourceAnchor domain types, and revision-bound PDF text Evidence persistence with backup/sync isolation. The user-facing Evidence Inbox, anchored retrieval, hybrid RAG, universal reading, and manuscript-writing workflows remain staged work in the [Research Knowledge Layer RFC](./docs/KNOWLEDGE_LAYER_RFC.md).
+The first user-facing Research Knowledge Layer workflow is now in place: Reader selections can be saved as revision-bound PDF text Evidence, triaged in a searchable Evidence Inbox, assigned to Research Projects, recoverably removed, and reopened against the exact captured revision. Missing local source bridges can be restored only after byte-size and SHA-256 verification; this never retargets Evidence to a newer revision or deletes Library papers/PDFs. Anchored retrieval, hybrid RAG, universal reading, and manuscript-writing workflows remain staged work in the [Research Knowledge Layer RFC](./docs/KNOWLEDGE_LAYER_RFC.md).
 
 ## Development
 

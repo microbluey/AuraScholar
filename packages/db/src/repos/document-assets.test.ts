@@ -230,6 +230,42 @@ describe("DocumentAssetsRepo", () => {
     );
   });
 
+  it("orders current document attachments before newer historical bridges", async () => {
+    const work = await works.upsert({ title: "Reader attachment priority" });
+    const historicalAttachment = await attachments.create({
+      byteSize: 128,
+      sha256: sha("a"),
+      workId: work.id,
+    });
+    const historicalRevision = await assets.resolveAttachment(historicalAttachment.id);
+    expect(historicalRevision).not.toBeNull();
+    await assets.createRevision(historicalRevision!.asset_id, {
+      blobSha256: sha("b"),
+      byteSize: 256,
+      expectedCurrentRevisionId: historicalRevision!.id,
+      id: "revision:current-without-local-bridge",
+      mimeType: "application/pdf",
+    });
+    const currentAttachment = await attachments.create({
+      byteSize: 512,
+      sha256: sha("c"),
+      workId: work.id,
+    });
+    await db.run(`UPDATE attachments SET created_at = ? WHERE id = ?`, [
+      Date.now() + 60_000,
+      historicalAttachment.id,
+    ]);
+    await db.run(`UPDATE attachments SET created_at = ? WHERE id = ?`, [
+      1,
+      currentAttachment.id,
+    ]);
+
+    expect((await attachments.forWork(work.id)).map((attachment) => attachment.id)).toEqual([
+      currentAttachment.id,
+      historicalAttachment.id,
+    ]);
+  });
+
   it("allows exactly one optimistic current-revision writer to win a race", async () => {
     const asset = await assets.create({
       id: "asset:revision-race",
@@ -475,19 +511,17 @@ describe("DocumentAssetsRepo", () => {
       availability_checked_at: null,
     });
 
-    let previousUpdatedAt = revision.updated_at;
     for (const status of ["unchecked", "available", "missing", "relink-required"] as const) {
       const updated = await assets.setAvailability(revision.id, status);
       expect(updated.availability_status).toBe(status);
       expect(updated.availability_checked_at).not.toBeNull();
-      expect(updated.updated_at).toBeGreaterThan(previousUpdatedAt);
+      expect(updated.updated_at).toBe(revision.updated_at);
       expect(updated).toMatchObject({
         asset_id: asset.id,
         mime_type: revision.mime_type,
         blob_sha256: revision.blob_sha256,
         byte_size: revision.byte_size,
       });
-      previousUpdatedAt = updated.updated_at;
     }
 
     await expect(assets.setAvailability(revision.id, "offline" as never)).rejects.toThrow(

@@ -2,6 +2,7 @@ import { Graph } from "@phosphor-icons/react";
 
 export type AppNavIconName =
   | "canvas"
+  | "evidence"
   | "library"
   | "profile"
   | "project"
@@ -30,6 +31,12 @@ export const APP_NAV_ITEMS: readonly AppNavItem[] = [
     icon: "project",
     label: "研究项目",
     to: "/projects",
+  },
+  {
+    description: "集中校验、归档和回溯研读过程中捕获的学术证据。",
+    icon: "evidence",
+    label: "证据收件箱",
+    to: "/evidence",
   },
   {
     description: "检索开放学术来源并把结果沉淀到文献库。",
@@ -97,6 +104,16 @@ export function AppNavIcon({ name }: { name: AppNavIconName }) {
           <path d="M4 9.5h16v8.8a1.7 1.7 0 0 1-1.7 1.7H5.7A1.7 1.7 0 0 1 4 18.3V6.7A1.7 1.7 0 0 1 5.7 5h3.8l1.8 2H18a2 2 0 0 1 2 2" />
           <path d="M8 13h8" />
           <path d="M8 16.5h5" />
+        </svg>
+      );
+    case "evidence":
+      return (
+        <svg {...common}>
+          <path d="M5 4.5h10l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19z" />
+          <path d="M14.5 4.5V9H19" />
+          <path d="M8.5 12.5h7" />
+          <path d="M8.5 16h4.5" />
+          <path d="m7.5 8 1.2 1.2L11 6.9" />
         </svg>
       );
     case "search":

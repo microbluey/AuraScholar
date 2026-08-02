@@ -94,7 +94,20 @@ export class AttachmentsRepo {
          ON w.id = a.work_id
         AND w.library_id = ?
         AND w.deleted_at IS NULL
-       WHERE a.work_id = ? AND a.deleted_at IS NULL`,
+       WHERE a.work_id = ? AND a.deleted_at IS NULL
+       ORDER BY CASE WHEN EXISTS (
+         SELECT 1
+         FROM document_revisions revision
+         JOIN document_assets asset
+           ON asset.id = revision.asset_id
+          AND asset.current_revision_id = revision.id
+          AND asset.library_id = w.library_id
+          AND asset.work_id = a.work_id
+          AND asset.deleted_at IS NULL
+         WHERE revision.attachment_id = a.id
+           AND revision.deleted_at IS NULL
+       ) THEN 0 ELSE 1 END,
+       a.created_at DESC, a.id ASC`,
       [this.libraryId, workId],
     );
   }
@@ -144,6 +157,41 @@ export class AttachmentsRepo {
     );
     const attachment = rows[0];
     if (!attachment) throw new Error(`Attachment ${attachmentId} is outside this Library`);
+
+    // A source-recovery bridge may intentionally bind this local Attachment to
+    // an existing historical revision. Accept that exact canonical mapping
+    // instead of manufacturing a second deterministic Asset/Revision pair.
+    const existingBridge = await this.db.query<{
+      asset_deleted_at: number | null;
+      blob_sha256: string;
+      byte_size: number;
+      library_id: string;
+      revision_deleted_at: number | null;
+      work_id: string | null;
+    }>(
+      `SELECT asset.library_id, asset.work_id, asset.deleted_at AS asset_deleted_at,
+              revision.blob_sha256, revision.byte_size,
+              revision.deleted_at AS revision_deleted_at
+       FROM document_revisions revision
+       JOIN document_assets asset ON asset.id = revision.asset_id
+       WHERE revision.attachment_id = ?
+       LIMIT 1`,
+      [attachment.id],
+    );
+    if (existingBridge[0]) {
+      const bridge = existingBridge[0];
+      if (
+        bridge.library_id !== attachment.library_id ||
+        bridge.work_id !== attachment.work_id ||
+        bridge.blob_sha256 !== attachment.sha256 ||
+        bridge.byte_size !== attachment.byte_size ||
+        bridge.asset_deleted_at !== null ||
+        bridge.revision_deleted_at !== null
+      ) {
+        throw new Error(`Attachment ${attachment.id} has an inconsistent document revision`);
+      }
+      return;
+    }
 
     const assetId = documentAssetIdFromAttachment(attachment.id);
     const revisionId = documentRevisionIdFromAttachment(attachment.id);

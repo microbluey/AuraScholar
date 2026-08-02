@@ -118,7 +118,7 @@ packages/
 
 桌面壳采用 Electron。共享且平台无关的领域逻辑位于 `packages/`,Electron 专属编排与 UI 位于 `apps/desktop/`。Electron 主进程提供 SQLite / 无 CORS HTTP / 文件系统 / 通知 / 内置浏览器,经 preload 的 `window.aura` 桥接给渲染进程。架构详见 [apps/desktop/README.md](./apps/desktop/README.md)。
 
-研究知识层的规范化地基已经落地:Library 级研究项目、逻辑文档资产、不可变文档修订、版本化 SourceAnchor 领域类型基础,以及绑定精确修订的 PDF 文本 Evidence 持久化,并纳入隔离的备份/同步链路。面向用户的 Evidence Inbox、锚定检索、混合 RAG、全能阅读器与论文写作工作流仍按[研究知识层 RFC](./docs/KNOWLEDGE_LAYER_RFC.md)分阶段推进。
+研究知识层的首个用户闭环已经落地:阅读器选区可保存为绑定精确修订的 PDF 文本 Evidence,并在可搜索的 Evidence 收件箱中归档到研究项目、可恢复移除,以及回到捕获时的原始修订。若本地来源桥接缺失,只有在文件大小与 SHA-256 均校验通过后才能恢复;该流程不会把 Evidence 改指向新版本,也不会删除 Library 论文或 PDF。锚定检索、混合 RAG、全能阅读器与论文写作工作流仍按[研究知识层 RFC](./docs/KNOWLEDGE_LAYER_RFC.md)分阶段推进。
 
 ## 开发
 

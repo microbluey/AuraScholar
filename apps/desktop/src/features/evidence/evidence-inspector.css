@@ -1,0 +1,293 @@
+.evidence-inspector {
+  position: sticky;
+  top: 4px;
+  display: grid;
+  gap: 16px;
+  max-height: calc(100vh - 150px);
+  padding: 18px;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 100% 0%, var(--evidence-accent-soft), transparent 38%),
+    var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 17px;
+  box-shadow: var(--shadow-card);
+}
+
+.evidence-inspector__back {
+  display: none;
+  gap: 7px;
+  align-items: center;
+  justify-self: start;
+  padding: 6px 8px;
+  color: var(--color-accent-strong);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 720;
+  background: var(--color-accent-subtle);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.evidence-inspector > header {
+  display: flex;
+  gap: 12px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.evidence-inspector > header h2 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: -0.025em;
+}
+
+.evidence-inspector > blockquote {
+  position: relative;
+  margin: 0;
+  padding: 15px 15px 15px 18px;
+  color: var(--color-text);
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 570;
+  line-height: 1.58;
+  background: color-mix(in srgb, var(--color-accent) 5%, var(--color-surface));
+  border-left: 3px solid var(--color-accent);
+  border-radius: 4px 12px 12px 4px;
+}
+
+.evidence-inspector__source,
+.evidence-inspector__notes,
+.evidence-inspector__projects {
+  display: grid;
+  gap: 9px;
+  padding-top: 15px;
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.evidence-inspector__source > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.evidence-inspector h3,
+.evidence-inspector p {
+  margin: 0;
+}
+
+.evidence-inspector h3 {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.evidence-inspector__source > p,
+.evidence-inspector__projects > p,
+.evidence-inspector__notes > p {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.evidence-inspector dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.evidence-inspector dl > div {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  background: var(--color-surface-sunken);
+  border-radius: 8px;
+}
+
+.evidence-inspector dt,
+.evidence-inspector dd {
+  margin: 0;
+  font-size: 10px;
+}
+
+.evidence-inspector dt {
+  color: var(--color-text-muted);
+}
+
+.evidence-inspector dd {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--color-text-secondary);
+  font-weight: 680;
+}
+
+.evidence-inspector dd span {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  color: var(--color-warning);
+}
+
+.evidence-inspector__assurance,
+.evidence-inspector__warning {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  padding: 8px 9px;
+  border-radius: 8px;
+}
+
+.evidence-inspector__assurance {
+  color: var(--color-accent-strong) !important;
+  background: var(--color-accent-subtle);
+}
+
+.evidence-inspector__warning {
+  color: var(--color-danger) !important;
+  background: color-mix(in srgb, var(--color-danger) 7%, var(--color-surface));
+}
+
+.evidence-inspector__notes > div,
+.evidence-inspector__projects > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.evidence-inspector > footer {
+  display: grid;
+  gap: 7px;
+}
+
+.evidence-inspector > footer .au-button {
+  width: 100%;
+}
+
+.evidence-inspector__file {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.evidence-inspector--empty {
+  place-items: center;
+  min-height: 300px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.evidence-inspector--empty > span {
+  color: var(--color-accent-subtle);
+  font-family: Georgia, serif;
+  font-size: 86px;
+  line-height: 0.6;
+}
+
+.evidence-inspector--empty h2 {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 16px;
+}
+
+.evidence-inspector--empty p {
+  max-width: 260px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.evidence-state {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  min-height: 330px;
+  padding: 52px 20px;
+  color: var(--color-text-muted);
+  text-align: center;
+  background: color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+  border: var(--border-width) dashed var(--color-border-strong);
+  border-radius: 16px;
+}
+
+.evidence-state > svg {
+  color: var(--color-accent-strong);
+}
+
+.evidence-state h2,
+.evidence-state p {
+  margin: 0;
+}
+
+.evidence-state h2 {
+  color: var(--color-text-secondary);
+  font-size: 16px;
+}
+
+.evidence-state p {
+  max-width: 430px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.evidence-state .au-button {
+  margin-top: 7px;
+}
+
+.evidence-state--error > svg,
+.evidence-state--error h2 {
+  color: var(--color-danger);
+}
+
+.evidence-skeleton {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
+  gap: 11px;
+}
+
+.evidence-skeleton > div {
+  display: grid;
+  gap: 14px;
+  min-height: 230px;
+  padding: 16px;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 15px;
+}
+
+.evidence-skeleton span {
+  height: 11px;
+  background: linear-gradient(
+    100deg,
+    var(--color-surface-sunken) 25%,
+    color-mix(in srgb, var(--color-surface-sunken) 45%, var(--color-surface)) 50%,
+    var(--color-surface-sunken) 75%
+  );
+  background-size: 220% 100%;
+  border-radius: var(--radius-pill);
+  animation: evidence-shimmer 1.4s linear infinite;
+}
+
+.evidence-skeleton span:nth-child(1) {
+  width: 26%;
+}
+.evidence-skeleton span:nth-child(2) {
+  width: 94%;
+  height: 16px;
+}
+.evidence-skeleton span:nth-child(3) {
+  width: 76%;
+  height: 16px;
+}
+.evidence-skeleton span:nth-child(4) {
+  width: 58%;
+}

@@ -7,21 +7,17 @@ import type {
 } from "@aurascholar/db/repos/sentinel";
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
-import type {
-  DocumentRevisionCommandInput,
-  EvidenceCommandInput,
-  ListEvidenceCommandInput,
-  ResolvedDocumentRevisionDto,
-  SaveTextEvidenceCommandInput,
-  SaveTextEvidenceCommandResult,
-} from "./evidence-command-contract";
-import type { EvidenceRecord } from "@aurascholar/db/repos/evidence";
+import type { EvidenceDataCommandMap } from "./evidence-command-contract";
 
 export type {
   DocumentRevisionCommandInput,
   EvidenceCommandInput,
+  EvidenceDataCommandMap,
+  EvidenceProjectCommandInput,
+  EvidenceTombstoneCommandInput,
   ListEvidenceCommandInput,
   ResolvedDocumentRevisionDto,
+  SearchEvidenceCommandInput,
   SaveTextEvidenceCommandInput,
   SaveTextEvidenceCommandResult,
 } from "./evidence-command-contract";
@@ -280,23 +276,7 @@ export interface ResearchProjectMutationResult {
 
 export type ResearchProjectScopeCommandInput = Record<string, never>;
 
-export interface DataCommandMap {
-  "document.resolveAttachmentRevision": {
-    input: DocumentRevisionCommandInput;
-    output: { revision: ResolvedDocumentRevisionDto | null };
-  };
-  "evidence.get": {
-    input: EvidenceCommandInput;
-    output: { evidence: EvidenceRecord | null };
-  };
-  "evidence.list": {
-    input: ListEvidenceCommandInput;
-    output: { evidence: EvidenceRecord[] };
-  };
-  "evidence.saveText": {
-    input: SaveTextEvidenceCommandInput;
-    output: SaveTextEvidenceCommandResult;
-  };
+export interface DataCommandMap extends EvidenceDataCommandMap {
   "library.addTagToWorks": {
     input: AddTagToWorksCommandInput;
     output: TagMutationResult;
