@@ -34,7 +34,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["**/*.tsx", "packages/reader/**/*.ts"],
+    files: ["**/*.tsx", "apps/desktop/src/features/library/use*.ts", "packages/reader/**/*.ts"],
     plugins: { "react-hooks": reactHooks },
     rules: {
       ...reactHooks.configs.recommended.rules,

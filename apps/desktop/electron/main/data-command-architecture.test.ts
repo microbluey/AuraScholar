@@ -64,17 +64,29 @@ describe("main-process data command architecture", () => {
     const refreshController = source("src/features/library/library-refresh-controller.ts");
     const refreshHook = source("src/features/library/useLibraryRefreshController.ts");
     const lifecycleModel = source("src/features/library/library-work-lifecycle-model.ts");
+    const noticeLifecycle = source("src/features/library/library-notice-lifecycle.ts");
+    const noticeHook = source("src/features/library/useLibraryNoticeLifecycle.ts");
+    const browseHook = source("src/features/library/useLibraryBrowseState.ts");
+    const workspaceState = source("src/features/library/library-workspace-state.ts");
 
     expect(libraryPage).toContain("useLibraryRefreshController");
     expect(libraryPage).not.toContain("refreshSeqRef");
-    expect(libraryPage).toContain("searchRef.current = value");
-    expect(libraryPage).toContain("activeCollectionRef.current = value");
-    expect(libraryPage).toContain("activeFilterRef.current = value");
+    expect(libraryPage).toContain("useLibraryBrowseState");
+    expect(browseHook).toContain("searchRef.current = value");
+    expect(browseHook).toContain("activeCollectionRef.current = value");
+    expect(browseHook).toContain("activeFilterRef.current = value");
     expect(refreshController).toContain("class LibraryRefreshController");
     expect(refreshController).toContain("batch.latestQuery = currentQuery");
     expect(refreshController).toContain("batch.dirty = true");
     expect(refreshHook).toContain("controller.start()");
     expect(refreshHook).toContain("controller.stop()");
+    expect(refreshHook).toContain("controller.updateDependencies(dependencies)");
+    expect(refreshHook).not.toContain("dependenciesRef");
+    expect(libraryPage).toContain("cancelCurrentRouteRequest");
+    expect(browseHook).toContain("resolveActiveLibraryRouteRequest");
+    expect(browseHook).not.toContain("../services/");
+    expect(browseHook).not.toContain("window.");
+    expect(workspaceState).toContain("libraryRouteRefreshDisposition");
 
     expect(libraryPage).toContain("new MutationLease<LibraryWorkAction>()");
     expect(libraryPage).toContain("scopeSelectedIds(");
@@ -82,9 +94,24 @@ describe("main-process data command architecture", () => {
     expect(libraryPage).toContain("reconcileTrashUndo(current, workIds)");
     expect(libraryPage).not.toContain("Array.from(selectedIds)");
     expect(libraryPage).toContain("message ?? trashUndo?.message ?? null");
-    expect(libraryPage).toContain("message === trashUndo.message) return");
+    expect(libraryPage).toContain("useLibraryNoticeLifecycle");
+    expect(libraryPage).toContain(
+      "persistent: Boolean(trashUndo && message === trashUndo.message)",
+    );
+    expect(libraryPage).not.toContain("setMessageLeaving");
+    expect(noticeLifecycle).toContain("class LibraryNoticeLifecycleController");
+    expect(noticeLifecycle).toContain("reduceLibraryNoticeState");
+    expect(noticeLifecycle).toContain("this.generation === generation");
+    expect(noticeLifecycle).not.toContain('from "../../components/InlineNotice"');
+    expect(noticeHook).toContain("controller.update({");
+    expect(noticeHook).toContain("controller.dispose()");
 
-    for (const pureFeatureSource of [refreshController, lifecycleModel]) {
+    for (const pureFeatureSource of [
+      refreshController,
+      lifecycleModel,
+      noticeLifecycle,
+      workspaceState,
+    ]) {
       expect(pureFeatureSource).not.toContain("../services/");
       expect(pureFeatureSource).not.toContain("window.");
       expect(pureFeatureSource).not.toContain('from "react"');
