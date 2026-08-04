@@ -8,7 +8,7 @@
     "production": {
       "byExtension": {
         ".css": 18771,
-        ".ts": 49172,
+        ".ts": 49911,
         ".tsx": 34733
       },
       "files": {
@@ -339,6 +339,13 @@
         "packages/homepage/src/index.ts": 9,
         "packages/homepage/src/model.ts": 72,
         "packages/homepage/src/render.ts": 174,
+        "packages/knowledge/src/annotation.ts": 87,
+        "packages/knowledge/src/content-unit.ts": 174,
+        "packages/knowledge/src/evidence.ts": 71,
+        "packages/knowledge/src/hash.ts": 33,
+        "packages/knowledge/src/index.ts": 42,
+        "packages/knowledge/src/pdf.ts": 280,
+        "packages/knowledge/src/profiles.ts": 22,
         "packages/platform/src/index.ts": 82,
         "packages/platform/src/memory.ts": 121,
         "packages/platform/src/sensitive-text.ts": 143,
@@ -351,7 +358,8 @@
         "packages/reader/src/annotations.ts": 26,
         "packages/reader/src/document.ts": 159,
         "packages/reader/src/export-md.ts": 59,
-        "packages/reader/src/index.ts": 27,
+        "packages/reader/src/extraction.ts": 28,
+        "packages/reader/src/index.ts": 29,
         "packages/reader/src/quads.ts": 78,
         "packages/reader/src/reader.css": 395,
         "packages/reader/src/selection-anchor.ts": 55,
@@ -380,11 +388,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 102676
+      "totalLines": 103415
     },
     "tests": {
       "byExtension": {
-        ".ts": 55380,
+        ".ts": 55680,
         ".tsx": 777
       },
       "files": {
@@ -601,6 +609,9 @@
         "packages/db/src/research-project-migration.test.ts": 333,
         "packages/db/src/work-list.test.ts": 323,
         "packages/homepage/src/render.test.ts": 172,
+        "packages/knowledge/src/annotation-evidence.test.ts": 98,
+        "packages/knowledge/src/content-unit.test.ts": 71,
+        "packages/knowledge/src/pdf.test.ts": 131,
         "packages/platform/src/sensitive-text.test.ts": 131,
         "packages/reader/src/anchor-guard.test.ts": 67,
         "packages/reader/src/anchoring.test.ts": 86,
@@ -616,7 +627,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 56157
+      "totalLines": 56457
     }
   },
   "uiDatabaseBoundary": {}
