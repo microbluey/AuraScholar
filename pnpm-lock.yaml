@@ -285,6 +285,19 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.21)
 
+  packages/knowledge:
+    dependencies:
+      '@aurascholar/anchors':
+        specifier: workspace:*
+        version: link:../anchors
+    devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)
+
   packages/platform:
     devDependencies:
       typescript:
@@ -296,6 +309,9 @@ importers:
 
   packages/reader:
     dependencies:
+      '@aurascholar/knowledge':
+        specifier: workspace:*
+        version: link:../knowledge
       '@aurascholar/tokens':
         specifier: workspace:*
         version: link:../tokens
