@@ -11,6 +11,8 @@ export type { NormalizedAnchor } from "./anchor-guard.js";
 export { makeQuoteSelector, resolveAnchor, similarity, CONTEXT_CHARS } from "./anchoring.js";
 export { PdfDocument, configureWorker, extractFullText } from "./document.js";
 export type { PageTextIndex, PdfDocumentMetadata } from "./document.js";
+export { createPdfTextSource } from "./extraction.js";
+export type { PdfTextSource } from "@aurascholar/knowledge";
 export { rectsForTextRange, textRangeFromDomSelection } from "./quads.js";
 export type { ReaderAnnotation, AnnotationType, PendingSelection } from "./annotations.js";
 export { buildPdfSelectionAnchor, buildReaderEvidenceSelection } from "./selection-anchor.js";
