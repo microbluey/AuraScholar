@@ -1,16 +1,15 @@
 {
   "lintWarnings": {
     "lint-warning|apps/desktop/src/components/CitationGraphView.tsx|react-hooks/refs": 1,
-    "lint-warning|apps/desktop/src/components/CitationGraphView.tsx|react-hooks/set-state-in-effect": 1,
-    "lint-warning|apps/desktop/src/pages/LibraryPage.tsx|react-hooks/set-state-in-effect": 4
+    "lint-warning|apps/desktop/src/components/CitationGraphView.tsx|react-hooks/set-state-in-effect": 1
   },
   "schemaVersion": 1,
   "source": {
     "production": {
       "byExtension": {
         ".css": 18771,
-        ".ts": 48499,
-        ".tsx": 34720
+        ".ts": 49172,
+        ".tsx": 34733
       },
       "files": {
         "apps/desktop/electron/data-command-contract.ts": 455,
@@ -47,8 +46,9 @@
         "apps/desktop/src/components/ConfirmDialog.tsx": 163,
         "apps/desktop/src/components/ImportConfirmDialog.tsx": 486,
         "apps/desktop/src/components/ImportTargetConflictNotice.tsx": 18,
-        "apps/desktop/src/components/InlineNotice.tsx": 61,
+        "apps/desktop/src/components/InlineNotice.tsx": 47,
         "apps/desktop/src/components/MetadataEditor.tsx": 680,
+        "apps/desktop/src/components/inline-notice-model.ts": 16,
         "apps/desktop/src/components/useModalFocusTrap.ts": 146,
         "apps/desktop/src/download.ts": 69,
         "apps/desktop/src/features/canvas/CanvasCards.tsx": 717,
@@ -135,18 +135,23 @@
         "apps/desktop/src/features/library/LibraryActionIconButton.tsx": 56,
         "apps/desktop/src/features/library/LibraryBulkActionBar.tsx": 277,
         "apps/desktop/src/features/library/LibraryCollectionManagement.tsx": 66,
-        "apps/desktop/src/features/library/LibrarySelectedWorkPanel.tsx": 369,
-        "apps/desktop/src/features/library/LibrarySelectedWorkSections.tsx": 295,
+        "apps/desktop/src/features/library/LibrarySelectedWorkPanel.tsx": 391,
+        "apps/desktop/src/features/library/LibrarySelectedWorkSections.tsx": 312,
         "apps/desktop/src/features/library/TagManager.tsx": 166,
         "apps/desktop/src/features/library/TextPromptDialog.tsx": 189,
         "apps/desktop/src/features/library/library-collection-events.ts": 36,
         "apps/desktop/src/features/library/library-collection-model.ts": 78,
         "apps/desktop/src/features/library/library-import-files.ts": 18,
-        "apps/desktop/src/features/library/library-refresh-controller.ts": 176,
+        "apps/desktop/src/features/library/library-notice-lifecycle.ts": 171,
+        "apps/desktop/src/features/library/library-refresh-controller.ts": 180,
         "apps/desktop/src/features/library/library-work-display.ts": 65,
         "apps/desktop/src/features/library/library-work-lifecycle-model.ts": 114,
+        "apps/desktop/src/features/library/library-workspace-state.ts": 185,
+        "apps/desktop/src/features/library/useLibraryBrowseState.ts": 116,
         "apps/desktop/src/features/library/useLibraryCollectionController.ts": 454,
-        "apps/desktop/src/features/library/useLibraryRefreshController.ts": 48,
+        "apps/desktop/src/features/library/useLibraryNoticeLifecycle.ts": 42,
+        "apps/desktop/src/features/library/useLibraryRefreshController.ts": 34,
+        "apps/desktop/src/features/library/useSelectedWorkRuntimeMeta.ts": 153,
         "apps/desktop/src/features/library/useTagManager.ts": 313,
         "apps/desktop/src/features/projects/ProjectSourceList.tsx": 71,
         "apps/desktop/src/features/projects/ProjectSourcePicker.tsx": 209,
@@ -184,7 +189,7 @@
         "apps/desktop/src/pages/EvidenceInboxPage.tsx": 267,
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1149,
-        "apps/desktop/src/pages/LibraryPage.tsx": 4046,
+        "apps/desktop/src/pages/LibraryPage.tsx": 4034,
         "apps/desktop/src/pages/ReaderPage.tsx": 2085,
         "apps/desktop/src/pages/ResearchProjectPage.tsx": 262,
         "apps/desktop/src/pages/SentinelPage.tsx": 1237,
@@ -375,16 +380,16 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 101990
+      "totalLines": 102676
     },
     "tests": {
       "byExtension": {
-        ".ts": 54618,
+        ".ts": 55380,
         ".tsx": 777
       },
       "files": {
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 475,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 502,
         "apps/desktop/electron/main/data-commands.test.ts": 1210,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
         "apps/desktop/electron/main/evidence-commands.test.ts": 475,
@@ -504,8 +509,11 @@
         "apps/desktop/src/features/evidence/useEvidenceInboxController.test.ts": 162,
         "apps/desktop/src/features/library/LibraryBulkActionBar.test.tsx": 55,
         "apps/desktop/src/features/library/library-collection-model.test.ts": 147,
-        "apps/desktop/src/features/library/library-refresh-controller.test.ts": 299,
+        "apps/desktop/src/features/library/library-notice-lifecycle.test.ts": 172,
+        "apps/desktop/src/features/library/library-refresh-controller.test.ts": 417,
         "apps/desktop/src/features/library/library-work-lifecycle-model.test.ts": 156,
+        "apps/desktop/src/features/library/library-workspace-state.test.ts": 281,
+        "apps/desktop/src/features/library/useSelectedWorkRuntimeMeta.test.ts": 164,
         "apps/desktop/src/features/projects/ProjectTargetPicker.test.tsx": 90,
         "apps/desktop/src/features/projects/ResearchProjectSwitcher.test.tsx": 72,
         "apps/desktop/src/features/projects/model.test.ts": 37,
@@ -608,7 +616,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 55395
+      "totalLines": 56157
     }
   },
   "uiDatabaseBoundary": {}

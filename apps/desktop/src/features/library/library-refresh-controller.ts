@@ -49,7 +49,11 @@ export class LibraryRefreshController<Query, Data> {
   private lifecycle = 0;
   private loadQueue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly dependencies: LibraryRefreshControllerDependencies<Query, Data>) {}
+  constructor(private dependencies: LibraryRefreshControllerDependencies<Query, Data>) {}
+
+  updateDependencies(dependencies: LibraryRefreshControllerDependencies<Query, Data>): void {
+    this.dependencies = dependencies;
+  }
 
   start(): void {
     if (this.active) return;

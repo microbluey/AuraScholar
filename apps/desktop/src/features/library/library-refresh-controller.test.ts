@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLibraryRefreshController } from "./library-refresh-controller";
+import {
+  createLibraryRouteRequest,
+  ownsLibraryRouteRequest,
+  type LibraryRouteRequest,
+} from "./library-workspace-state";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -37,6 +42,22 @@ function setup(load: (query: string) => Promise<string>) {
       query = next;
     },
   };
+}
+
+interface RouteRefreshQuery {
+  routeKey: string | null;
+  routeWorkId: string | null;
+}
+
+function routeQuery(request: LibraryRouteRequest | null): RouteRefreshQuery {
+  return {
+    routeKey: request?.key ?? null,
+    routeWorkId: request?.workId ?? null,
+  };
+}
+
+function isSameRouteQuery(left: RouteRefreshQuery, right: RouteRefreshQuery): boolean {
+  return left.routeKey === right.routeKey && left.routeWorkId === right.routeWorkId;
 }
 
 describe("LibraryRefreshController", () => {
@@ -295,5 +316,102 @@ describe("LibraryRefreshController", () => {
     expect(result.query).toBe("query");
     expect(result.error.message).toBe("normalization failed");
     expect(reportFailure).toHaveBeenCalledWith(result.error, "query");
+  });
+
+  it("rejects a deferred B result after dependencies advance to deep link C", async () => {
+    const requestB = createLibraryRouteRequest({
+      filter: "all",
+      locationKey: "location-b",
+      workId: "work-b",
+    });
+    const requestC = createLibraryRouteRequest({
+      filter: "trash",
+      locationKey: "location-c",
+      workId: "work-c",
+    });
+    if (!requestB || !requestC) throw new Error("Expected route requests");
+    const loadB = deferred<string>();
+    const loadC = deferred<string>();
+    const load = vi.fn((query: RouteRefreshQuery) =>
+      query.routeKey === requestB.key ? loadB.promise : loadC.promise,
+    );
+    const applied = vi.fn();
+    const dependenciesFor = (request: LibraryRouteRequest, query: RouteRefreshQuery) => ({
+      apply: (data: string, loadedQuery: RouteRefreshQuery) => {
+        if (ownsLibraryRouteRequest(loadedQuery.routeKey, request)) {
+          applied(data, loadedQuery);
+        }
+      },
+      getQuery: () => query,
+      isSameQuery: isSameRouteQuery,
+      load,
+    });
+    const queryB = routeQuery(requestB);
+    const queryC = routeQuery(requestC);
+    const controller = createLibraryRefreshController(dependenciesFor(requestB, queryB));
+    controller.start();
+
+    const refreshB = controller.refresh();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledWith(queryB));
+    controller.updateDependencies(dependenciesFor(requestC, queryC));
+    const refreshC = controller.refresh();
+    expect(refreshC).toBe(refreshB);
+
+    loadB.resolve("stale B");
+    await vi.waitFor(() => expect(load).toHaveBeenCalledWith(queryC));
+    expect(applied).not.toHaveBeenCalled();
+    loadC.resolve("fresh C");
+
+    await expect(refreshB).resolves.toEqual({ status: "applied", query: queryC, data: "fresh C" });
+    expect(applied).toHaveBeenCalledOnce();
+    expect(applied).toHaveBeenCalledWith("fresh C", queryC);
+  });
+
+  it("rejects a deferred deep-link result after the route is cancelled", async () => {
+    const requestB = createLibraryRouteRequest({
+      filter: "all",
+      locationKey: "location-b",
+      workId: "work-b",
+    });
+    if (!requestB) throw new Error("Expected route request");
+    const loadB = deferred<string>();
+    const browseLoad = deferred<string>();
+    const load = vi.fn((query: RouteRefreshQuery) =>
+      query.routeKey === requestB.key ? loadB.promise : browseLoad.promise,
+    );
+    const applied = vi.fn();
+    const dependenciesFor = (request: LibraryRouteRequest | null, query: RouteRefreshQuery) => ({
+      apply: (data: string, loadedQuery: RouteRefreshQuery) => {
+        if (ownsLibraryRouteRequest(loadedQuery.routeKey, request)) {
+          applied(data, loadedQuery);
+        }
+      },
+      getQuery: () => query,
+      isSameQuery: isSameRouteQuery,
+      load,
+    });
+    const queryB = routeQuery(requestB);
+    const browseQuery = routeQuery(null);
+    const controller = createLibraryRefreshController(dependenciesFor(requestB, queryB));
+    controller.start();
+
+    const refreshB = controller.refresh();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledWith(queryB));
+    controller.updateDependencies(dependenciesFor(null, browseQuery));
+    const refreshAfterCancel = controller.refresh();
+    expect(refreshAfterCancel).toBe(refreshB);
+
+    loadB.resolve("stale B");
+    await vi.waitFor(() => expect(load).toHaveBeenCalledWith(browseQuery));
+    expect(applied).not.toHaveBeenCalled();
+    browseLoad.resolve("fresh browse");
+
+    await expect(refreshAfterCancel).resolves.toEqual({
+      status: "applied",
+      query: browseQuery,
+      data: "fresh browse",
+    });
+    expect(applied).toHaveBeenCalledOnce();
+    expect(applied).toHaveBeenCalledWith("fresh browse", browseQuery);
   });
 });

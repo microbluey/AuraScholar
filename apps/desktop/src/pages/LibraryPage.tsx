@@ -5,12 +5,13 @@ import {
   useEffect,
   useId,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type DragEvent,
   type KeyboardEvent,
 } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, Button } from "@aurascholar/ui";
 import {
   formatBibliography,
@@ -32,7 +33,7 @@ import type { ExportFormat } from "../services/cite";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
 import type { Draft as MetadataDraft } from "../components/MetadataEditor";
 import { useConfirmDialog } from "../components/ConfirmDialog";
-import { inferNoticeTone, InlineNotice } from "../components/InlineNotice";
+import { InlineNotice } from "../components/InlineNotice";
 import { useModalFocusTrap } from "../components/useModalFocusTrap";
 import { writeClipboardText } from "../clipboard";
 import { downloadBlob } from "../download";
@@ -63,7 +64,24 @@ import {
 import { TagManager } from "../features/library/TagManager";
 import { TextPromptDialog, type TextPromptConfig } from "../features/library/TextPromptDialog";
 import { libraryTagTone, readingStatusLabel } from "../features/library/library-work-display";
+import {
+  createLibraryRouteRequest,
+  filterLibraryWorkspaceItems,
+  hasLibraryBrowseViewChanged,
+  libraryDeepLinkView,
+  libraryRouteRefreshDisposition,
+  ownsLibraryRouteRequest,
+  resolveLibraryVisiblePage,
+  withoutLibraryRouteParams,
+  type LibraryExtraFilter as ExtraFilter,
+  type LibraryFilter,
+  type LibrarySortMode as SortMode,
+} from "../features/library/library-workspace-state";
+import { useLibraryBrowseState } from "../features/library/useLibraryBrowseState";
+import { useLibraryNoticeLifecycle } from "../features/library/useLibraryNoticeLifecycle";
+import { reduceLibraryNoticeState } from "../features/library/library-notice-lifecycle";
 import { useLibraryRefreshController } from "../features/library/useLibraryRefreshController";
+import { useSelectedWorkRuntimeMeta } from "../features/library/useSelectedWorkRuntimeMeta";
 import type {
   CollectionActivationReason,
   CollectionManagerViewTarget,
@@ -103,9 +121,6 @@ const ImportConfirmDialog = lazy(() =>
   import("../components/ImportConfirmDialog").then((m) => ({ default: m.ImportConfirmDialog })),
 );
 
-type LibraryFilter = "all" | "reading" | "unread" | "noted" | "starred" | "trash";
-type SortMode = "added" | "year";
-type ExtraFilter = "with-pdf" | "without-pdf";
 type ImportMethod = "identifier" | "pdf" | "references";
 interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_IMPORT_PDF__?: (file: File) => Promise<void>;
@@ -118,19 +133,6 @@ interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_STAR__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH__?: string;
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__?: string;
-}
-
-const LIBRARY_FILTERS = new Set<LibraryFilter>([
-  "all",
-  "reading",
-  "unread",
-  "noted",
-  "starred",
-  "trash",
-]);
-
-function normalizeLibraryFilter(value: string | null): LibraryFilter | null {
-  return value && LIBRARY_FILTERS.has(value as LibraryFilter) ? (value as LibraryFilter) : null;
 }
 
 // How many works to show per page. The DB list() caps at a higher hard limit
@@ -160,6 +162,8 @@ interface LibraryRefreshQuery {
   previewItems: WorkWithAuthors[];
   previewTrashItems: WorkWithAuthors[];
   previewWorkMeta: Record<string, WorkTableMeta>;
+  routeKey: string | null;
+  routeWorkId: string | null;
   search: string;
 }
 
@@ -175,6 +179,8 @@ function isSameLibraryRefreshQuery(left: LibraryRefreshQuery, right: LibraryRefr
     left.previewItems === right.previewItems &&
     left.previewTrashItems === right.previewTrashItems &&
     left.previewWorkMeta === right.previewWorkMeta &&
+    left.routeKey === right.routeKey &&
+    left.routeWorkId === right.routeWorkId &&
     left.search === right.search
   );
 }
@@ -652,33 +658,63 @@ function consumeLibrarySmokeTrashRestoreFailure(): Error | null {
 
 export function LibraryPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedWorkId = searchParams.get("work");
-  const requestedFilter = normalizeLibraryFilter(searchParams.get("filter"));
+  const urlRouteRequest = createLibraryRouteRequest({
+    filter: searchParams.get("filter"),
+    locationKey: location.key,
+    workId: requestedWorkId,
+  });
+  const clearLibraryRouteParams = useCallback(() => {
+    setSearchParams((current) => withoutLibraryRouteParams(current), { replace: true });
+  }, [setSearchParams]);
+  const {
+    activeCollection,
+    activeCollectionRef,
+    activeFilter,
+    activeFilterRef,
+    activeSource,
+    activeTag,
+    appliedRouteKeyRef,
+    applyRouteView,
+    cancelCurrentRouteRequest,
+    currentRouteKey,
+    currentRouteRequest,
+    extraFilter,
+    search,
+    searchRef,
+    setActiveCollection,
+    setActiveFilter,
+    setActiveSource,
+    setActiveTag,
+    setExtraFilter,
+    setSearch,
+  } = useLibraryBrowseState({
+    onCancelRoute: clearLibraryRouteParams,
+    urlRouteRequest,
+  });
   const [input, setInput] = useState("");
-  const [search, setSearchState] = useState("");
   const [items, setItems] = useState<WorkWithAuthors[]>([]);
   const [previewItems, setPreviewItems] = useState<WorkWithAuthors[]>(() => PREVIEW_LIBRARY_WORKS);
   const [previewTrashItems, setPreviewTrashItems] = useState<WorkWithAuthors[]>([]);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
   const [trashCount, setTrashCount] = useState(0);
   const [workMeta, setWorkMeta] = useState<Record<string, WorkTableMeta>>({});
+  const [librarySnapshotRevision, setLibrarySnapshotRevision] = useState(0);
   const [previewWorkMeta, setPreviewWorkMeta] = useState<Record<string, WorkTableMeta>>(() =>
     cloneWorkMetaMap(PREVIEW_LIBRARY_META),
   );
   const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
-  const [activeCollection, setActiveCollectionState] = useState<string | null>(null);
-  const [activeFilter, setActiveFilterState] = useState<LibraryFilter>("all");
-  const [activeTag, setActiveTag] = useState<string | null>(null);
-  const [activeSource, setActiveSource] = useState<string | null>(null);
-  const [extraFilter, setExtraFilter] = useState<ExtraFilter | null>(null);
   const [sortMode, setSortMode] = useState<SortMode>("added");
   const [selectedWorkId, setSelectedWorkId] = useState<string | null>(null);
-  const [selectedMeta, setSelectedMeta] = useState<WorkRuntimeMeta | null>(null);
   const [busy, setBusy] = useState(false);
   const [attachingPdf, setAttachingPdf] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [messageLeaving, setMessageLeaving] = useState(false);
+  const [noticeState, setMessage] = useReducer(reduceLibraryNoticeState, {
+    instance: 0,
+    message: null,
+  });
+  const { instance: messageInstance, message } = noticeState;
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [trashUndo, setTrashUndo] = useState<LibraryTrashUndoState | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -706,21 +742,6 @@ export function LibraryPage() {
   const [confirmDraft, setConfirmDraft] = useState<IngestDraft | null>(null);
   const [findingFulltext, setFindingFulltext] = useState(false);
   const [quickDropActive, setQuickDropActive] = useState(false);
-  const searchRef = useRef(search);
-  const activeCollectionRef = useRef(activeCollection);
-  const activeFilterRef = useRef(activeFilter);
-  const setSearch = useCallback((value: string) => {
-    searchRef.current = value;
-    setSearchState(value);
-  }, []);
-  const setActiveCollection = useCallback((value: string | null) => {
-    activeCollectionRef.current = value;
-    setActiveCollectionState(value);
-  }, []);
-  const setActiveFilter = useCallback((value: LibraryFilter) => {
-    activeFilterRef.current = value;
-    setActiveFilterState(value);
-  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedPdfInputRef = useRef<HTMLInputElement>(null);
   const refsInputRef = useRef<HTMLInputElement>(null);
@@ -732,10 +753,6 @@ export function LibraryPage() {
   const starActionBusyRef = useRef<Record<string, boolean>>({});
   const readingStatusBusyRef = useRef<{ status: ReadingStatus; workId: string } | null>(null);
   const quickDropDepthRef = useRef(0);
-  const selectedMetaSeqRef = useRef(0);
-  const pendingRequestedWorkIdRef = useRef<string | null>(null);
-  const pendingRequestedWorkNeedsFreshRowsRef = useRef(false);
-  const lastUnavailableRequestedWorkIdRef = useRef<string | null>(null);
   const pendingKeyboardFocusIndexRef = useRef<number | null>(null);
   const skipNextPageResetRef = useRef(false);
   const { confirm, confirmDialog } = useConfirmDialog();
@@ -776,32 +793,15 @@ export function LibraryPage() {
   const releaseWorkMutation = useCallback((grant: MutationLeaseGrant<LibraryWorkAction>) => {
     if (workMutationLeaseRef.current.release(grant)) setWorkActionBusy(null);
   }, []);
-
-  useEffect(() => {
-    if (!message) return;
-    setMessageLeaving(false);
-    const tone = inferNoticeTone(message);
-    if (tone === "busy") return;
-    if (trashUndo && message === trashUndo.message) return;
-    const hasUndoAction = Boolean(
-      trashUndo && message.startsWith("撤销移入回收站失败，撤销入口仍保留"),
-    );
-    let duration = 4_500;
-    if (tone === "warning") duration = 6_500;
-    if (tone === "danger") duration = 9_000;
-    if (hasUndoAction) duration = 10_000;
-    const exitTimeout = window.setTimeout(() => {
-      setMessageLeaving(true);
-    }, duration - 220);
-    const removeTimeout = window.setTimeout(() => {
-      setMessageLeaving(false);
-      setMessage((current) => (current === message ? null : current));
-    }, duration);
-    return () => {
-      window.clearTimeout(exitTimeout);
-      window.clearTimeout(removeTimeout);
-    };
-  }, [message, trashUndo]);
+  const dismissMessage = useCallback((expectedMessage: string) => {
+    setMessage((current) => (current === expectedMessage ? null : current));
+  }, []);
+  const messageLeaving = useLibraryNoticeLifecycle({
+    instance: messageInstance,
+    message,
+    onDismiss: dismissMessage,
+    persistent: Boolean(trashUndo && message === trashUndo.message),
+  });
 
   const fillExamplePaper = useCallback(() => {
     setInput("1706.03762");
@@ -809,15 +809,20 @@ export function LibraryPage() {
   }, []);
 
   const coordinatedRefresh = useLibraryRefreshController<LibraryRefreshQuery, LibraryRefreshData>({
-    getQuery: () => ({
-      activeCollection: activeCollectionRef.current,
-      activeFilter: activeFilterRef.current,
-      desktopRuntime: isDesktopRuntime(),
-      previewItems,
-      previewTrashItems,
-      previewWorkMeta,
-      search: searchRef.current,
-    }),
+    getQuery: () => {
+      const routeView = currentRouteRequest ? libraryDeepLinkView(currentRouteRequest) : null;
+      return {
+        activeCollection: routeView?.activeCollection ?? activeCollectionRef.current,
+        activeFilter: routeView?.activeFilter ?? activeFilterRef.current,
+        desktopRuntime: isDesktopRuntime(),
+        previewItems,
+        previewTrashItems,
+        previewWorkMeta,
+        routeKey: currentRouteRequest?.key ?? null,
+        routeWorkId: currentRouteRequest?.workId ?? null,
+        search: routeView?.search ?? searchRef.current,
+      };
+    },
     isSameQuery: isSameLibraryRefreshQuery,
     load: async (query) => {
       if (!query.desktopRuntime) {
@@ -848,13 +853,59 @@ export function LibraryPage() {
       await waitForLibrarySmokeAfterReadDelay();
       return { ...snapshot, previewMode: false };
     },
-    apply: (snapshot) => {
+    apply: (snapshot, query) => {
+      if (!ownsLibraryRouteRequest(query.routeKey, currentRouteRequest)) return;
       setCollections(snapshot.collections);
       setTrashCount(snapshot.trashCount);
       setItems(snapshot.works);
       setWorkMeta(snapshot.workMeta);
-      if (pendingRequestedWorkIdRef.current) {
-        pendingRequestedWorkNeedsFreshRowsRef.current = false;
+      setLibrarySnapshotRevision((current) => current + 1);
+      if (currentRouteRequest && query.routeWorkId === currentRouteRequest.workId) {
+        const routeView = libraryDeepLinkView(currentRouteRequest);
+        const routeRows = filterLibraryWorkspaceItems({
+          activeFilter: routeView.activeFilter,
+          activeSource: routeView.activeSource,
+          activeTag: routeView.activeTag,
+          extraFilter: routeView.extraFilter,
+          items: snapshot.works,
+          sortMode,
+          workMeta: snapshot.workMeta,
+        });
+        const targetIndex = routeRows.findIndex((work) => work.id === currentRouteRequest.workId);
+        skipNextPageResetRef.current = hasLibraryBrowseViewChanged(
+          {
+            activeCollection,
+            activeFilter,
+            activeSource,
+            activeTag,
+            extraFilter,
+            search,
+          },
+          routeView,
+        );
+        applyRouteView(routeView);
+        setSelectedIds(new Set());
+        setSelectedWorkId(targetIndex >= 0 ? routeView.selectedWorkId : null);
+        setPage(targetIndex >= 0 ? Math.floor(targetIndex / PAGE_SIZE) : 0);
+        if (targetIndex < 0) {
+          setMessage("没有找到要定位的文献，可能已被删除或来自另一个资料库");
+        }
+        appliedRouteKeyRef.current = query.routeKey;
+        clearLibraryRouteParams();
+      } else {
+        const refreshedRows = filterLibraryWorkspaceItems({
+          activeFilter,
+          activeSource,
+          activeTag,
+          extraFilter,
+          items: snapshot.works,
+          sortMode,
+          workMeta: snapshot.workMeta,
+        });
+        if (selectedWorkId && !refreshedRows.some((work) => work.id === selectedWorkId)) {
+          setSelectedWorkId(null);
+        }
+        if (refreshedRows.length === 0) setPage(0);
       }
       setLibraryLoadError(null);
       setMessage((current) => {
@@ -881,11 +932,23 @@ export function LibraryPage() {
   }, [coordinatedRefresh]);
 
   useEffect(() => {
+    const disposition = libraryRouteRefreshDisposition(currentRouteKey, appliedRouteKeyRef.current);
+    if (disposition === "load-route") {
+      void refresh();
+      return;
+    }
+    if (disposition === "skip-applied-route") return;
+    if (disposition === "skip-route-consumption") {
+      appliedRouteKeyRef.current = null;
+      return;
+    }
     const t = setTimeout(() => void refresh(), search ? 250 : 0);
     return () => clearTimeout(t);
   }, [
     activeCollection,
     activeFilter,
+    appliedRouteKeyRef,
+    currentRouteKey,
     previewItems,
     previewTrashItems,
     previewWorkMeta,
@@ -994,7 +1057,17 @@ export function LibraryPage() {
         setBusy(false);
       }
     },
-    [input, busy, setActiveCollection, setActiveFilter, setSearch, surfaceDedup],
+    [
+      input,
+      busy,
+      setActiveCollection,
+      setActiveFilter,
+      setActiveSource,
+      setActiveTag,
+      setExtraFilter,
+      setSearch,
+      surfaceDedup,
+    ],
   );
 
   const handleUpload = useCallback(
@@ -1121,42 +1194,7 @@ export function LibraryPage() {
       window.removeEventListener("aurascholar:create-tag", onCreateTag);
       window.removeEventListener("aurascholar:manage-tags", onManageTags);
     };
-  }, [setActiveCollection, setActiveFilter]);
-
-  useEffect(() => {
-    if (!requestedWorkId) return;
-    const nextFilter = requestedFilter ?? "all";
-    pendingRequestedWorkIdRef.current = requestedWorkId;
-    lastUnavailableRequestedWorkIdRef.current = null;
-    pendingRequestedWorkNeedsFreshRowsRef.current = Boolean(
-      items.length === 0 || search.trim() || activeFilter !== nextFilter || activeCollection,
-    );
-    skipNextPageResetRef.current = true;
-    setActiveFilter(nextFilter);
-    setActiveCollection(null);
-    setActiveTag(null);
-    setActiveSource(null);
-    setExtraFilter(null);
-    setSearch("");
-    setSelectedIds(new Set());
-    setSelectedWorkId(requestedWorkId);
-    const next = new URLSearchParams(searchParams);
-    next.delete("work");
-    next.delete("filter");
-    setSearchParams(next, { replace: true });
-  }, [
-    activeCollection,
-    activeFilter,
-    items.length,
-    requestedFilter,
-    requestedWorkId,
-    search,
-    searchParams,
-    setActiveCollection,
-    setActiveFilter,
-    setSearch,
-    setSearchParams,
-  ]);
+  }, [setActiveCollection, setActiveFilter, setActiveSource, setActiveTag, setExtraFilter]);
 
   useEffect(() => {
     window.dispatchEvent(
@@ -1192,32 +1230,15 @@ export function LibraryPage() {
   );
   const advancedFacetCount = [activeSource, extraFilter].filter(Boolean).length;
   const filteredItems = useMemo(() => {
-    const sortWorks = (works: WorkWithAuthors[]) =>
-      [...works].sort((a, b) => {
-        if (sortMode === "year") return (b.year ?? 0) - (a.year ?? 0);
-        return (b.created_at ?? 0) - (a.created_at ?? 0);
-      });
-    if (activeFilter === "trash") return sortWorks(items);
-    const filtered = items.filter((work) => {
-      if (activeTag && !(workMeta[work.id]?.tags ?? []).includes(activeTag)) return false;
-      if (
-        activeSource &&
-        !`${work.venue_name ?? ""} ${work.type ?? ""} ${work.arxiv_id ? "arXiv" : ""}`
-          .toLowerCase()
-          .includes(activeSource.toLowerCase())
-      ) {
-        return false;
-      }
-      const meta = workMeta[work.id];
-      if (extraFilter === "with-pdf" && (meta?.pdfs ?? 0) === 0) return false;
-      if (extraFilter === "without-pdf" && (meta?.pdfs ?? 0) > 0) return false;
-      if (activeFilter === "reading") return work.reading_status === "reading";
-      if (activeFilter === "unread") return work.reading_status === "unread";
-      if (activeFilter === "noted") return (workMeta[work.id]?.annotations ?? 0) > 0;
-      if (activeFilter === "starred") return work.starred === 1;
-      return true;
+    return filterLibraryWorkspaceItems({
+      activeFilter,
+      activeSource,
+      activeTag,
+      extraFilter,
+      items,
+      sortMode,
+      workMeta,
     });
-    return sortWorks(filtered);
   }, [activeFilter, activeSource, activeTag, extraFilter, items, sortMode, workMeta]);
   const countBaseItems = isTrashView ? [] : items;
   const totalDisplay = countBaseItems.length.toLocaleString("zh-CN");
@@ -1231,7 +1252,13 @@ export function LibraryPage() {
     [selectedIds, tableRows],
   );
   const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE_SIZE));
-  const safePage = Math.min(page, pageCount - 1);
+  const safePage = resolveLibraryVisiblePage({
+    page,
+    pageCount,
+    pageSize: PAGE_SIZE,
+    selectedWorkId,
+    workIds: tableRows.map((work) => work.id),
+  });
   const pagedRows = useMemo(
     () => tableRows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
     [tableRows, safePage],
@@ -1303,6 +1330,30 @@ export function LibraryPage() {
     () => tableRows.find((w) => w.id === selectedWorkId) ?? null,
     [tableRows, selectedWorkId],
   );
+  if (selectedWorkId && !selectedWork && !currentRouteRequest) {
+    setSelectedWorkId(null);
+  }
+  const selectedTableMeta = selectedWork ? workMeta[selectedWork.id] : undefined;
+  const selectedRuntimeMetaVersion = selectedTableMeta
+    ? [
+        librarySnapshotRevision,
+        selectedTableMeta.annotations,
+        selectedTableMeta.pdfs,
+        selectedTableMeta.sentinelTaskCount,
+        selectedTableMeta.sentinelStatus ?? "",
+        selectedTableMeta.sentinelState ?? "",
+      ].join("\u0000")
+    : `${librarySnapshotRevision}\u0000missing`;
+  const selectedRuntimeMeta = useSelectedWorkRuntimeMeta({
+    annotationCount: selectedTableMeta?.annotations ?? 0,
+    desktopRuntime: isDesktopRuntime(),
+    load: loadLibraryWorkRuntimeMeta,
+    previewMeta: selectedWork ? (PREVIEW_RUNTIME_META[selectedWork.id] ?? null) : null,
+    runtimeVersion: selectedRuntimeMetaVersion,
+    tableMeta: selectedTableMeta,
+    workId: selectedWork?.id ?? null,
+  });
+  const selectedMeta = selectedRuntimeMeta.meta;
   const editingPreviewWork = useMemo(() => {
     if (!editingMetaId || isDesktopRuntime()) return null;
     return (
@@ -1632,6 +1683,7 @@ export function LibraryPage() {
         setTrashCount((current) => Math.max(0, current - restored.length));
         setTrashUndo(null);
         setSelectedIds(new Set());
+        if (restored[0]) setPage(0);
         setSelectedWorkId(restored[0]?.id ?? selectedWorkId);
         setMessage(
           count === 1 ? "已撤销移入预览回收站" : `已撤销移入预览回收站:${count} 篇文献已恢复`,
@@ -1682,91 +1734,6 @@ export function LibraryPage() {
     trashUndo,
   ]);
 
-  useEffect(() => {
-    const pendingRequestedWorkId = pendingRequestedWorkIdRef.current;
-    if (tableRows.length === 0) {
-      if (pendingRequestedWorkId) {
-        if (pendingRequestedWorkNeedsFreshRowsRef.current) return;
-        pendingRequestedWorkIdRef.current = null;
-        if (lastUnavailableRequestedWorkIdRef.current !== pendingRequestedWorkId) {
-          lastUnavailableRequestedWorkIdRef.current = pendingRequestedWorkId;
-          setMessage("没有找到要定位的文献，可能已被删除或来自另一个资料库");
-        }
-        setPage(0);
-      }
-      setSelectedWorkId(null);
-      return;
-    }
-    if (pendingRequestedWorkId) {
-      const targetIndex = tableRows.findIndex((w) => w.id === pendingRequestedWorkId);
-      if (targetIndex >= 0) {
-        setSelectedWorkId(pendingRequestedWorkId);
-        setPage(Math.floor(targetIndex / PAGE_SIZE));
-        pendingRequestedWorkIdRef.current = null;
-        pendingRequestedWorkNeedsFreshRowsRef.current = false;
-        lastUnavailableRequestedWorkIdRef.current = null;
-        return;
-      }
-      if (pendingRequestedWorkNeedsFreshRowsRef.current) return;
-      pendingRequestedWorkIdRef.current = null;
-      if (lastUnavailableRequestedWorkIdRef.current !== pendingRequestedWorkId) {
-        lastUnavailableRequestedWorkIdRef.current = pendingRequestedWorkId;
-        setMessage("没有找到要定位的文献，可能已被删除或来自另一个资料库");
-      }
-      setPage(0);
-    }
-    if (selectedWorkId && !tableRows.some((w) => w.id === selectedWorkId)) {
-      setSelectedWorkId(null);
-    }
-  }, [tableRows, selectedWorkId]);
-
-  useEffect(() => {
-    if (!selectedWorkId || tableRows.length === 0) return;
-    const selectedIndex = tableRows.findIndex((w) => w.id === selectedWorkId);
-    if (selectedIndex < 0) return;
-    const selectedPage = Math.floor(selectedIndex / PAGE_SIZE);
-    if (selectedPage !== safePage) setPage(selectedPage);
-  }, [safePage, selectedWorkId, tableRows]);
-
-  useEffect(() => {
-    if (!selectedWork) {
-      setSelectedMeta(null);
-      return;
-    }
-    if (!isDesktopRuntime()) {
-      const previewMeta = PREVIEW_RUNTIME_META[selectedWork.id] ?? null;
-      const tableMeta = workMeta[selectedWork.id];
-      setSelectedMeta(
-        previewMeta
-          ? {
-              ...previewMeta,
-              sentinelTaskCount: tableMeta?.sentinelTaskCount ?? previewMeta.sentinelTaskCount,
-              sentinelStatus: tableMeta?.sentinelStatus ?? previewMeta.sentinelStatus,
-              sentinelState: tableMeta?.sentinelState ?? previewMeta.sentinelState,
-            }
-          : null,
-      );
-      return;
-    }
-    const seq = selectedMetaSeqRef.current + 1;
-    selectedMetaSeqRef.current = seq;
-    let cancelled = false;
-    void (async () => {
-      const runtimeMeta = await loadLibraryWorkRuntimeMeta(
-        selectedWork.id,
-        workMeta[selectedWork.id]?.annotations ?? 0,
-      );
-      if (cancelled || selectedMetaSeqRef.current !== seq) return;
-      setSelectedMeta(runtimeMeta);
-    })().catch(() => {
-      if (!cancelled && selectedMetaSeqRef.current === seq) setSelectedMeta(null);
-    });
-    return () => {
-      cancelled = true;
-      selectedMetaSeqRef.current += 1;
-    };
-  }, [selectedWork, workMeta]);
-
   // Reset to first page whenever the filtered set changes shape.
   useEffect(() => {
     if (skipNextPageResetRef.current) {
@@ -1776,22 +1743,28 @@ export function LibraryPage() {
     setPage(0);
   }, [activeFilter, activeSource, activeTag, activeCollection, extraFilter, search, sortMode]);
 
-  const selectWork = useCallback((work: WorkWithAuthors) => {
-    setSelectedWorkId(work.id);
-    if (window.matchMedia("(max-width: 760px)").matches) {
-      requestAnimationFrame(() => {
-        contextPanelRef.current?.scrollIntoView({
-          block: "start",
-          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-            ? "auto"
-            : "smooth",
+  const selectWork = useCallback(
+    (work: WorkWithAuthors) => {
+      cancelCurrentRouteRequest();
+      setSelectedWorkId(work.id);
+      if (window.matchMedia("(max-width: 760px)").matches) {
+        requestAnimationFrame(() => {
+          contextPanelRef.current?.scrollIntoView({
+            block: "start",
+            behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+              ? "auto"
+              : "smooth",
+          });
         });
-      });
-    }
-  }, []);
+      }
+    },
+    [cancelCurrentRouteRequest],
+  );
 
   const closeSelectedWork = useCallback(() => {
+    cancelCurrentRouteRequest();
     const closingWorkId = selectedWorkId;
+    setPage(safePage);
     setSelectedWorkId(null);
     if (!closingWorkId) return;
     requestAnimationFrame(() => {
@@ -1800,7 +1773,7 @@ export function LibraryPage() {
       );
       row?.focus({ preventScroll: true });
     });
-  }, [selectedWorkId]);
+  }, [cancelCurrentRouteRequest, safePage, selectedWorkId, setPage, setSelectedWorkId]);
 
   const openReader = useCallback(
     (work: WorkWithAuthors) => {
@@ -1851,21 +1824,26 @@ export function LibraryPage() {
       const clamped = Math.min(Math.max(nextIndex, 0), pagedRows.length - 1);
       const next = pagedRows[clamped];
       if (!next || clamped === index) return;
+      cancelCurrentRouteRequest();
       setSelectedWorkId(next.id);
       focusPagedRow(clamped);
     },
-    [focusPagedRow, pagedRows],
+    [cancelCurrentRouteRequest, focusPagedRow, pagedRows],
   );
 
   // --- Multi-select & bulk operations -------------------------------------
-  const toggleRowSelected = useCallback((workId: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(workId)) next.delete(workId);
-      else next.add(workId);
-      return next;
-    });
-  }, []);
+  const toggleRowSelected = useCallback(
+    (workId: string) => {
+      cancelCurrentRouteRequest();
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(workId)) next.delete(workId);
+        else next.add(workId);
+        return next;
+      });
+    },
+    [cancelCurrentRouteRequest],
+  );
 
   const handleRowKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>, work: WorkWithAuthors, index: number) => {
@@ -2124,6 +2102,7 @@ export function LibraryPage() {
           setTrashCount((current) => Math.max(0, current - restored.length));
           setTrashUndo((current) => reconcileTrashUndo(current, workIds));
           setSelectedIds(new Set());
+          if (restored[0]) setPage(0);
           setSelectedWorkId(restored[0]?.id ?? selectedWorkId);
           setMessage(`已从预览回收站恢复 ${restored.length} 篇文献`);
           return;
@@ -2493,7 +2472,7 @@ export function LibraryPage() {
     setActiveSource(null);
     setExtraFilter(null);
     setSelectedIds(new Set());
-  }, [setActiveCollection, setActiveFilter]);
+  }, [setActiveCollection, setActiveFilter, setActiveSource, setActiveTag, setExtraFilter]);
 
   const openBreadcrumbCollection = useCallback(
     (collectionId: string) => {
@@ -2504,7 +2483,7 @@ export function LibraryPage() {
       setExtraFilter(null);
       setSelectedIds(new Set());
     },
-    [setActiveCollection, setActiveFilter],
+    [setActiveCollection, setActiveFilter, setActiveSource, setActiveTag, setExtraFilter],
   );
 
   const activateManagedCollection = useCallback(
@@ -2518,7 +2497,7 @@ export function LibraryPage() {
         setExtraFilter(null);
       }
     },
-    [setActiveCollection, setActiveFilter],
+    [setActiveCollection, setActiveFilter, setActiveSource, setActiveTag, setExtraFilter],
   );
 
   const clearManagedActiveCollection = useCallback(() => {
@@ -2547,7 +2526,15 @@ export function LibraryPage() {
       setExtraFilter(null);
       setSelectedIds(new Set());
     },
-    [clearLibraryView, openBreadcrumbCollection, setActiveCollection, setActiveFilter],
+    [
+      clearLibraryView,
+      openBreadcrumbCollection,
+      setActiveCollection,
+      setActiveFilter,
+      setActiveSource,
+      setActiveTag,
+      setExtraFilter,
+    ],
   );
 
   const clearInlineSearch = useCallback(() => {
@@ -2746,7 +2733,6 @@ export function LibraryPage() {
           }`}
           message={visibleNoticeMessage}
           onDismiss={() => {
-            setMessageLeaving(false);
             if (!message || message === trashUndo.message) setTrashUndo(null);
             setMessage(null);
           }}
@@ -2769,10 +2755,7 @@ export function LibraryPage() {
             messageLeaving ? "library-command__message--leaving" : ""
           }`}
           message={message}
-          onDismiss={() => {
-            setMessageLeaving(false);
-            setMessage(null);
-          }}
+          onDismiss={() => setMessage(null)}
         />
       )}
 
@@ -2783,10 +2766,7 @@ export function LibraryPage() {
           isTrashView={isTrashView}
           onAddTag={bulkAddTag}
           onAddToProject={() =>
-            addWorksToProject(
-              actionableSelectedIds,
-              `${actionableSelectedIds.length} 篇已选文献`,
-            )
+            addWorksToProject(actionableSelectedIds, `${actionableSelectedIds.length} 篇已选文献`)
           }
           onClear={() => setSelectedIds(new Set())}
           onCopyBibliography={handleCopyBibliography}
@@ -3042,6 +3022,7 @@ export function LibraryPage() {
                     aria-checked={pageSomeSelected ? "mixed" : pageAllSelected}
                     checked={pageAllSelected}
                     onChange={(e) => {
+                      cancelCurrentRouteRequest();
                       setSelectedIds((prev) => {
                         const next = new Set(prev);
                         if (e.target.checked) pagedRows.forEach((w) => next.add(w.id));
@@ -3134,7 +3115,11 @@ export function LibraryPage() {
                     className="library-filter-button"
                     type="button"
                     disabled={safePage <= 0}
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    onClick={() => {
+                      cancelCurrentRouteRequest();
+                      setSelectedWorkId(null);
+                      setPage(Math.max(0, safePage - 1));
+                    }}
                   >
                     上一页
                   </button>
@@ -3145,7 +3130,11 @@ export function LibraryPage() {
                     className="library-filter-button"
                     type="button"
                     disabled={safePage >= pageCount - 1}
-                    onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                    onClick={() => {
+                      cancelCurrentRouteRequest();
+                      setSelectedWorkId(null);
+                      setPage(Math.min(pageCount - 1, safePage + 1));
+                    }}
                   >
                     下一页
                   </button>
@@ -3170,6 +3159,7 @@ export function LibraryPage() {
               key={selectedWork.id}
               work={selectedWork}
               meta={selectedMeta}
+              metaStatus={selectedRuntimeMeta.status}
               tableMeta={workMeta[selectedWork.id]}
               isTrashView={isTrashView}
               attachingPdf={attachingPdf}
@@ -3191,9 +3181,7 @@ export function LibraryPage() {
               onAddToCanvas={() =>
                 void openInCanvas({ workId: selectedWork.id, sourceLabel: selectedWork.title })
               }
-              onAddToProject={() =>
-                addWorksToProject([selectedWork.id], selectedWork.title)
-              }
+              onAddToProject={() => addWorksToProject([selectedWork.id], selectedWork.title)}
               onOpenCanvas={() =>
                 void openInCanvas({ workId: selectedWork.id, sourceLabel: selectedWork.title })
               }

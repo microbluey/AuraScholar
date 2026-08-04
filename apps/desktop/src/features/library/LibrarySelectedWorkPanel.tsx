@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge, Button } from "@aurascholar/ui";
 import type { ReadingStatus, WorkWithAuthors } from "@aurascholar/db";
 import type { WorkRuntimeMeta, WorkTableMeta } from "../../services/library-page-data";
+import type { SelectedWorkRuntimeMetaStatus } from "./useSelectedWorkRuntimeMeta";
 import {
   formatAttachmentSize,
   formatAttachmentSource,
@@ -22,6 +23,7 @@ type DetailPanelTab = "overview" | "notes" | "related";
 export interface LibrarySelectedWorkPanelProps {
   work: WorkWithAuthors | null;
   meta: WorkRuntimeMeta | null;
+  metaStatus: SelectedWorkRuntimeMetaStatus;
   tableMeta?: WorkTableMeta;
   isTrashView: boolean;
   attachingPdf: boolean;
@@ -49,6 +51,7 @@ export interface LibrarySelectedWorkPanelProps {
 export function LibrarySelectedWorkPanel({
   work,
   meta,
+  metaStatus,
   tableMeta,
   isTrashView,
   attachingPdf,
@@ -97,6 +100,7 @@ export function LibrarySelectedWorkPanel({
       <LibraryTrashWorkPanel
         work={work}
         meta={meta}
+        metaStatus={metaStatus}
         tableMeta={tableMeta}
         workActionBusy={workActionBusy}
         onRestoreWork={onRestoreWork}
@@ -276,7 +280,11 @@ export function LibrarySelectedWorkPanel({
                   )}
                 </div>
               </div>
-              {!meta ? (
+              {metaStatus === "error" ? (
+                <div className="library-fulltext-empty" role="status">
+                  全文信息暂时无法读取，请刷新后重试。
+                </div>
+              ) : !meta ? (
                 <div className="library-fulltext-empty" aria-live="polite">
                   正在读取全文信息...
                 </div>
@@ -305,11 +313,21 @@ export function LibrarySelectedWorkPanel({
               </div>
               <LibraryStatusLine
                 label="批注"
-                value={meta ? `${meta.annotationCount} 条` : "读取中"}
+                value={
+                  metaStatus === "error"
+                    ? "读取失败"
+                    : meta
+                      ? `${meta.annotationCount} 条`
+                      : "读取中"
+                }
                 variant={meta?.annotationCount ? "success" : "neutral"}
               />
               <LibraryStatusLine label="空间白板" value="可作为文献卡加入" variant="neutral" />
-              <LibraryStatusLine label="研究项目" value="可加入一个或多个研究范围" variant="neutral" />
+              <LibraryStatusLine
+                label="研究项目"
+                value="可加入一个或多个研究范围"
+                variant="neutral"
+              />
             </section>
             <section className="library-inspector__section library-inspector__section--danger">
               <button
@@ -327,7 +345,11 @@ export function LibrarySelectedWorkPanel({
 
         {activePanelTab === "notes" && (
           <>
-            <LibraryWorkNotesPanel meta={meta} onOpenReader={onOpenReader} />
+            <LibraryWorkNotesPanel
+              meta={meta}
+              metaStatus={metaStatus}
+              onOpenReader={onOpenReader}
+            />
             <section className="library-inspector__section">
               <div className="library-panel-heading">
                 <h3>空间白板</h3>

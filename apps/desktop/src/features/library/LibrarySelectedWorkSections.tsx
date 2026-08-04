@@ -1,6 +1,7 @@
 import { Badge, Button } from "@aurascholar/ui";
 import type { WorkWithAuthors } from "@aurascholar/db";
 import type { WorkRuntimeMeta, WorkTableMeta } from "../../services/library-page-data";
+import type { SelectedWorkRuntimeMetaStatus } from "./useSelectedWorkRuntimeMeta";
 import {
   annotationTypeLabel,
   formatLibraryDateTime,
@@ -13,6 +14,7 @@ export type LibraryWorkAction = "merge" | "purge" | "restore" | "trash";
 export function LibraryTrashWorkPanel({
   work,
   meta,
+  metaStatus,
   tableMeta,
   workActionBusy,
   onRestoreWork,
@@ -21,6 +23,7 @@ export function LibraryTrashWorkPanel({
 }: {
   work: WorkWithAuthors;
   meta: WorkRuntimeMeta | null;
+  metaStatus: SelectedWorkRuntimeMetaStatus;
   tableMeta?: WorkTableMeta;
   workActionBusy: LibraryWorkAction | null;
   onRestoreWork: () => void;
@@ -113,7 +116,15 @@ export function LibraryTrashWorkPanel({
         <LibraryStatusLine label="题录来源" value={sourceText} variant="neutral" />
         <LibraryStatusLine
           label="PDF 附件"
-          value={meta ? (meta.pdfCount ? `${meta.pdfCount} 个` : "无") : "读取中"}
+          value={
+            metaStatus === "error"
+              ? "读取失败"
+              : meta
+                ? meta.pdfCount
+                  ? `${meta.pdfCount} 个`
+                  : "无"
+                : "读取中"
+          }
           variant={meta?.pdfCount ? "success" : "neutral"}
         />
         <p className="library-preview-copy">{work.abstract || "暂无摘要。"}</p>
@@ -124,9 +135,11 @@ export function LibraryTrashWorkPanel({
 
 export function LibraryWorkNotesPanel({
   meta,
+  metaStatus,
   onOpenReader,
 }: {
   meta: WorkRuntimeMeta | null;
+  metaStatus: SelectedWorkRuntimeMetaStatus;
   onOpenReader: () => void;
 }) {
   const notes = meta?.notePreviews ?? [];
@@ -140,7 +153,7 @@ export function LibraryWorkNotesPanel({
       </div>
       <LibraryStatusLine
         label="总数"
-        value={meta ? `${meta.annotationCount} 条` : "读取中"}
+        value={metaStatus === "error" ? "读取失败" : meta ? `${meta.annotationCount} 条` : "读取中"}
         variant={meta?.annotationCount ? "success" : "neutral"}
       />
       {notes.length > 0 ? (
@@ -159,7 +172,11 @@ export function LibraryWorkNotesPanel({
         </div>
       ) : (
         <p className="library-panel-empty">
-          {meta ? "暂无笔记。进入阅读器后可以高亮、批注和整理摘录。" : "正在读取笔记…"}
+          {metaStatus === "error"
+            ? "笔记暂时无法读取，请刷新后重试。"
+            : meta
+              ? "暂无笔记。进入阅读器后可以高亮、批注和整理摘录。"
+              : "正在读取笔记…"}
         </p>
       )}
     </section>
