@@ -6,6 +6,11 @@ const MAX_RECORD_ID_LENGTH = 512;
 export const MAX_LIBRARY_ORGANIZATION_UNDO_WORK_IDS = 20_000;
 
 export interface DataCommandDependencies {
+  /**
+   * Serial read-only access for command-internal lookups. Unlike `execute`,
+   * this is intentionally not constrained to the public IPC result shape.
+   */
+  inspect?<T>(operation: (database: Database) => T | Promise<T>): Promise<T>;
   execute?<K extends DataCommandName>(
     commandName: K,
     operation: (

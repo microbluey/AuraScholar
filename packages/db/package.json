@@ -32,6 +32,10 @@
       "types": "./dist/work-list.d.ts",
       "default": "./dist/work-list.js"
     },
+    "./knowledge-worker": {
+      "types": "./dist/knowledge-worker.d.ts",
+      "default": "./dist/knowledge-worker.js"
+    },
     "./repos/annotations": {
       "types": "./dist/repos/annotations.d.ts",
       "default": "./dist/repos/annotations.js"
@@ -51,6 +55,10 @@
     "./repos/evidence-inbox": {
       "types": "./dist/repos/evidence-inbox.d.ts",
       "default": "./dist/repos/evidence-inbox.js"
+    },
+    "./repos/knowledge": {
+      "types": "./dist/repos/knowledge.d.ts",
+      "default": "./dist/repos/knowledge.js"
     },
     "./repos/collections": {
       "types": "./dist/repos/collections.d.ts",

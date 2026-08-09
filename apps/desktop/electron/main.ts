@@ -8,6 +8,8 @@ import { openExternalUrl, registerPlatformHandlers } from "./main/platform";
 import { registerDbHandlers } from "./main/db";
 import { registerDataCommandHandlers } from "./main/data-commands";
 import { registerEvidenceSourceRecoveryHandlers } from "./main/evidence-source-recovery";
+import { registerEmbeddingArtifactHandlers } from "./main/embedding-artifact-commands";
+import { knowledgeOutboxDispatcher } from "./main/knowledge-outbox-dispatcher";
 import { initResearchBrowser, registerResearchHandlers } from "./main/research-browser";
 import { startCitationBridge, citationBridgePort } from "./main/citation-bridge";
 
@@ -84,6 +86,8 @@ if (!hasSingleInstanceLock) {
     registerDbHandlers();
     registerDataCommandHandlers();
     registerEvidenceSourceRecoveryHandlers();
+    registerEmbeddingArtifactHandlers();
+    knowledgeOutboxDispatcher.start();
     registerResearchHandlers();
     registerCloseLifecycleHandlers();
     handle(CH.citationBridgePort, () => citationBridgePort());
@@ -99,6 +103,10 @@ if (!hasSingleInstanceLock) {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  knowledgeOutboxDispatcher.stop();
 });
 
 function focusPrimaryWindow(): void {

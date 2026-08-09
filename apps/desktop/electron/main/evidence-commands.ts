@@ -1,5 +1,8 @@
 import type { Database } from "@aurascholar/db";
-import { DocumentAssetsRepo } from "@aurascholar/db/repos/document-assets";
+import {
+  DocumentAssetsRepo,
+  type AttachmentRevisionSource,
+} from "@aurascholar/db/repos/document-assets";
 import {
   EvidenceRepo,
   type EvidenceKind,
@@ -12,6 +15,7 @@ import type {
   DocumentRevisionCommandInput,
   EvidenceCommandInput,
   ListEvidenceCommandInput,
+  ResolveDocumentRevisionCommandInput,
   SaveTextEvidenceCommandInput,
 } from "../data-command-contract";
 import {
@@ -24,6 +28,7 @@ import {
 
 type EvidenceCommandName =
   | "document.resolveAttachmentRevision"
+  | "document.resolveRevision"
   | "evidence.get"
   | "evidence.list"
   | "evidence.saveText";
@@ -54,17 +59,23 @@ export async function executeEvidenceCommand(
           throw new Error("Document revision changed; reopen the source before continuing");
         }
         return {
-          revision: {
-            assetId: source.asset_id,
-            attachmentId: source.attachment_id,
-            availabilityStatus: source.availability_status,
-            blobSha256: source.blob_sha256,
-            currentRevisionId: source.current_revision_id,
-            pageCount: source.page_count,
-            revisionId: source.id,
-            revisionNo: source.revision_no,
-            workId: source.work_id,
-          },
+          revision: toResolvedDocumentRevision(source),
+        };
+      });
+    }
+    case "document.resolveRevision": {
+      const input = parseResolveDocumentRevisionInput(request.input);
+      return executeQuery(dependencies, request.name, async (database) => {
+        await assertActiveLocalLibrary(database, input.libraryId);
+        const source = await new DocumentAssetsRepo(database, input.libraryId).resolveRevision(
+          input.revisionId,
+        );
+        if (!source) return { revision: null };
+        if (source.work_id !== input.workId) {
+          throw new Error("Document revision does not belong to the requested Work");
+        }
+        return {
+          revision: toResolvedDocumentRevision(source),
         };
       });
     }
@@ -156,6 +167,29 @@ function parseDocumentRevisionInput(value: unknown): DocumentRevisionCommandInpu
     workId: requireRecordId(value.workId, "Work id"),
     attachmentId: requireRecordId(value.attachmentId, "Attachment id"),
     ...(expectedBlobSha256 ? { expectedBlobSha256 } : {}),
+  };
+}
+
+function parseResolveDocumentRevisionInput(value: unknown): ResolveDocumentRevisionCommandInput {
+  if (!isRecord(value)) throw new Error("Invalid document.resolveRevision input");
+  return {
+    libraryId: requireRecordId(value.libraryId, "Library id"),
+    revisionId: requireRecordId(value.revisionId, "Document revision id"),
+    workId: requireRecordId(value.workId, "Work id"),
+  };
+}
+
+function toResolvedDocumentRevision(source: AttachmentRevisionSource) {
+  return {
+    assetId: source.asset_id,
+    attachmentId: source.attachment_id,
+    availabilityStatus: source.availability_status,
+    blobSha256: source.blob_sha256,
+    currentRevisionId: source.current_revision_id,
+    pageCount: source.page_count,
+    revisionId: source.id,
+    revisionNo: source.revision_no,
+    workId: source.work_id,
   };
 }
 

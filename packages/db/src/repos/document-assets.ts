@@ -1,6 +1,7 @@
 import type { Database } from "../database.js";
 import { newId } from "../ids.js";
 import { withDatabaseSavepoint } from "../savepoint.js";
+import { appendKnowledgeChangeInTransaction } from "./knowledge.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
 
 export type DocumentAssetKind =
@@ -199,7 +200,18 @@ export class DocumentAssetsRepo {
           );
           if (changed !== 1) throw new Error("Document asset changed while adding a revision");
         }
-        return this.requireRevision(id, { includeDeleted: false });
+        const revision = await this.requireRevision(id, { includeDeleted: false });
+        await appendKnowledgeChangeInTransaction(this.db, {
+          libraryId: this.libraryId,
+          sourceType: "revision",
+          sourceId: revision.id,
+          changeKind: "upsert",
+          expectedRevisionId: revision.id,
+          expectedContentHash: isCanonicalSha256(revision.blob_sha256)
+            ? revision.blob_sha256
+            : null,
+        });
+        return revision;
       }),
     );
   }
@@ -209,6 +221,28 @@ export class DocumentAssetsRepo {
     options: { includeDeleted?: boolean } = {},
   ): Promise<AttachmentRevisionSource | null> {
     assertId(attachmentId, "Attachment id");
+    return this.resolveAttachedRevision("attachment", attachmentId, options);
+  }
+
+  /**
+   * Resolves the concrete attachment that owns an immutable document revision.
+   * This is intentionally the inverse of resolveAttachment(): deep links must
+   * never substitute the current revision for a historical source anchor.
+   */
+  async resolveRevision(
+    revisionId: string,
+    options: { includeDeleted?: boolean } = {},
+  ): Promise<AttachmentRevisionSource | null> {
+    assertId(revisionId, "Document revision id");
+    return this.resolveAttachedRevision("revision", revisionId, options);
+  }
+
+  private async resolveAttachedRevision(
+    selector: "attachment" | "revision",
+    id: string,
+    options: { includeDeleted?: boolean },
+  ): Promise<AttachmentRevisionSource | null> {
+    const selectorColumn = selector === "attachment" ? "attachment.id" : "revision.id";
     const rows = await this.db.query<AttachmentRevisionSource>(
       `SELECT revision.*, asset.library_id, asset.work_id,
               attachment.page_count, attachment.sha256 AS attachment_sha256,
@@ -220,9 +254,9 @@ export class DocumentAssetsRepo {
        JOIN document_assets asset ON asset.id = revision.asset_id
        JOIN attachments attachment ON attachment.id = revision.attachment_id
        JOIN works work ON work.id = attachment.work_id AND work.id = asset.work_id
-       WHERE attachment.id = ?
+       WHERE ${selectorColumn} = ?
        LIMIT 1`,
-      [attachmentId],
+      [id],
     );
     const source = rows[0];
     if (!source) return null;
@@ -396,4 +430,8 @@ function validateRevisionInput(input: CreateDocumentRevisionInput): void {
 
 function assertId(value: string, label: string): void {
   if (!value.trim()) throw new Error(`${label} must be a non-empty string`);
+}
+
+function isCanonicalSha256(value: string): boolean {
+  return /^[0-9a-f]{64}$/.test(value);
 }

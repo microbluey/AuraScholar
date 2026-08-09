@@ -10,6 +10,7 @@
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
+import { appendPdfAnchoringText, isPdfTextItem } from "@aurascholar/knowledge";
 
 export interface PageTextIndex {
   /** Normalized page text used for anchoring. */
@@ -112,13 +113,10 @@ export class PdfDocument {
     const items: PageTextIndex["items"] = [];
 
     for (const item of content.items) {
-      if (!("str" in item)) continue;
+      if (!isPdfTextItem(item)) continue;
       const textItem = item as TextItem;
       items.push({ textStart: text.length, item: textItem });
-      text += textItem.str;
-      // pdf.js marks explicit line/paragraph breaks; normalize to single space
-      // so quotes survive different line-breaking between extractions.
-      if (textItem.hasEOL) text += " ";
+      text = appendPdfAnchoringText(text, textItem);
     }
 
     const index: PageTextIndex = { text, items };

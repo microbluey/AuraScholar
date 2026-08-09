@@ -27,6 +27,9 @@ import { executeLibraryTagCommand } from "./library-tag-commands";
 import { executeResearchProjectCommand } from "./research-project-commands";
 import { executeEvidenceCommand } from "./evidence-commands";
 import { executeEvidenceInboxCommand } from "./evidence-inbox-commands";
+import { executeKnowledgeCommand } from "./knowledge-commands";
+import { localSemanticIndexService } from "./local-semantic-index-runtime";
+import { localSemanticSearchService } from "./local-semantic-search-runtime";
 import { executeSavedSearchCommand } from "./saved-search-commands";
 import { executeSentinelCommand } from "./sentinel-commands";
 import {
@@ -46,6 +49,7 @@ const PROVIDER_SCOPE_PATTERN = /^webdav-[a-z0-9]{14}$/;
 export type { DataCommandDependencies } from "./data-command-runtime";
 
 const defaultDependencies: DataCommandDependencies = {
+  inspect: (operation) => withMainDatabase(operation),
   execute: (_commandName, operation) => withMainDatabase(operation),
   getDeviceId: getStableDeviceId,
   transaction: withMainDatabaseTransaction,
@@ -62,6 +66,7 @@ export async function executeDataCommand(
   const envelope = parseEnvelope(request);
   switch (envelope.name) {
     case "document.resolveAttachmentRevision":
+    case "document.resolveRevision":
     case "evidence.get":
     case "evidence.list":
     case "evidence.saveText":
@@ -72,6 +77,14 @@ export async function executeDataCommand(
     case "evidence.softDelete":
     case "evidence.restore":
       return executeEvidenceInboxCommand(envelope, dependencies);
+    case "knowledge.buildSemanticIndex":
+    case "knowledge.getContentStats":
+    case "knowledge.getSemanticIndexStatus":
+    case "knowledge.searchContent":
+      return executeKnowledgeCommand(envelope, dependencies, {
+        semanticIndex: localSemanticIndexService,
+        semanticSearch: localSemanticSearchService,
+      });
     case "library.addTagToWorks":
     case "library.createTag":
     case "library.deleteTag":
@@ -224,6 +237,7 @@ function parseEnvelope(value: unknown): DataCommandRequest {
   if (
     value.name !== "library.addTagToWorks" &&
     value.name !== "document.resolveAttachmentRevision" &&
+    value.name !== "document.resolveRevision" &&
     value.name !== "evidence.get" &&
     value.name !== "evidence.list" &&
     value.name !== "evidence.search" &&
@@ -232,6 +246,10 @@ function parseEnvelope(value: unknown): DataCommandRequest {
     value.name !== "evidence.softDelete" &&
     value.name !== "evidence.restore" &&
     value.name !== "evidence.saveText" &&
+    value.name !== "knowledge.buildSemanticIndex" &&
+    value.name !== "knowledge.getContentStats" &&
+    value.name !== "knowledge.getSemanticIndexStatus" &&
+    value.name !== "knowledge.searchContent" &&
     value.name !== "library.createCollection" &&
     value.name !== "library.createTag" &&
     value.name !== "library.deleteCollection" &&

@@ -1,6 +1,7 @@
 import type { Database } from "../database.js";
 import { newId, projectEvidenceMembershipId } from "../ids.js";
 import { withDatabaseSavepoint } from "../savepoint.js";
+import { appendKnowledgeChangeInTransaction } from "./knowledge.js";
 import {
   assertAnnotationEvidenceSource,
   matchesProvenance,
@@ -198,6 +199,14 @@ export class EvidenceRepo {
             now,
           ],
         );
+        await appendKnowledgeChangeInTransaction(this.db, {
+          libraryId: this.libraryId,
+          sourceType: "evidence",
+          sourceId: id,
+          changeKind: "upsert",
+          expectedRevisionId: source.revision_id,
+          expectedContentHash: contentHash,
+        });
         const evidence = await this.get(id);
         if (!evidence) throw new Error(`Evidence ${id} was not readable after creation`);
         return { evidence, created: true };
@@ -308,20 +317,30 @@ export class EvidenceRepo {
     restore: boolean,
   ): Promise<void> {
     assertId(evidenceId, "Evidence id");
-    return withDatabaseWriteLock(this.db, async () => {
-      const current = await this.get(evidenceId, { includeDeleted: true });
-      if (!current || current.updatedAt !== expectedUpdatedAt) {
-        throw new Error("Evidence changed; reload it before updating");
-      }
-      const now = Math.max(Date.now(), current.updatedAt + 1);
-      const changed = await this.db.run(
-        `UPDATE evidence_items SET deleted_at = ?, updated_at = ?
-         WHERE id = ? AND library_id = ? AND updated_at = ?
-           AND deleted_at IS ${restore ? "NOT NULL" : "NULL"}`,
-        [restore ? null : now, now, evidenceId, this.libraryId, expectedUpdatedAt],
-      );
-      if (changed !== 1) throw new Error("Evidence changed; reload it before updating");
-    });
+    return withDatabaseWriteLock(this.db, () =>
+      withDatabaseSavepoint(this.db, "evidence_tombstone", async () => {
+        const current = await this.get(evidenceId, { includeDeleted: true });
+        if (!current || current.updatedAt !== expectedUpdatedAt) {
+          throw new Error("Evidence changed; reload it before updating");
+        }
+        const now = Math.max(Date.now(), current.updatedAt + 1);
+        const changed = await this.db.run(
+          `UPDATE evidence_items SET deleted_at = ?, updated_at = ?
+           WHERE id = ? AND library_id = ? AND updated_at = ?
+             AND deleted_at IS ${restore ? "NOT NULL" : "NULL"}`,
+          [restore ? null : now, now, evidenceId, this.libraryId, expectedUpdatedAt],
+        );
+        if (changed !== 1) throw new Error("Evidence changed; reload it before updating");
+        await appendKnowledgeChangeInTransaction(this.db, {
+          libraryId: this.libraryId,
+          sourceType: "evidence",
+          sourceId: evidenceId,
+          changeKind: restore ? "upsert" : "delete",
+          expectedRevisionId: current.revisionId,
+          expectedContentHash: current.sourceContentHash,
+        });
+      }),
+    );
   }
 
   private async resolveCurrentSource(

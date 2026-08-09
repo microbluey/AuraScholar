@@ -31,6 +31,7 @@ import {
   saveBackupSafetySnapshot,
   type BackupSafetySnapshot,
 } from "../features/settings/backup-safety";
+import { LocalEmbeddingModelCard } from "../features/settings/LocalEmbeddingModelCard";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { describeSafeError } from "../services/sensitive-text";
 import { LIBRARY_BACKUP_VERSION } from "../shared/library-backup";
@@ -149,7 +150,7 @@ const BACKUP_FRESH_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type SettingsTargetSection = "ai" | "translate" | "sync";
-type SettingsSection = "appearance" | SettingsTargetSection;
+type SettingsSection = "appearance" | "local-model" | SettingsTargetSection;
 
 type SettingsSmokeFailureKey =
   | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_READ__"
@@ -1230,9 +1231,10 @@ export function SettingsPage() {
             <span className="settings-rail__eyebrow">设置分区</span>
             {[
               ["appearance", "01", "外观"],
-              ["ai", "02", "AI 服务"],
-              ["translate", "03", "阅读翻译"],
-              ["sync", "04", "同步与备份"],
+              ["local-model", "02", "本地语义"],
+              ["ai", "03", "AI 服务"],
+              ["translate", "04", "阅读翻译"],
+              ["sync", "05", "同步与备份"],
             ].map(([section, index, label]) => (
               <button
                 key={section}
@@ -1318,6 +1320,8 @@ export function SettingsPage() {
                 </Button>
               </div>
             </Card>
+
+            <LocalEmbeddingModelCard enabled={desktopRuntime} />
 
             <Card
               className={settingsCardClassName(

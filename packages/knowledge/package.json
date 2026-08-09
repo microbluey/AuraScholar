@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./evaluation-tools": {
+      "types": "./dist/retrieval-evaluation-tools.d.ts",
+      "default": "./dist/retrieval-evaluation-tools.js"
     }
   },
   "files": [

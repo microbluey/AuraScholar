@@ -20,6 +20,13 @@ export interface DocumentRevisionCommandInput {
   workId: string;
 }
 
+/** Resolves the exact attachment behind an immutable document revision. */
+export interface ResolveDocumentRevisionCommandInput {
+  libraryId: string;
+  revisionId: string;
+  workId: string;
+}
+
 export interface ResolvedDocumentRevisionDto {
   assetId: string;
   attachmentId: string | null;
@@ -91,6 +98,10 @@ export interface EvidenceTombstoneCommandInput extends EvidenceCommandInput {
 export interface EvidenceDataCommandMap {
   "document.resolveAttachmentRevision": {
     input: DocumentRevisionCommandInput;
+    output: { revision: ResolvedDocumentRevisionDto | null };
+  };
+  "document.resolveRevision": {
+    input: ResolveDocumentRevisionCommandInput;
     output: { revision: ResolvedDocumentRevisionDto | null };
   };
   "evidence.get": {

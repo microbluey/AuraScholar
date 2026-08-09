@@ -19,6 +19,13 @@ export {
 } from "./local-first.js";
 export type { LocalFirstState, EnsureLocalFirstOptions } from "./local-first.js";
 export type { Database } from "./database.js";
+export { KnowledgeJobWorker } from "./knowledge-worker.js";
+export type {
+  KnowledgeJobExecutor,
+  KnowledgeJobQueue,
+  KnowledgeJobWorkerOptions,
+  KnowledgeJobWorkerResult,
+} from "./knowledge-worker.js";
 export { WorksRepo } from "./repos/works.js";
 export type {
   WorkInput,
@@ -64,6 +71,68 @@ export type {
   SearchEvidenceInput,
   SearchEvidenceResult,
 } from "./repos/evidence-inbox.js";
+export {
+  CONTENT_UNIT_SOURCE_TYPES,
+  CONTENT_UNIT_STATES,
+  KNOWLEDGE_CHANGE_KINDS,
+  KNOWLEDGE_CHANGE_SOURCE_TYPES,
+  KNOWLEDGE_JOB_KINDS,
+  KNOWLEDGE_JOB_STATUSES,
+  ContentUnitSearchRepo,
+  ContentUnitsRepo,
+  KnowledgeChangesRepo,
+  KnowledgeJobsRepo,
+  appendKnowledgeChangeInTransaction,
+  knowledgeJobRetryDelayMs,
+  summarizeKnowledgeJobError,
+} from "./repos/knowledge.js";
+export type {
+  AppendKnowledgeChangeInput,
+  CancelKnowledgeJobOptions,
+  ClaimKnowledgeJobOptions,
+  ContentUnit,
+  ContentUnitIndexStats,
+  ContentUnitRow,
+  ContentUnitSearchResult,
+  ContentUnitSourceType,
+  ContentUnitState,
+  EnqueueKnowledgeJobInput,
+  FailKnowledgeJobOptions,
+  KnowledgeChangeKind,
+  KnowledgeChangeRow,
+  KnowledgeChangeSourceType,
+  KnowledgeJobKind,
+  KnowledgeJobLeaseOptions,
+  KnowledgeJobRow,
+  KnowledgeJobStatus,
+  ReplaceContentUnitsInput,
+  SearchContentUnitsInput,
+} from "./repos/knowledge.js";
+export {
+  EMBEDDING_DISTANCE_METRICS,
+  EMBEDDING_EGRESS_MODES,
+  EMBEDDING_NORMALIZATIONS,
+  KNOWLEDGE_INDEX_ENTRY_STATUSES,
+  KNOWLEDGE_INDEX_MODES,
+  KNOWLEDGE_INDEX_STATUSES,
+  EmbeddingProfilesRepo,
+  KnowledgeIndexesRepo,
+} from "./repos/knowledge-indexes.js";
+export type {
+  BeginKnowledgeIndexInput,
+  EmbeddingDistanceMetric,
+  EmbeddingEgressMode,
+  EmbeddingNormalization,
+  EmbeddingProfileInput,
+  EmbeddingProfileRow,
+  KnowledgeIndexEntryRow,
+  KnowledgeIndexEntryStatus,
+  KnowledgeIndexMode,
+  KnowledgeIndexRow,
+  KnowledgeIndexStatus,
+  MarkKnowledgeIndexVectorReadyInput,
+  PendingKnowledgeIndexEntry,
+} from "./repos/knowledge-indexes.js";
 export { FlashcardsRepo, Rating } from "./repos/flashcards.js";
 export type { FlashcardInput, FlashcardRow, DueCard } from "./repos/flashcards.js";
 export { SentinelRepo } from "./repos/sentinel.js";

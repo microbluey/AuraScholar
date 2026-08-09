@@ -25,6 +25,9 @@ import { ensureLocalLibraryIdentity } from "./local-first.js";
 import { createLibraryBoundaryTriggers } from "./migration-library-boundary-triggers.js";
 import { applyDocumentEvidenceV19 } from "./migration-document-evidence.js";
 import { applyResearchProjectsV18 } from "./migration-research-projects.js";
+import { applyKnowledgeV20 } from "./migration-knowledge.js";
+import { applyKnowledgeContentUnitsFtsV21 } from "./migration-knowledge-fts.js";
+import { applyKnowledgeIndexesV22 } from "./migration-knowledge-indexes.js";
 
 export const MIGRATIONS: Migration[] = [
   {
@@ -404,6 +407,14 @@ export const MIGRATIONS: Migration[] = [
     disableForeignKeys: true,
   },
   { version: 19, name: "document_evidence", sql: "", apply: applyDocumentEvidenceV19 },
+  { version: 20, name: "knowledge_jobs", sql: "", apply: applyKnowledgeV20 },
+  {
+    version: 21,
+    name: "knowledge_content_units_fts",
+    sql: "",
+    apply: applyKnowledgeContentUnitsFtsV21,
+  },
+  { version: 22, name: "knowledge_index_generations", sql: "", apply: applyKnowledgeIndexesV22 },
 ];
 
 async function applyLibraryOwnershipV17(db: SqlExecutor): Promise<void> {

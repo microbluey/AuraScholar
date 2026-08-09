@@ -1,6 +1,7 @@
 import type { Database } from "../database.js";
 import { documentAssetIdFromAttachment, documentRevisionIdFromAttachment, newId } from "../ids.js";
 import { withDatabaseSavepoint } from "../savepoint.js";
+import { appendKnowledgeChangeInTransaction } from "./knowledge.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
 
 export interface AttachmentInput {
@@ -54,7 +55,8 @@ export class AttachmentsRepo {
       );
       if (existing[0]) {
         return withDatabaseSavepoint(this.db, "attachment_map", async () => {
-          await this.ensureDocumentMapping(existing[0]!.id);
+          const mapping = await this.ensureDocumentMapping(existing[0]!.id);
+          if (mapping.changed) await this.appendRevisionInvalidation(mapping);
           return { id: existing[0]!.id, deduped: true };
         });
       }
@@ -80,7 +82,8 @@ export class AttachmentsRepo {
             now,
           ],
         );
-        await this.ensureDocumentMapping(id);
+        const mapping = await this.ensureDocumentMapping(id);
+        await this.appendRevisionInvalidation(mapping);
         return { id, deduped: false };
       });
     });
@@ -128,7 +131,7 @@ export class AttachmentsRepo {
     return rows[0] ?? null;
   }
 
-  private async ensureDocumentMapping(attachmentId: string): Promise<void> {
+  private async ensureDocumentMapping(attachmentId: string): Promise<DocumentMapping> {
     const rows = await this.db.query<{
       id: string;
       library_id: string;
@@ -162,6 +165,7 @@ export class AttachmentsRepo {
     // an existing historical revision. Accept that exact canonical mapping
     // instead of manufacturing a second deterministic Asset/Revision pair.
     const existingBridge = await this.db.query<{
+      id: string;
       asset_deleted_at: number | null;
       blob_sha256: string;
       byte_size: number;
@@ -169,7 +173,7 @@ export class AttachmentsRepo {
       revision_deleted_at: number | null;
       work_id: string | null;
     }>(
-      `SELECT asset.library_id, asset.work_id, asset.deleted_at AS asset_deleted_at,
+      `SELECT revision.id, asset.library_id, asset.work_id, asset.deleted_at AS asset_deleted_at,
               revision.blob_sha256, revision.byte_size,
               revision.deleted_at AS revision_deleted_at
        FROM document_revisions revision
@@ -190,7 +194,11 @@ export class AttachmentsRepo {
       ) {
         throw new Error(`Attachment ${attachment.id} has an inconsistent document revision`);
       }
-      return;
+      return {
+        revisionId: bridge.id,
+        blobSha256: bridge.blob_sha256,
+        changed: false,
+      };
     }
 
     const assetId = documentAssetIdFromAttachment(attachment.id);
@@ -269,11 +277,37 @@ export class AttachmentsRepo {
         [revisionId, Date.now(), assetId],
       );
     }
+    return {
+      revisionId,
+      blobSha256: revision.blob_sha256,
+      changed: true,
+    };
   }
+
+  private async appendRevisionInvalidation(mapping: DocumentMapping): Promise<void> {
+    await appendKnowledgeChangeInTransaction(this.db, {
+      libraryId: this.libraryId,
+      sourceType: "revision",
+      sourceId: mapping.revisionId,
+      changeKind: "upsert",
+      expectedRevisionId: mapping.revisionId,
+      expectedContentHash: isCanonicalSha256(mapping.blobSha256) ? mapping.blobSha256 : null,
+    });
+  }
+}
+
+interface DocumentMapping {
+  revisionId: string;
+  blobSha256: string;
+  changed: boolean;
 }
 
 function normalizeAssetKind(kind: string): "pdf" | "supplement" | "other" {
   if (kind === "pdf") return "pdf";
   if (kind === "supplement") return "supplement";
   return "other";
+}
+
+function isCanonicalSha256(value: string): boolean {
+  return /^[0-9a-f]{64}$/.test(value);
 }

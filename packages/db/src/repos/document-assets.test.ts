@@ -255,10 +255,7 @@ describe("DocumentAssetsRepo", () => {
       Date.now() + 60_000,
       historicalAttachment.id,
     ]);
-    await db.run(`UPDATE attachments SET created_at = ? WHERE id = ?`, [
-      1,
-      currentAttachment.id,
-    ]);
+    await db.run(`UPDATE attachments SET created_at = ? WHERE id = ?`, [1, currentAttachment.id]);
 
     expect((await attachments.forWork(work.id)).map((attachment) => attachment.id)).toEqual([
       currentAttachment.id,
@@ -434,6 +431,28 @@ describe("DocumentAssetsRepo", () => {
       }),
     ).rejects.toThrow(`Attachment ${attachment.id} is not compatible`);
     expect(await assets.resolveAttachment("attachment:missing")).toBeNull();
+  });
+
+  it("resolves an exact historical revision back to its own attachment", async () => {
+    const work = await works.upsert({ title: "Historical revision source" });
+    const attachment = await attachments.create({
+      byteSize: 128,
+      sha256: sha("b"),
+      workId: work.id,
+    });
+    const historical = await assets.resolveAttachment(attachment.id);
+    expect(historical).not.toBeNull();
+    await assets.createRevision(historical!.asset_id, {
+      blobSha256: sha("c"),
+      byteSize: 256,
+      mimeType: "application/pdf",
+    });
+
+    await expect(assets.resolveRevision(historical!.id)).resolves.toMatchObject({
+      attachment_id: attachment.id,
+      id: historical!.id,
+      work_id: work.id,
+    });
   });
 
   it("keeps asset ownership and revision source identity immutable", async () => {

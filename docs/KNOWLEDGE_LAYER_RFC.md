@@ -482,6 +482,12 @@ extractor or chunker creates parallel units; it never overwrites units still
 referenced by an active generation. Old units are collected only after the
 generation has retired and no in-flight query lease refers to it.
 
+`language` is retrieval metadata rather than an identity component. Search
+hydration prefers an explicit ContentUnit label and otherwise inherits the
+current Work language label. This lets bibliographic language corrections take
+effect without changing ContentUnit IDs or rebuilding vectors; an unknown label
+is neutral rather than guessed.
+
 An FTS5 index is built over `content_units.text`. FTS candidates join the pinned
 `knowledge_index_entries` generation and validate unit/hash state so a query
 cannot fuse G1 vectors with G2 text. Exact metadata queries use a separate
@@ -518,6 +524,29 @@ vector index. Gate 1A uses `mode = fulltext` with a null
 1B creates `mode = hybrid` generations with an EmbeddingProfile and vector refs.
 This lets full-text retrieval have snapshot consistency without making
 embeddings a prerequisite.
+
+Implementation status: schema v22 persists the profile catalog, generation
+metadata, and ContentUnit/hash entry mappings on every SQLite target. It does
+not create a native vector virtual table during migration. The trusted desktop
+adapter creates a dimension-specific `vec0` table only after the optional
+sqlite-vec extension has loaded, so a Web or fallback-only database retains the
+same recoverable generation state without a native-module dependency. An
+explicit adapter transaction records each native row and its generation
+`vector_ref` atomically; vector candidate selection applies Library, generation,
+and source scope inside the KNN query before relational stale-row validation.
+No embedding provider or user-facing semantic retrieval flow invokes that native
+adapter until a local profile has passed the automatic integrity and packaging
+checks. Human quality review is optional and never a prerequisite for local
+indexing.
+
+The first local-profile boundary is documented in [the local embedding runtime
+spike](./LOCAL_EMBEDDING_RUNTIME_SPIKE.md). It forbids silent model downloads or
+token truncation: a profile pins a locally installed artifact/runtime and uses a
+versioned tokenizer-window pooling policy when a structural ContentUnit exceeds
+the model context. This is a capability contract only; an executable runtime
+and installer are covered by the automatic Gate 1B checks. Model-quality
+evaluation remains an offline measurement signal and does not block local
+indexing when no reviewed corpus is available.
 
 Generation switch:
 
@@ -703,7 +732,10 @@ Retrieval pipeline:
 3. Deduplicate source paragraphs, annotations, and saved Evidence by
    revision/anchor/content hash while retaining badges and human-signal boosts.
 4. Fuse non-exact ranks with Reciprocal Rank Fusion.
-5. Optionally rerank a bounded candidate set.
+5. If the query contains an affirmative, explicit material-language request,
+   add a bounded `language-preference` RRF-equivalent channel after hydration.
+   It is a preference, not a filter: non-matching candidates remain available,
+   and unlabelled candidates receive no boost.
 6. Expand the parent section within a token budget.
 7. Return original text, authority label, SourceAnchor, and diagnostic ranks.
 
@@ -743,6 +775,14 @@ Decision criteria:
 pre-v1 and must not be accepted without an Electron packaging and migration
 spike. LanceDB offers stronger built-in vector/hybrid features but introduces a
 native sidecar directory and additional backup/compaction complexity.
+
+The 2026-08-05 macOS arm64 synthetic spike is recorded in
+[the local vector-engine spike](./VECTOR_ENGINE_SPIKE.md). It provisionally
+selects `sqlite-vec` as the first embedded adapter for a modest local corpus
+(initially at most 50k ready ContentUnits), with full-text fallback when the
+extension is unavailable. This is not a release-wide engine decision: supported
+Electron-target packaging, lifecycle/rebuild behavior, and a bilingual real
+corpus evaluation remain required before Gate 1B.
 
 The vector index is optional in backups. Canonical data and profile fingerprints
 are sufficient to rebuild it only when source blobs/snapshots are present. Gate 0
@@ -1077,6 +1117,26 @@ Release criteria:
 - if semantic indexing is unavailable, the product visibly falls back to Gate
   1A rather than failing search.
 
+Cross-language model reports retain raw full-corpus and target-language-only
+views. Product acceptance additionally records the declared explicit-language
+routing view when the query set contains such intent; its parser and preference
+weight are part of the reranker provenance. A routed pass is not a substitute
+for the raw embedding view and cannot conceal a model regression.
+
+The current local vertical uses automatic scope, deletion, generation,
+offline, packaging, and fallback checks as its blocking criteria. The bilingual
+scoring harness reports model-quality evidence when an explicitly labelled
+corpus is available; absence of human labels does not disable a locally
+installed model.
+
+A separate corpus-shaped desktop regression keeps the product path honest
+between model-evaluation runs: it builds a mixed-source, mixed-language local
+corpus through the durable `sqlite-vec` generation, exercises source-allowlist
+chunking and explicit material-language routing, and excludes context-only
+units. Its deterministic vectors and broad timing budgets detect integration
+and accidental-performance regressions only; they do not replace a labelled
+quality corpus or the 50k engine benchmark.
+
 ### Gate 2 — Ask Current Document
 
 Deliver:
@@ -1180,10 +1240,11 @@ Maintain two bilingual datasets:
 - visible development set for tuning and pull-request regression;
 - held-out release set to prevent tuning directly to test answers.
 
-The first complete benchmark contains at least 360 human-reviewed quality
+The first complete automated benchmark contains at least 360 labelled quality
 queries and 120 isolation, deletion, concurrency, and prompt-injection cases.
-Core labels receive two independent human reviews plus adjudication. Synthetic
-queries may extend stress coverage but cannot alone decide release.
+Synthetic or development labels must be marked as such and cannot be described
+as human-reviewed. A separate human-labelled benchmark may be added for
+research confidence, but it is not a product gate.
 
 The corpus covers at least four disciplines and separate slices for Chinese
 query/Chinese source, English/English, Chinese/English, English/Chinese, and
@@ -1210,20 +1271,30 @@ Every sample records:
 Each benchmark record also pins extractor, chunker, embedding profile,
 VectorStore, fusion weights, reranker, prompt, generator, and dataset versions.
 
+The executable [bilingual retrieval evaluation protocol](./RETRIEVAL_EVALUATION_PROTOCOL.md)
+validates corpus isolation and copied-query self matches before scoring ordered
+ContentUnit IDs. It reports Recall, hit rate, MRR, and nDCG independently for
+each required language slice. A bilingual run records both full-corpus and,
+when translated candidate pairs are present, target-language-only candidate
+scopes so cross-language semantic matching is not confused with language
+selection or routing behavior. Synthetic scorer tests cannot qualify a model
+for release.
+
 CI levels:
 
 - every PR: unit/scoping tests and a small fixed golden set;
 - nightly: complete retrieval, safety, deletion, and concurrency set;
 - provider/chunker/model/reranker/prompt changes: full benchmark;
-- release: held-out evaluation, offline test, performance baseline, migration,
-  backup/restore, and human citation review.
+- release: held-out evaluation when available, offline test, performance
+  baseline, migration, backup/restore, and automated citation-identity checks.
 
 Retrieval and generation are scored separately. Overall averages may not hide a
 regression in a language, discipline, format, or scope slice. A drop greater than
 three percentage points from the released baseline in any primary slice blocks
 release. Security, isolation, deletion, and citation-identity checks require
-100%; they have no regression budget. LLM judges may track trends but cannot
-replace human citation-support review.
+100%; they have no regression budget. LLM or heuristic judges may track trends,
+but their outputs are reported as automated signals rather than authoritative
+labels.
 
 Performance reports use fixed 5k, 50k, and 500k ContentUnit corpora and document
 the reference CPU, memory, OS, model, dimensions, text-length distribution,
@@ -1306,7 +1377,7 @@ version 16. Each migration is tested for:
 | Permanent erasure            | Source payload and every captured/derived copy removed                                     |
 | Index sync                   | Rebuild locally; do not sync initially                                                     |
 | Embedding mode               | Local preferred after spike; remote embedding separately authorized                        |
-| Vector engine                | Adapter plus benchmark; no engine committed in this RFC                                    |
+| Vector engine                | `sqlite-vec` provisional first adapter for modest local corpora; LanceDB escalation path   |
 | GraphRAG                     | Deferred until measured need                                                               |
 | Bibliographic citation       | Work + optional locator; Evidence not required                                             |
 | Claim-to-evidence provenance | ClaimEvidenceLink to EvidenceItem + canonical SourceAnchor                                 |
@@ -1317,7 +1388,8 @@ version 16. Each migration is tested for:
 The following are decided by focused implementation spikes without changing the
 invariants above:
 
-- SQLite exact scan / `sqlite-vec` versus LanceDB for the first vector adapter;
+- supported-platform Electron packaging and lifecycle acceptance for the provisional `sqlite-vec` adapter;
+- the corpus-size/latency threshold at which LanceDB or another ANN engine replaces the first adapter;
 - local embedding runtime and bilingual model profile;
 - Chinese full-text tokenizer/segmentation profile;
 - exact schema for typed Project join tables versus a future strongly keyed
