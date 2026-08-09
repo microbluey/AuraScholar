@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import "./knowledge-search.css";
 import type {
   KnowledgeContentSearchRetrieval,
   KnowledgeContentSearchResult,
@@ -91,22 +92,16 @@ export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchP
     controllerRef.current?.abort();
     controllerRef.current = null;
 
-    if (!enabled || !normalizedQuery) {
-      setResults([]);
-      setRetrieval(DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL);
-      setError(null);
-      setSearchState("idle");
-      return;
-    }
+    if (!enabled || !normalizedQuery) return;
 
     const controller = new AbortController();
     const sourceTypes = sourceTypesForKnowledgeSearchFilter(sourceFilter);
     controllerRef.current = controller;
-    setResults([]);
-    setRetrieval(DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL);
-    setError(null);
-    setSearchState("loading");
     const timeoutId = window.setTimeout(() => {
+      setResults([]);
+      setRetrieval(DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL);
+      setError(null);
+      setSearchState("loading");
       void searchKnowledgeContent(normalizedQuery, {
         limit: 20,
         signal: controller.signal,
@@ -231,7 +226,7 @@ export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchP
             </p>
           ) : null}
 
-          {results.length > 0 ? (
+          {normalizedQuery && results.length > 0 ? (
             <div className="knowledge-search__results" aria-label="内容检索结果">
               {results.map((result) => (
                 <KnowledgeSearchResultCard

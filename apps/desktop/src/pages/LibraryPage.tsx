@@ -46,8 +46,6 @@ import {
   PREVIEW_LIBRARY_WORK_SEEDS,
   type PreviewLibraryWorkSeed,
 } from "../services/preview-library";
-import type { KnowledgeContentSearchResult } from "../services/knowledge-search";
-import { resolveKnowledgeSearchReaderPath } from "../services/knowledge-search-navigation";
 import { describeSafeError } from "../services/sensitive-text";
 import { useCanvasIngress } from "../features/canvas/useCanvasIngress";
 import { useProjectIngress } from "../features/projects/useProjectIngress";
@@ -57,9 +55,7 @@ import {
 } from "../features/library/LibraryBulkActionBar";
 import { LibraryCollectionManagement } from "../features/library/LibraryCollectionManagement";
 import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
-import { KnowledgeIndexPlanner } from "../features/library/KnowledgeIndexPlanner";
-import { KnowledgeSearchPanel } from "../features/library/KnowledgeSearchPanel";
-import { LocalSemanticIndexControl } from "../features/library/LocalSemanticIndexControl";
+import { LibraryUtilityControls } from "../features/library/LibraryUtilityControls";
 import { LibrarySelectedWorkPanel } from "../features/library/LibrarySelectedWorkPanel";
 import {
   hasDraggedFiles,
@@ -1788,28 +1784,6 @@ export function LibraryPage() {
     [navigate],
   );
 
-  const openKnowledgeSearchResult = useCallback(
-    async (result: KnowledgeContentSearchResult) => {
-      const workId = result.workId?.trim();
-      if (!workId) {
-        setMessage("该检索结果没有可打开的文献来源。");
-        return;
-      }
-      try {
-        const readerPath = await resolveKnowledgeSearchReaderPath(result);
-        if (!readerPath) {
-          setMessage("该检索结果的原始 PDF 修订不可用，未跳转到其他版本。");
-          return;
-        }
-        setSelectedWorkId(workId);
-        navigate(readerPath);
-      } catch (cause) {
-        setMessage(`打开检索来源失败:${describeSafeError(cause)}`);
-      }
-    },
-    [navigate],
-  );
-
   const focusPagedRow = useCallback((index: number) => {
     pendingKeyboardFocusIndexRef.current = index;
     const focusRow = () => {
@@ -2720,42 +2694,18 @@ export function LibraryPage() {
           />
         </div>
       </div>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="application/pdf"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleUpload(f);
-          e.target.value = "";
-        }}
+      <LibraryUtilityControls
+        enabled={isDesktopRuntime()}
+        fileInputRef={fileInputRef}
+        onMessage={setMessage}
+        onAttachPdf={handleAttachPdf}
+        onReferencesFile={handleRefsFile}
+        onSelectWork={setSelectedWorkId}
+        onUploadFile={handleUpload}
+        referenceImportAccept={REFERENCE_IMPORT_ACCEPT}
+        refsInputRef={refsInputRef}
+        selectedPdfInputRef={selectedPdfInputRef}
       />
-      <input
-        ref={selectedPdfInputRef}
-        type="file"
-        accept="application/pdf"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleAttachPdf(f);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={refsInputRef}
-        type="file"
-        accept={REFERENCE_IMPORT_ACCEPT}
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleRefsFile(f);
-          e.target.value = "";
-        }}
-      />
-      <KnowledgeSearchPanel enabled={isDesktopRuntime()} onOpenResult={openKnowledgeSearchResult} />
-      <LocalSemanticIndexControl enabled={isDesktopRuntime()} />
-      <KnowledgeIndexPlanner enabled={isDesktopRuntime()} />
       {trashUndo ? (
         <InlineNotice
           className={`library-command__message ${

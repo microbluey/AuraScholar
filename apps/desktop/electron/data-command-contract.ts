@@ -1,5 +1,4 @@
 import type { MergeWorksResult, ReadingStatus } from "@aurascholar/db/repos/works";
-import type { ContentUnitSourceType } from "@aurascholar/db/repos/knowledge";
 import type { DiscoverySource, ResearchProject } from "@aurascholar/core";
 import type {
   SentinelCheckUpdate,
@@ -9,6 +8,7 @@ import type {
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
 import type { EvidenceDataCommandMap } from "./evidence-command-contract";
+import type * as KnowledgeContract from "./knowledge-command-contract";
 
 export type {
   DocumentRevisionCommandInput,
@@ -23,6 +23,8 @@ export type {
   SaveTextEvidenceCommandInput,
   SaveTextEvidenceCommandResult,
 } from "./evidence-command-contract";
+
+export type * from "./knowledge-command-contract";
 
 export interface SetWorkReadingStatusCommandInput {
   libraryId: string;
@@ -47,103 +49,6 @@ export interface WorkMutationCountResult {
 
 export interface LibraryScopedCommandInput {
   libraryId: string;
-}
-
-/**
- * Filters for grounded, source-anchored retrieval from the local Knowledge
- * Layer. Omitted filters leave that dimension unrestricted within libraryId.
- */
-export interface SearchKnowledgeContentCommandInput extends LibraryScopedCommandInput {
-  query: string;
-  limit?: number;
-  sourceTypes?: ContentUnitSourceType[];
-  sourceId?: string;
-  workId?: string;
-  assetId?: string;
-  revisionId?: string;
-  includeContextOnly?: boolean;
-}
-
-/**
- * Renderer-safe projection of a ContentUnit FTS result. `anchor` is retained
- * verbatim so a caller can navigate to its PDF/evidence/annotation origin.
- */
-export interface KnowledgeContentSearchResult {
-  id: string;
-  sourceType: ContentUnitSourceType;
-  sourceId: string;
-  workId: string | null;
-  workTitle: string | null;
-  assetId: string | null;
-  revisionId: string | null;
-  parentUnitId: string | null;
-  ordinal: number;
-  headingPath: string[] | null;
-  anchor: unknown;
-  text: string;
-  language: string | null;
-  tokenCount: number | null;
-  state: "ready" | "context-only";
-  score: number;
-  excerpt: string;
-}
-
-/** Retrieval capability state, never a relevance/confidence score. */
-export type KnowledgeContentSearchMode = "fulltext" | "hybrid";
-export type KnowledgeSemanticSearchStatus = "not-configured" | "unavailable" | "used";
-export type KnowledgeContentSearchLanguage = "zh" | "en";
-
-export interface KnowledgeContentSearchLanguagePreference {
-  /** Language explicitly requested for source material, not answer generation. */
-  requestedLanguage: KnowledgeContentSearchLanguage;
-  /** True only when at least one candidate carried a matching known label. */
-  applied: boolean;
-}
-
-export interface KnowledgeContentSearchRetrieval {
-  mode: KnowledgeContentSearchMode;
-  semanticStatus: KnowledgeSemanticSearchStatus;
-  languagePreference?: KnowledgeContentSearchLanguagePreference;
-}
-
-/** Effective language labels for citation-safe ContentUnits in a local Library. */
-export interface KnowledgeContentIndexLanguageCoverage {
-  zh: number;
-  en: number;
-  other: number;
-  missing: number;
-}
-
-/** Active, Library-scoped corpus counts used by the semantic-index planner. */
-export interface KnowledgeContentIndexStats {
-  totalContentUnits: number;
-  readyContentUnits: number;
-  contextOnlyContentUnits: number;
-  sourceCounts: Record<ContentUnitSourceType, number>;
-  /** Labels recognized by the product's explicit zh/en material preference. */
-  languageCoverage: KnowledgeContentIndexLanguageCoverage;
-}
-
-/** Renderer-safe state for the fixed local semantic-index generation. */
-export interface KnowledgeSemanticIndexSummary {
-  expectedCount: number;
-  id: string;
-  indexedCount: number;
-  /** True when newer Library changes exist beyond this generation snapshot. */
-  stale: boolean;
-  status: "active" | "building" | "failed";
-}
-
-export interface KnowledgeSemanticIndexStatus {
-  active: KnowledgeSemanticIndexSummary | null;
-  building: KnowledgeSemanticIndexSummary | null;
-  failed: KnowledgeSemanticIndexSummary | null;
-}
-
-export interface BuildKnowledgeSemanticIndexResult {
-  created: boolean;
-  index: KnowledgeSemanticIndexSummary;
-  job: { id: string; status: "queued" | "leased" | "running" | "retry-wait" };
 }
 
 export interface CreateCollectionCommandInput extends LibraryScopedCommandInput {
@@ -378,19 +283,22 @@ export type ResearchProjectScopeCommandInput = Record<string, never>;
 export interface DataCommandMap extends EvidenceDataCommandMap {
   "knowledge.buildSemanticIndex": {
     input: LibraryScopedCommandInput;
-    output: BuildKnowledgeSemanticIndexResult;
+    output: KnowledgeContract.BuildKnowledgeSemanticIndexResult;
   };
   "knowledge.getContentStats": {
     input: LibraryScopedCommandInput;
-    output: { stats: KnowledgeContentIndexStats };
+    output: { stats: KnowledgeContract.KnowledgeContentIndexStats };
   };
   "knowledge.getSemanticIndexStatus": {
     input: LibraryScopedCommandInput;
-    output: { status: KnowledgeSemanticIndexStatus };
+    output: { status: KnowledgeContract.KnowledgeSemanticIndexStatus };
   };
   "knowledge.searchContent": {
-    input: SearchKnowledgeContentCommandInput;
-    output: { results: KnowledgeContentSearchResult[]; retrieval: KnowledgeContentSearchRetrieval };
+    input: KnowledgeContract.SearchKnowledgeContentCommandInput;
+    output: {
+      results: KnowledgeContract.KnowledgeContentSearchResult[];
+      retrieval: KnowledgeContract.KnowledgeContentSearchRetrieval;
+    };
   };
   "library.addTagToWorks": {
     input: AddTagToWorksCommandInput;

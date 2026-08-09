@@ -230,7 +230,7 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
       return await waitForAbort(this.sessionPromise, signal);
     } catch (error) {
       rethrowAbort(error, signal);
-      throw new Error("Local embedding model is unavailable");
+      throw new Error("Local embedding model is unavailable", { cause: error });
     }
   }
 
@@ -272,7 +272,7 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
       return await waitForAbort(operation(), signal);
     } catch (error) {
       rethrowAbort(error, signal);
-      throw new Error("Local embedding inference failed");
+      throw new Error("Local embedding inference failed", { cause: error });
     }
   }
 }

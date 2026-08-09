@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import "./knowledge-index-controls.css";
 import {
   estimateVectorIndexCapacity,
   fitsVectorIndexQuota,

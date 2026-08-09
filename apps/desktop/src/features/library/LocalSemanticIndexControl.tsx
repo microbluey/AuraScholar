@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import "./knowledge-index-controls.css";
 import { Button } from "@aurascholar/ui";
 import {
   buildKnowledgeSemanticIndex,
@@ -58,7 +59,9 @@ export function LocalSemanticIndexControl({ enabled }: LocalSemanticIndexControl
         failed: current?.failed ?? null,
       }));
       setLoadState("ready");
-      setNotice(result.created ? "语义索引已排队，将在本机后台构建。" : "语义索引已在本机后台构建中。");
+      setNotice(
+        result.created ? "语义索引已排队，将在本机后台构建。" : "语义索引已在本机后台构建中。",
+      );
     } catch (error) {
       setNotice(`无法开始语义索引：${describeSafeError(error)}`);
     } finally {
@@ -88,7 +91,8 @@ export function LocalSemanticIndexControl({ enabled }: LocalSemanticIndexControl
       <p className="local-semantic-index-control__summary">{presentation.summary}</p>
       {building ? (
         <p className="local-semantic-index-control__progress" role="status">
-          正在索引 {building.indexedCount.toLocaleString()} / {building.expectedCount.toLocaleString()} 个片段。
+          正在索引 {building.indexedCount.toLocaleString()} /{" "}
+          {building.expectedCount.toLocaleString()} 个片段。
         </p>
       ) : null}
       {notice ? (
@@ -153,6 +157,7 @@ function describeStatus(
       summary: `当前 generation 已索引 ${status.active.indexedCount.toLocaleString()} 个本地片段。`,
     };
   }
-  if (status?.failed) return { badge: "构建失败", summary: "可检查本机模型后重新创建；关键词检索仍可用。" };
+  if (status?.failed)
+    return { badge: "构建失败", summary: "可检查本机模型后重新创建；关键词检索仍可用。" };
   return { badge: "尚未创建", summary: "安装本地模型后，可按需创建一份资料库专属语义索引。" };
 }

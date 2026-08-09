@@ -1,6 +1,5 @@
 import { isAbsolute } from "node:path";
 import type {
-  LocalEmbeddingArtifact,
   LocalEmbeddingModelSpec,
   OfflineEmbeddingRuntime,
   OfflineEmbeddingRuntimeLoadInput,
@@ -87,14 +86,18 @@ export class TransformersJsLocalEmbeddingRuntime implements OfflineEmbeddingRunt
     assertRuntimeInput(input, this.id, this.version);
     const transformers = await this.importModule();
     configureOfflineEnvironment(transformers.env, this.version);
-    const extractor = await transformers.pipeline("feature-extraction", input.artifact.rootDirectory, {
-      device: "cpu",
-      dtype: MODEL_DTYPE,
-      local_files_only: true,
-      model_file_name: MODEL_FILE_NAME,
-      revision: input.artifact.modelRevision,
-      subfolder: MODEL_SUBFOLDER,
-    });
+    const extractor = await transformers.pipeline(
+      "feature-extraction",
+      input.artifact.rootDirectory,
+      {
+        device: "cpu",
+        dtype: MODEL_DTYPE,
+        local_files_only: true,
+        model_file_name: MODEL_FILE_NAME,
+        revision: input.artifact.modelRevision,
+        subfolder: MODEL_SUBFOLDER,
+      },
+    );
     assertFeatureExtractor(extractor);
 
     return new TransformersJsOfflineEmbeddingSession(extractor, input.model);
@@ -133,7 +136,9 @@ class TransformersJsOfflineEmbeddingSession implements OfflineEmbeddingSession {
         })
         .trim();
       if (!window) throw new Error("Embedding tokenizer produced an empty document window");
-      if (encodedTokenIds(this.extractor.tokenizer, window, false).length > options.maxContentTokens) {
+      if (
+        encodedTokenIds(this.extractor.tokenizer, window, false).length > options.maxContentTokens
+      ) {
         throw new Error("Embedding tokenizer window cannot be represented without truncation");
       }
       windows.push(window);
@@ -153,7 +158,9 @@ class TransformersJsOfflineEmbeddingSession implements OfflineEmbeddingSession {
     for (const text of texts) {
       throwIfAborted(options.signal);
       assertText(text, "Embedding text");
-      if (encodedTokenIds(this.extractor.tokenizer, text, true).length > options.maxSequenceTokens) {
+      if (
+        encodedTokenIds(this.extractor.tokenizer, text, true).length > options.maxSequenceTokens
+      ) {
         throw new Error("Embedding text exceeds the configured sequence limit");
       }
     }
@@ -172,7 +179,10 @@ async function importTransformersJsModule(): Promise<TransformersJsModule> {
   };
 }
 
-function configureOfflineEnvironment(environment: TransformersJsEnvironment, version: string): void {
+function configureOfflineEnvironment(
+  environment: TransformersJsEnvironment,
+  version: string,
+): void {
   if (environment.version !== version) {
     throw new Error("Installed Transformers.js runtime version does not match the model artifact");
   }
@@ -192,7 +202,8 @@ function assertRuntimeInput(
   runtimeId: string,
   runtimeVersion: string,
 ): void {
-  if (!input || typeof input !== "object") throw new Error("Local embedding runtime input is invalid");
+  if (!input || typeof input !== "object")
+    throw new Error("Local embedding runtime input is invalid");
   const { artifact, model } = input;
   if (!artifact || !model) throw new Error("Local embedding runtime input is incomplete");
   if (!isAbsolute(artifact.rootDirectory)) {
