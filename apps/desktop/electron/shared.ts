@@ -25,6 +25,10 @@ export const CH = {
   dbScalar: "db:scalar",
   dataCommand: "data:command",
   evidenceRecoverSource: "evidence:recoverSource",
+  embeddingArtifactCatalogStatus: "embedding:artifact:catalog-status",
+  embeddingArtifactStatus: "embedding:artifact:status",
+  embeddingArtifactInstall: "embedding:artifact:install",
+  embeddingArtifactRemove: "embedding:artifact:remove",
 
   appCloseHold: "app:close:hold",
   appCloseRespond: "app:close:respond",

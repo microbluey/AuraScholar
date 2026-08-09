@@ -8,6 +8,7 @@ import type {
 import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
 import type { EvidenceDataCommandMap } from "./evidence-command-contract";
+import type * as KnowledgeContract from "./knowledge-command-contract";
 
 export type {
   DocumentRevisionCommandInput,
@@ -16,11 +17,14 @@ export type {
   EvidenceProjectCommandInput,
   EvidenceTombstoneCommandInput,
   ListEvidenceCommandInput,
+  ResolveDocumentRevisionCommandInput,
   ResolvedDocumentRevisionDto,
   SearchEvidenceCommandInput,
   SaveTextEvidenceCommandInput,
   SaveTextEvidenceCommandResult,
 } from "./evidence-command-contract";
+
+export type * from "./knowledge-command-contract";
 
 export interface SetWorkReadingStatusCommandInput {
   libraryId: string;
@@ -277,6 +281,25 @@ export interface ResearchProjectMutationResult {
 export type ResearchProjectScopeCommandInput = Record<string, never>;
 
 export interface DataCommandMap extends EvidenceDataCommandMap {
+  "knowledge.buildSemanticIndex": {
+    input: LibraryScopedCommandInput;
+    output: KnowledgeContract.BuildKnowledgeSemanticIndexResult;
+  };
+  "knowledge.getContentStats": {
+    input: LibraryScopedCommandInput;
+    output: { stats: KnowledgeContract.KnowledgeContentIndexStats };
+  };
+  "knowledge.getSemanticIndexStatus": {
+    input: LibraryScopedCommandInput;
+    output: { status: KnowledgeContract.KnowledgeSemanticIndexStatus };
+  };
+  "knowledge.searchContent": {
+    input: KnowledgeContract.SearchKnowledgeContentCommandInput;
+    output: {
+      results: KnowledgeContract.KnowledgeContentSearchResult[];
+      retrieval: KnowledgeContract.KnowledgeContentSearchRetrieval;
+    };
+  };
   "library.addTagToWorks": {
     input: AddTagToWorksCommandInput;
     output: TagMutationResult;

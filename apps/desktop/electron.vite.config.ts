@@ -12,6 +12,7 @@ export default defineConfig({
         exclude: [
           "@aurascholar/cite",
           "@aurascholar/db",
+          "@aurascholar/knowledge",
           "@aurascholar/platform",
           "@aurascholar/sync",
         ],
@@ -23,7 +24,7 @@ export default defineConfig({
       rollupOptions: {
         // better-sqlite3 is a native module — keep it external so its prebuilt
         // binary is required at runtime rather than bundled.
-        external: ["better-sqlite3"],
+        external: ["better-sqlite3", "sqlite-vec"],
       },
     },
   },

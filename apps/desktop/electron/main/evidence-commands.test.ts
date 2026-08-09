@@ -104,7 +104,7 @@ async function rowCount(table: "evidence_items" | "project_evidence" | "project_
 }
 
 describe("Evidence data commands", () => {
-  it("rejects malformed input for all four commands before acquiring a database lease", async () => {
+  it("rejects malformed input for all commands before acquiring a database lease", async () => {
     let executeCalls = 0;
     let transactionCalls = 0;
     const rejectingDependencies: DataCommandDependencies = {
@@ -132,6 +132,10 @@ describe("Evidence data commands", () => {
           libraryId,
           workId: "work:test",
         },
+      },
+      {
+        name: "document.resolveRevision",
+        input: { libraryId, revisionId: " ", workId: "work:test" },
       },
       { name: "evidence.get", input: { evidenceId: "evidence:test", libraryId: " " } },
       {
@@ -257,6 +261,12 @@ describe("Evidence data commands", () => {
       revisionId: source.revisionId,
       workId: source.workId,
     });
+    const resolvedByRevision = await command("document.resolveRevision", {
+      libraryId,
+      revisionId: source.revisionId,
+      workId: source.workId,
+    });
+    expect(resolvedByRevision).toEqual(resolved);
 
     const saved = await command("evidence.saveText", saveInput(source));
     const fetched = await command("evidence.get", {
@@ -270,6 +280,7 @@ describe("Evidence data commands", () => {
 
     expect(executeNames).toEqual([
       "document.resolveAttachmentRevision",
+      "document.resolveRevision",
       "evidence.get",
       "evidence.list",
     ]);
@@ -306,6 +317,14 @@ describe("Evidence data commands", () => {
         input: {
           attachmentId: source.attachmentId,
           libraryId: foreignLibraryId,
+          workId: source.workId,
+        },
+      },
+      {
+        name: "document.resolveRevision",
+        input: {
+          libraryId: foreignLibraryId,
+          revisionId: source.revisionId,
           workId: source.workId,
         },
       },

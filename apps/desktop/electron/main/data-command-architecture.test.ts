@@ -4,6 +4,23 @@ import { describe, expect, it } from "vitest";
 import type { DataCommandDependencies } from "./data-command-runtime";
 
 function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDependencies): void {
+  void dependencies.execute?.("knowledge.getContentStats", async () => ({
+    stats: {
+      totalContentUnits: 0,
+      readyContentUnits: 0,
+      contextOnlyContentUnits: 0,
+      sourceCounts: { pdf: 0, annotation: 0, evidence: 0 },
+      languageCoverage: { zh: 0, en: 0, other: 0, missing: 0 },
+    },
+  }));
+  // @ts-expect-error knowledge.getContentStats must return its declared result envelope.
+  void dependencies.execute?.("knowledge.getContentStats", async () => ({ stats: [] }));
+  void dependencies.execute?.("knowledge.searchContent", async () => ({
+    results: [],
+    retrieval: { mode: "fulltext", semanticStatus: "not-configured" },
+  }));
+  // @ts-expect-error knowledge.searchContent must return its declared result envelope.
+  void dependencies.execute?.("knowledge.searchContent", async () => ({ results: 1 }));
   void dependencies.execute?.("project.get", async () => ({ project: null }));
   // @ts-expect-error project.get must return its declared Project result.
   void dependencies.execute?.("project.get", async () => ({ updated: 1 }));
@@ -279,6 +296,19 @@ describe("main-process data command architecture", () => {
     expect(commands).toContain("expectedUpdatedAt");
   });
 
+  it("keeps grounded ContentUnit search behind its typed command gateway", () => {
+    const gateway = source("src/services/knowledge-search.ts");
+    const commands = source("electron/main/knowledge-commands.ts");
+
+    expect(gateway).toContain('data.command("knowledge.searchContent"');
+    expect(gateway).not.toContain("ContentUnitSearchRepo");
+    expect(gateway).not.toContain("window.aura.db");
+    expect(gateway).not.toMatch(/\.\s*(?:query|run|exec|queryScalar)\s*\(/);
+    expect(commands).toContain("assertActiveLocalLibrary");
+    expect(commands).toContain("new ContentUnitSearchRepo");
+    expect(commands).toContain("toKnowledgeContentSearchResult");
+  });
+
   it("keeps Saved Search UI workflows inside the Discovery feature controller", () => {
     const discoveryPage = source("src/pages/DiscoveryPage.tsx");
     const controller = source("src/features/discovery/discovery-saved-search-controller.ts");
@@ -456,6 +486,7 @@ describe("main-process data command architecture", () => {
     const projectCommands = source("electron/main/research-project-commands.ts");
     const evidenceCommands = source("electron/main/evidence-commands.ts");
     const evidenceInboxCommands = source("electron/main/evidence-inbox-commands.ts");
+    const knowledgeCommands = source("electron/main/knowledge-commands.ts");
 
     expect(runtime).toContain("DataCommandOutput<NoInfer<K>>");
     expect(dispatcher).not.toContain("): Promise<unknown>");
@@ -466,6 +497,7 @@ describe("main-process data command architecture", () => {
     expect(projectCommands).not.toContain("): Promise<unknown>");
     expect(evidenceCommands).not.toContain("): Promise<unknown>");
     expect(evidenceInboxCommands).not.toContain("): Promise<unknown>");
+    expect(knowledgeCommands).not.toContain("): Promise<unknown>");
   });
 
   it("routes every raw database IPC method through the connection coordinator", () => {

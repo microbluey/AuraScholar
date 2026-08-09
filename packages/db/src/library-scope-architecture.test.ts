@@ -17,6 +17,8 @@ const LIBRARY_SCOPED_REPOS = new Set([
   "CanvasRepo",
   "SavedSearchesRepo",
   "SentinelRepo",
+  "KnowledgeJobsRepo",
+  "ContentUnitSearchRepo",
 ]);
 
 const ROOT_TABLE_SQL =

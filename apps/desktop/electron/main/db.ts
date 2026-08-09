@@ -12,12 +12,15 @@ import { createNodeDatabase } from "@aurascholar/db/node";
 import { CH } from "../shared";
 import { DatabaseCoordinator, type DatabaseOperation } from "./database-coordinator";
 import { getStableDeviceId } from "./platform";
+import { loadSqliteVecExtension, type SqliteVecRuntimeStatus } from "./sqlite-vec-runtime";
 
 let databaseCoordinatorPromise: Promise<DatabaseCoordinator> | null = null;
+let sqliteVecRuntimeStatus: SqliteVecRuntimeStatus | null = null;
 
 async function open(): Promise<DatabaseCoordinator> {
   const file = join(app.getPath("userData"), "aurascholar.db");
   const db = await createNodeDatabase(file);
+  sqliteVecRuntimeStatus = await loadSqliteVecExtension(db, { isPackaged: app.isPackaged });
   await runMigrations(db);
   await ensureLocalFirstState(db, {
     deviceId: await getStableDeviceId(),
@@ -34,6 +37,17 @@ export function getMainDatabaseCoordinator(): Promise<DatabaseCoordinator> {
 
 export function getMainDb(): Promise<Database> {
   return getMainDatabaseCoordinator();
+}
+
+/** Safe capability state for future semantic-index jobs; never contains a local path or raw error. */
+export async function getSqliteVecRuntimeStatus(): Promise<SqliteVecRuntimeStatus> {
+  await getMainDatabaseCoordinator();
+  return (
+    sqliteVecRuntimeStatus ?? {
+      reason: "extension-loader-unavailable",
+      state: "unavailable",
+    }
+  );
 }
 
 export async function withMainDatabase<T>(operation: DatabaseOperation<T>): Promise<T> {

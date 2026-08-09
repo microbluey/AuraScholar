@@ -55,6 +55,7 @@ import {
 } from "../features/library/LibraryBulkActionBar";
 import { LibraryCollectionManagement } from "../features/library/LibraryCollectionManagement";
 import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
+import { LibraryUtilityControls } from "../features/library/LibraryUtilityControls";
 import { LibrarySelectedWorkPanel } from "../features/library/LibrarySelectedWorkPanel";
 import {
   hasDraggedFiles,
@@ -2693,38 +2694,17 @@ export function LibraryPage() {
           />
         </div>
       </div>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="application/pdf"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleUpload(f);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={selectedPdfInputRef}
-        type="file"
-        accept="application/pdf"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleAttachPdf(f);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={refsInputRef}
-        type="file"
-        accept={REFERENCE_IMPORT_ACCEPT}
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleRefsFile(f);
-          e.target.value = "";
-        }}
+      <LibraryUtilityControls
+        enabled={isDesktopRuntime()}
+        fileInputRef={fileInputRef}
+        onMessage={setMessage}
+        onAttachPdf={handleAttachPdf}
+        onReferencesFile={handleRefsFile}
+        onSelectWork={setSelectedWorkId}
+        onUploadFile={handleUpload}
+        referenceImportAccept={REFERENCE_IMPORT_ACCEPT}
+        refsInputRef={refsInputRef}
+        selectedPdfInputRef={selectedPdfInputRef}
       />
       {trashUndo ? (
         <InlineNotice

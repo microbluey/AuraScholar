@@ -182,7 +182,9 @@ describe("v19 document revisions and evidence migration", () => {
 
     await runMigrations(db);
 
-    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(19);
+    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(
+      MIGRATIONS[MIGRATIONS.length - 1]!.version,
+    );
     expect(
       await db.query<{ name: string }>(
         `SELECT name FROM sqlite_master
@@ -442,7 +444,9 @@ describe("v19 document revisions and evidence migration", () => {
 
     await runMigrations(db);
 
-    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(19);
+    expect(Number(await db.queryScalar(`SELECT MAX(version) FROM _migrations`))).toBe(
+      MIGRATIONS[MIGRATIONS.length - 1]!.version,
+    );
     expect(Number(await db.queryScalar(`SELECT COUNT(*) FROM document_assets`))).toBe(3);
     expect(Number(await db.queryScalar(`SELECT COUNT(*) FROM document_revisions`))).toBe(3);
     expect(

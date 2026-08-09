@@ -1,0 +1,278 @@
+.knowledge-index-planner {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 10px;
+  padding: 13px 14px;
+  border: var(--border-width) solid color-mix(in srgb, var(--color-border) 88%, var(--color-accent));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface-raised) 94%, var(--color-bg-subtle));
+}
+
+.knowledge-index-planner__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.knowledge-index-planner__heading p {
+  margin: 0 0 2px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.knowledge-index-planner__heading h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-heading);
+  font-size: 15px;
+}
+
+.knowledge-index-planner__heading > div > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.knowledge-index-planner__scope {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: var(--border-width) solid color-mix(in srgb, var(--color-border) 78%, var(--color-accent));
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.knowledge-index-planner__controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.knowledge-index-planner__control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 8px 0 10px;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 11px;
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.knowledge-index-planner__control select {
+  max-width: 156px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 600;
+}
+
+.knowledge-index-planner__feedback,
+.knowledge-index-planner__corpus,
+.knowledge-index-planner__language-coverage,
+.knowledge-index-planner__quota,
+.knowledge-index-planner__assumption {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.knowledge-index-planner__feedback[role="alert"] {
+  color: var(--color-danger);
+}
+
+.knowledge-index-planner__summary {
+  display: grid;
+  gap: 8px;
+}
+
+.knowledge-index-planner__corpus strong {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.knowledge-index-planner__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.knowledge-index-planner__metrics > div {
+  min-width: 0;
+  padding: 8px;
+  border: var(--border-width) solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-surface-raised) 88%, transparent);
+}
+
+.knowledge-index-planner__metrics dt {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-index-planner__metrics dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--color-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-index-planner__quota {
+  font-weight: 650;
+}
+
+.knowledge-index-planner__quota--fits {
+  color: var(--color-success);
+}
+
+.knowledge-index-planner__quota--exceeds {
+  color: var(--color-danger);
+}
+
+.knowledge-index-planner__assumption {
+  font-size: 11px;
+}
+
+.knowledge-index-planner--unavailable {
+  border-color: color-mix(in srgb, var(--color-border) 88%, transparent);
+  background: var(--color-surface-raised);
+}
+
+.local-semantic-index-control {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 10px;
+  padding: 13px 14px;
+  border: var(--border-width) solid
+    color-mix(in srgb, var(--color-border) 82%, var(--color-success));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface-raised) 92%, var(--color-success) 3%);
+}
+
+.local-semantic-index-control__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.local-semantic-index-control__heading p {
+  margin: 0 0 2px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.local-semantic-index-control__heading h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-heading);
+  font-size: 15px;
+}
+
+.local-semantic-index-control__heading > div > span,
+.local-semantic-index-control__summary,
+.local-semantic-index-control__progress,
+.local-semantic-index-control__notice,
+.local-semantic-index-control__actions > span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.local-semantic-index-control__heading > div > span {
+  display: block;
+  margin-top: 3px;
+}
+
+.local-semantic-index-control__scope {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: var(--border-width) solid
+    color-mix(in srgb, var(--color-border) 78%, var(--color-success));
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.local-semantic-index-control__summary,
+.local-semantic-index-control__progress,
+.local-semantic-index-control__notice {
+  margin: 0;
+}
+
+.local-semantic-index-control__progress {
+  color: var(--color-success);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.local-semantic-index-control__notice[role="alert"] {
+  color: var(--color-danger);
+}
+
+.local-semantic-index-control__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.local-semantic-index-control__actions > span {
+  flex: 1 1 260px;
+}
+
+.local-semantic-index-control--unavailable {
+  border-color: color-mix(in srgb, var(--color-border) 88%, transparent);
+  background: var(--color-surface-raised);
+}
+
+@media (max-width: 640px) {
+  .knowledge-index-planner__heading,
+  .local-semantic-index-control__heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .knowledge-index-planner__controls,
+  .knowledge-index-planner__metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,41 @@
+name: Embedding Runtime Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_embedding_runtime_smoke:
+        description: Download the optional model runtime and run its native package smoke matrix
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  native-package-smoke:
+    if: inputs.run_embedding_runtime_smoke
+    name: Native package smoke (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            runner: macos-15
+          - label: macOS x64
+            runner: macos-15-intel
+          - label: Windows x64
+            runner: windows-latest
+          - label: Linux x64
+            runner: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @aurascholar/desktop smoke:embedding-runtime

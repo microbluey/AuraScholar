@@ -31,6 +31,17 @@ import {
   saveBackupSafetySnapshot,
   type BackupSafetySnapshot,
 } from "../features/settings/backup-safety";
+import { LocalEmbeddingModelCard } from "../features/settings/LocalEmbeddingModelCard";
+import type {
+  AiSettingsSnapshot,
+  BackupSafetyDisplay,
+  SettingsSection,
+  SettingsSmokeFailureKey,
+  SettingsTargetSection,
+  SettingsUrlValidation,
+  SyncSettingsSnapshot,
+  TranslateSettingsSnapshot,
+} from "../features/settings/settings-contracts";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { describeSafeError } from "../services/sensitive-text";
 import { LIBRARY_BACKUP_VERSION } from "../shared/library-backup";
@@ -64,36 +75,6 @@ const AI_PROVIDER_OPTIONS: Array<{
 ];
 
 const DEFAULT_AI_PROVIDER_OPTION = AI_PROVIDER_OPTIONS[0]!;
-
-interface AiSettingsSnapshot {
-  kind: AiProviderKind;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-}
-
-interface TranslateSettingsSnapshot {
-  engine: TranslateEngine;
-  targetLang: string;
-  deeplKey: string;
-  baiduAppid: string;
-  baiduKey: string;
-}
-
-interface SyncSettingsSnapshot {
-  baseUrl: string;
-  username: string;
-  password: string;
-}
-
-interface BackupSafetyDisplay {
-  detail: string;
-  secondaryDetail: string;
-  tone: "muted" | "ready" | "warning";
-  value: string;
-}
-
-type SettingsUrlValidation = { ok: true; value: string } | { message: string; ok: false };
 
 const DEFAULT_AI_SETTINGS: AiSettingsSnapshot = {
   kind: "openai-compatible",
@@ -147,19 +128,6 @@ const PREVIEW_BACKUP_SAFETY: BackupSafetySnapshot = {
 const MIN_SETTINGS_BUSY_MS = 500;
 const BACKUP_FRESH_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-type SettingsTargetSection = "ai" | "translate" | "sync";
-type SettingsSection = "appearance" | SettingsTargetSection;
-
-type SettingsSmokeFailureKey =
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_READ__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_SAVE__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_TEST__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_TRANSLATE_READ__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_TRANSLATE_SAVE__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_READ__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_SAVE__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_RUN__";
 
 function describeUnknownError(value: unknown): string {
   return describeSafeError(value);
@@ -1230,9 +1198,10 @@ export function SettingsPage() {
             <span className="settings-rail__eyebrow">设置分区</span>
             {[
               ["appearance", "01", "外观"],
-              ["ai", "02", "AI 服务"],
-              ["translate", "03", "阅读翻译"],
-              ["sync", "04", "同步与备份"],
+              ["local-model", "02", "本地语义"],
+              ["ai", "03", "AI 服务"],
+              ["translate", "04", "阅读翻译"],
+              ["sync", "05", "同步与备份"],
             ].map(([section, index, label]) => (
               <button
                 key={section}
@@ -1318,6 +1287,8 @@ export function SettingsPage() {
                 </Button>
               </div>
             </Card>
+
+            <LocalEmbeddingModelCard enabled={desktopRuntime} />
 
             <Card
               className={settingsCardClassName(

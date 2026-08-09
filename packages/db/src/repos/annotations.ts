@@ -1,5 +1,8 @@
 import type { Database } from "../database.js";
 import { newId } from "../ids.js";
+import { withDatabaseSavepoint } from "../savepoint.js";
+import { appendKnowledgeChangeInTransaction, type KnowledgeChangeKind } from "./knowledge.js";
+import { withDatabaseWriteLock } from "./write-lock.js";
 
 export interface AnnotationInput {
   attachmentId: string;
@@ -60,34 +63,39 @@ export class AnnotationsRepo {
   }
 
   async create(input: AnnotationInput): Promise<string> {
-    await this.assertWritableTarget(input);
-    const id = newId();
-    const now = Date.now();
-    // sort_key: page-major ordering; y position refinement happens on update
-    // when the renderer knows the resolved rects.
-    const anchor = input.anchor as { quads?: { rects?: Array<{ y2: number }> } } | undefined;
-    const firstRectY = anchor?.quads?.rects?.[0]?.y2 ?? 0;
-    const sortKey = input.pageIndex * 1e6 - firstRectY;
-    await this.db.run(
-      `INSERT INTO annotations (id, attachment_id, work_id, type, color, page_index,
-                                anchor_json, content_md, ink_paths_json, sort_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        input.attachmentId,
-        input.workId,
-        input.type,
-        input.color ?? null,
-        input.pageIndex,
-        input.anchor ? JSON.stringify(input.anchor) : null,
-        input.contentMd ?? null,
-        input.inkPaths ? JSON.stringify(input.inkPaths) : null,
-        sortKey,
-        now,
-        now,
-      ],
+    return withDatabaseWriteLock(this.db, () =>
+      withDatabaseSavepoint(this.db, "annotation_create", async () => {
+        await this.assertWritableTarget(input);
+        const id = newId();
+        const now = Date.now();
+        // sort_key: page-major ordering; y position refinement happens on update
+        // when the renderer knows the resolved rects.
+        const anchor = input.anchor as { quads?: { rects?: Array<{ y2: number }> } } | undefined;
+        const firstRectY = anchor?.quads?.rects?.[0]?.y2 ?? 0;
+        const sortKey = input.pageIndex * 1e6 - firstRectY;
+        await this.db.run(
+          `INSERT INTO annotations (id, attachment_id, work_id, type, color, page_index,
+                                    anchor_json, content_md, ink_paths_json, sort_key, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            input.attachmentId,
+            input.workId,
+            input.type,
+            input.color ?? null,
+            input.pageIndex,
+            input.anchor ? JSON.stringify(input.anchor) : null,
+            input.contentMd ?? null,
+            input.inkPaths ? JSON.stringify(input.inkPaths) : null,
+            sortKey,
+            now,
+            now,
+          ],
+        );
+        await this.appendKnowledgeChange(id, "upsert");
+        return id;
+      }),
     );
-    return id;
   }
 
   async listForAttachment(attachmentId: string): Promise<AnnotationRow[]> {
@@ -107,7 +115,8 @@ export class AnnotationsRepo {
   }
 
   async updateContent(id: string, contentMd: string): Promise<void> {
-    const changed = await this.db.run(
+    await this.mutateAndAppend(
+      id,
       `UPDATE annotations SET content_md = ?, updated_at = ?
        WHERE id = ? AND deleted_at IS NULL
          AND EXISTS (
@@ -121,13 +130,15 @@ export class AnnotationsRepo {
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [contentMd, Date.now(), id, this.libraryId],
+      (now) => [contentMd, now, id, this.libraryId],
+      `Annotation ${id} is missing or removed`,
+      "upsert",
     );
-    this.assertChanged(changed, `Annotation ${id} is missing or removed`);
   }
 
   async setOrphaned(id: string, orphaned: boolean): Promise<void> {
-    const changed = await this.db.run(
+    await this.mutateAndAppend(
+      id,
       `UPDATE annotations SET orphaned = ?, updated_at = ?
        WHERE id = ? AND deleted_at IS NULL
          AND EXISTS (
@@ -141,13 +152,15 @@ export class AnnotationsRepo {
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [orphaned ? 1 : 0, Date.now(), id, this.libraryId],
+      (now) => [orphaned ? 1 : 0, now, id, this.libraryId],
+      `Annotation ${id} is missing or removed`,
+      "upsert",
     );
-    this.assertChanged(changed, `Annotation ${id} is missing or removed`);
   }
 
   async softDelete(id: string): Promise<void> {
-    const changed = await this.db.run(
+    await this.mutateAndAppend(
+      id,
       `UPDATE annotations SET deleted_at = ?, updated_at = ?
        WHERE id = ? AND deleted_at IS NULL
          AND EXISTS (
@@ -161,13 +174,15 @@ export class AnnotationsRepo {
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [Date.now(), Date.now(), id, this.libraryId],
+      (now) => [now, now, id, this.libraryId],
+      `Annotation ${id} is missing or already removed`,
+      "delete",
     );
-    this.assertChanged(changed, `Annotation ${id} is missing or already removed`);
   }
 
   async restore(id: string): Promise<void> {
-    const changed = await this.db.run(
+    await this.mutateAndAppend(
+      id,
       `UPDATE annotations SET deleted_at = NULL, updated_at = ?
        WHERE id = ? AND deleted_at IS NOT NULL
          AND EXISTS (
@@ -181,8 +196,65 @@ export class AnnotationsRepo {
              AND a.work_id = annotations.work_id
              AND a.deleted_at IS NULL
          )`,
-      [Date.now(), id, this.libraryId],
+      (now) => [now, id, this.libraryId],
+      `Annotation ${id} is missing or already active`,
+      "upsert",
     );
-    this.assertChanged(changed, `Annotation ${id} is missing or already active`);
   }
+
+  private async mutateAndAppend(
+    id: string,
+    statement: string,
+    params: (now: number) => unknown[],
+    errorMessage: string,
+    changeKind: KnowledgeChangeKind,
+  ): Promise<void> {
+    await withDatabaseWriteLock(this.db, () =>
+      withDatabaseSavepoint(this.db, "annotation_mutation", async () => {
+        const changed = await this.db.run(statement, params(Date.now()));
+        this.assertChanged(changed, errorMessage);
+        await this.appendKnowledgeChange(id, changeKind);
+      }),
+    );
+  }
+
+  private async appendKnowledgeChange(id: string, changeKind: KnowledgeChangeKind): Promise<void> {
+    const rows = await this.db.query<{
+      revision_id: string | null;
+      blob_sha256: string | null;
+    }>(
+      `SELECT CASE WHEN asset.id IS NULL THEN NULL ELSE revision.id END AS revision_id,
+              CASE WHEN asset.id IS NULL THEN NULL ELSE revision.blob_sha256 END AS blob_sha256
+       FROM annotations annotation
+       JOIN attachments attachment ON attachment.id = annotation.attachment_id
+       JOIN works work
+         ON work.id = annotation.work_id
+        AND work.id = attachment.work_id
+        AND work.library_id = ?
+       LEFT JOIN document_revisions revision
+         ON revision.attachment_id = attachment.id
+        AND revision.deleted_at IS NULL
+       LEFT JOIN document_assets asset
+         ON asset.id = revision.asset_id
+        AND asset.library_id = work.library_id
+        AND asset.deleted_at IS NULL
+       WHERE annotation.id = ?
+       LIMIT 1`,
+      [this.libraryId, id],
+    );
+    const source = rows[0];
+    if (!source) throw new Error(`Annotation ${id} is outside this Library`);
+    await appendKnowledgeChangeInTransaction(this.db, {
+      libraryId: this.libraryId,
+      sourceType: "annotation",
+      sourceId: id,
+      changeKind,
+      expectedRevisionId: source.revision_id,
+      expectedContentHash: isCanonicalSha256(source.blob_sha256) ? source.blob_sha256 : null,
+    });
+  }
+}
+
+function isCanonicalSha256(value: string | null): value is string {
+  return value !== null && /^[0-9a-f]{64}$/.test(value);
 }

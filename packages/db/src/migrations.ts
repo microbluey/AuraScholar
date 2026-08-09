@@ -1,9 +1,6 @@
-// Hand-rolled migration runner: an ordered list of SQL scripts applied inside
-// a transaction, tracked in _migrations. Works identically on native SQLite
-// (desktop) and sqlite-wasm (web) because it only needs `exec`.
-//
-// FTS5 tables and triggers live here rather than in the Drizzle schema —
-// Drizzle has no FTS5 support, and virtual tables must not be ORM-managed.
+// Hand-rolled migration runner: ordered SQL scripts applied transactionally and tracked in _migrations.
+// It works on native SQLite (desktop) and sqlite-wasm (web) because it only needs `exec`.
+// FTS5 tables and triggers live here rather than in the Drizzle schema — virtual tables must not be ORM-managed.
 
 export interface SqlExecutor {
   exec(sql: string): void | Promise<void>;
@@ -24,6 +21,7 @@ import { DDL_V1 } from "./ddl.js";
 import { ensureLocalLibraryIdentity } from "./local-first.js";
 import { createLibraryBoundaryTriggers } from "./migration-library-boundary-triggers.js";
 import { applyDocumentEvidenceV19 } from "./migration-document-evidence.js";
+import { knowledgeMigrations } from "./migration-knowledge-registry.js";
 import { applyResearchProjectsV18 } from "./migration-research-projects.js";
 
 export const MIGRATIONS: Migration[] = [
@@ -404,6 +402,7 @@ export const MIGRATIONS: Migration[] = [
     disableForeignKeys: true,
   },
   { version: 19, name: "document_evidence", sql: "", apply: applyDocumentEvidenceV19 },
+  ...knowledgeMigrations,
 ];
 
 async function applyLibraryOwnershipV17(db: SqlExecutor): Promise<void> {

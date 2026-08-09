@@ -83,6 +83,17 @@ Two independent knobs, set in "管理站点":
 If you see `NODE_MODULE_VERSION 130 vs 141`, that's this ABI mismatch — rebuild
 for the runtime you're using.
 
+### Optional ONNX Runtime packaging
+
+The local-embedding runtime is not yet a desktop dependency. When
+`onnxruntime-node` is added, the registered `afterPack` hook removes every
+non-target native binary from its staged `napi-v3` directory. It does nothing
+while that optional package is absent and fails packaging if the requested
+target lacks a matching binary. The `asarUnpack` rule explicitly keeps its
+native package outside `app.asar`. The current contract supports macOS,
+Windows, and Linux on x64 or arm64; universal macOS packaging needs an explicit
+dual-architecture policy before it is enabled.
+
 ## Scripts
 
 - `dev` — electron-vite dev (HMR renderer + main)
@@ -94,5 +105,10 @@ for the runtime you're using.
   harness reports its current feature stage while running and defaults to a
   five-minute renderer timeout; set `AURASCHOLAR_SMOKE_TIMEOUT_MS` to override
   it when diagnosing a slower machine.
+- `smoke:embedding-runtime` — create a disposable Electron package with the
+  optional embedding runtime, retain only the native target binary, then launch
+  it with remote model loading disabled. It downloads npm runtime packages but
+  never downloads a model artifact; use it on a native target runner or before
+  changing Electron/ONNX Runtime versions.
 - `package` — build + electron-builder (dmg/nsis/AppImage) into `release/`
 - `rebuild:electron` — recompile native modules against the Electron ABI

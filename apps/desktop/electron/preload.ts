@@ -15,6 +15,12 @@ import {
   type ResearchTab,
 } from "./shared";
 import type { DataCommandInput, DataCommandName, DataCommandOutput } from "./data-command-contract";
+import type {
+  InstallLocalEmbeddingArtifactResult,
+  RemoveLocalEmbeddingArtifactResult,
+} from "./main/embedding-artifact-commands";
+import type { LocalEmbeddingArtifactCatalogStatus } from "./main/local-embedding-artifact-catalog";
+import type { LocalEmbeddingArtifactStatus } from "./main/local-embedding-artifact-installer";
 import {
   AppCloseRequestCoordinator,
   type AppCloseRequestCallback,
@@ -136,6 +142,20 @@ const api = {
       input: DataCommandInput<K>,
     ): Promise<DataCommandOutput<K>> {
       return ipcRenderer.invoke(CH.dataCommand, { name, input });
+    },
+  },
+  embedding: {
+    artifactCatalogStatus(): Promise<LocalEmbeddingArtifactCatalogStatus> {
+      return ipcRenderer.invoke(CH.embeddingArtifactCatalogStatus);
+    },
+    artifactStatus(): Promise<LocalEmbeddingArtifactStatus> {
+      return ipcRenderer.invoke(CH.embeddingArtifactStatus);
+    },
+    installArtifact(): Promise<InstallLocalEmbeddingArtifactResult> {
+      return ipcRenderer.invoke(CH.embeddingArtifactInstall);
+    },
+    removeArtifact(): Promise<RemoveLocalEmbeddingArtifactResult> {
+      return ipcRenderer.invoke(CH.embeddingArtifactRemove);
     },
   },
   evidence: {
