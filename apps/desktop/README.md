@@ -12,9 +12,10 @@ built with [electron-vite](https://electron-vite.org/).
   connection (better-sqlite3), CORS-free HTTP, FS under app-data, OS
   notifications, secrets, the multi-tab research browser, and the local
   citation bridge.
-- **Platform layer** — `src/services/aura-platform.ts` / `aura-db.ts` adapt
-  the `window.aura` preload bridge to the `@aurascholar/platform` interfaces
-  (HTTP / FS / notifications) and the shared `Database` handle.
+- **Platform layer** — `src/services/aura-platform.ts` adapts the restricted
+  `window.aura` preload bridge to HTTP, constrained app-data file operations,
+  and notifications. Renderer data access never receives a shared `Database`
+  handle.
 - **Renderer data boundaries** — new and migrated pages consume typed services
   instead of opening database sessions or embedding SQL. Read services own
   active-Library scoping and row aggregation; durable multi-row mutations go
@@ -22,6 +23,10 @@ built with [electron-vite](https://electron-vite.org/).
   remains in the main process. The architecture-health gate rejects recognized
   direct database-session, Repository-construction, and SQL-access patterns in
   renderer pages and components.
+- **Smoke-only raw SQL** — the end-to-end smoke harness has an isolated raw
+  SQL bridge solely for fixture setup and inspection. Main grants it only to
+  an unpackaged smoke process; packaged builds ignore `AURASCHOLAR_SMOKE` and
+  never expose that capability through preload.
 - **Renderer feature controllers** — migrated workflows keep async mutations,
   modal lifecycles, and global event subscriptions in feature hooks. Pages
   consume semantic actions and compose those workflows with their view state.
