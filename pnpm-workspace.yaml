@@ -1,6 +1,9 @@
 packages:
   - "apps/*"
   - "packages/*"
+overrides:
+  shell-quote: 1.10.0
+  sharp: 0.35.3
 allowBuilds:
   better-sqlite3: true
   electron: true

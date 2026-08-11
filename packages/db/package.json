@@ -107,7 +107,7 @@
   },
   "dependencies": {
     "@aurascholar/platform": "workspace:*",
-    "drizzle-orm": "^0.38.3",
+    "drizzle-orm": "0.45.2",
     "uuidv7": "^1.0.2",
     "ts-fsrs": "^4.6.1"
   },
