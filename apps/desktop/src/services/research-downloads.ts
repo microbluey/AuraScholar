@@ -6,7 +6,7 @@
 // nothing written) and surfaced to a confirmation card — the user picks/edits
 // before anything reaches the library; citation files (.bib etc.) are
 // authoritative and imported directly. No per-site scraping required.
-import { auraFs } from "./aura-platform";
+import { auraFiles, auraFs } from "./aura-platform";
 import { describeSafeError } from "./sensitive-text";
 import type { IngestDraft } from "./library-types";
 import type {
@@ -53,7 +53,7 @@ async function ingestDownloadedFile(
   const display = fileName.replace(/^\d+-/, "");
   const ext = extOf(display);
   try {
-    const bytes = await auraFs.readFile(relPath);
+    const bytes = await auraFiles.readResearchDownload(relPath);
     if (ext === ".pdf") {
       // Analyze only — never auto-write. The page identity (citation_* meta) is
       // preferred over guessing a DOI from the PDF body. The temp file is kept
@@ -158,9 +158,9 @@ function ensureDownloadBroker(): boolean {
     void inspectFinishedDownload(payload).then((result) => {
       if (generation !== brokerGeneration) {
         if (result.draft?.pdf) {
-          void import("./library-actions").then(({ discardStagedPdf }) =>
-            discardStagedPdf(result.draft?.pdf),
-          ).catch(() => {});
+          void import("./library-actions")
+            .then(({ discardStagedPdf }) => discardStagedPdf(result.draft?.pdf))
+            .catch(() => {});
         }
         return;
       }
@@ -203,9 +203,9 @@ export function disposeResearchDownloadBroker(): void {
   const abandoned = bufferedResults.splice(0);
   for (const result of abandoned) {
     if (result.draft?.pdf) {
-      void import("./library-actions").then(({ discardStagedPdf }) =>
-        discardStagedPdf(result.draft?.pdf),
-      ).catch(() => {});
+      void import("./library-actions")
+        .then(({ discardStagedPdf }) => discardStagedPdf(result.draft?.pdf))
+        .catch(() => {});
     }
   }
 }

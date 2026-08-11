@@ -1,62 +1,112 @@
+import type { WorkInput } from "@aurascholar/db/repos/works";
+import type { DataCommandMap } from "../../electron/data-command-contract";
 import { auraFs } from "./aura-platform";
-import { libraryRepos as repos } from "./library-repos";
-import type { CommitIngestArgs, IngestResult, PendingPdf } from "./library-types";
+import type { PendingPdf } from "./library-types";
+
+type FinalizeIngestCommand = DataCommandMap["library.finalizeIngest"];
+type FindIngestDedupCommand = DataCommandMap["library.findIngestDedup"];
+type ReleaseStagedPdfCommand = DataCommandMap["library.releaseStagedPdf"];
+type StagePdfCommand = DataCommandMap["library.stagePdf"];
+
+export type FinalizeIngestDecision =
+  | { mode: "attach"; pdf: PendingPdf | null; workId: string }
+  | { mode: "create"; pdf: PendingPdf | null; workInput: WorkInput };
+
+export type FinalizeIngestResult = FinalizeIngestCommand["output"];
+export type FindIngestDedupResult = FindIngestDedupCommand["output"];
+export type StagedPdfReceipt = StagePdfCommand["output"];
+
+export interface FinalizeDedupIngestResult {
+  attachmentError: unknown | null;
+  result: FinalizeIngestResult;
+}
 
 /**
- * Commit a user-confirmed import: the ONLY place that writes works/attachments.
- * `workInput` is the user's final pick/edit; `pdf` is the staged blob (already
- * on disk) to attach.
+ * Commit one reviewed ingest decision through the main-process transaction.
+ * `PendingPdf.relPath` is intentionally kept out of the command input: it is
+ * a renderer-only research-download cleanup capability.
  */
-export async function commitIngest(args: CommitIngestArgs): Promise<IngestResult> {
-  const { works, attachments } = await repos();
-  const { id, deduped } = await works.upsert(args.workInput);
-  let pdfFetched = false;
-  if (args.pdf) {
-    await attachments.create({
-      workId: id,
-      sha256: args.pdf.sha,
-      byteSize: args.pdf.byteSize,
-      originalFilename: args.pdf.fileName,
-      fetchedVia: args.pdf.fetchedVia,
-      pageCount: args.pdf.pageCount,
+export function finalizeIngest(decision: FinalizeIngestDecision): Promise<FinalizeIngestResult> {
+  const pdf = toStagedPdfInput(decision.pdf);
+  if (decision.mode === "create") {
+    return window.aura.data.command("library.finalizeIngest", {
+      mode: "create",
+      pdf,
+      workInput: decision.workInput,
     });
-    pdfFetched = true;
   }
-  return { workId: id, deduped, title: args.workInput.title, pdfFetched };
-}
-
-/** Restore a soft-deleted dedup hit and surface it (no new rows written). */
-export async function restoreDedup(workId: string): Promise<void> {
-  const { works } = await repos();
-  await works.restore(workId);
-}
-
-/** Attach an already-staged PDF (blob on disk) to a work; used for dedup hits. */
-export async function attachStagedPdf(
-  workId: string,
-  pdf: PendingPdf,
-): Promise<{ id: string; deduped: boolean }> {
-  const { attachments } = await repos();
-  return attachments.create({
-    workId,
-    sha256: pdf.sha,
-    byteSize: pdf.byteSize,
-    originalFilename: pdf.fileName,
-    fetchedVia: pdf.fetchedVia,
-    pageCount: pdf.pageCount,
+  return window.aura.data.command("library.finalizeIngest", {
+    mode: "attach",
+    pdf,
+    workId: decision.workId,
   });
 }
 
 /**
+ * Query only the active local Library for an exact PDF or DOI ingest hit.
+ * The renderer never receives a database handle or a caller-selected Library
+ * scope; this is intentionally smaller than a general work/attachment API.
+ */
+export function findIngestDedup(
+  input: FindIngestDedupCommand["input"],
+): Promise<FindIngestDedupResult> {
+  return window.aura.data.command("library.findIngestDedup", input);
+}
+
+/**
+ * Preserve the dedup surface when linking a fresh staged PDF fails, but never
+ * claim success for a removed or foreign target. Main must independently
+ * revalidate the same active work with a no-PDF, idempotent attach command.
+ */
+export async function finalizeDedupIngest(
+  workId: string,
+  pdf: PendingPdf | null,
+): Promise<FinalizeDedupIngestResult> {
+  try {
+    return {
+      attachmentError: null,
+      result: await finalizeIngest({ mode: "attach", pdf, workId }),
+    };
+  } catch (attachmentError) {
+    if (!pdf) throw attachmentError;
+    try {
+      const result = await finalizeIngest({ mode: "attach", pdf: null, workId });
+      await discardStagedPdf(pdf);
+      return { attachmentError, result };
+    } catch {
+      throw attachmentError;
+    }
+  }
+}
+
+function toStagedPdfInput(pdf: PendingPdf | null): FinalizeIngestCommand["input"]["pdf"] {
+  if (!pdf) return null;
+  return {
+    fetchedVia: pdf.fetchedVia,
+    fileName: pdf.fileName,
+    pageCount: pdf.pageCount,
+    stageId: pdf.stageId,
+    ...(pdf.sourceUrl === undefined ? {} : { sourceUrl: pdf.sourceUrl }),
+  };
+}
+
+/** Main owns canonical blob writes and returns an opaque one-time receipt. */
+export function stagePdf(bytes: Uint8Array): Promise<StagedPdfReceipt> {
+  return window.aura.data.command("library.stagePdf", { bytes });
+}
+
+/**
  * Discard a PDF staged during analysis when the user cancels before commit.
- * Only the transient research-download path is removed here. Content-addressed
- * blobs are global across Libraries, so a scoped reference check followed by a
- * filesystem delete would race another Library attaching the same SHA. Orphan
- * cleanup belongs to a future globally serialized blob compactor.
+ * Main releases only its short-lived receipt, never global content-addressed
+ * bytes; the renderer separately clears a research-download temp file.
  */
 export async function discardStagedPdf(pdf: PendingPdf | null | undefined): Promise<void> {
   if (!pdf) return;
-  if (pdf.relPath) {
-    await auraFs.deleteFile(pdf.relPath).catch(() => {});
-  }
+  const releases: Promise<unknown>[] = [releaseStagedPdf(pdf.stageId).catch(() => {})];
+  if (pdf.relPath) releases.push(auraFs.deleteFile(pdf.relPath).catch(() => {}));
+  await Promise.all(releases);
+}
+
+function releaseStagedPdf(stageId: string): Promise<ReleaseStagedPdfCommand["output"]> {
+  return window.aura.data.command("library.releaseStagedPdf", { stageId });
 }

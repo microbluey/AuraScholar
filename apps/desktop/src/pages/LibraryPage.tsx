@@ -39,7 +39,7 @@ import { writeClipboardText } from "../clipboard";
 import { downloadBlob } from "../download";
 import { isImeComposing } from "../keyboard";
 import { isPlatformShortcut, shortcutLabel } from "../shortcut-labels";
-import { blobPath, sha256Hex, auraFs, isDesktopRuntime } from "../services/aura-platform";
+import { isDesktopRuntime } from "../services/aura-platform";
 import { fulltextWorkHandoffPath } from "../services/fulltext";
 import { waitForMinimumElapsed } from "../services/minimum-busy";
 import {
@@ -55,6 +55,7 @@ import {
 } from "../features/library/LibraryBulkActionBar";
 import { LibraryCollectionManagement } from "../features/library/LibraryCollectionManagement";
 import { LibraryActionIconButton } from "../features/library/LibraryActionIconButton";
+import { LibraryInlineSearch } from "../features/library/LibraryInlineSearch";
 import { LibraryUtilityControls } from "../features/library/LibraryUtilityControls";
 import { LibrarySelectedWorkPanel } from "../features/library/LibrarySelectedWorkPanel";
 import {
@@ -67,17 +68,17 @@ import { TextPromptDialog, type TextPromptConfig } from "../features/library/Tex
 import { libraryTagTone, readingStatusLabel } from "../features/library/library-work-display";
 import {
   createLibraryRouteRequest,
-  filterLibraryWorkspaceItems,
   hasLibraryBrowseViewChanged,
   libraryDeepLinkView,
   libraryRouteRefreshDisposition,
   ownsLibraryRouteRequest,
-  resolveLibraryVisiblePage,
+  shouldShowLibraryOnboardingEmpty,
   withoutLibraryRouteParams,
   type LibraryExtraFilter as ExtraFilter,
   type LibraryFilter,
   type LibrarySortMode as SortMode,
 } from "../features/library/library-workspace-state";
+import { loadPreviewLibraryPage } from "../features/library/preview-library-page";
 import { useLibraryBrowseState } from "../features/library/useLibraryBrowseState";
 import { useLibraryNoticeLifecycle } from "../features/library/useLibraryNoticeLifecycle";
 import { reduceLibraryNoticeState } from "../features/library/library-notice-lifecycle";
@@ -103,6 +104,7 @@ import {
   emptyWorkMeta,
   loadLibraryPageData,
   loadLibraryWorkRuntimeMeta,
+  type LibraryPageBrowseSummary,
   type WorkRuntimeMeta,
   type WorkTableMeta,
 } from "../services/library-page-data";
@@ -136,10 +138,7 @@ interface LibrarySmokeWindow extends Window {
   __AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__?: string;
 }
 
-// How many works to show per page. The DB list() caps at a higher hard limit
-// (works.ts:list default 200); paging is a client-side window over that set.
 const PAGE_SIZE = 30;
-const LIST_HARD_LIMIT = 1000;
 const MIN_CITATION_BUSY_MS = 350;
 const MIN_BULK_TAG_BUSY_MS = 250;
 const MIN_MOVE_ACTION_BUSY_MS = 250;
@@ -159,13 +158,18 @@ interface LibraryViewDetail {
 interface LibraryRefreshQuery {
   activeCollection: string | null;
   activeFilter: LibraryFilter;
+  activeSource: string | null;
+  activeTag: string | null;
   desktopRuntime: boolean;
+  extraFilter: ExtraFilter | null;
+  page: number;
   previewItems: WorkWithAuthors[];
   previewTrashItems: WorkWithAuthors[];
   previewWorkMeta: Record<string, WorkTableMeta>;
   routeKey: string | null;
   routeWorkId: string | null;
   search: string;
+  sortMode: SortMode;
 }
 
 type LibraryRefreshData = Awaited<ReturnType<typeof loadLibraryPageData>> & {
@@ -176,13 +180,18 @@ function isSameLibraryRefreshQuery(left: LibraryRefreshQuery, right: LibraryRefr
   return (
     left.activeCollection === right.activeCollection &&
     left.activeFilter === right.activeFilter &&
+    left.activeSource === right.activeSource &&
+    left.activeTag === right.activeTag &&
     left.desktopRuntime === right.desktopRuntime &&
+    left.extraFilter === right.extraFilter &&
+    left.page === right.page &&
     left.previewItems === right.previewItems &&
     left.previewTrashItems === right.previewTrashItems &&
     left.previewWorkMeta === right.previewWorkMeta &&
     left.routeKey === right.routeKey &&
     left.routeWorkId === right.routeWorkId &&
-    left.search === right.search
+    left.search === right.search &&
+    left.sortMode === right.sortMode
   );
 }
 
@@ -408,26 +417,6 @@ function cloneWorkMetaMap(source: Record<string, WorkTableMeta>): Record<string,
   return Object.fromEntries(
     Object.entries(source).map(([workId, meta]) => [workId, { ...meta, tags: [...meta.tags] }]),
   ) as Record<string, WorkTableMeta>;
-}
-
-function filterPreviewWorksFrom(works: WorkWithAuthors[], query: string): WorkWithAuthors[] {
-  const text = query.trim().toLowerCase();
-  if (!text) return works;
-  return works.filter((work) => {
-    const meta = PREVIEW_LIBRARY_META[work.id];
-    return [
-      work.title,
-      work.abstract,
-      work.doi,
-      work.arxiv_id,
-      work.venue_name,
-      work.year?.toString(),
-      ...work.authorNames,
-      ...(meta?.tags ?? []),
-    ]
-      .filter(Boolean)
-      .some((value) => value!.toLowerCase().includes(text));
-  });
 }
 
 function normalizePreviewLookup(value: string | null | undefined): string {
@@ -702,6 +691,18 @@ export function LibraryPage() {
   const [collections, setCollections] = useState<CollectionRow[]>([]);
   const [trashCount, setTrashCount] = useState(0);
   const [workMeta, setWorkMeta] = useState<Record<string, WorkTableMeta>>({});
+  const [pageTotal, setPageTotal] = useState(0);
+  const [browseSummary, setBrowseSummary] = useState<LibraryPageBrowseSummary>({
+    availableSources: [],
+    availableTags: [],
+    baseTotal: 0,
+    notedTotal: 0,
+    readingTotal: 0,
+    starredTotal: 0,
+    unreadTotal: 0,
+    withPdfTotal: 0,
+    withoutPdfTotal: 0,
+  });
   const [librarySnapshotRevision, setLibrarySnapshotRevision] = useState(0);
   const [previewWorkMeta, setPreviewWorkMeta] = useState<Record<string, WorkTableMeta>>(() =>
     cloneWorkMetaMap(PREVIEW_LIBRARY_META),
@@ -739,7 +740,7 @@ export function LibraryPage() {
   } | null>(null);
   const [importing, setImporting] = useState(false);
   // Import confirmation: analyze returns a draft (blob already staged by sha,
-  // no library rows written); commitIngest writes only after the user confirms.
+  // no library rows written); finalizeIngest writes only after confirmation.
   const [confirmDraft, setConfirmDraft] = useState<IngestDraft | null>(null);
   const [findingFulltext, setFindingFulltext] = useState(false);
   const [quickDropActive, setQuickDropActive] = useState(false);
@@ -815,41 +816,58 @@ export function LibraryPage() {
       return {
         activeCollection: routeView?.activeCollection ?? activeCollectionRef.current,
         activeFilter: routeView?.activeFilter ?? activeFilterRef.current,
+        activeSource: routeView?.activeSource ?? activeSource,
+        activeTag: routeView?.activeTag ?? activeTag,
         desktopRuntime: isDesktopRuntime(),
+        extraFilter: routeView?.extraFilter ?? extraFilter,
+        page: routeView ? 0 : page,
         previewItems,
         previewTrashItems,
         previewWorkMeta,
         routeKey: currentRouteRequest?.key ?? null,
         routeWorkId: currentRouteRequest?.workId ?? null,
         search: routeView?.search ?? searchRef.current,
+        sortMode,
       };
     },
     isSameQuery: isSameLibraryRefreshQuery,
     load: async (query) => {
       if (!query.desktopRuntime) {
-        const previewSource =
-          query.activeFilter === "trash" ? query.previewTrashItems : query.previewItems;
-        const scopedPreviewItems =
-          query.activeFilter !== "trash" && query.activeCollection
-            ? previewSource.filter(
-                (work) => PREVIEW_WORK_COLLECTIONS[work.id] === query.activeCollection,
-              )
-            : previewSource;
         return {
-          collections: PREVIEW_LIBRARY_COLLECTIONS,
+          ...loadPreviewLibraryPage({
+            activeCollection: query.activeCollection,
+            activeFilter: query.activeFilter,
+            activeSource: query.activeSource,
+            activeTag: query.activeTag,
+            collections: PREVIEW_LIBRARY_COLLECTIONS,
+            extraFilter: query.extraFilter,
+            focusWorkId: query.routeWorkId,
+            page: query.page,
+            pageSize: PAGE_SIZE,
+            previewItems: query.previewItems,
+            previewTrashItems: query.previewTrashItems,
+            previewWorkCollections: PREVIEW_WORK_COLLECTIONS,
+            search: query.search,
+            sortMode: query.sortMode,
+            workMeta: query.previewWorkMeta,
+          }),
           previewMode: true,
-          trashCount: query.previewTrashItems.length,
-          works: filterPreviewWorksFrom(scopedPreviewItems, query.search),
-          workMeta: query.previewWorkMeta,
         };
       }
       const smokeFailure = consumeLibrarySmokeReadFailure();
       if (smokeFailure) throw smokeFailure;
       const snapshot = await loadLibraryPageData({
         collectionId: query.activeCollection ?? undefined,
-        limit: LIST_HARD_LIMIT,
+        extraFilter: query.extraFilter,
+        filter: query.activeFilter,
+        focusWorkId: query.routeWorkId ?? undefined,
+        limit: PAGE_SIZE,
+        offset: query.page * PAGE_SIZE,
         search: query.search || undefined,
         showTrash: query.activeFilter === "trash",
+        sort: query.sortMode,
+        source: query.activeSource,
+        tag: query.activeTag,
       });
       await waitForLibrarySmokeAfterReadDelay();
       return { ...snapshot, previewMode: false };
@@ -860,19 +878,12 @@ export function LibraryPage() {
       setTrashCount(snapshot.trashCount);
       setItems(snapshot.works);
       setWorkMeta(snapshot.workMeta);
+      setPageTotal(snapshot.total);
+      setBrowseSummary(snapshot.browseSummary);
       setLibrarySnapshotRevision((current) => current + 1);
       if (currentRouteRequest && query.routeWorkId === currentRouteRequest.workId) {
         const routeView = libraryDeepLinkView(currentRouteRequest);
-        const routeRows = filterLibraryWorkspaceItems({
-          activeFilter: routeView.activeFilter,
-          activeSource: routeView.activeSource,
-          activeTag: routeView.activeTag,
-          extraFilter: routeView.extraFilter,
-          items: snapshot.works,
-          sortMode,
-          workMeta: snapshot.workMeta,
-        });
-        const targetIndex = routeRows.findIndex((work) => work.id === currentRouteRequest.workId);
+        const targetFound = snapshot.works.some((work) => work.id === currentRouteRequest.workId);
         skipNextPageResetRef.current = hasLibraryBrowseViewChanged(
           {
             activeCollection,
@@ -886,27 +897,20 @@ export function LibraryPage() {
         );
         applyRouteView(routeView);
         setSelectedIds(new Set());
-        setSelectedWorkId(targetIndex >= 0 ? routeView.selectedWorkId : null);
-        setPage(targetIndex >= 0 ? Math.floor(targetIndex / PAGE_SIZE) : 0);
-        if (targetIndex < 0) {
+        setSelectedWorkId(targetFound ? routeView.selectedWorkId : null);
+        setPage(targetFound ? Math.floor(snapshot.offset / PAGE_SIZE) : 0);
+        if (!targetFound) {
           setMessage("没有找到要定位的文献，可能已被删除或来自另一个资料库");
         }
         appliedRouteKeyRef.current = query.routeKey;
         clearLibraryRouteParams();
       } else {
-        const refreshedRows = filterLibraryWorkspaceItems({
-          activeFilter,
-          activeSource,
-          activeTag,
-          extraFilter,
-          items: snapshot.works,
-          sortMode,
-          workMeta: snapshot.workMeta,
-        });
-        if (selectedWorkId && !refreshedRows.some((work) => work.id === selectedWorkId)) {
+        if (selectedWorkId && !snapshot.works.some((work) => work.id === selectedWorkId)) {
           setSelectedWorkId(null);
         }
-        if (refreshedRows.length === 0) setPage(0);
+        const loadedPage = Math.floor(snapshot.offset / PAGE_SIZE);
+        if (loadedPage !== query.page) setPage(loadedPage);
+        if (snapshot.total === 0) setPage(0);
       }
       setLibraryLoadError(null);
       setMessage((current) => {
@@ -948,13 +952,18 @@ export function LibraryPage() {
   }, [
     activeCollection,
     activeFilter,
+    activeSource,
+    activeTag,
     appliedRouteKeyRef,
     currentRouteKey,
+    extraFilter,
+    page,
     previewItems,
     previewTrashItems,
     previewWorkMeta,
     refresh,
     search,
+    sortMode,
   ]);
 
   useEffect(() => {
@@ -982,18 +991,15 @@ export function LibraryPage() {
   const surfaceDedup = useCallback(
     async (draft: IngestDraft): Promise<boolean> => {
       if (!draft.dedup) return false;
-      const { attachStagedPdf, restoreDedup } = await import("../services/library-actions");
-      await restoreDedup(draft.dedup.workId);
-      // A fresh PDF for an existing work: attach it directly (work identity is
-      // already settled, no confirmation needed).
+      const { finalizeDedupIngest } = await import("../services/library-actions");
+      // A fresh PDF for an existing work can be finalized directly: main
+      // validates the active dedup target and attaches it atomically.
+      const { attachmentError, result } = await finalizeDedupIngest(draft.dedup.workId, draft.pdf);
       let pdfMessage: string | null = null;
-      if (draft.pdf) {
-        try {
-          const attachment = await attachStagedPdf(draft.dedup.workId, draft.pdf);
-          pdfMessage = attachment.deduped ? "PDF 已经挂过" : "PDF 已挂到该文献";
-        } catch (e) {
-          pdfMessage = `PDF 挂载失败:${describeSafeError(e)}`;
-        }
+      if (attachmentError) {
+        pdfMessage = `PDF 挂载失败:${describeSafeError(attachmentError)}`;
+      } else if (result.attachment) {
+        pdfMessage = result.attachment.deduped ? "PDF 已经挂过" : "PDF 已挂到该文献";
       }
       setMessage(`已在库中:${draft.dedup.title}${pdfMessage ? `，${pdfMessage}` : ""}`);
       await refresh();
@@ -1102,13 +1108,12 @@ export function LibraryPage() {
       setMessage("正在识别 PDF…");
       try {
         const data = new Uint8Array(await file.arrayBuffer());
-        const sha = await sha256Hex(data);
-        await auraFs.writeFile(blobPath(sha), data);
+        const { stagePdf } = await import("../services/library-actions");
+        const receipt = await stagePdf(data);
         const title = file.name.replace(/\.pdf$/i, "") || "Smoke PDF";
         const pdf: PendingPdf = {
-          sha,
+          ...receipt,
           fileName: file.name,
-          byteSize: data.byteLength,
           pageCount: 1,
           relPath: null,
           fetchedVia: "manual",
@@ -1142,26 +1147,18 @@ export function LibraryPage() {
   // User confirmed the import card → write to the library (create or attach).
   const handleConfirmImport = useCallback(
     async (decision: ImportDecision) => {
-      const draft = confirmDraft;
-      const { attachStagedPdf, commitIngest, restoreDedup } =
-        await import("../services/library-actions");
+      const { finalizeIngest } = await import("../services/library-actions");
+      const result = await finalizeIngest(decision);
       if (decision.mode === "attach") {
-        await restoreDedup(decision.workId);
-        if (decision.pdf) await attachStagedPdf(decision.workId, decision.pdf);
         setMessage("已将 PDF 挂到所选文献");
       } else {
-        const result = await commitIngest({
-          workInput: decision.workInput,
-          pdf: decision.pdf,
-          source: draft?.source ?? "pdf",
-        });
         setMessage(`已入库:${result.title}`);
       }
       setConfirmDraft(null);
       window.dispatchEvent(new Event("aurascholar:library-updated"));
       await refresh();
     },
-    [confirmDraft, refresh],
+    [refresh],
   );
 
   const handleCancelImport = useCallback(() => {
@@ -1205,45 +1202,24 @@ export function LibraryPage() {
     );
   }, [activeCollection, activeFilter, activeTag]);
 
-  const availableTags = useMemo(
-    () =>
-      Array.from(new Set(items.flatMap((work) => workMeta[work.id]?.tags ?? []))).sort((a, b) =>
-        a.localeCompare(b, "zh-CN"),
-      ),
-    [items, workMeta],
-  );
-  const availableSources = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          items
-            .flatMap((work) => [work.venue_name, work.type, work.arxiv_id ? "arXiv" : null])
-            .filter((value): value is string => Boolean(value?.trim())),
-        ),
-      ).sort((a, b) => a.localeCompare(b, "zh-CN")),
-    [items],
-  );
-
   const isTrashView = activeFilter === "trash";
   const hasSearchQuery = search.trim().length > 0;
   const hasActiveLibraryFilter = Boolean(
     activeCollection || activeTag || activeSource || extraFilter || activeFilter !== "all",
   );
+  const showOnboardingEmpty = shouldShowLibraryOnboardingEmpty({
+    activeCollection,
+    activeFilter,
+    activeSource,
+    activeTag,
+    extraFilter,
+    hasSearchQuery,
+    itemCount: items.length,
+  });
   const advancedFacetCount = [activeSource, extraFilter].filter(Boolean).length;
-  const filteredItems = useMemo(() => {
-    return filterLibraryWorkspaceItems({
-      activeFilter,
-      activeSource,
-      activeTag,
-      extraFilter,
-      items,
-      sortMode,
-      workMeta,
-    });
-  }, [activeFilter, activeSource, activeTag, extraFilter, items, sortMode, workMeta]);
-  const countBaseItems = isTrashView ? [] : items;
-  const totalDisplay = countBaseItems.length.toLocaleString("zh-CN");
-  const tableRows = filteredItems;
+  const { availableSources, availableTags } = browseSummary;
+  const totalDisplay = browseSummary.baseTotal.toLocaleString("zh-CN");
+  const tableRows = items;
   const actionableSelectedIds = useMemo(
     () =>
       scopeSelectedIds(
@@ -1252,28 +1228,19 @@ export function LibraryPage() {
       ),
     [selectedIds, tableRows],
   );
-  const pageCount = Math.max(1, Math.ceil(tableRows.length / PAGE_SIZE));
-  const safePage = resolveLibraryVisiblePage({
-    page,
-    pageCount,
-    pageSize: PAGE_SIZE,
-    selectedWorkId,
-    workIds: tableRows.map((work) => work.id),
-  });
-  const pagedRows = useMemo(
-    () => tableRows.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
-    [tableRows, safePage],
-  );
+  const pageCount = Math.max(1, Math.ceil(pageTotal / PAGE_SIZE));
+  const safePage = Math.min(Math.max(0, page), pageCount - 1);
+  const pagedRows = tableRows;
   const pageSelectedCount = useMemo(
     () => pagedRows.filter((work) => selectedIds.has(work.id)).length,
     [pagedRows, selectedIds],
   );
   const pageAllSelected = pagedRows.length > 0 && pageSelectedCount === pagedRows.length;
   const pageSomeSelected = pageSelectedCount > 0 && !pageAllSelected;
-  const readingCount = countBaseItems.filter((w) => w.reading_status === "reading").length;
-  const unreadCount = countBaseItems.filter((w) => w.reading_status === "unread").length;
-  const notedCount = countBaseItems.filter((w) => (workMeta[w.id]?.annotations ?? 0) > 0).length;
-  const starredCount = countBaseItems.filter((w) => w.starred === 1).length;
+  const readingCount = browseSummary.readingTotal;
+  const unreadCount = browseSummary.unreadTotal;
+  const notedCount = browseSummary.notedTotal;
+  const starredCount = browseSummary.starredTotal;
   const activeCollectionRow =
     collections.find((collection) => collection.id === activeCollection) ?? null;
   const activeCollectionPath = useMemo(
@@ -1285,7 +1252,7 @@ export function LibraryPage() {
     : (activeCollectionRow?.name ??
       (activeTag ? `标签:${activeTag}` : activeSource ? `来源:${activeSource}` : "全部文献"));
   const viewMetaParts = [
-    `${tableRows.length.toLocaleString("zh-CN")} 条结果`,
+    `${pageTotal.toLocaleString("zh-CN")} 条结果`,
     activeFilter === "reading"
       ? "阅读中"
       : activeFilter === "unread"
@@ -1306,7 +1273,7 @@ export function LibraryPage() {
     ? "当前筛选无结果"
     : isTrashView
       ? "回收站为空"
-      : items.length > 0
+      : browseSummary.baseTotal > 0
         ? "当前筛选无结果"
         : activeCollection
           ? "这个文件夹是空的"
@@ -1315,7 +1282,7 @@ export function LibraryPage() {
     ? "换一个关键词，或清除搜索查看当前结果。"
     : isTrashView
       ? "移入回收站的文献会显示在这里，可以恢复或永久删除。"
-      : items.length > 0
+      : browseSummary.baseTotal > 0
         ? "换一个筛选条件，或在上方搜索框里缩小/清除关键词。"
         : activeCollection
           ? "这个文件夹是空的。"
@@ -1426,9 +1393,8 @@ export function LibraryPage() {
     [refresh, selectedWork],
   );
 
-  // "Find full text" for a work missing a PDF: try OA first (still confirmed via
-  // the card, defaulting to attach); otherwise open the browser at its landing
-  // page carrying the work id so the eventual download attaches to this work.
+  // "Find full text" for a work missing a PDF: main tries and attaches a safe
+  // OA copy directly; otherwise the browser handoff retains the work target.
   const handleFindFulltext = useCallback(async () => {
     if (!selectedWork) return;
     if (!isDesktopRuntime()) {
@@ -1449,19 +1415,11 @@ export function LibraryPage() {
     setFindingFulltext(true);
     setMessage("正在查找开放获取全文…");
     try {
-      const { analyzeOaPdf } = await import("../services/library");
-      const draft = await analyzeOaPdf({
-        doi: selectedWork.doi ?? undefined,
-        arxivId: selectedWork.arxiv_id ?? undefined,
-        title: selectedWork.title,
-      });
-      if (draft) {
-        setMessage(null);
-        setConfirmDraft({
-          ...draft,
-          targetWorkId: selectedWork.id,
-          targetTitle: selectedWork.title,
-        });
+      const { ensureOaPdfAttachment } = await import("../services/library-oa");
+      if (await ensureOaPdfAttachment(selectedWork.id)) {
+        setMessage(`已为《${selectedWork.title}》挂载开放获取 PDF`);
+        await refresh();
+        window.dispatchEvent(new Event("aurascholar:library-updated"));
         return;
       }
       // No OA copy — hand off to the browser at the publisher / search page.
@@ -1482,7 +1440,7 @@ export function LibraryPage() {
     } finally {
       setFindingFulltext(false);
     }
-  }, [selectedWork, navigate]);
+  }, [navigate, refresh, selectedWork]);
 
   const updateWorkStarred = useCallback(
     async (work: WorkWithAuthors, starred: boolean) => {
@@ -2643,39 +2601,24 @@ export function LibraryPage() {
               <span>{viewSubtitle}</span>
             </div>
           </div>
-          <div className="library-inline-search library-inline-search--header">
-            <input
-              ref={searchInputRef}
-              className="au-input"
-              aria-label={isTrashView ? "搜索回收站文献" : "搜索当前文献结果"}
-              placeholder={isTrashView ? "搜索回收站" : "在结果中搜索"}
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setSelectedIds(new Set());
-              }}
-              onKeyDown={(e) => {
-                if (isImeComposing(e)) return;
-                if (e.key === "Escape" && search) {
-                  e.preventDefault();
-                  clearInlineSearch();
-                }
-              }}
-            />
-            {search ? (
-              <button
-                type="button"
-                className="library-inline-search__clear"
-                aria-label="清除文献搜索"
-                title="清除搜索"
-                onClick={clearInlineSearch}
-              >
-                ×
-              </button>
-            ) : (
-              <span className="au-kbd">{findShortcut}</span>
-            )}
-          </div>
+          <LibraryInlineSearch
+            findShortcut={findShortcut}
+            inputRef={searchInputRef}
+            isTrashView={isTrashView}
+            search={search}
+            onClear={clearInlineSearch}
+            onSearchChange={(value) => {
+              setSearch(value);
+              setSelectedIds(new Set());
+            }}
+            onSearchKeyDown={(event) => {
+              if (isImeComposing(event)) return;
+              if (event.key === "Escape" && search) {
+                event.preventDefault();
+                clearInlineSearch();
+              }
+            }}
+          />
         </div>
         <div className="library-topbar__actions">
           <Button
@@ -2950,8 +2893,8 @@ export function LibraryPage() {
               onRetry={() => void refresh()}
               onTryExample={fillExamplePaper}
             />
-          ) : tableRows.length === 0 ? (
-            items.length === 0 && !isTrashView && !activeCollection && !hasSearchQuery ? (
+          ) : pageTotal === 0 ? (
+            showOnboardingEmpty ? (
               <LibraryOnboardingEmpty
                 busy={busy}
                 previewMode={!isDesktopRuntime()}
@@ -3089,7 +3032,7 @@ export function LibraryPage() {
                 );
               })}
               <div className="library-table__footer">
-                <span>共 {tableRows.length.toLocaleString("zh-CN")} 条</span>
+                <span>共 {pageTotal.toLocaleString("zh-CN")} 条</span>
                 <div className="library-pagination">
                   <button
                     className="library-filter-button"
@@ -3097,6 +3040,7 @@ export function LibraryPage() {
                     disabled={safePage <= 0}
                     onClick={() => {
                       cancelCurrentRouteRequest();
+                      setSelectedIds(new Set());
                       setSelectedWorkId(null);
                       setPage(Math.max(0, safePage - 1));
                     }}
@@ -3112,6 +3056,7 @@ export function LibraryPage() {
                     disabled={safePage >= pageCount - 1}
                     onClick={() => {
                       cancelCurrentRouteRequest();
+                      setSelectedIds(new Set());
                       setSelectedWorkId(null);
                       setPage(Math.min(pageCount - 1, safePage + 1));
                     }}

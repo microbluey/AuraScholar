@@ -10,6 +10,7 @@ import {
   ownsLibraryRouteRequest,
   resolveActiveLibraryRouteRequest,
   resolveLibraryVisiblePage,
+  shouldShowLibraryOnboardingEmpty,
   withoutLibraryRouteParams,
 } from "./library-workspace-state";
 
@@ -277,5 +278,33 @@ describe("Library workspace filtering", () => {
         workMeta,
       }).map((item) => item.id),
     ).toEqual(["unread", "reading"]);
+  });
+});
+
+describe("Library empty state", () => {
+  it("keeps an empty active facet distinct from first-use onboarding", () => {
+    expect(
+      shouldShowLibraryOnboardingEmpty({
+        activeCollection: null,
+        activeFilter: "all",
+        activeSource: null,
+        activeTag: null,
+        extraFilter: null,
+        hasSearchQuery: false,
+        itemCount: 0,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldShowLibraryOnboardingEmpty({
+        activeCollection: null,
+        activeFilter: "starred",
+        activeSource: null,
+        activeTag: "Smoke QA",
+        extraFilter: null,
+        hasSearchQuery: false,
+        itemCount: 0,
+      }),
+    ).toBe(false);
   });
 });

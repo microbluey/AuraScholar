@@ -79,8 +79,8 @@ describe("legacy repository transaction debt", () => {
       .sort();
 
     // This storage adapter's savepoint is only the non-Electron fallback.
-    // Desktop sync uses sync.applyRemoteSegment, whose main-process outer
-    // transaction is asserted in data-command-architecture.test.ts.
+    // Desktop sync applies remote segments through the main-owned runner,
+    // whose outer transaction is asserted in sync-runner.test.ts.
     expect(files).toEqual(["src/shared/sqlite-sync-storage.ts"]);
   });
 

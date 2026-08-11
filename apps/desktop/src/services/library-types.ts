@@ -1,5 +1,7 @@
 import type { NormalizedWork } from "@aurascholar/connectors";
-import type { WorkInput } from "@aurascholar/db/repos/works";
+import type { OaPdfSource } from "@aurascholar/core";
+
+export type PdfFetchedVia = "manual" | "research-download" | OaPdfSource;
 
 export interface IngestResult {
   workId: string;
@@ -20,10 +22,10 @@ export interface AttachPdfResult {
 }
 
 /**
- * A PDF staged during analysis. Its blob is already written (content-addressed
- * by sha, so writing is idempotent and harmless); commit only creates the
- * `attachments` row. `relPath` is the research-download temp file, deleted by
- * the caller after commit/cancel; null for in-memory local uploads.
+ * A PDF staged by the main process. `stageId` is a short-lived, opaque
+ * capability that `finalizeIngest` can consume once; hash and byte size are
+ * returned only as renderer metadata. `relPath` is the research-download temp
+ * file, deleted by the caller after commit/cancel; null for in-memory uploads.
  */
 export interface PendingPdf {
   sha: string;
@@ -31,7 +33,10 @@ export interface PendingPdf {
   byteSize: number;
   pageCount: number;
   relPath: string | null;
-  fetchedVia: "manual" | "research-download";
+  stageId: string;
+  fetchedVia: PdfFetchedVia;
+  /** Original OA endpoint, retained only when the source is automatically fetched. */
+  sourceUrl?: string;
 }
 
 /** Import already in the library; surfaced directly without a confirm card. */
@@ -44,7 +49,7 @@ export interface DedupHit {
 /**
  * Output of the analyze step: resolved candidates + staged PDF, with NO rows
  * written to `works`/`attachments`. The user picks/edits a candidate in the
- * confirm card; only `commitIngest` writes to the library.
+ * confirm card; only `finalizeIngest` writes to the library.
  */
 export interface IngestDraft {
   source: "browser" | "pdf" | "input";
@@ -79,14 +84,6 @@ export interface IngestDraft {
   targetConflict?: DedupHit;
 }
 
-/** Minimal work shape for OA lookup (subset of NormalizedWork fields). */
-export interface OaLookupWork {
-  doi?: string;
-  arxivId?: string;
-  oaPdfUrl?: string;
-  title: string;
-}
-
 /** Best-effort metadata read straight from the PDF (Info/XMP + first page). */
 export interface PdfFields {
   title?: string;
@@ -102,9 +99,3 @@ export interface LocalMatch {
   authors: string[];
   doi: string | null;
 }
-
-export type CommitIngestArgs = {
-  workInput: WorkInput;
-  pdf: PendingPdf | null;
-  source: IngestDraft["source"];
-};

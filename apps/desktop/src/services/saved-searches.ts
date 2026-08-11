@@ -2,8 +2,7 @@
 // surfaces newly-published matches. Network work stays in the renderer, while
 // every durable mutation crosses the typed main-process command boundary.
 import type { DiscoverySource } from "@aurascholar/core";
-import { SavedSearchesRepo, type SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
-import { getLibraryDb } from "./aura-db";
+import type { SavedSearchRow } from "../../electron/data-command-contract";
 import { auraNotifier } from "./aura-platform";
 import type { DiscoveryResultWithLibrary } from "./discovery";
 import {
@@ -19,6 +18,7 @@ import { savedSearchPollKey, waitForSavedSearchPoll } from "./saved-search-polli
 import type {
   CreateSavedSearchResult,
   SavedSearchNotification,
+  SavedSearchReadRepository,
   SavedSearchScope,
   SavedSearchServiceDependencies,
   SavedSearchTimer,
@@ -79,6 +79,18 @@ const defaultWrites: SavedSearchWriteGateway = {
   },
 };
 
+const defaultReads: SavedSearchReadRepository = {
+  async due() {
+    return (await window.aura.data.command("savedSearch.listDue", {})).savedSearches;
+  },
+  async get(savedSearchId) {
+    return (await window.aura.data.command("savedSearch.get", { savedSearchId })).savedSearch;
+  },
+  async list() {
+    return (await window.aura.data.command("savedSearch.list", {})).savedSearches;
+  },
+};
+
 const defaultDependencies: SavedSearchServiceDependencies = {
   clearTimer: (timer) => globalThis.clearTimeout(timer),
   dispatchUpdated: () => {
@@ -90,8 +102,8 @@ const defaultDependencies: SavedSearchServiceDependencies = {
   now: () => Date.now(),
   onLoopError: () => undefined,
   async openScope() {
-    const { db, libraryId } = await getLibraryDb();
-    return { libraryId, repository: new SavedSearchesRepo(db, libraryId) };
+    const { libraryId } = await window.aura.data.command("savedSearch.getScope", {});
+    return { libraryId, repository: defaultReads };
   },
   schedule: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
   async search(query, sources, signal) {
@@ -173,7 +185,7 @@ export class SavedSearchService {
     signal?.throwIfAborted();
     const scope = await this.dependencies.openScope();
     signal?.throwIfAborted();
-    const due = (await scope.repository.due(this.dependencies.now())).map((row) => ({
+    const due = (await scope.repository.due()).map((row) => ({
       generation: this.pollGeneration(scope.libraryId, row.id),
       row,
     }));

@@ -30,7 +30,6 @@ import {
 } from "./features/shell/app-navigation";
 import { isImeComposing } from "./keyboard";
 import { isPlatformShortcut, shortcutLabel } from "./shortcut-labels";
-import { readLocalStorageJson } from "./storage";
 import { isDesktopRuntime } from "./services/aura-platform";
 import { cancelExitBarriers, runExitBarriers } from "./services/exit-barriers";
 import { describeSafeError } from "./services/sensitive-text";
@@ -152,24 +151,18 @@ export function resolveAppCommandShortcut({
   return "open-global";
 }
 
-function readStoredAiModelLabel(): string {
-  const parsed = readLocalStorageJson<{ model?: unknown } | null>("ai-settings", null);
-  return typeof parsed?.model === "string" ? parsed.model.trim() : "";
-}
-
 function initialAiShellStatus(): AiShellStatus {
   if (!isDesktopRuntime()) {
     return {
       checking: false,
-      model: readStoredAiModelLabel() || AI_PREVIEW_MODEL_LABEL,
+      model: AI_PREVIEW_MODEL_LABEL,
       preview: true,
       ready: true,
     };
   }
-  const storedModel = readStoredAiModelLabel();
   return {
     checking: true,
-    model: storedModel || AI_UNCONFIGURED_LABEL,
+    model: AI_UNCONFIGURED_LABEL,
     ready: false,
   };
 }
@@ -178,7 +171,7 @@ async function readAiShellStatus(): Promise<AiShellStatus> {
   if (!isDesktopRuntime()) {
     return {
       checking: false,
-      model: readStoredAiModelLabel() || AI_PREVIEW_MODEL_LABEL,
+      model: AI_PREVIEW_MODEL_LABEL,
       preview: true,
       ready: true,
     };
@@ -195,14 +188,14 @@ async function readAiShellStatus(): Promise<AiShellStatus> {
     }
     return {
       checking: false,
-      model: readStoredAiModelLabel() || AI_UNCONFIGURED_LABEL,
+      model: AI_UNCONFIGURED_LABEL,
       ready: false,
     };
   } catch (error) {
     return {
       checking: false,
       error: describeUnknownError(error),
-      model: readStoredAiModelLabel() || AI_UNCONFIGURED_LABEL,
+      model: AI_UNCONFIGURED_LABEL,
       ready: false,
     };
   }

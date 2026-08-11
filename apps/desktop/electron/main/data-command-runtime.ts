@@ -1,6 +1,8 @@
 import type { Database } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import type { DataCommandName, DataCommandOutput } from "../data-command-contract";
+import type { LibraryStagePdfCommandResult } from "../library-ingest-command-contract";
+import type { StagedPdfClaim } from "./library-pdf-staging";
 
 const MAX_RECORD_ID_LENGTH = 512;
 export const MAX_LIBRARY_ORGANIZATION_UNDO_WORK_IDS = 20_000;
@@ -18,6 +20,17 @@ export interface DataCommandDependencies {
     ) => DataCommandOutput<NoInfer<K>> | Promise<DataCommandOutput<NoInfer<K>>>,
   ): Promise<DataCommandOutput<K>>;
   getDeviceId?(): Promise<string>;
+  /** Main-only, one-time receipt for an already persisted canonical PDF blob. */
+  claimStagedPdf?(stageId: string): Promise<StagedPdfClaim>;
+  /**
+   * Revalidates a claimed receipt against its current canonical blob before a
+   * durable ingest transaction can reference it.
+   */
+  verifyStagedPdf?(receipt: LibraryStagePdfCommandResult): Promise<void>;
+  /** Main-only canonical PDF writer; never supplied by renderer code. */
+  stagePdf?(bytes: Uint8Array): Promise<LibraryStagePdfCommandResult>;
+  /** Drops an uncommitted stage capability without deleting global blob bytes. */
+  releaseStagedPdf?(stageId: string): boolean | Promise<boolean>;
   transaction<K extends DataCommandName>(
     commandName: K,
     operation: (

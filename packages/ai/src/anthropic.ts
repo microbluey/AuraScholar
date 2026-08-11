@@ -55,6 +55,7 @@ export class AnthropicProvider implements AIProvider {
         // Anthropic requires max_tokens; default generously when unset.
         max_tokens: options.maxTokens ?? 4096,
       }),
+      signal: options.signal,
       timeoutMs: 120_000,
     });
     if (res.status !== 200) {

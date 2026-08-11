@@ -27,9 +27,8 @@ export const smokeLibrarySeedAssets = String.raw`            await window.aura.d
               [MISSING_PDF.workId, TAG_MANAGER_SMOKE.id]
             );
             const pdfBytes = makeSmokePdf();
-            const pdfSha = await sha256Hex(pdfBytes);
-            const pdfPath = "blobs/" + pdfSha.slice(0, 2) + "/" + pdfSha + ".pdf";
-            await window.aura.fs.writeFile(pdfPath, pdfBytes);
+            const stagedPdf = await window.aura.data.command("library.stagePdf", { bytes: pdfBytes });
+            const pdfSha = stagedPdf.sha;
             await window.aura.db.run(
               "INSERT OR IGNORE INTO attachments (id, work_id, kind, sha256, byte_size, original_filename, fetched_via, page_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [

@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { describeSafeError } from "@aurascholar/platform";
 import {
   CH,
   EV,
@@ -8,8 +7,6 @@ import {
   type CaptureResult,
   type DownloadFinishedPayload,
   type DownloadStartedPayload,
-  type HttpRequestDTO,
-  type HttpResultDTO,
   type RecoverEvidenceSourceInput,
   type RecoverEvidenceSourceResult,
   type ResearchTab,
@@ -25,6 +22,12 @@ import {
   AppCloseRequestCoordinator,
   type AppCloseRequestCallback,
 } from "./preload/close-lifecycle";
+import { hasPreloadSmokeBridge } from "./smoke-mode";
+
+// Raw SQL exists only to seed and inspect the isolated end-to-end smoke app.
+// Main grants this startup argument only for an unpackaged smoke process. Do
+// not rely on AURASCHOLAR_SMOKE here: a packaged process may inherit it.
+const SMOKE_MODE = hasPreloadSmokeBridge(process.argv);
 
 const appCloseRequestCoordinator = new AppCloseRequestCoordinator((response) =>
   ipcRenderer.invoke(CH.appCloseRespond, response),
@@ -53,60 +56,32 @@ ipcRenderer.on(EV.lifecycleCloseCancelled, (_event, value: unknown) => {
 // The single, whitelisted surface the renderer may touch. No nodeIntegration;
 // everything funnels through these typed calls.
 const api = {
-  http(req: HttpRequestDTO): Promise<HttpResultDTO> {
-    return ipcRenderer.invoke(CH.http, req);
-  },
-  cancelHttp(requestId: string): Promise<void> {
-    return ipcRenderer.invoke(CH.httpCancel, requestId);
-  },
   fs: {
-    readFile(path: string): Promise<Uint8Array> {
-      return ipcRenderer.invoke(CH.fsRead, path);
-    },
     writeFile(path: string, data: Uint8Array): Promise<void> {
       return ipcRenderer.invoke(CH.fsWrite, path, data);
     },
     deleteFile(path: string): Promise<void> {
       return ipcRenderer.invoke(CH.fsDelete, path);
     },
-    exists(path: string): Promise<boolean> {
-      return ipcRenderer.invoke(CH.fsExists, path);
-    },
-    listDir(path: string): Promise<string[]> {
-      return ipcRenderer.invoke(CH.fsListDir, path);
-    },
     mkdirp(path: string): Promise<void> {
       return ipcRenderer.invoke(CH.fsMkdirp, path);
+    },
+  },
+  files: {
+    readBlobPdf(sha256: string): Promise<Uint8Array> {
+      return ipcRenderer.invoke(CH.fsReadBlobPdf, sha256);
+    },
+    readResearchDownload(relPath: string): Promise<Uint8Array> {
+      return ipcRenderer.invoke(CH.fsReadResearchDownload, relPath);
     },
   },
   notify(title: string, body?: string): Promise<void> {
     return ipcRenderer.invoke(CH.notify, title, body);
   },
   clipboard: {
-    readText(): Promise<string> {
-      return ipcRenderer.invoke(CH.clipboardReadText);
-    },
     writeText(text: string): Promise<void> {
       return ipcRenderer.invoke(CH.clipboardWriteText, text);
     },
-  },
-  async openExternal(url: string): Promise<void> {
-    const error = await ipcRenderer.invoke(CH.openExternal, url);
-    if (error) throw new Error(describeSafeError(error));
-  },
-  secrets: {
-    get(key: string): Promise<string | null> {
-      return ipcRenderer.invoke(CH.secretGet, key);
-    },
-    set(key: string, value: string): Promise<void> {
-      return ipcRenderer.invoke(CH.secretSet, key, value);
-    },
-    delete(key: string): Promise<void> {
-      return ipcRenderer.invoke(CH.secretDelete, key);
-    },
-  },
-  deviceId(): Promise<string> {
-    return ipcRenderer.invoke(CH.deviceId);
   },
   lifecycle: {
     holdClose(requestId: string): Promise<boolean> {
@@ -120,20 +95,6 @@ const api = {
       return () => {
         appCloseCancelledCallbacks.delete(callback);
       };
-    },
-  },
-  db: {
-    query<T>(sql: string, params: unknown[]): Promise<T[]> {
-      return ipcRenderer.invoke(CH.dbQuery, sql, params);
-    },
-    run(sql: string, params: unknown[]): Promise<number> {
-      return ipcRenderer.invoke(CH.dbRun, sql, params);
-    },
-    exec(sql: string): Promise<void> {
-      return ipcRenderer.invoke(CH.dbExec, sql);
-    },
-    queryScalar(sql: string): Promise<unknown> {
-      return ipcRenderer.invoke(CH.dbScalar, sql);
     },
   },
   data: {
@@ -235,10 +196,30 @@ const api = {
       return () => ipcRenderer.off(EV.researchTabsChanged, listener);
     },
   },
-  citationBridgePort(): Promise<number | null> {
-    return ipcRenderer.invoke(CH.citationBridgePort);
-  },
 };
+
+// Do not include this property in `AuraApi`: production renderer code must
+// not be able to type-check against a raw database capability. Smoke scripts
+// are main-owned strings and run only when the main process registers matching
+// IPC handlers.
+if (SMOKE_MODE) {
+  Object.assign(api, {
+    db: {
+      query<T>(sql: string, params: unknown[]): Promise<T[]> {
+        return ipcRenderer.invoke(CH.dbQuery, sql, params);
+      },
+      run(sql: string, params: unknown[]): Promise<number> {
+        return ipcRenderer.invoke(CH.dbRun, sql, params);
+      },
+      exec(sql: string): Promise<void> {
+        return ipcRenderer.invoke(CH.dbExec, sql);
+      },
+      queryScalar(sql: string): Promise<unknown> {
+        return ipcRenderer.invoke(CH.dbScalar, sql);
+      },
+    },
+  });
+}
 
 contextBridge.exposeInMainWorld("aura", api);
 

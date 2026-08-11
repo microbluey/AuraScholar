@@ -1,13 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  getLibraryDb: vi.fn(),
-}));
-
-vi.mock("./aura-db", () => ({
-  getLibraryDb: mocks.getLibraryDb,
-}));
-
 import {
   createOrRestoreSentinelTask,
   deleteSentinelTask,
@@ -70,7 +62,6 @@ describe("sentinel page data gateway", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getLibraryDb.mockResolvedValue({ db: {}, libraryId: "library-1" });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: { aura: { data: { command } } },
@@ -104,6 +95,43 @@ describe("sentinel page data gateway", () => {
     expect(snapshot.tasks).toEqual([first, { ...second, last_error: "Authorization: [redacted]" }]);
     expect(snapshot.eventsByTask.get("first")?.[0]?.id).toBe("event-first");
     expect(snapshot.eventsByTask.get("second")?.[0]?.id).toBe("event-second");
+  });
+
+  it("loads the default page through one typed snapshot command", async () => {
+    const first = task("first");
+    const second = { ...task("second"), last_error: "Authorization: Bearer secret-token" };
+    command.mockResolvedValue({
+      events: [
+        {
+          detected_at: 2,
+          evidence_json: null,
+          from_state: "accepted",
+          id: "event-first",
+          notified_at: null,
+          task_id: first.id,
+          to_state: "registered",
+        },
+        {
+          detected_at: 3,
+          evidence_json: null,
+          from_state: "registered",
+          id: "event-second",
+          notified_at: null,
+          task_id: second.id,
+          to_state: "online",
+        },
+      ],
+      tasks: [first, second],
+    });
+
+    const snapshot = await loadSentinelPageSnapshot();
+
+    expect(command.mock.calls).toEqual([["sentinel.getPageSnapshot", {}]]);
+    expect(snapshot.tasks).toEqual([first, { ...second, last_error: "Authorization: [redacted]" }]);
+    expect(snapshot.eventsByTask.get(first.id)?.map((event) => event.id)).toEqual(["event-first"]);
+    expect(snapshot.eventsByTask.get(second.id)?.map((event) => event.id)).toEqual([
+      "event-second",
+    ]);
   });
 
   it("does not open the repository when already aborted", async () => {
@@ -148,6 +176,27 @@ describe("sentinel page data gateway", () => {
     expect(repo.createOrRestore).not.toHaveBeenCalled();
   });
 
+  it("does not start a default write when cancellation wins during mutation scope resolution", async () => {
+    const controller = new AbortController();
+    let resolveScope!: (value: { libraryId: string }) => void;
+    command.mockImplementation((name: string) => {
+      if (name === "library.getScope") {
+        return new Promise<{ libraryId: string }>((resolve) => {
+          resolveScope = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const pending = createOrRestoreSentinelTask({ title: "Expired" }, controller.signal);
+    await Promise.resolve();
+    controller.abort();
+    resolveScope({ libraryId: "library-1" });
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(command.mock.calls).toEqual([["library.getScope", {}]]);
+  });
+
   it("returns a committed create result even when cancellation happens during the write", async () => {
     const controller = new AbortController();
     const created = task("committed");
@@ -190,8 +239,11 @@ describe("sentinel page data gateway", () => {
   it("routes default writes through typed main-process commands", async () => {
     const created = task("command-created");
     const result = { id: created.id, status: "created" as const, task: created };
-    command.mockResolvedValueOnce(result);
-    command.mockResolvedValue(undefined);
+    command.mockImplementation((name: string) => {
+      if (name === "library.getScope") return Promise.resolve({ libraryId: "library-1" });
+      if (name === "sentinel.createOrRestore") return Promise.resolve(result);
+      return Promise.resolve(undefined);
+    });
 
     await expect(
       createOrRestoreSentinelTask({ doi: created.doi ?? undefined, title: created.title }),
@@ -201,12 +253,16 @@ describe("sentinel page data gateway", () => {
     await restoreSentinelTask(created.id);
 
     expect(command.mock.calls).toEqual([
+      ["library.getScope", {}],
       [
         "sentinel.createOrRestore",
         { doi: created.doi, libraryId: "library-1", title: created.title },
       ],
+      ["library.getScope", {}],
       ["sentinel.setStatus", { libraryId: "library-1", status: "paused", taskId: created.id }],
+      ["library.getScope", {}],
       ["sentinel.delete", { libraryId: "library-1", taskId: created.id }],
+      ["library.getScope", {}],
       ["sentinel.restore", { libraryId: "library-1", taskId: created.id }],
     ]);
   });

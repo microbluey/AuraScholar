@@ -74,7 +74,7 @@ export function GraphPage() {
         window.clearTimeout(resetId);
       };
     }
-    void listWorks(undefined, undefined, 30)
+    void listWorks(30)
       .then((rows) => {
         if (cancelled) return;
         const recentWithDoi = rows.find((work) => work.doi?.trim());

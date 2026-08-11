@@ -134,6 +134,30 @@ export function hasLibraryBrowseViewChanged(
   );
 }
 
+/**
+ * An empty scoped result is recoverable with its active filter controls; it is
+ * distinct from a genuinely empty Library, which should show first-use help.
+ */
+export function shouldShowLibraryOnboardingEmpty(input: {
+  activeCollection: string | null;
+  activeFilter: LibraryFilter;
+  activeSource: string | null;
+  activeTag: string | null;
+  extraFilter: LibraryExtraFilter | null;
+  hasSearchQuery: boolean;
+  itemCount: number;
+}): boolean {
+  return (
+    input.itemCount === 0 &&
+    !input.hasSearchQuery &&
+    input.activeFilter === "all" &&
+    !input.activeCollection &&
+    !input.activeSource &&
+    !input.activeTag &&
+    !input.extraFilter
+  );
+}
+
 export function filterLibraryWorkspaceItems(input: {
   activeFilter: LibraryFilter;
   activeSource: string | null;

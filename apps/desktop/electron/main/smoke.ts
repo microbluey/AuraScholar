@@ -6,13 +6,15 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { app, type BrowserWindow } from "electron";
 import { buildSmokeChecks } from "./smoke/checks";
-import type { SecretsFileSmoke, SmokeRendererResult } from "./smoke/contracts";
+import type { CitationBridgeSmoke, SecretsFileSmoke, SmokeRendererResult } from "./smoke/contracts";
+import { citationBridgePort } from "./citation-bridge";
 import {
   SmokeInputDriver,
   SMOKE_INPUT_REQUEST_PREFIX,
   SMOKE_INPUT_RESULT_EVENT,
 } from "./smoke/input-driver";
 import { buildRendererSmokeScript } from "./smoke/renderer-script";
+import { prepareSmokeWindowForLayout } from "./smoke/window-layout";
 
 const SMOKE_MODE = process.env.AURASCHOLAR_SMOKE === "1";
 const SMOKE_RESULT_PREFIX = "AURASCHOLAR_SMOKE_RESULT ";
@@ -25,6 +27,8 @@ const SMOKE_TIMEOUT_MS =
   Number.isFinite(parsedSmokeTimeoutMs) && parsedSmokeTimeoutMs > 0
     ? parsedSmokeTimeoutMs
     : DEFAULT_SMOKE_TIMEOUT_MS;
+const CITATION_BRIDGE_READY_TIMEOUT_MS = 2_000;
+const CITATION_BRIDGE_RETRY_INTERVAL_MS = 25;
 
 function emitSmokeResult(result: unknown, code: 0 | 1): void {
   console.log(`${SMOKE_RESULT_PREFIX}${JSON.stringify(result)}`);
@@ -53,6 +57,61 @@ async function inspectSecretsFile(): Promise<SecretsFileSmoke> {
       privateMode: false,
     };
   }
+}
+
+/**
+ * Keep the local citation bridge's port main-owned. Smoke validates its HTTP
+ * guard from the main process rather than exporting a renderer IPC just for
+ * test discovery.
+ */
+async function inspectCitationBridge(): Promise<CitationBridgeSmoke> {
+  const port = await waitForCitationBridgePort();
+  if (port === null) return { methodGuard: false, pingOk: false, unauthRejected: false };
+
+  try {
+    const base = `http://127.0.0.1:${port}`;
+    const [pingResponse, unauthResponse, methodResponse] = await Promise.all([
+      fetch(`${base}/ping`),
+      fetch(`${base}/works/search?q=smoke`),
+      fetch(`${base}/ping`, { method: "POST" }),
+    ]);
+    const [pingJson, unauthJson, methodJson] = await Promise.all([
+      readSmokeJson(pingResponse),
+      readSmokeJson(unauthResponse),
+      readSmokeJson(methodResponse),
+    ]);
+    return {
+      pingOk:
+        pingResponse.status === 200 &&
+        pingJson?.ok === true &&
+        pingJson.app === "aurascholar" &&
+        pingResponse.headers.get("cache-control") === "no-store",
+      unauthRejected: unauthResponse.status === 401 && unauthJson?.error === "bad token",
+      methodGuard:
+        methodResponse.status === 405 &&
+        methodJson?.error === "method not allowed" &&
+        (methodResponse.headers.get("allow") ?? "").includes("GET"),
+    };
+  } catch {
+    return { methodGuard: false, pingOk: false, unauthRejected: false };
+  }
+}
+
+async function readSmokeJson(response: Response): Promise<Record<string, unknown> | null> {
+  const value: unknown = await response.json().catch(() => null);
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+async function waitForCitationBridgePort(): Promise<number | null> {
+  const deadline = Date.now() + CITATION_BRIDGE_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const port = citationBridgePort();
+    if (port !== null) return port;
+    await new Promise<void>((resolve) => setTimeout(resolve, CITATION_BRIDGE_RETRY_INTERVAL_MS));
+  }
+  return citationBridgePort();
 }
 
 export function setupSmokeHarness(win: BrowserWindow): void {
@@ -164,6 +223,7 @@ export function setupSmokeHarness(win: BrowserWindow): void {
       return;
     }
 
+    prepareSmokeWindowForLayout(win);
     const script = buildRendererSmokeScript();
 
     setTimeout(() => {
@@ -171,8 +231,11 @@ export function setupSmokeHarness(win: BrowserWindow): void {
         .executeJavaScript(script, true)
         .then(async (renderer: SmokeRendererResult) => {
           await smokeInputDriver.idle();
-          const secretsFile = await inspectSecretsFile();
-          const checks = buildSmokeChecks(renderer, secretsFile);
+          const [secretsFile, citationBridge] = await Promise.all([
+            inspectSecretsFile(),
+            inspectCitationBridge(),
+          ]);
+          const checks = buildSmokeChecks(renderer, secretsFile, citationBridge);
           const failed = checks.filter((check) => !check.pass);
           const ok = failed.length === 0 && consoleErrors.length === 0;
           finish(

@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeContentSearchResult } from "../../electron/data-command-contract";
-import { getLibraryDb } from "./aura-db";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 import {
   DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL,
   searchKnowledgeContent,
 } from "./knowledge-search";
 
-vi.mock("./aura-db", () => ({ getLibraryDb: vi.fn() }));
+vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScope: vi.fn() }));
 
 const result: KnowledgeContentSearchResult = {
   id: "content-unit:service",
@@ -37,7 +37,7 @@ describe("Knowledge search desktop gateway", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    vi.mocked(getLibraryDb).mockResolvedValue({ db: {} as never, libraryId: "library:service" });
+    vi.mocked(getActiveLibraryCommandScope).mockResolvedValue("library:service");
   });
 
   it("obtains local scope and forwards only typed search filters to the command", async () => {
@@ -73,7 +73,7 @@ describe("Knowledge search desktop gateway", () => {
       results: [],
       retrieval: DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL,
     });
-    expect(getLibraryDb).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
     expect(command).not.toHaveBeenCalled();
 
     const beforeScope = new AbortController();
@@ -83,12 +83,12 @@ describe("Knowledge search desktop gateway", () => {
     ).rejects.toMatchObject({
       name: "AbortError",
     });
-    expect(getLibraryDb).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
 
     const afterScope = new AbortController();
-    vi.mocked(getLibraryDb).mockImplementationOnce(async () => {
+    vi.mocked(getActiveLibraryCommandScope).mockImplementationOnce(async () => {
       afterScope.abort();
-      return { db: {} as never, libraryId: "library:service" };
+      return "library:service";
     });
     await expect(
       searchKnowledgeContent("grounded", { signal: afterScope.signal }),

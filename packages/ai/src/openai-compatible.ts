@@ -41,6 +41,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         temperature: options.temperature,
         max_tokens: options.maxTokens,
       }),
+      signal: options.signal,
       timeoutMs: 120_000,
     });
     if (res.status !== 200) {
@@ -62,7 +63,10 @@ export class OpenAICompatibleProvider implements AIProvider {
       ...rest,
       messages: [
         ...rest.messages,
-        { role: "system", content: "Respond with a single valid JSON object only, no prose, no markdown fences." },
+        {
+          role: "system",
+          content: "Respond with a single valid JSON object only, no prose, no markdown fences.",
+        },
       ],
     };
     let lastError: unknown;

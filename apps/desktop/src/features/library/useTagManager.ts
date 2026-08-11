@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TagRow } from "@aurascholar/db";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 import { isDesktopRuntime } from "../../services/aura-platform";
 import {
@@ -9,6 +8,7 @@ import {
   renameLibraryTag,
   restoreLibraryTag,
   setLibraryTagColor,
+  type LibraryTag,
 } from "../../services/library-organization";
 import { describeSafeError } from "../../services/sensitive-text";
 import type { TextPromptConfig } from "./TextPromptDialog";
@@ -40,7 +40,7 @@ export function useTagManager({
   initialCreate?: boolean;
   onChanged: () => void;
 }) {
-  const [tags, setTags] = useState<TagRow[]>([]);
+  const [tags, setTags] = useState<LibraryTag[]>([]);
   const [loading, setLoading] = useState(true);
   const [tagPrompt, setTagPrompt] = useState<TextPromptConfig | null>(null);
   const [tagAction, setTagAction] = useState<TagManagerAction | null>(null);
@@ -140,7 +140,7 @@ export function useTagManager({
   }, [create, initialCreate, loading]);
 
   const rename = useCallback(
-    (tag: TagRow) => {
+    (tag: LibraryTag) => {
       if (tagBusy) return;
       setTagPrompt({
         title: "重命名标签",
@@ -180,7 +180,7 @@ export function useTagManager({
   );
 
   const recolor = useCallback(
-    (tag: TagRow) => {
+    (tag: LibraryTag) => {
       if (tagBusy) return;
       setTagPrompt({
         title: "设置标签颜色",
@@ -216,7 +216,7 @@ export function useTagManager({
   );
 
   const remove = useCallback(
-    async (tag: TagRow) => {
+    async (tag: LibraryTag) => {
       if (tagBusy) return;
       const confirmed = await confirm({
         title: "删除标签？",

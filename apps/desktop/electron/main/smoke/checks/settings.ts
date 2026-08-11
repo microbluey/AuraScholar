@@ -16,12 +16,12 @@ export function buildSettingsSmokeChecks(renderer: SmokeRendererResult): SmokeCh
       pass: renderer.settingsInitialLoadCompleted,
     },
     {
-      name: "settings-inline-secret-migration-failure-preserves-old-key",
+      name: "settings-ai-legacy-model-only-fails-closed",
       pass:
-        renderer.settingsInlineSecretMigrationVisible &&
-        renderer.settingsInlineSecretMigrationFailurePreserved &&
-        renderer.settingsInlineSecretMigrationRetrySanitized,
-      detail: `visible=${renderer.settingsInlineSecretMigrationVisible}; preserved=${renderer.settingsInlineSecretMigrationFailurePreserved}; sanitized=${renderer.settingsInlineSecretMigrationRetrySanitized}`,
+        renderer.settingsAiLegacyModelOnlyVisible &&
+        renderer.settingsAiLegacyModelOnlyFailsClosed &&
+        renderer.settingsAiLegacyTargetSanitized,
+      detail: `visible=${renderer.settingsAiLegacyModelOnlyVisible}; failsClosed=${renderer.settingsAiLegacyModelOnlyFailsClosed}; sanitized=${renderer.settingsAiLegacyTargetSanitized}`,
     },
     {
       name: "settings-ai-save-failure-preserves-input",

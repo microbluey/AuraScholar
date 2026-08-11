@@ -2,23 +2,13 @@
 // and the renderer. Channel names live here so both sides can't drift.
 
 export const CH = {
-  http: "platform:http",
-  httpCancel: "platform:http:cancel",
-  fsRead: "platform:fs:read",
   fsWrite: "platform:fs:write",
   fsDelete: "platform:fs:delete",
-  fsExists: "platform:fs:exists",
-  fsListDir: "platform:fs:listDir",
   fsMkdirp: "platform:fs:mkdirp",
+  fsReadBlobPdf: "platform:fs:blob-pdf:read",
+  fsReadResearchDownload: "platform:fs:research-download:read",
   notify: "platform:notify",
-  clipboardReadText: "platform:clipboard:readText",
   clipboardWriteText: "platform:clipboard:writeText",
-  openExternal: "platform:openExternal",
-  secretGet: "platform:secret:get",
-  secretSet: "platform:secret:set",
-  secretDelete: "platform:secret:delete",
-  deviceId: "platform:deviceId",
-
   dbQuery: "db:query",
   dbRun: "db:run",
   dbExec: "db:exec",
@@ -34,7 +24,6 @@ export const CH = {
   appCloseRespond: "app:close:respond",
 
   researchOpen: "research:open",
-  researchSetProxy: "research:setProxy",
   researchActivate: "research:activate",
   researchNavigate: "research:navigate",
   researchGoBack: "research:goBack",
@@ -47,8 +36,6 @@ export const CH = {
   researchCapture: "research:capture",
   researchClearSiteData: "research:clearSiteData",
   researchSiteData: "research:siteData",
-
-  citationBridgePort: "citation-bridge:port",
 } as const;
 
 // Events emitted main → renderer (via webContents.send).
@@ -73,27 +60,6 @@ export interface AppCloseResponse {
   requestId: string;
   decision: AppCloseDecision;
 }
-
-export interface HttpRequestDTO {
-  requestId?: string;
-  url: string;
-  method?: string;
-  headers?: Record<string, string>;
-  body?: Uint8Array | string;
-  timeoutMs?: number;
-}
-
-export interface HttpResponseDTO {
-  status: number;
-  headers: Record<string, string>;
-  body: Uint8Array;
-}
-
-export interface HttpAbortedDTO {
-  aborted: true;
-}
-
-export type HttpResultDTO = HttpResponseDTO | HttpAbortedDTO;
 
 export interface ResearchTab {
   tabId: string;

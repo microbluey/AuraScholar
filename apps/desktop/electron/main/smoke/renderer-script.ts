@@ -11,6 +11,7 @@ import { smokeLibrarySeedBackground } from "./fragments/library-seed-background"
 import { smokeLibrarySeedSitesGraph } from "./fragments/library-seed-sites-graph";
 import { smokeLibraryBase } from "./fragments/library-base";
 import { smokeLibraryBulkTrash } from "./fragments/library-bulk-trash";
+import { smokeLibraryFilterRecovery } from "./fragments/library-filter-recovery";
 import { smokeLibraryStatusStar } from "./fragments/library-status-star";
 import { smokeLibraryCommandPalette } from "./fragments/library-command-palette";
 import { smokeLibraryBulkOperations } from "./fragments/library-bulk-operations";
@@ -43,6 +44,10 @@ import { smokeResult } from "./fragments/result";
 
 const rendererSmokeFragments = [
   smokeFixtures,
+  String.raw`        if (!window.aura?.db) {
+          throw new Error("Smoke raw database bridge is unavailable.");
+        }
+`,
   smokeHelpers,
   smokeShellBootstrap,
   smokeSharedState,
@@ -56,6 +61,7 @@ const rendererSmokeFragments = [
   smokeLibrarySeedSitesGraph,
   smokeLibraryBase,
   smokeLibraryBulkTrash,
+  smokeLibraryFilterRecovery,
   smokeLibraryStatusStar,
   smokeLibraryCommandPalette,
   smokeLibraryBulkOperations,

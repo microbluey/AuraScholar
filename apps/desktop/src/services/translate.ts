@@ -1,238 +1,289 @@
-// Translation service for the desktop app: BYOK-style config in localStorage
-// (mirrors ai.ts; keychain migration tracked for before v0.2), and a helper
-// that resolves the configured engine into a Translator. The LLM engine reuses
-// the AI provider, so the default path needs no extra setup.
+// Renderer-safe translation facade. Provider configuration, API keys, and
+// network egress are main-owned; this module only handles settings DTOs,
+// main-command cancellation, and the existing application-global cache.
 import {
-  makeTranslator,
   md5,
-  type TranslateConfig,
+  type TranslateEngine,
   type TranslateInput,
   type TranslateOptions,
   type TranslateResult,
   type Translator,
 } from "@aurascholar/translate";
-import { auraHttp } from "./aura-platform";
-import { getDb } from "./aura-db";
-import { describeSafeError, toSafeError } from "./sensitive-text";
-import { SECRET_KEYS, getSecret, migrateInlineSecret, withSecretTransaction } from "./secrets";
-import {
-  isStorageRecord,
-  readLocalStorageJson,
-  tryWriteLocalStorageJson,
-  writeLocalStorageJson,
-} from "../storage";
+import type {
+  SaveTranslationProviderSettingsCommandInput,
+  TranslateWithConfiguredProviderCommandInput,
+  TranslationProviderSettingsSnapshot,
+} from "../../electron/translation-provider-command-contract";
+import { isStorageRecord, readLocalStorageJson, tryRemoveLocalStorageItem } from "../storage";
 
-const SETTINGS_KEY = "translate-settings";
+const LEGACY_SETTINGS_KEY = "translate-settings";
+
+const DEFAULT_CONFIG: TranslationProviderSettingsSnapshot = {
+  baidu: { appid: "", hasApiKey: false },
+  deepl: { hasApiKey: false },
+  engine: "llm",
+  targetLang: "zh",
+};
+
+/** Main-owned, key-free configuration view for Reader and Settings UI. */
+export type TranslateConfig = TranslationProviderSettingsSnapshot;
+
+/** Renderer may submit a replacement key, but can never read a stored one. */
+export interface TranslateSettingsInput {
+  baidu?: {
+    apiKey?: string;
+    appid?: string;
+  };
+  deepl?: {
+    apiKey?: string;
+    baseUrl?: string;
+  };
+  engine: TranslateEngine;
+  targetLang: string;
+}
+
+/** Main owns app-global cache persistence; callers retain only cache behavior. */
+export interface TranslationCacheDataSource {
+  clear: () => Promise<number>;
+  get: (cacheKey: string) => Promise<string | null>;
+  put: (cacheKey: string, engine: string, targetLang: string, result: string) => Promise<void>;
+}
+
+const defaultTranslationCacheDataSource: TranslationCacheDataSource = {
+  async clear() {
+    return (await window.aura.data.command("translationCache.clear", {})).deleted;
+  },
+  async get(cacheKey) {
+    return (await window.aura.data.command("translationCache.get", { cacheKey })).result;
+  },
+  async put(cacheKey, engine, targetLang, result) {
+    await window.aura.data.command("translationCache.put", {
+      cacheKey,
+      engine,
+      result,
+      targetLang,
+    });
+  },
+};
 
 /**
- * Wraps a Translator with a SQLite-backed cache. Full-page / full-text
+ * Wraps a Translator with the main-owned SQLite cache. Full-page / full-text
  * translation re-runs over the same chunks costs real BYOK tokens; caching by
- * (engine, targetLang, source-hash) makes re-opening a page instant and free.
- * Empty results are never cached (so transient failures don't stick).
+ * (provider target, target language, source hash) makes re-opening a page
+ * instant and free. Empty results are never cached.
  */
 class CachingTranslator implements Translator {
   readonly id: string;
-  constructor(private readonly inner: Translator) {
+
+  constructor(
+    private readonly inner: Translator,
+    private readonly cache: TranslationCacheDataSource,
+    private readonly cacheScope = inner.id,
+    private readonly configuredTargetLang?: string,
+  ) {
     this.id = inner.id;
   }
 
   async translate(input: TranslateInput, opts?: TranslateOptions): Promise<TranslateResult> {
+    if (opts?.signal?.aborted) throw abortError();
     const text = input.text.trim();
     if (!text) return { text: "", engine: this.id };
-    const key = md5(`${this.id}\0${input.targetLang}\0${text}`);
+    const targetLang = this.configuredTargetLang ?? input.targetLang;
+    const key = md5(`${this.cacheScope}\0${targetLang}\0${text}`);
 
-    const cached = await readCache(key).catch(() => null);
+    const cached = await this.cache.get(key).catch(() => null);
+    if (opts?.signal?.aborted) throw abortError();
     if (cached) return { text: cached, engine: `${this.id} (缓存)` };
 
-    let result: TranslateResult;
-    try {
-      result = await this.inner.translate(input, opts);
-    } catch (error) {
-      throw toSafeError(error);
-    }
+    const result = await this.inner.translate({ ...input, targetLang }, opts);
+    if (opts?.signal?.aborted) throw abortError();
     if (result.text.trim()) {
-      await writeCache(key, this.id, input.targetLang, result.text).catch(() => {});
+      await this.cache.put(key, this.id, targetLang, result.text).catch(() => {});
     }
     return result;
   }
 }
 
-async function readCache(key: string): Promise<string | null> {
-  const db = await getDb();
-  const rows = await db.query<{ result: string }>(
-    `SELECT result FROM translation_cache WHERE cache_key = ?`,
-    [key],
-  );
-  return rows[0]?.result ?? null;
+/** Testable cache wrapper that keeps cache failures out of translation flow. */
+export function createCachingTranslator(
+  inner: Translator,
+  cache: TranslationCacheDataSource = defaultTranslationCacheDataSource,
+): Translator {
+  return new CachingTranslator(inner, cache);
 }
 
-async function writeCache(
-  key: string,
-  engine: string,
-  targetLang: string,
-  result: string,
-): Promise<void> {
-  const db = await getDb();
-  await db.run(
-    `INSERT OR REPLACE INTO translation_cache (cache_key, engine, target_lang, result, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
-    [key, engine, targetLang, result, Date.now()],
-  );
-}
-
-const DEFAULT_CONFIG: TranslateConfig = {
-  engine: "llm",
-  targetLang: "zh",
-};
-
-function normalizeTranslateConfig(value: unknown): TranslateConfig {
-  if (!isStorageRecord(value)) return DEFAULT_CONFIG;
-  const engine =
-    value.engine === "deepl" || value.engine === "baidu" || value.engine === "llm"
-      ? value.engine
-      : DEFAULT_CONFIG.engine;
-  const targetLang = typeof value.targetLang === "string" && value.targetLang.trim()
-    ? value.targetLang.trim()
-    : DEFAULT_CONFIG.targetLang;
-  const deepl = isStorageRecord(value.deepl)
-    ? {
-        apiKey: typeof value.deepl.apiKey === "string" ? value.deepl.apiKey.trim() : "",
-        baseUrl:
-          typeof value.deepl.baseUrl === "string"
-            ? normalizeStoredDeepLBaseUrl(value.deepl.baseUrl)
-            : undefined,
-      }
-    : undefined;
-  const baidu = isStorageRecord(value.baidu)
-    ? {
-        appid: typeof value.baidu.appid === "string" ? value.baidu.appid.trim() : "",
-        key: typeof value.baidu.key === "string" ? value.baidu.key.trim() : "",
-      }
-    : undefined;
-  return { engine, targetLang, deepl, baidu };
-}
-
+/**
+ * Reads the main-owned configuration. A valid old localStorage record is
+ * handed off once, then removed only after main accepts it. A legacy record
+ * without an inline key remains intentionally unconfigured: main never binds
+ * its old named secret to a renderer-supplied endpoint.
+ */
 export async function loadTranslateConfig(): Promise<TranslateConfig> {
-  const parsed = normalizeTranslateConfig(readLocalStorageJson<unknown>(SETTINGS_KEY, null));
-
-  // Migrate any inline plaintext keys out of localStorage into the secret store.
-  const deeplMigration = await migrateInlineSecret(SECRET_KEYS.translateDeepl, parsed.deepl?.apiKey);
-  const baiduMigration = await migrateInlineSecret(SECRET_KEYS.translateBaidu, parsed.baidu?.key);
-  if (
-    (parsed.deepl?.apiKey && deeplMigration.persisted) ||
-    (parsed.baidu?.key && baiduMigration.persisted)
-  ) {
-    const sanitized: TranslateConfig = {
-      ...parsed,
-      deepl: parsed.deepl
-        ? { ...parsed.deepl, apiKey: deeplMigration.persisted ? "" : parsed.deepl.apiKey }
-        : undefined,
-      baidu: parsed.baidu
-        ? { ...parsed.baidu, key: baiduMigration.persisted ? "" : parsed.baidu.key }
-        : undefined,
-    };
-    tryWriteLocalStorageJson(SETTINGS_KEY, sanitized);
+  const legacy = readLegacyTranslateSettings();
+  if (legacy) {
+    const snapshot = await window.aura.data.command("translation.adoptLegacySettings", legacy);
+    tryRemoveLocalStorageItem(LEGACY_SETTINGS_KEY);
+    return snapshot;
   }
-
-  // Rehydrate keys from the secret store onto the returned config.
-  const deepl = parsed.deepl
-    ? { ...parsed.deepl, apiKey: deeplMigration.value || (await getSecret(SECRET_KEYS.translateDeepl)) }
-    : undefined;
-  const baidu = parsed.baidu
-    ? { ...parsed.baidu, key: baiduMigration.value || (await getSecret(SECRET_KEYS.translateBaidu)) }
-    : undefined;
-  return { ...parsed, deepl, baidu };
+  return (await window.aura.data.command("translation.getSettings", {})) ?? DEFAULT_CONFIG;
 }
 
-export async function saveTranslateConfig(config: TranslateConfig): Promise<void> {
-  const normalized = normalizeTranslateConfigForStorage(config);
-  // Strip the secret fields before persisting non-secret config to localStorage.
-  const sanitized: TranslateConfig = {
-    ...normalized,
-    deepl: normalized.deepl ? { ...normalized.deepl, apiKey: "" } : undefined,
-    baidu: normalized.baidu ? { ...normalized.baidu, key: "" } : undefined,
-  };
-  await withSecretTransaction(
-    [
-      { key: SECRET_KEYS.translateDeepl, value: normalized.deepl?.apiKey ?? "" },
-      { key: SECRET_KEYS.translateBaidu, value: normalized.baidu?.key ?? "" },
-    ],
-    () => {
-      writeLocalStorageJson(SETTINGS_KEY, sanitized);
+/**
+ * Saves non-secret target data in main and optionally replaces the current
+ * provider key. Omitting a key preserves it only for the same bound target;
+ * changing an endpoint or Baidu APPID requires a new key in main.
+ */
+export function saveTranslateConfig(
+  config: TranslateSettingsInput,
+): Promise<TranslationProviderSettingsSnapshot> {
+  const baiduApiKey = trimOptional(config.baidu?.apiKey);
+  const baiduAppid = trimOptional(config.baidu?.appid);
+  const deeplApiKey = trimOptional(config.deepl?.apiKey);
+  const deeplBaseUrl = trimOptional(config.deepl?.baseUrl);
+  const input: SaveTranslationProviderSettingsCommandInput = {
+    baidu: {
+      ...(baiduApiKey ? { apiKey: baiduApiKey } : {}),
+      ...(baiduAppid ? { appid: baiduAppid } : {}),
     },
-  );
+    deepl: {
+      ...(deeplApiKey ? { apiKey: deeplApiKey } : {}),
+      ...(deeplBaseUrl ? { baseUrl: deeplBaseUrl } : {}),
+    },
+    engine: config.engine,
+    targetLang: config.targetLang,
+  };
+  return window.aura.data.command("translation.saveSettings", input);
 }
 
-function normalizeTranslateConfigForStorage(config: TranslateConfig): TranslateConfig {
-  const engine =
-    config.engine === "deepl" || config.engine === "baidu" || config.engine === "llm"
-      ? config.engine
-      : DEFAULT_CONFIG.engine;
-  const targetLang = config.targetLang.trim() || DEFAULT_CONFIG.targetLang;
-  const deepl = config.deepl
-    ? {
-        apiKey: config.deepl.apiKey.trim(),
-        baseUrl: normalizeDeepLBaseUrlForStorage(config.deepl.baseUrl),
-      }
-    : undefined;
-  const baidu = config.baidu
-    ? {
-        appid: config.baidu.appid.trim(),
-        key: config.baidu.key.trim(),
-      }
-    : undefined;
-  if (engine === "deepl" && !deepl?.apiKey) {
-    throw new Error("请填写 DeepL API Key，或切换为大模型翻译。");
-  }
-  if (engine === "baidu" && (!baidu?.appid || !baidu?.key)) {
-    throw new Error("请填写百度翻译 APPID 和密钥，或切换为大模型翻译。");
-  }
-  return { baidu, deepl, engine, targetLang };
-}
-
-function normalizeStoredDeepLBaseUrl(value: string): string | undefined {
-  try {
-    return normalizeDeepLBaseUrlForStorage(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeDeepLBaseUrlForStorage(value?: string): string | undefined {
-  const raw = value?.trim() ?? "";
-  if (!raw) return undefined;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("DeepL API 地址格式不正确，请使用完整的 http:// 或 https:// 地址。");
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("DeepL API 地址仅支持 http:// 或 https://。");
-  }
-  if (url.username || url.password) {
-    throw new Error("DeepL API 地址不要包含密钥或账号，请填写在 API Key 字段中。");
-  }
-  if (url.search || url.hash) {
-    throw new Error("DeepL API 地址请填写接口根地址，不要包含查询参数或 # 片段。");
-  }
-  return url.toString().replace(/\/+$/, "");
-}
-
-/** Resolves the active translator (cache-wrapped), or an error the UI surfaces. */
+/** Resolves the active main-owned translator (cache-wrapped), or a UI error. */
 export async function resolveTranslator(): Promise<{ translator: Translator } | { error: string }> {
   const config = await loadTranslateConfig();
-  const provider =
-    config.engine === "llm" ? await import("./ai").then(({ makeProvider }) => makeProvider()) : null;
-  const result = makeTranslator(config, { http: auraHttp, provider });
-  if ("error" in result) return { error: describeSafeError(result.error) };
-  return { translator: new CachingTranslator(result.translator) };
+  if (config.engine === "deepl" && !config.deepl.hasApiKey) {
+    return { error: "请先在设置页填写 DeepL API Key，或切换为大模型翻译。" };
+  }
+  if (config.engine === "baidu" && (!config.baidu.appid || !config.baidu.hasApiKey)) {
+    return { error: "请先在设置页填写百度翻译 APPID 和密钥，或切换为大模型翻译。" };
+  }
+  const provider = new MainProcessTranslator(config);
+  return {
+    translator: new CachingTranslator(
+      provider,
+      defaultTranslationCacheDataSource,
+      translationCacheScope(config),
+      config.targetLang,
+    ),
+  };
 }
 
 /** Clears all cached translations. Returns how many rows were removed. */
 export async function clearTranslationCache(): Promise<number> {
-  const db = await getDb();
-  const before = await db.query<{ n: number }>(`SELECT COUNT(*) AS n FROM translation_cache`);
-  await db.run(`DELETE FROM translation_cache`);
-  return before[0]?.n ?? 0;
+  return defaultTranslationCacheDataSource.clear();
+}
+
+class MainProcessTranslator implements Translator {
+  readonly id: string;
+
+  constructor(config: TranslateConfig) {
+    this.id = config.engine;
+  }
+
+  async translate(input: TranslateInput, opts?: TranslateOptions): Promise<TranslateResult> {
+    const result = await invokeConfiguredTranslation(
+      {
+        ...(opts?.domain?.trim() ? { domain: opts.domain.trim() } : {}),
+        ...(input.sourceLang?.trim() ? { sourceLang: input.sourceLang.trim() } : {}),
+        text: input.text,
+      },
+      opts?.signal,
+    );
+    return result;
+  }
+}
+
+async function invokeConfiguredTranslation(
+  input: Omit<TranslateWithConfiguredProviderCommandInput, "requestId">,
+  signal?: AbortSignal,
+): Promise<TranslateResult> {
+  if (signal?.aborted) throw abortError();
+  const requestId = newTranslationRequestId();
+  let cancellationRequested = false;
+  const cancel = () => {
+    if (cancellationRequested) return;
+    cancellationRequested = true;
+    // The original invocation remains authoritative for the user-visible
+    // error/result; main may already have finished its provider request.
+    void window.aura.data.command("translation.cancel", { requestId }).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const result = await window.aura.data.command("translation.translate", { ...input, requestId });
+    if (signal?.aborted) throw abortError();
+    return result;
+  } finally {
+    signal?.removeEventListener("abort", cancel);
+  }
+}
+
+function translationCacheScope(config: TranslateConfig): string {
+  return `main:${md5(
+    JSON.stringify({
+      baiduAppid: config.baidu.appid,
+      deeplBaseUrl: config.deepl.baseUrl ?? "",
+      engine: config.engine,
+      targetLang: config.targetLang,
+    }),
+  )}`;
+}
+
+function readLegacyTranslateSettings(): SaveTranslationProviderSettingsCommandInput | null {
+  const parsed = readLocalStorageJson<unknown>(LEGACY_SETTINGS_KEY, null);
+  if (!isStorageRecord(parsed)) return null;
+  const engine: TranslateEngine =
+    parsed.engine === "deepl" || parsed.engine === "baidu" || parsed.engine === "llm"
+      ? parsed.engine
+      : "llm";
+  const targetLang =
+    typeof parsed.targetLang === "string" && parsed.targetLang.trim()
+      ? parsed.targetLang.trim()
+      : "zh";
+  const deepl = isStorageRecord(parsed.deepl) ? parsed.deepl : {};
+  const baidu = isStorageRecord(parsed.baidu) ? parsed.baidu : {};
+  const baiduApiKey = trimUnknown(baidu.key);
+  const baiduAppid = trimUnknown(baidu.appid);
+  const deeplApiKey = trimUnknown(deepl.apiKey);
+  const deeplBaseUrl = trimUnknown(deepl.baseUrl);
+  return {
+    baidu: {
+      ...(baiduApiKey ? { apiKey: baiduApiKey } : {}),
+      ...(baiduAppid ? { appid: baiduAppid } : {}),
+    },
+    deepl: {
+      ...(deeplApiKey ? { apiKey: deeplApiKey } : {}),
+      ...(deeplBaseUrl ? { baseUrl: deeplBaseUrl } : {}),
+    },
+    engine,
+    targetLang,
+  };
+}
+
+function trimOptional(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function trimUnknown(value: unknown): string | undefined {
+  return typeof value === "string" ? trimOptional(value) : undefined;
+}
+
+function newTranslationRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `translation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function abortError(): Error {
+  const error = new Error("Translation request cancelled");
+  error.name = "AbortError";
+  return error;
 }

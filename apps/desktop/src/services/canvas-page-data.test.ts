@@ -1,13 +1,11 @@
-import type { Database } from "@aurascholar/db";
 import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
 import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createCanvasPageRepository,
   loadCanvasActiveWork,
   loadCanvasAnnotationIngressSource,
+  type CanvasAnnotationIngressSource,
   type CanvasPageDataSource,
-  type CanvasPageRepository,
 } from "./canvas-page-data";
 
 function annotation(overrides: Partial<AnnotationRow> = {}): AnnotationRow {
@@ -40,150 +38,143 @@ function work(overrides: Partial<WorkWithAuthors> = {}): WorkWithAuthors {
   } as WorkWithAuthors;
 }
 
-function repository(overrides: Partial<CanvasPageRepository> = {}): CanvasPageRepository {
+function ingressSource(
+  overrides: Partial<CanvasAnnotationIngressSource> = {},
+): CanvasAnnotationIngressSource {
   return {
-    findActiveAnnotation: vi.fn(async () => annotation()),
-    findActiveWork: vi.fn(async () => work()),
+    annotation: annotation(),
+    work: work(),
     ...overrides,
   };
 }
 
-function dataSource(repo: CanvasPageRepository): CanvasPageDataSource {
-  return { open: vi.fn(async () => repo) };
+function dataSource(overrides: Partial<CanvasPageDataSource> = {}): CanvasPageDataSource {
+  return {
+    getActiveWork: vi.fn(async () => work()),
+    getAnnotationIngressSource: vi.fn(async () => ingressSource()),
+    ...overrides,
+  };
 }
 
 describe("canvas page data gateway", () => {
-  it("builds the production annotation query with Library, work, and soft-delete scope", async () => {
-    const query = vi.fn(async (_sql: string, _params: unknown[] = []) => [annotation()]);
-    const repo = createCanvasPageRepository({
-      db: { query } as unknown as Database,
-      libraryId: "library-1",
-    });
+  const command = vi.fn();
 
-    await expect(repo.findActiveAnnotation("annotation-1", "work-1")).resolves.toEqual(
-      annotation(),
-    );
-    const [sql, params] = query.mock.calls[0] ?? [];
-    expect(sql).toEqual(expect.stringContaining("w.library_id = ?"));
-    expect(sql).toEqual(expect.stringContaining("w.deleted_at IS NULL"));
-    expect(sql).toEqual(expect.stringContaining("at.work_id = an.work_id"));
-    expect(sql).toEqual(expect.stringContaining("at.deleted_at IS NULL"));
-    expect(sql).toEqual(expect.stringContaining("an.deleted_at IS NULL"));
-    expect(params).toEqual(["annotation-1", "work-1", "library-1"]);
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
   });
 
-  it("filters a soft-deleted work returned by the production repository", async () => {
-    const query = vi.fn(async (sql: string, params: unknown[]) => {
-      if (sql.includes("SELECT * FROM works")) {
-        expect(params).toEqual(["work-1", "library-1"]);
-        return [work({ deleted_at: 123 })];
-      }
-      return [];
-    });
-    const repo = createCanvasPageRepository({
-      db: { query } as unknown as Database,
-      libraryId: "library-1",
-    });
-
-    await expect(repo.findActiveWork("work-1")).resolves.toBeNull();
-  });
-
-  it("loads an active annotation and its source work from one scoped repository", async () => {
-    const row = annotation();
+  it("loads an active work through the scoped Canvas command", async () => {
     const sourceWork = work();
-    const repo = repository({
-      findActiveAnnotation: vi.fn(async () => row),
-      findActiveWork: vi.fn(async () => sourceWork),
-    });
-    const source = dataSource(repo);
+    command.mockResolvedValueOnce({ work: sourceWork });
 
-    await expect(
-      loadCanvasAnnotationIngressSource(row.id, row.work_id, undefined, source),
-    ).resolves.toEqual({ annotation: row, work: sourceWork });
-    expect(source.open).toHaveBeenCalledTimes(1);
-    expect(repo.findActiveAnnotation).toHaveBeenCalledWith(row.id, row.work_id);
-    expect(repo.findActiveWork).toHaveBeenCalledWith(row.work_id);
+    await expect(loadCanvasActiveWork(sourceWork.id)).resolves.toBe(sourceWork);
+    expect(command).toHaveBeenCalledWith("canvas.getActiveWork", { workId: sourceWork.id });
   });
 
-  it("fails closed when the annotation is missing or outside the requested work", async () => {
-    const repo = repository({
-      findActiveAnnotation: vi.fn(async () => null),
+  it("loads a Canvas annotation ingress source through one scoped command", async () => {
+    const source = ingressSource();
+    command.mockResolvedValueOnce({ source });
+
+    await expect(
+      loadCanvasAnnotationIngressSource(source.annotation.id, source.work.id),
+    ).resolves.toBe(source);
+    expect(command).toHaveBeenCalledWith("canvas.getAnnotationIngressSource", {
+      annotationId: source.annotation.id,
+      workId: source.work.id,
+    });
+  });
+
+  it("retains an injectable data source for Canvas ingress lifecycle tests", async () => {
+    const source = ingressSource();
+    const injected = dataSource({
+      getAnnotationIngressSource: vi.fn(async () => source),
     });
 
     await expect(
-      loadCanvasAnnotationIngressSource(
-        "foreign-annotation",
-        "work-1",
-        undefined,
-        dataSource(repo),
-      ),
+      loadCanvasAnnotationIngressSource(source.annotation.id, source.work.id, undefined, injected),
+    ).resolves.toBe(source);
+    expect(injected.getAnnotationIngressSource).toHaveBeenCalledWith(
+      source.annotation.id,
+      source.work.id,
+    );
+  });
+
+  it("fails closed when the ingress source is missing", async () => {
+    const injected = dataSource({
+      getAnnotationIngressSource: vi.fn(async () => null),
+    });
+
+    await expect(
+      loadCanvasAnnotationIngressSource("foreign-annotation", "work-1", undefined, injected),
     ).rejects.toThrow("没有找到属于这篇文献的批注");
-    expect(repo.findActiveWork).not.toHaveBeenCalled();
   });
 
   it("rejects a mismatched annotation returned by a faulty data source", async () => {
-    const repo = repository({
-      findActiveAnnotation: vi.fn(async () => annotation({ work_id: "work-2" })),
+    const injected = dataSource({
+      getAnnotationIngressSource: vi.fn(async () =>
+        ingressSource({ annotation: annotation({ work_id: "work-2" }) }),
+      ),
     });
 
     await expect(
-      loadCanvasAnnotationIngressSource("annotation-1", "work-1", undefined, dataSource(repo)),
+      loadCanvasAnnotationIngressSource("annotation-1", "work-1", undefined, injected),
     ).rejects.toThrow("这条批注不属于请求加入的文献");
-    expect(repo.findActiveWork).not.toHaveBeenCalled();
   });
 
-  it("rejects an annotation whose source work is no longer active", async () => {
-    const repo = repository({
-      findActiveWork: vi.fn(async () => null),
+  it("rejects an ingress source whose work is no longer active", async () => {
+    const injected = dataSource({
+      getAnnotationIngressSource: vi.fn(async () =>
+        ingressSource({ work: work({ deleted_at: 123 }) }),
+      ),
     });
 
     await expect(
-      loadCanvasAnnotationIngressSource("annotation-1", "work-1", undefined, dataSource(repo)),
+      loadCanvasAnnotationIngressSource("annotation-1", "work-1", undefined, injected),
     ).rejects.toThrow("批注的来源文献已不存在或位于回收站");
   });
 
-  it("does not open a repository when already aborted", async () => {
-    const source = dataSource(repository());
+  it("does not request data when already aborted", async () => {
+    const injected = dataSource();
     const controller = new AbortController();
     controller.abort();
 
-    await expect(loadCanvasActiveWork("work-1", controller.signal, source)).rejects.toMatchObject({
-      name: "AbortError",
-    });
-    expect(source.open).not.toHaveBeenCalled();
+    await expect(loadCanvasActiveWork("work-1", controller.signal, injected)).rejects.toMatchObject(
+      {
+        name: "AbortError",
+      },
+    );
+    expect(injected.getActiveWork).not.toHaveBeenCalled();
   });
 
   it("does not project a work returned after cancellation", async () => {
     const controller = new AbortController();
-    const repo = repository({
-      findActiveWork: vi.fn(async () => {
+    const injected = dataSource({
+      getActiveWork: vi.fn(async () => {
         controller.abort();
         return work();
       }),
     });
 
-    await expect(
-      loadCanvasActiveWork("work-1", controller.signal, dataSource(repo)),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(loadCanvasActiveWork("work-1", controller.signal, injected)).rejects.toMatchObject(
+      { name: "AbortError" },
+    );
   });
 
-  it("stops annotation ingress before resolving its work when cancelled", async () => {
+  it("does not project an ingress source returned after cancellation", async () => {
     const controller = new AbortController();
-    const repo = repository({
-      findActiveAnnotation: vi.fn(async () => {
+    const injected = dataSource({
+      getAnnotationIngressSource: vi.fn(async () => {
         controller.abort();
-        return annotation();
+        return ingressSource();
       }),
     });
 
     await expect(
-      loadCanvasAnnotationIngressSource(
-        "annotation-1",
-        "work-1",
-        controller.signal,
-        dataSource(repo),
-      ),
+      loadCanvasAnnotationIngressSource("annotation-1", "work-1", controller.signal, injected),
     ).rejects.toMatchObject({ name: "AbortError" });
-    expect(repo.findActiveWork).not.toHaveBeenCalled();
   });
 });

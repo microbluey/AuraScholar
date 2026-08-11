@@ -1,14 +1,33 @@
 import type { MergeWorksResult, ReadingStatus } from "@aurascholar/db/repos/works";
-import type { DiscoverySource, ResearchProject } from "@aurascholar/core";
+import type { ResearchProject } from "@aurascholar/core";
 import type {
   SentinelCheckUpdate,
   SentinelCreateInput,
   SentinelCreateResult,
 } from "@aurascholar/db/repos/sentinel";
-import type { ApplyRemoteSegmentCommand, ApplyRemoteSegmentResult } from "@aurascholar/sync";
 import type { LibraryBackupImportSummary } from "../src/shared/library-backup";
+import type { AiDataCommandMap } from "./ai-command-contract";
+import type { AnnotationRecoveryDataCommandMap } from "./annotation-recovery-command-contract";
+import type { CanvasDataCommandMap } from "./canvas-command-contract";
+import type { CitationGraphDataCommandMap } from "./citation-graph-command-contract";
+import type { DiscoveryLibraryStatusDataCommandMap } from "./discovery-library-status-command-contract";
+import type { DiscoverySiteDataCommandMap } from "./discovery-site-command-contract";
 import type { EvidenceDataCommandMap } from "./evidence-command-contract";
 import type * as KnowledgeContract from "./knowledge-command-contract";
+import type { LibraryIngestDataCommandMap } from "./library-ingest-command-contract";
+import type { LibraryOaDataCommandMap } from "./library-oa-command-contract";
+import type { LibraryReadDataCommandMap } from "./library-read-command-contract";
+import type { ReferenceImportDataCommandMap } from "./reference-import-command-contract";
+import type { ReaderDataCommandMap } from "./reader-command-contract";
+import type { SavedSearchDataCommandMap } from "./saved-search-command-contract";
+import type { SentinelReadDataCommandMap } from "./sentinel-read-command-contract";
+import type { SentinelRunDataCommandMap } from "./sentinel-run-command-contract";
+import type { SnippetDataCommandMap } from "./snippet-command-contract";
+import type { ScholarlyDataCommandMap } from "./scholarly-command-contract";
+import type { TranslationCacheDataCommandMap } from "./translation-cache-command-contract";
+import type { TranslationProviderDataCommandMap } from "./translation-provider-command-contract";
+import type { WorkMetadataDataCommandMap } from "./work-metadata-command-contract";
+import type { SyncDataCommandMap } from "./sync-command-contract";
 
 export type {
   DocumentRevisionCommandInput,
@@ -24,7 +43,28 @@ export type {
   SaveTextEvidenceCommandResult,
 } from "./evidence-command-contract";
 
+export type * from "./annotation-recovery-command-contract";
+export type * from "./ai-command-contract";
+export type * from "./canvas-command-contract";
+export type * from "./citation-graph-command-contract";
+export type * from "./discovery-library-status-command-contract";
+export type * from "./discovery-site-command-contract";
 export type * from "./knowledge-command-contract";
+export type * from "./library-ingest-command-contract";
+export type * from "./library-oa-command-contract";
+export type * from "./library-page-command-contract";
+export type * from "./library-read-command-contract";
+export type * from "./reference-import-command-contract";
+export type * from "./reader-command-contract";
+export type * from "./saved-search-command-contract";
+export type * from "./sentinel-read-command-contract";
+export type * from "./sentinel-run-command-contract";
+export type * from "./snippet-command-contract";
+export type * from "./scholarly-command-contract";
+export type * from "./sync-command-contract";
+export type * from "./translation-cache-command-contract";
+export type * from "./translation-provider-command-contract";
+export type * from "./work-metadata-command-contract";
 
 export interface SetWorkReadingStatusCommandInput {
   libraryId: string;
@@ -141,54 +181,12 @@ export type MergeWorksCommandResult = MergeWorksResult;
 
 export interface ImportLibraryBackupCommandInput {
   backupText: string;
-  libraryId: string;
 }
 
-export interface ApplyRemoteSyncSegmentCommandInput {
-  libraryId: string;
-  providerScope: string;
-  segment: ApplyRemoteSegmentCommand;
-}
+export type LibraryBackupExportCommandInput = Record<string, never>;
 
-export interface CreateSavedSearchCommandInput extends LibraryScopedCommandInput {
-  query: string;
-  sources: DiscoverySource[] | null;
-}
-
-export interface CreateSavedSearchCommandResult {
-  created: boolean;
-  id: string;
-}
-
-export interface SavedSearchCommandInput extends LibraryScopedCommandInput {
-  savedSearchId: string;
-}
-
-export interface SavedSearchMutationResult {
-  updated: number;
-}
-
-export interface RecordSavedSearchRunCommandInput extends SavedSearchCommandInput {
-  expectedUpdatedAt: number;
-  nextRunAt: number;
-  observedIds: string[];
-}
-
-export interface RecordSavedSearchRunCommandResult {
-  committed: boolean;
-  freshCount: number;
-  updatedAt: number | null;
-}
-
-export interface RecordSavedSearchErrorCommandInput extends SavedSearchCommandInput {
-  error: string;
-  expectedUpdatedAt: number;
-  nextRunAt: number;
-}
-
-export interface RecordSavedSearchErrorCommandResult {
-  committed: boolean;
-  updatedAt: number | null;
+export interface LibraryBackupExportCommandResult {
+  backupText: string;
 }
 
 export interface CreateOrRestoreSentinelCommandInput
@@ -280,7 +278,29 @@ export interface ResearchProjectMutationResult {
 
 export type ResearchProjectScopeCommandInput = Record<string, never>;
 
-export interface DataCommandMap extends EvidenceDataCommandMap {
+export interface DataCommandMap
+  extends
+    AiDataCommandMap,
+    AnnotationRecoveryDataCommandMap,
+    CanvasDataCommandMap,
+    CitationGraphDataCommandMap,
+    DiscoveryLibraryStatusDataCommandMap,
+    DiscoverySiteDataCommandMap,
+    EvidenceDataCommandMap,
+    LibraryIngestDataCommandMap,
+    LibraryOaDataCommandMap,
+    LibraryReadDataCommandMap,
+    ReferenceImportDataCommandMap,
+    ReaderDataCommandMap,
+    SavedSearchDataCommandMap,
+    ScholarlyDataCommandMap,
+    SentinelReadDataCommandMap,
+    SentinelRunDataCommandMap,
+    SnippetDataCommandMap,
+    SyncDataCommandMap,
+    TranslationCacheDataCommandMap,
+    TranslationProviderDataCommandMap,
+    WorkMetadataDataCommandMap {
   "knowledge.buildSemanticIndex": {
     input: LibraryScopedCommandInput;
     output: KnowledgeContract.BuildKnowledgeSemanticIndexResult;
@@ -404,30 +424,6 @@ export interface DataCommandMap extends EvidenceDataCommandMap {
     input: SearchResearchProjectLibraryWorksCommandInput;
     output: { works: ResearchProjectWorkSummary[] };
   };
-  "savedSearch.clearNew": {
-    input: SavedSearchCommandInput;
-    output: SavedSearchMutationResult;
-  };
-  "savedSearch.create": {
-    input: CreateSavedSearchCommandInput;
-    output: CreateSavedSearchCommandResult;
-  };
-  "savedSearch.delete": {
-    input: SavedSearchCommandInput;
-    output: SavedSearchMutationResult;
-  };
-  "savedSearch.recordError": {
-    input: RecordSavedSearchErrorCommandInput;
-    output: RecordSavedSearchErrorCommandResult;
-  };
-  "savedSearch.recordRun": {
-    input: RecordSavedSearchRunCommandInput;
-    output: RecordSavedSearchRunCommandResult;
-  };
-  "savedSearch.restore": {
-    input: SavedSearchCommandInput;
-    output: SavedSearchMutationResult;
-  };
   "sentinel.createOrRestore": {
     input: CreateOrRestoreSentinelCommandInput;
     output: SentinelCreateResult;
@@ -460,9 +456,9 @@ export interface DataCommandMap extends EvidenceDataCommandMap {
     input: ImportLibraryBackupCommandInput;
     output: LibraryBackupImportSummary;
   };
-  "sync.applyRemoteSegment": {
-    input: ApplyRemoteSyncSegmentCommandInput;
-    output: ApplyRemoteSegmentResult;
+  "library.exportBackup": {
+    input: LibraryBackupExportCommandInput;
+    output: LibraryBackupExportCommandResult;
   };
 }
 

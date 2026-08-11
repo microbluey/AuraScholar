@@ -1,6 +1,6 @@
 import { parseSourceAnchor } from "@aurascholar/core";
 import type { KnowledgeContentSearchResult } from "../../electron/data-command-contract";
-import { getLibraryDb } from "./aura-db";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 
 export interface KnowledgeSearchReaderTarget {
   assetId: string | null;
@@ -87,7 +87,7 @@ export async function resolveKnowledgeSearchReaderPath(
   const target = knowledgeSearchReaderTarget(result);
   if (!target) return null;
 
-  const { libraryId } = await getLibraryDb();
+  const libraryId = await getActiveLibraryCommandScope();
   throwIfAborted(signal);
   const response = await window.aura.data.command("document.resolveRevision", {
     libraryId,

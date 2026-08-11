@@ -8,9 +8,6 @@ const BASELINE_FILE = "architecture-health-baseline.json";
 const SOURCE_EXTENSIONS = new Set([".css", ".ts", ".tsx"]);
 const IGNORED_DIRECTORIES = new Set([".git", ".turbo", "dist", "node_modules", "out", "release"]);
 const UI_GATEWAY_ALLOWLIST = new Set([
-  "apps/desktop/src/features/canvas/canvas-citation-resolver.ts",
-  "apps/desktop/src/features/canvas/persistence.ts",
-  "apps/desktop/src/features/reader/library-reader-session.ts",
   "apps/desktop/src/shared/library-backup.ts",
   "apps/desktop/src/shared/sqlite-sync-storage.ts",
 ]);

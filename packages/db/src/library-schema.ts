@@ -72,5 +72,14 @@ export const works = sqliteTable(
     index("works_s2_idx").on(table.libraryId, table.s2Id),
     index("works_pmid_idx").on(table.libraryId, table.pmid),
     index("works_year_idx").on(table.libraryId, table.year),
+    index("works_page_created_idx").on(table.libraryId, table.deletedAt, table.createdAt, table.id),
+    index("works_page_year_idx").on(
+      table.libraryId,
+      table.deletedAt,
+      table.year,
+      table.createdAt,
+      table.id,
+    ),
+    index("works_page_deleted_idx").on(table.libraryId, table.deletedAt, table.updatedAt, table.id),
   ],
 );

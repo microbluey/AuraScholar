@@ -1,23 +1,29 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow } from "electron";
-import { CH } from "./shared";
-import { handle, setTrustedSender } from "./main/ipc";
+import { setTrustedSender } from "./main/ipc";
 import { attachCloseLifecycle, registerCloseLifecycleHandlers } from "./main/close-lifecycle";
 import { openExternalUrl, registerPlatformHandlers } from "./main/platform";
-import { registerDbHandlers } from "./main/db";
+import { registerSmokeDbHandlers } from "./main/db";
 import { registerDataCommandHandlers } from "./main/data-commands";
 import { registerEvidenceSourceRecoveryHandlers } from "./main/evidence-source-recovery";
 import { registerEmbeddingArtifactHandlers } from "./main/embedding-artifact-commands";
+import { clearLibraryPdfStaging, recoverLibraryPdfStaging } from "./main/library-pdf-staging";
 import { knowledgeOutboxDispatcher } from "./main/knowledge-outbox-dispatcher";
 import { initResearchBrowser, registerResearchHandlers } from "./main/research-browser";
-import { startCitationBridge, citationBridgePort } from "./main/citation-bridge";
+import { startCitationBridge } from "./main/citation-bridge";
+import { isMainSmokeMode, SMOKE_PRELOAD_ARGUMENT } from "./smoke-mode";
 
 // electron-vite injects these env vars during dev; they're undefined in prod.
 const DEV_URL = process.env.ELECTRON_RENDERER_URL;
 const USER_DATA_DIR = process.env.AURASCHOLAR_USER_DATA_DIR;
-const SMOKE_MODE = process.env.AURASCHOLAR_SMOKE === "1";
+const SMOKE_REQUESTED = process.env.AURASCHOLAR_SMOKE === "1";
+const SMOKE_MODE = isMainSmokeMode(process.env.AURASCHOLAR_SMOKE, app.isPackaged);
 const RENDERER_ENTRY = join(__dirname, "../renderer/index.html");
+
+if (SMOKE_REQUESTED && app.isPackaged) {
+  console.warn("AuraScholar ignores AURASCHOLAR_SMOKE in packaged builds.");
+}
 
 if (USER_DATA_DIR) {
   app.setPath("userData", USER_DATA_DIR);
@@ -45,6 +51,10 @@ async function createWindow(): Promise<void> {
       // ESM preload (.mjs) requires the sandbox off; we still keep context
       // isolation on and expose only the whitelisted bridge.
       sandbox: false,
+      // A packaged build never receives this argument, even if its launch
+      // environment has AURASCHOLAR_SMOKE=1. The preload must not trust that
+      // environment value directly because it controls the raw smoke bridge.
+      additionalArguments: SMOKE_MODE ? [SMOKE_PRELOAD_ARGUMENT] : [],
     },
   });
 
@@ -59,6 +69,9 @@ async function createWindow(): Promise<void> {
   });
 
   setTrustedSender(win.webContents);
+  win.once("closed", () => {
+    void clearLibraryPdfStaging().catch(() => {});
+  });
   attachCloseLifecycle(win);
 
   if (SMOKE_MODE) {
@@ -81,16 +94,20 @@ if (!hasSingleInstanceLock) {
 } else {
   app.on("second-instance", focusPrimaryWindow);
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     registerPlatformHandlers();
-    registerDbHandlers();
+    // Resolve stale SHA-only staging journal entries before any typed command
+    // or window can create a fresh receipt. Recovery never revives receipts.
+    await recoverLibraryPdfStaging();
+    if (SMOKE_MODE) {
+      registerSmokeDbHandlers();
+    }
     registerDataCommandHandlers();
     registerEvidenceSourceRecoveryHandlers();
     registerEmbeddingArtifactHandlers();
     knowledgeOutboxDispatcher.start();
     registerResearchHandlers();
     registerCloseLifecycleHandlers();
-    handle(CH.citationBridgePort, () => citationBridgePort());
     startCitationBridge();
 
     void createWindow();

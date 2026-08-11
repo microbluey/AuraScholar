@@ -42,6 +42,8 @@ export interface FlashcardRequest {
   paperText: string;
   /** Output language for the cards. */
   language?: "zh" | "en";
+  /** Caller-controlled cancellation for provider transport. */
+  signal?: AbortSignal;
 }
 
 export async function generateFlashcards(
@@ -55,6 +57,7 @@ export async function generateFlashcards(
       : "Write all card content in English.";
   return provider.generateObject({
     schema: FlashcardOutputSchema,
+    signal: req.signal,
     temperature: 0.3,
     maxTokens: 2000,
     messages: [
@@ -93,13 +96,21 @@ export function flashcardsToCards(
 ): Array<{ cardType: string; frontMd: string; backMd: string }> {
   const cards: Array<{ cardType: string; frontMd: string; backMd: string }> = [
     { cardType: "tldr", frontMd: `《${title}》的核心思想是什么?`, backMd: out.tldr },
-    { cardType: "method", frontMd: `《${title}》解决什么问题?用什么方法?`, backMd: `**问题**:${out.problem}\n\n**方法**:${out.method}` },
+    {
+      cardType: "method",
+      frontMd: `《${title}》解决什么问题?用什么方法?`,
+      backMd: `**问题**:${out.problem}\n\n**方法**:${out.method}`,
+    },
     {
       cardType: "contribution",
       frontMd: `《${title}》的主要贡献有哪些?`,
       backMd: out.contributions.map((c, i) => `${i + 1}. ${c}`).join("\n"),
     },
-    { cardType: "limitation", frontMd: `《${title}》的结果与局限?`, backMd: `**结果**:${out.results}\n\n**局限**:${out.limitations}` },
+    {
+      cardType: "limitation",
+      frontMd: `《${title}》的结果与局限?`,
+      backMd: `**结果**:${out.results}\n\n**局限**:${out.limitations}`,
+    },
   ];
   for (const qa of out.qaCards) {
     cards.push({ cardType: "qa", frontMd: qa.q, backMd: qa.a });

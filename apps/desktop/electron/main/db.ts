@@ -1,7 +1,7 @@
 // SQLite in the main process via better-sqlite3 (the same driver the db
-// package's tests use). The renderer talks to this over IPC; migrations run
-// once at startup. The native SQLite driver stays in the main process so the
-// renderer bundle never pulls better-sqlite3 into the browser dependency graph.
+// package's tests use). Typed main-process commands own production database
+// access. The raw renderer SQL handlers below are smoke-test-only; migrations
+// run once at startup and the native driver never enters the renderer bundle.
 import { join } from "node:path";
 import { app } from "electron";
 import { handle } from "./ipc";
@@ -61,7 +61,8 @@ export async function withMainDatabaseTransaction<T>(
   return (await getMainDatabaseCoordinator()).transaction(commandName, operation);
 }
 
-export function registerDbHandlers(): void {
+/** Registers raw SQL IPC only for the isolated AURASCHOLAR_SMOKE process. */
+export function registerSmokeDbHandlers(): void {
   handle(CH.dbQuery, async (_e, sql: string, params: unknown[]) => {
     return (await getMainDatabaseCoordinator()).query(sql, params);
   });

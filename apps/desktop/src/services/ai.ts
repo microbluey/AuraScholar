@@ -1,29 +1,21 @@
-// AI service for the desktop app: BYOK config in settings. Non-secret fields
-// (kind/baseUrl/model) live in localStorage; the API key is stored encrypted
-// via safeStorage (see services/secrets.ts). Flashcard generation pipeline.
-import {
-  OpenAICompatibleProvider,
-  AnthropicProvider,
-  generateFlashcards,
-  flashcardsToCards,
-  PROMPT_VERSION,
-  type AIProvider,
-} from "@aurascholar/ai";
-import { newId } from "@aurascholar/db/ids";
-import { FlashcardsRepo } from "@aurascholar/db/repos/flashcards";
+// Renderer-safe AI facade. Provider configuration, API keys, and network
+// egress are main-owned; this module only manages UI settings DTOs, PDF text
+// extraction, typed commands, and user-facing flashcard failure semantics.
 import { PdfDocument, extractFullText } from "@aurascholar/reader";
-import { getLibraryDb } from "./aura-db";
-import { auraHttp } from "./aura-platform";
-import { describeSafeError, toSafeError } from "./sensitive-text";
-import { SECRET_KEYS, getSecret, migrateInlineSecret, withSecretTransaction } from "./secrets";
+import type {
+  AiProviderKind as MainAiProviderKind,
+  AiSettingsSnapshot,
+} from "../../electron/ai-command-contract";
 import {
-  isStorageRecord,
-  readLocalStorageJson,
-  tryWriteLocalStorageJson,
-  writeLocalStorageJson,
-} from "../storage";
+  generateAiFlashcards,
+  getAiFlashcardTarget,
+  recordAiFlashcardFailure,
+  testAiProvider as testAiProviderCommand,
+} from "./ai-data";
+import { describeSafeError, toSafeError } from "./sensitive-text";
+import { isStorageRecord, readLocalStorageJson, tryRemoveLocalStorageItem } from "../storage";
 
-export type AiProviderKind = "openai-compatible" | "anthropic";
+export type AiProviderKind = MainAiProviderKind;
 
 export interface AiSettings {
   /** Defaults to "openai-compatible" for settings saved before this field existed. */
@@ -31,136 +23,56 @@ export interface AiSettings {
   /** Optional for Anthropic (defaults to api.anthropic.com). */
   baseUrl: string;
   model: string;
-  apiKey: string;
+  /** Write-only. An omitted/empty value preserves only the same saved target. */
+  apiKey?: string;
 }
 
-const SETTINGS_KEY = "ai-settings";
+export type AiSettingsDraft = AiSettingsSnapshot;
 
-interface StoredAiSettings {
-  apiKey: string;
-  baseUrl: string;
-  kind: AiProviderKind;
-  model: string;
-  normalizedBaseUrl: string | null;
+const LEGACY_SETTINGS_KEY = "ai-settings";
+
+/**
+ * Reads main-owned settings, first handing off a former localStorage record.
+ * A legacy configuration without its own inline key is intentionally migrated
+ * as unconfigured: main never pairs it with an old named secret.
+ */
+export async function loadAiSettingsDraft(): Promise<AiSettingsDraft | null> {
+  const legacy = readLegacyAiSettings();
+  if (legacy) {
+    const snapshot = await window.aura.data.command("ai.adoptLegacySettings", legacy);
+    tryRemoveLocalStorageItem(LEGACY_SETTINGS_KEY);
+    return snapshot;
+  }
+  return window.aura.data.command("ai.getSettings", {});
 }
 
-export async function loadAiSettingsDraft(): Promise<AiSettings | null> {
-  const stored = await loadStoredAiSettings();
-  if (!stored) return null;
+/** A ready status is based on a main-owned target that has a bound key. */
+export async function loadAiSettings(): Promise<Omit<AiSettings, "apiKey"> | null> {
+  const settings = await loadAiSettingsDraft();
+  if (!settings || !settings.hasApiKey) return null;
   return {
-    apiKey: stored.apiKey,
-    baseUrl: stored.baseUrl,
-    kind: stored.kind,
-    model: stored.model,
+    baseUrl: settings.baseUrl,
+    kind: settings.kind,
+    model: settings.model,
   };
 }
 
-export async function loadAiSettings(): Promise<AiSettings | null> {
-  const stored = await loadStoredAiSettings();
-  if (!stored) return null;
-
-  // Anthropic can run without a baseUrl; openai-compatible needs one.
-  const baseOk =
-    stored.normalizedBaseUrl !== null &&
-    (stored.kind === "anthropic" || !!stored.normalizedBaseUrl);
-  return baseOk && stored.model && stored.apiKey
-    ? {
-        apiKey: stored.apiKey,
-        baseUrl: stored.normalizedBaseUrl ?? "",
-        kind: stored.kind,
-        model: stored.model,
-      }
-    : null;
-}
-
-async function loadStoredAiSettings(): Promise<StoredAiSettings | null> {
-  const parsed = readLocalStorageJson<unknown>(SETTINGS_KEY, null);
-  if (!isStorageRecord(parsed)) return null;
-
-  const kind: AiProviderKind = parsed.kind === "anthropic" ? "anthropic" : "openai-compatible";
-  const rawBaseUrl = typeof parsed.baseUrl === "string" ? parsed.baseUrl.trim() : "";
-  const normalizedBaseUrl =
-    typeof parsed.baseUrl === "string" ? normalizeStoredAiBaseUrl(kind, parsed.baseUrl) : null;
-  const baseUrl = normalizedBaseUrl ?? rawBaseUrl;
-  const model = typeof parsed.model === "string" ? parsed.model.trim() : "";
-  const inlineApiKey = typeof parsed.apiKey === "string" ? parsed.apiKey : "";
-
-  // Migrate any inline plaintext key out of localStorage into the secret store.
-  const migrated = await migrateInlineSecret(SECRET_KEYS.aiApiKey, inlineApiKey);
-  if (inlineApiKey && migrated.persisted) {
-    tryWriteLocalStorageJson(SETTINGS_KEY, { baseUrl, kind, model });
-  }
-  const apiKey = (migrated.value || (await getSecret(SECRET_KEYS.aiApiKey))).trim();
-  return { apiKey, baseUrl, kind, model, normalizedBaseUrl };
-}
-
-export async function saveAiSettings(settings: AiSettings): Promise<void> {
-  const normalized = normalizeAiSettingsForStorage(settings);
-  const { apiKey, ...config } = normalized;
-  await withSecretTransaction([{ key: SECRET_KEYS.aiApiKey, value: apiKey }], () => {
-    writeLocalStorageJson(SETTINGS_KEY, config);
+/**
+ * The renderer may explicitly replace a saved target/key, but never reads a
+ * stored key. Main rejects a changed target without a replacement key.
+ */
+export function saveAiSettings(settings: AiSettings): Promise<AiSettingsDraft> {
+  const apiKey = settings.apiKey?.trim();
+  return window.aura.data.command("ai.saveSettings", {
+    ...(apiKey ? { apiKey } : {}),
+    baseUrl: settings.baseUrl,
+    kind: settings.kind ?? "openai-compatible",
+    model: settings.model,
   });
 }
 
-function normalizeAiSettingsForStorage(settings: AiSettings): Required<AiSettings> {
-  const kind: AiProviderKind = settings.kind === "anthropic" ? "anthropic" : "openai-compatible";
-  const baseUrl = normalizeAiBaseUrlForStorage(kind, settings.baseUrl);
-  const model = settings.model.trim();
-  const apiKey = settings.apiKey.trim();
-  if (!model) throw new Error("请填写模型名称。");
-  if (!apiKey) throw new Error("请填写 API Key。本地兼容端点也可以填写占位 Key。");
-  return { apiKey, baseUrl, kind, model };
-}
-
-function normalizeStoredAiBaseUrl(kind: AiProviderKind, value: string): string | null {
-  try {
-    return normalizeAiBaseUrlForStorage(kind, value);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeAiBaseUrlForStorage(kind: AiProviderKind, value: string): string {
-  const raw = value.trim();
-  if (!raw) {
-    if (kind === "anthropic") return "";
-    throw new Error("请填写 OpenAI 兼容 API 地址。");
-  }
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("AI API 地址格式不正确，请使用完整的 http:// 或 https:// 地址。");
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("AI API 地址仅支持 http:// 或 https://。");
-  }
-  if (url.username || url.password) {
-    throw new Error("AI API 地址不要包含密钥或账号，请填写在 API Key 字段中。");
-  }
-  if (url.search || url.hash) {
-    throw new Error("AI API 地址请填写接口根地址，不要包含查询参数或 # 片段。");
-  }
-  return url.toString().replace(/\/+$/, "");
-}
-
-export async function makeProvider(): Promise<AIProvider | null> {
-  const s = await loadAiSettings();
-  if (!s) return null;
-  if (s.kind === "anthropic") {
-    return new AnthropicProvider({
-      http: auraHttp,
-      baseUrl: s.baseUrl || undefined,
-      model: s.model,
-      apiKey: s.apiKey,
-    });
-  }
-  return new OpenAICompatibleProvider({
-    http: auraHttp,
-    baseUrl: s.baseUrl,
-    model: s.model,
-    apiKey: s.apiKey,
-  });
+export function testAiProvider(signal?: AbortSignal): Promise<{ text: string }> {
+  return testAiProviderCommand(signal);
 }
 
 export interface GenerateResult {
@@ -170,6 +82,8 @@ export interface GenerateResult {
 export interface GenerateFlashcardsOptions {
   /** Manual requests persist failures so the UI can surface them; optional background attempts may stay silent. */
   persistError?: boolean;
+  /** Cancels main-owned provider work before its durable commit boundary. */
+  signal?: AbortSignal;
 }
 
 function notifyFlashcardsUpdated(): void {
@@ -178,52 +92,28 @@ function notifyFlashcardsUpdated(): void {
   window.dispatchEvent(new Event("aurascholar:library-updated"));
 }
 
-/** Generates AI flashcards for a library work from its PDF text. */
+/** Generates AI flashcards for a library work from renderer-extracted PDF text. */
 export async function generateFlashcardsForWork(
   workId: string,
-  title: string,
+  _title: string,
   options: GenerateFlashcardsOptions = {},
 ): Promise<GenerateResult> {
   try {
-    return await generateInner(workId, title);
-  } catch (e) {
-    const safeError = toSafeError(e);
-    const safeMessage = describeSafeError(e);
-    if (options.persistError === false) throw safeError;
-    // Persist manual/on-demand failures so the reader and library panels can
-    // surface them after navigation.
-    const { db, libraryId } = await getLibraryDb();
-    const active = await db.query<{ id: string }>(
-      `SELECT id
-       FROM works
-       WHERE id = ? AND library_id = ? AND deleted_at IS NULL
-       LIMIT 1`,
-      [workId, libraryId],
-    );
-    if (!active[0]) throw safeError;
-    await db.run(
-      `INSERT INTO ai_jobs
-         (id, library_id, kind, work_id, status, error, created_at, updated_at)
-       VALUES (?, ?, 'flashcards', ?, 'error', ?, ?, ?)`,
-      [newId(), libraryId, workId, safeMessage, Date.now(), Date.now()],
-    );
+    return await generateInner(workId, options.signal);
+  } catch (error) {
+    const safeError = toSafeError(error);
+    if (isAbortError(safeError) || options.persistError === false) throw safeError;
+    // Keep the established manual/on-demand error job behavior. Main scopes
+    // the record to an active work and returns false for a removed target.
+    await recordAiFlashcardFailure({ error: describeSafeError(error), workId });
     throw safeError;
   }
 }
 
-async function generateInner(workId: string, title: string): Promise<GenerateResult> {
-  const { db, libraryId } = await getLibraryDb();
-  const active = await db.query<{ id: string }>(
-    `SELECT id
-     FROM works
-     WHERE id = ? AND library_id = ? AND deleted_at IS NULL
-     LIMIT 1`,
-    [workId, libraryId],
-  );
-  if (!active[0]) throw new Error("文献不存在或已在回收站，无法生成闪卡");
-
-  const provider = await makeProvider();
-  if (!provider) throw new Error("请先在设置页配置 AI 服务(地址、模型与 API Key)");
+async function generateInner(workId: string, signal?: AbortSignal): Promise<GenerateResult> {
+  if (signal?.aborted) throw abortError();
+  const target = await getAiFlashcardTarget(workId);
+  if (!target.active) throw new Error("文献不存在或已在回收站，无法生成闪卡");
 
   const { loadPdfForWork } = await import("./library-read");
   const pdf = await loadPdfForWork(workId);
@@ -236,42 +126,39 @@ async function generateInner(workId: string, title: string): Promise<GenerateRes
   } finally {
     doc.destroy();
   }
+  if (signal?.aborted) throw abortError();
   if (text.trim().length < 200) {
     throw new Error("PDF 文本提取结果过短(可能是扫描版),暂不支持");
   }
 
-  const output = await generateFlashcards(provider, { title, paperText: text, language: "zh" });
-  const cards = flashcardsToCards(output, title);
-
-  const repo = new FlashcardsRepo(db, libraryId);
-  const generationId = newId();
-  await repo.createMany(
-    cards.map((c) => ({
-      workId,
-      frontMd: c.frontMd,
-      backMd: c.backMd,
-      cardType: c.cardType,
-      source: "ai",
-      aiModel: provider.model,
-      generationId,
-    })),
-  );
-  // Record the job for observability/debugging.
-  await db.run(
-    `INSERT INTO ai_jobs
-       (id, library_id, kind, work_id, status, model, prompt_version, result_json, created_at, updated_at)
-     VALUES (?, ?, 'flashcards', ?, 'done', ?, ?, ?, ?, ?)`,
-    [
-      newId(),
-      libraryId,
-      workId,
-      provider.model,
-      PROMPT_VERSION,
-      JSON.stringify(output),
-      Date.now(),
-      Date.now(),
-    ],
-  );
+  const result = await generateAiFlashcards({ paperText: text, workId }, signal);
   notifyFlashcardsUpdated();
-  return { created: cards.length };
+  return result;
+}
+
+function readLegacyAiSettings(): {
+  baseUrl: string;
+  inlineApiKey?: string;
+  kind: AiProviderKind;
+  model: string;
+} | null {
+  const parsed = readLocalStorageJson<unknown>(LEGACY_SETTINGS_KEY, null);
+  if (!isStorageRecord(parsed)) return null;
+  if (typeof parsed.baseUrl !== "string" || typeof parsed.model !== "string") return null;
+  const kind: AiProviderKind = parsed.kind === "anthropic" ? "anthropic" : "openai-compatible";
+  const baseUrl = parsed.baseUrl.trim();
+  const model = parsed.model.trim();
+  if (!model || (!baseUrl && kind !== "anthropic")) return null;
+  const inlineApiKey = typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "";
+  return inlineApiKey ? { baseUrl, inlineApiKey, kind, model } : { baseUrl, kind, model };
+}
+
+function isAbortError(error: Error): boolean {
+  return error.name === "AbortError";
+}
+
+function abortError(): Error {
+  const error = new Error("AI request cancelled");
+  error.name = "AbortError";
+  return error;
 }

@@ -1,4 +1,9 @@
-import type { SecretsFileSmoke, SmokeCheck, SmokeRendererResult } from "./contracts";
+import type {
+  CitationBridgeSmoke,
+  SecretsFileSmoke,
+  SmokeCheck,
+  SmokeRendererResult,
+} from "./contracts";
 import { buildBaseSmokeChecks } from "./checks/base";
 import { buildGraphSmokeChecks } from "./checks/graph";
 import { buildLibraryCoreSmokeChecks } from "./checks/library-core";
@@ -16,9 +21,10 @@ import { buildHomepageSmokeChecks } from "./checks/homepage";
 export function buildSmokeChecks(
   renderer: SmokeRendererResult,
   secretsFile: SecretsFileSmoke,
+  citationBridge: CitationBridgeSmoke,
 ): SmokeCheck[] {
   return [
-    ...buildBaseSmokeChecks(renderer, secretsFile),
+    ...buildBaseSmokeChecks(renderer, secretsFile, citationBridge),
     ...buildGraphSmokeChecks(renderer),
     ...buildLibraryCoreSmokeChecks(renderer),
     ...buildCommandSmokeChecks(renderer),

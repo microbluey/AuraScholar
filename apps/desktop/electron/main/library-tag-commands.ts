@@ -1,10 +1,14 @@
 import type { Database } from "@aurascholar/db";
-import { TagsRepo } from "@aurascholar/db/repos/tags";
+import { requireLocalLibraryId } from "@aurascholar/db/local-first";
+import { TagsRepo, type TagRow } from "@aurascholar/db/repos/tags";
 import type {
   AddTagToWorksCommandInput,
   CreateTagCommandInput,
   DataCommandOutput,
   DataCommandRequest,
+  LibraryListTagsCommandResult,
+  LibraryScopeCommandInput,
+  LibraryTagSummary,
   RenameTagCommandInput,
   RestoreTagCommandInput,
   SetTagColorCommandInput,
@@ -26,6 +30,7 @@ type LibraryTagCommandName =
   | "library.addTagToWorks"
   | "library.createTag"
   | "library.deleteTag"
+  | "library.listTags"
   | "library.renameTag"
   | "library.restoreTag"
   | "library.setTagColor";
@@ -37,6 +42,14 @@ export async function executeLibraryTagCommand(
   dependencies: DataCommandDependencies,
 ): Promise<DataCommandOutput<LibraryTagCommandName>> {
   switch (request.name) {
+    case "library.listTags": {
+      parseLibraryScopeInput(request.input);
+      return executeLibraryTagQuery(dependencies, request.name, async (database) => {
+        const libraryId = await requireLocalLibraryId(database);
+        await assertActiveLocalLibrary(database, libraryId);
+        return { tags: (await new TagsRepo(database, libraryId).list()).map(toLibraryTagSummary) };
+      });
+    }
     case "library.addTagToWorks": {
       const input = parseAddTagToWorksInput(request.input);
       return dependencies.transaction(request.name, async (database) => {
@@ -94,6 +107,30 @@ export async function executeLibraryTagCommand(
       });
     }
   }
+}
+
+function executeLibraryTagQuery(
+  dependencies: DataCommandDependencies,
+  commandName: "library.listTags",
+  operation: (
+    database: Database,
+  ) => LibraryListTagsCommandResult | Promise<LibraryListTagsCommandResult>,
+): Promise<LibraryListTagsCommandResult> {
+  if (!dependencies.execute) {
+    throw new Error("Main-process database query execution is unavailable");
+  }
+  return dependencies.execute(commandName, operation);
+}
+
+function parseLibraryScopeInput(value: unknown): LibraryScopeCommandInput {
+  if (!isRecord(value) || Object.keys(value).length > 0) {
+    throw new Error("Invalid library.listTags input");
+  }
+  return value as LibraryScopeCommandInput;
+}
+
+function toLibraryTagSummary(tag: TagRow): LibraryTagSummary {
+  return { color: tag.color, count: tag.count, id: tag.id, name: tag.name };
 }
 
 function parseAddTagToWorksInput(value: unknown): AddTagToWorksCommandInput {

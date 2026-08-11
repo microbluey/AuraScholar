@@ -25,8 +25,12 @@ export const smokeSettingsAi = String.raw`        location.hash = "#/settings";
           !bodyIncludes("正在读取翻译配置") &&
           !bodyIncludes("正在读取同步配置");
         if (aiBaseUrlInput && aiModelInput && apiKeyInput) {
-          const aiSettingsBeforeInvalidUrl = localStorage.getItem("ai-settings");
-          const aiSecretBeforeInvalidUrl = await window.aura?.secrets?.get?.("secret:ai:apiKey");
+          // Settings and credentials are main-owned. Smoke may observe only
+          // this public, key-free snapshot; it must never read a saved key.
+          const aiSettingsBeforeInvalidUrl = await window.aura?.data?.command(
+            "ai.getSettings",
+            {}
+          );
           const invalidAiUrl = "api.smoke-ai.example/v1";
           const credentialAiUrl = "https://sk-smoke-secret@api.smoke-ai.example/v1";
           const validAiUrlInputValue = "https://api.smoke-ai.example/v1///";
@@ -75,52 +79,72 @@ export const smokeSettingsAi = String.raw`        location.hash = "#/settings";
                 : null;
             }, 1_000)
           );
-          const aiSettingsAfterInvalidUrl = localStorage.getItem("ai-settings");
-          const aiSecretAfterInvalidUrl = await window.aura?.secrets?.get?.("secret:ai:apiKey");
+          const aiSettingsAfterInvalidUrl = await window.aura?.data?.command(
+            "ai.getSettings",
+            {}
+          );
           settingsAiUrlInvalidDidNotPersist =
-            aiSettingsAfterInvalidUrl === aiSettingsBeforeInvalidUrl &&
-            aiSecretAfterInvalidUrl === aiSecretBeforeInvalidUrl;
+            JSON.stringify(aiSettingsAfterInvalidUrl) === JSON.stringify(aiSettingsBeforeInvalidUrl);
           setInputValue(aiBaseUrlInput, validAiUrlInputValue);
           await waitFor(() => aiBaseUrlInput.value === validAiUrlInputValue, 1_000);
 
-          const aiSettingsBeforeFailure = localStorage.getItem("ai-settings");
-          const aiSecretBeforeFailure = await window.aura?.secrets?.get?.("secret:ai:apiKey");
+          const aiSettingsBeforeFailure = await window.aura?.data?.command("ai.getSettings", {});
           const aiFailureDraft = "smoke-ai-save-failure-key";
           setInputValue(apiKeyInput, aiFailureDraft);
           await waitFor(() => apiKeyInput.value === aiFailureDraft, 1_000);
-          window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__ =
-            "Smoke settings AI save failure";
+          // Fail the durable main-command write instead of short-circuiting
+          // the renderer. The command must roll back the replacement secret
+          // when the target record cannot be persisted.
+          await window.aura.db.exec(
+            "DROP TRIGGER IF EXISTS aurascholar_smoke_ai_settings_insert_failure"
+          );
+          await window.aura.db.exec(
+            "DROP TRIGGER IF EXISTS aurascholar_smoke_ai_settings_update_failure"
+          );
+          await window.aura.db.exec(
+            "CREATE TEMP TRIGGER aurascholar_smoke_ai_settings_insert_failure BEFORE INSERT ON settings WHEN NEW.key = 'local.ai.provider.v1' BEGIN SELECT RAISE(FAIL, 'Smoke settings AI save failure'); END;"
+          );
+          await window.aura.db.exec(
+            "CREATE TEMP TRIGGER aurascholar_smoke_ai_settings_update_failure BEFORE UPDATE OF value_json ON settings WHEN OLD.key = 'local.ai.provider.v1' BEGIN SELECT RAISE(FAIL, 'Smoke settings AI save failure'); END;"
+          );
           const failSaveAiButton = Array.from(document.querySelectorAll("button")).find(
             (button) => button.textContent?.replace(/\s+/g, " ").trim() === "保存 AI 配置"
           );
-          failSaveAiButton?.click();
-          const preservedAiInput = await waitFor(() => {
-            const currentApiKeyInput = Array.from(
-              document.querySelectorAll(".settings-card--ai input")
-            )[2];
-            const saveButton = Array.from(document.querySelectorAll("button")).find(
-              (button) =>
-                button.textContent?.replace(/\s+/g, " ").trim() === "保存 AI 配置" &&
-                !button.disabled
+          let preservedAiInput = null;
+          try {
+            failSaveAiButton?.click();
+            preservedAiInput = await waitFor(() => {
+              const currentApiKeyInput = Array.from(
+                document.querySelectorAll(".settings-card--ai input")
+              )[2];
+              const saveButton = Array.from(document.querySelectorAll("button")).find(
+                (button) =>
+                  button.textContent?.replace(/\s+/g, " ").trim() === "保存 AI 配置" &&
+                  !button.disabled
+              );
+              return bodyIncludes("保存失败，修改仍保留，可重新保存") &&
+                bodyIncludes("Smoke settings AI save failure") &&
+                currentApiKeyInput?.value === aiFailureDraft &&
+                Boolean(saveButton)
+                ? currentApiKeyInput
+                : null;
+            }, 3_000);
+          } finally {
+            await window.aura.db.exec(
+              "DROP TRIGGER IF EXISTS aurascholar_smoke_ai_settings_insert_failure"
             );
-            return bodyIncludes("保存失败，修改仍保留，可重新保存") &&
-              bodyIncludes("Smoke settings AI save failure") &&
-              currentApiKeyInput?.value === aiFailureDraft &&
-              Boolean(saveButton)
-              ? currentApiKeyInput
-              : null;
-          }, 3_000);
-          delete window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__;
-          const aiSettingsAfterFailure = localStorage.getItem("ai-settings");
-          const aiSecretAfterFailure = await window.aura?.secrets?.get?.("secret:ai:apiKey");
+            await window.aura.db.exec(
+              "DROP TRIGGER IF EXISTS aurascholar_smoke_ai_settings_update_failure"
+            );
+          }
+          const aiSettingsAfterFailure = await window.aura?.data?.command("ai.getSettings", {});
           settingsAiSaveFailureVisible =
             bodyIncludes("保存失败，修改仍保留，可重新保存") &&
             bodyIncludes("Smoke settings AI save failure");
           settingsAiSaveFailurePreserved =
             Boolean(preservedAiInput) && preservedAiInput.value === aiFailureDraft;
           settingsAiSaveFailureDidNotPersist =
-            aiSettingsAfterFailure === aiSettingsBeforeFailure &&
-            aiSecretAfterFailure === aiSecretBeforeFailure;
+            JSON.stringify(aiSettingsAfterFailure) === JSON.stringify(aiSettingsBeforeFailure);
           setInputValue(apiKeyInput, "smoke-ai-busy-key");
           await waitFor(() => apiKeyInput.value === "smoke-ai-busy-key", 1_000);
           const saveAiButton = Array.from(document.querySelectorAll("button")).find(
@@ -158,18 +182,14 @@ export const smokeSettingsAi = String.raw`        location.hash = "#/settings";
           settingsBusyNavigationCancelPreserved =
             settingsBusyNavigationConfirmVisible && location.hash.includes("/settings");
         }
-        await waitFor(() => bodyIncludes("已保存，新的 AI 配置会用于摘要、闪卡与翻译。"), 3_000);
+        await waitFor(() => bodyIncludes("已保存，新的 AI 配置会用于摘要、观点合成与翻译。"), 3_000);
         if (expectedAiNormalizedUrl) {
-          const savedAiSettingsText = localStorage.getItem("ai-settings");
+          const savedAiSettings = await window.aura?.data?.command("ai.getSettings", {});
           const currentAiBaseUrlInput = document.querySelector(".settings-card--ai input");
-          try {
-            const savedAiSettings = JSON.parse(savedAiSettingsText ?? "null");
-            settingsAiUrlNormalized =
-              savedAiSettings?.baseUrl === expectedAiNormalizedUrl &&
-              currentAiBaseUrlInput?.value === expectedAiNormalizedUrl;
-          } catch {
-            settingsAiUrlNormalized = false;
-          }
+          settingsAiUrlNormalized =
+            savedAiSettings?.baseUrl === expectedAiNormalizedUrl &&
+            savedAiSettings?.hasApiKey === true &&
+            currentAiBaseUrlInput?.value === expectedAiNormalizedUrl;
         }
         if (aiBaseUrlInput && aiModelInput && apiKeyInput) {
           window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_TEST__ =
@@ -198,21 +218,18 @@ export const smokeSettingsAi = String.raw`        location.hash = "#/settings";
             )
           );
           delete window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_TEST__;
-          const aiSettingsAfterTestFailureText = localStorage.getItem("ai-settings");
-          const aiSecretAfterTestFailure = await window.aura?.secrets?.get?.("secret:ai:apiKey");
-          try {
-            const savedAiSettingsAfterTest = JSON.parse(aiSettingsAfterTestFailureText ?? "null");
-            settingsAiTestFailureConfigSaved =
-              savedAiSettingsAfterTest?.baseUrl === expectedAiNormalizedUrl &&
-              savedAiSettingsAfterTest?.model === "smoke-ai-model" &&
-              savedAiSettingsAfterTest?.kind === "openai-compatible" &&
-              aiSecretAfterTestFailure === "smoke-ai-busy-key" &&
-              aiBaseUrlInput.value === expectedAiNormalizedUrl &&
-              aiModelInput.value === "smoke-ai-model" &&
-              apiKeyInput.value === "smoke-ai-busy-key";
-          } catch {
-            settingsAiTestFailureConfigSaved = false;
-          }
+          const savedAiSettingsAfterTest = await window.aura?.data?.command(
+            "ai.getSettings",
+            {}
+          );
+          settingsAiTestFailureConfigSaved =
+            savedAiSettingsAfterTest?.baseUrl === expectedAiNormalizedUrl &&
+            savedAiSettingsAfterTest?.model === "smoke-ai-model" &&
+            savedAiSettingsAfterTest?.kind === "openai-compatible" &&
+            savedAiSettingsAfterTest?.hasApiKey === true &&
+            aiBaseUrlInput.value === expectedAiNormalizedUrl &&
+            aiModelInput.value === "smoke-ai-model" &&
+            apiKeyInput.value === "";
           settingsAiTestFailureRetryVisible = Boolean(
             Array.from(document.querySelectorAll("button")).find(
               (button) =>

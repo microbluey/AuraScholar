@@ -38,60 +38,31 @@ export const smokeSettingsAiTranslate = String.raw`        location.hash = "#/se
           () => location.hash.includes("/library") && document.querySelector(".library-page"),
           4_000
         );
-        const inlineMigrationKey = "smoke-inline-migration-ai-key";
-        const inlineMigrationSettings = {
-          apiKey: inlineMigrationKey,
-          baseUrl: "https://api.inline-migration.example/v1",
-          kind: "openai-compatible",
-          model: "smoke-inline-migration-model"
-        };
-        localStorage.setItem("ai-settings", JSON.stringify(inlineMigrationSettings));
-        await window.aura?.secrets?.delete?.("secret:ai:apiKey");
-        window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__ =
-          "Smoke inline AI migration failure";
+        // Shell bootstrap provides a former model-only renderer setting.
+        // R4 must migrate its non-secret target but fail closed: an absent
+        // inline key may never bind any older named AI secret.
         location.hash = "#/settings?section=ai";
-        const inlineMigrationFailureInput = await waitFor(() => {
+        const legacyModelOnlyInput = await waitFor(() => {
           const currentApiKeyInput = Array.from(
             document.querySelectorAll(".settings-card--ai input")
           )[2];
           return location.hash.includes("/settings?section=ai") &&
             !bodyIncludes("读取 AI 配置失败") &&
-            currentApiKeyInput?.value === inlineMigrationKey &&
+            currentApiKeyInput?.value === "" &&
             !currentApiKeyInput.disabled
             ? currentApiKeyInput
             : null;
         }, 4_000);
-        const inlineSettingsAfterFailure = localStorage.getItem("ai-settings") ?? "";
-        const inlineSecretAfterFailure = await window.aura?.secrets?.get?.("secret:ai:apiKey");
-        settingsInlineSecretMigrationVisible = Boolean(inlineMigrationFailureInput);
-        settingsInlineSecretMigrationFailurePreserved =
-          settingsInlineSecretMigrationVisible &&
-          inlineSettingsAfterFailure.includes(inlineMigrationKey) &&
-          !inlineSecretAfterFailure;
-        delete window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__;
-        location.hash = "#/library";
-        await waitFor(
-          () => location.hash.includes("/library") && document.querySelector(".library-page"),
-          4_000
-        );
-        location.hash = "#/settings?section=ai";
-        const migratedInlineInput = await waitFor(() => {
-          const currentApiKeyInput = Array.from(
-            document.querySelectorAll(".settings-card--ai input")
-          )[2];
-          return location.hash.includes("/settings?section=ai") &&
-            !bodyIncludes("读取 AI 配置失败") &&
-            currentApiKeyInput?.value === inlineMigrationKey
-            ? currentApiKeyInput
-            : null;
-        }, 4_000);
-        const inlineSettingsAfterRetry = localStorage.getItem("ai-settings") ?? "";
-        const inlineSecretAfterRetry = await window.aura?.secrets?.get?.("secret:ai:apiKey");
-        settingsInlineSecretMigrationRetrySanitized =
-          Boolean(migratedInlineInput) &&
-          inlineSecretAfterRetry === inlineMigrationKey &&
-          !inlineSettingsAfterRetry.includes(inlineMigrationKey) &&
-          !inlineSettingsAfterRetry.includes("apiKey");
+        const legacySnapshot = await window.aura?.data?.command("ai.getSettings", {});
+        const legacySettingsRecord = localStorage.getItem("ai-settings");
+        settingsAiLegacyModelOnlyVisible = Boolean(legacyModelOnlyInput);
+        settingsAiLegacyModelOnlyFailsClosed =
+          settingsAiLegacyModelOnlyVisible &&
+          legacySnapshot?.hasApiKey === false;
+        settingsAiLegacyTargetSanitized =
+          settingsAiLegacyModelOnlyVisible &&
+          legacySettingsRecord === null &&
+          !Object.hasOwn(legacySnapshot ?? {}, "apiKey");
 
         location.hash = "#/library";
         await waitFor(
@@ -176,11 +147,10 @@ export const smokeSettingsAiTranslate = String.raw`        location.hash = "#/se
           1_000
         );
         if (deeplKeyInput) {
-          const translateSettingsBeforeValidation = localStorage.getItem("translate-settings");
-          const deeplSecretBeforeValidation =
-            await window.aura?.secrets?.get?.("secret:translate:deepl");
-          const baiduSecretBeforeValidation =
-            await window.aura?.secrets?.get?.("secret:translate:baidu");
+          const translateSettingsBeforeValidation = await window.aura?.data?.command(
+            "translation.getSettings",
+            {}
+          );
           setInputValue(deeplKeyInput, "");
           await waitFor(() => deeplKeyInput.value === "", 1_000);
           const validateDeepLButton = Array.from(
@@ -236,17 +206,15 @@ export const smokeSettingsAiTranslate = String.raw`        location.hash = "#/se
                 : null;
             }, 1_000)
           );
-          const translateSettingsAfterValidation = localStorage.getItem("translate-settings");
-          const deeplSecretAfterValidation =
-            await window.aura?.secrets?.get?.("secret:translate:deepl");
-          const baiduSecretAfterValidation =
-            await window.aura?.secrets?.get?.("secret:translate:baidu");
+          const translateSettingsAfterValidation = await window.aura?.data?.command(
+            "translation.getSettings",
+            {}
+          );
           settingsTranslateProviderValidationVisible =
             deepLValidationVisible && baiduValidationVisible;
           settingsTranslateProviderValidationDidNotPersist =
-            translateSettingsAfterValidation === translateSettingsBeforeValidation &&
-            deeplSecretAfterValidation === deeplSecretBeforeValidation &&
-            baiduSecretAfterValidation === baiduSecretBeforeValidation;
+            JSON.stringify(translateSettingsAfterValidation) ===
+            JSON.stringify(translateSettingsBeforeValidation);
           const deeplEngineButtonAgain = Array.from(
             document.querySelector('[data-settings-section="translate"]')?.querySelectorAll("button") ??
               []
@@ -264,14 +232,14 @@ export const smokeSettingsAiTranslate = String.raw`        location.hash = "#/se
             },
             1_000
           );
-          const translateSettingsBeforeFailure = localStorage.getItem("translate-settings");
-          const translateSecretBeforeFailure =
-            await window.aura?.secrets?.get?.("secret:translate:deepl");
+          const translateSettingsBeforeFailure = await window.aura?.data?.command(
+            "translation.getSettings",
+            {}
+          );
           const translateFailureDraft = "smoke-translate-save-failure-key";
           setInputValue(currentDeeplKeyInput, translateFailureDraft);
           await waitFor(() => currentDeeplKeyInput?.value === translateFailureDraft, 1_000);
-          window.__AURASCHOLAR_SMOKE_FAIL_SECRET_WRITE_AFTER__ = 1;
-          window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__ =
+          window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_TRANSLATE_SAVE__ =
             "Smoke settings translate save failure";
           const failSaveTranslateButton = Array.from(
             document.querySelector('[data-settings-section="translate"]')?.querySelectorAll("button") ??
@@ -295,11 +263,11 @@ export const smokeSettingsAiTranslate = String.raw`        location.hash = "#/se
               ? currentKeyInput
               : null;
           }, 3_000);
-          delete window.__AURASCHOLAR_SMOKE_FAIL_SECRET_WRITE_AFTER__;
-          delete window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__;
-          const translateSettingsAfterFailure = localStorage.getItem("translate-settings");
-          const translateSecretAfterFailure =
-            await window.aura?.secrets?.get?.("secret:translate:deepl");
+          delete window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_TRANSLATE_SAVE__;
+          const translateSettingsAfterFailure = await window.aura?.data?.command(
+            "translation.getSettings",
+            {}
+          );
           settingsTranslateSaveFailureVisible =
             bodyIncludes("保存失败，修改仍保留，可重新保存") &&
             bodyIncludes("Smoke settings translate save failure");
@@ -307,8 +275,7 @@ export const smokeSettingsAiTranslate = String.raw`        location.hash = "#/se
             Boolean(preservedTranslateInput) &&
             preservedTranslateInput.value === translateFailureDraft;
           settingsTranslateSaveFailureDidNotPersist =
-            translateSettingsAfterFailure === translateSettingsBeforeFailure &&
-            translateSecretAfterFailure === translateSecretBeforeFailure;
+            JSON.stringify(translateSettingsAfterFailure) === JSON.stringify(translateSettingsBeforeFailure);
           const resetTranslateButton = Array.from(
             document.querySelector('[data-settings-section="translate"]')?.querySelectorAll("button") ??
               []

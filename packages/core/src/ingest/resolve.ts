@@ -12,6 +12,7 @@ import {
   s2SearchByTitle,
   unpaywallPdf,
   type ConnectorContext,
+  type ConnectorRequestOptions,
   type NormalizedWork,
 } from "@aurascholar/connectors";
 import type { Clue } from "./clues.js";
@@ -33,16 +34,20 @@ export interface OaPdfCandidate {
   via: OaPdfSource;
 }
 
-export async function resolveClue(ctx: ConnectorContext, clue: Clue): Promise<ResolvedWork | null> {
+export async function resolveClue(
+  ctx: ConnectorContext,
+  clue: Clue,
+  opts?: ConnectorRequestOptions,
+): Promise<ResolvedWork | null> {
   switch (clue.kind) {
     case "doi":
-      return resolveDoi(ctx, clue.doi);
+      return resolveDoi(ctx, clue.doi, opts);
     case "arxiv": {
-      const work = await arxivByid(ctx, clue.arxivId);
+      const work = await arxivByid(ctx, clue.arxivId, opts);
       if (!work) return null;
       // Preprint may have been published since — its DOI gives richer metadata.
       if (work.doi) {
-        const published = await resolveDoi(ctx, work.doi);
+        const published = await resolveDoi(ctx, work.doi, opts);
         if (published) {
           published.work.arxivId = clue.arxivId;
           published.work.oaPdfUrl ??= work.oaPdfUrl;
@@ -55,7 +60,7 @@ export async function resolveClue(ctx: ConnectorContext, clue: Clue): Promise<Re
       return { work, confidence: 1 };
     }
     case "title":
-      return resolveTitle(ctx, clue.title);
+      return resolveTitle(ctx, clue.title, opts);
     case "url":
       // Reaching here means URL pattern matching failed upstream; treat the
       // URL itself as unresolvable (the app layer may fetch the page HTML
@@ -64,10 +69,14 @@ export async function resolveClue(ctx: ConnectorContext, clue: Clue): Promise<Re
   }
 }
 
-async function resolveDoi(ctx: ConnectorContext, doi: string): Promise<ResolvedWork | null> {
+async function resolveDoi(
+  ctx: ConnectorContext,
+  doi: string,
+  opts?: ConnectorRequestOptions,
+): Promise<ResolvedWork | null> {
   const [crossref, openalex] = await Promise.all([
-    crossrefByDoi(ctx, doi),
-    openalexByDoi(ctx, doi).catch(() => null),
+    crossrefByDoi(ctx, doi, opts),
+    openalexByDoi(ctx, doi, opts).catch(() => null),
   ]);
   if (!crossref && !openalex) return null;
 
@@ -84,8 +93,12 @@ async function resolveDoi(ctx: ConnectorContext, doi: string): Promise<ResolvedW
   return { work, confidence: 1 };
 }
 
-async function resolveTitle(ctx: ConnectorContext, title: string): Promise<ResolvedWork | null> {
-  const hits = await crossrefSearchByTitle(ctx, title, 5);
+async function resolveTitle(
+  ctx: ConnectorContext,
+  title: string,
+  opts?: ConnectorRequestOptions,
+): Promise<ResolvedWork | null> {
+  const hits = await crossrefSearchByTitle(ctx, title, 5, opts);
   const best = hits[0];
   const crossrefConfidence = best ? titleSimilarity(title, best.work.title) : 0;
 
@@ -97,7 +110,7 @@ async function resolveTitle(ctx: ConnectorContext, title: string): Promise<Resol
   // Weak or empty Crossref result — corroborate with Semantic Scholar, which
   // indexes preprints and venues Crossref misses. Adopt S2 only if it beats
   // Crossref's match (and Crossref entirely when Crossref found nothing).
-  const s2Papers = await s2SearchByTitle(ctx, title, 5).catch(() => []);
+  const s2Papers = await s2SearchByTitle(ctx, title, 5, opts).catch(() => []);
   const s2Best = s2Papers[0] ? normalizeS2(s2Papers[0]) : null;
   const s2Confidence = s2Best ? titleSimilarity(title, s2Best.title) : 0;
 

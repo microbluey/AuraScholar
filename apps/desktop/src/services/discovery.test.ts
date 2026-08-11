@@ -1,20 +1,8 @@
 import type { DiscoveryResult } from "@aurascholar/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markLibraryStatus, searchDiscoveryDetailed } from "./discovery";
 
-const mocks = vi.hoisted(() => ({
-  getLibraryDb: vi.fn(),
-  query: vi.fn(),
-}));
-
-vi.mock("./aura-db", () => ({
-  getLibraryDb: mocks.getLibraryDb,
-}));
-
-vi.mock("./aura-platform", () => ({
-  auraHttp: {},
-}));
-
-import { markLibraryStatus } from "./discovery";
+const command = vi.fn();
 
 const result: DiscoveryResult = {
   id: "crossref:10.1000/paper:0",
@@ -31,24 +19,17 @@ const result: DiscoveryResult = {
 
 describe("discovery library status", () => {
   beforeEach(() => {
-    vi.stubGlobal("window", { aura: {} });
-    mocks.getLibraryDb.mockResolvedValue({
-      db: { query: mocks.query },
-      libraryId: "library-1",
-    });
-    mocks.query.mockImplementation(async (sql: string) => {
-      if (sql.includes("FROM attachments")) return [];
-      if (sql.includes("doi IN")) return [{ doi: "10.1000/paper", id: "work-1" }];
-      return [];
-    });
+    vi.clearAllMocks();
+    vi.stubGlobal("window", { aura: { data: { command } } });
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it("marks a library match without a PDF as needing full text", async () => {
+  it("maps a typed active-work status without a PDF to full-text availability", async () => {
+    command.mockResolvedValueOnce({ statuses: [{ hasPdf: false, workId: "work-1" }] });
+
     await expect(markLibraryStatus([result])).resolves.toEqual([
       expect.objectContaining({
         inLibrary: true,
@@ -56,18 +37,37 @@ describe("discovery library status", () => {
         needsFulltext: true,
       }),
     ]);
-    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("FROM attachments"), [
-      "library-1",
-      "work-1",
-    ]);
+    expect(command).toHaveBeenCalledWith("discovery.getLibraryStatus", {
+      probes: [expect.objectContaining({ doi: "10.1000/paper" })],
+    });
   });
 
-  it("recognizes an active PDF attachment on a fresh search", async () => {
-    mocks.query.mockImplementation(async (sql: string) => {
-      if (sql.includes("FROM attachments")) return [{ work_id: "work-1" }];
-      if (sql.includes("doi IN")) return [{ doi: "10.1000/paper", id: "work-1" }];
-      return [];
+  it("runs public-source search through the cancellable semantic main command", async () => {
+    command.mockResolvedValueOnce({
+      report: {
+        cursors: { openalex: { hasMore: false, page: 1 } },
+        results: [],
+        sources: { openalex: { count: 0, source: "openalex", status: "empty" } },
+      },
     });
+
+    await expect(
+      searchDiscoveryDetailed({ text: "semantic command search" }, ["openalex"]),
+    ).resolves.toMatchObject({ results: [] });
+
+    expect(command).toHaveBeenCalledWith(
+      "discovery.searchOpenSources",
+      expect.objectContaining({
+        limit: 20,
+        query: { text: "semantic command search" },
+        requestId: expect.any(String),
+        sources: ["openalex"],
+      }),
+    );
+  });
+
+  it("maps an active PDF status from the typed command", async () => {
+    command.mockResolvedValueOnce({ statuses: [{ hasPdf: true, workId: "work-1" }] });
 
     await expect(markLibraryStatus([result])).resolves.toEqual([
       expect.objectContaining({
@@ -78,24 +78,8 @@ describe("discovery library status", () => {
     ]);
   });
 
-  it("does not use a fingerprint fallback when the stored DOI conflicts", async () => {
-    mocks.query.mockImplementation(async (sql: string, params: unknown[]) => {
-      if (sql.includes("doi IN")) return [];
-      if (sql.includes("fingerprint IN")) {
-        return [
-          {
-            arxiv_id: null,
-            doi: "10.1000/different",
-            fingerprint: params[1],
-            id: "different-work",
-            openalex_id: null,
-            pmid: null,
-            s2_id: null,
-          },
-        ];
-      }
-      return [];
-    });
+  it("preserves unmatched result fields from the positional command mapping", async () => {
+    command.mockResolvedValueOnce({ statuses: [{ hasPdf: false, workId: null }] });
 
     await expect(markLibraryStatus([result])).resolves.toEqual([
       expect.objectContaining({
@@ -106,114 +90,22 @@ describe("discovery library status", () => {
     ]);
   });
 
-  it("selects the sole compatible fingerprint candidate regardless of SQL row order", async () => {
-    const fingerprintRows = [
-      {
-        arxiv_id: null,
-        doi: "10.1000/different",
-        fingerprint: "",
-        id: "conflicting-work",
-        openalex_id: null,
-        pmid: null,
-        s2_id: null,
-      },
-      {
-        arxiv_id: null,
-        doi: null,
-        fingerprint: "",
-        id: "compatible-work",
-        openalex_id: "W-compatible",
-        pmid: null,
-        s2_id: null,
-      },
-    ];
-    mocks.query.mockImplementation(async (sql: string, params: unknown[]) => {
-      if (sql.includes("doi IN")) return [];
-      if (sql.includes("fingerprint IN")) {
-        return fingerprintRows.map((row) => ({ ...row, fingerprint: params[1] }));
-      }
-      return [];
-    });
+  it("returns early without Aura, including for an already-aborted request", async () => {
+    vi.stubGlobal("window", {});
+    const controller = new AbortController();
+    controller.abort();
 
-    const forward = await markLibraryStatus([result]);
-    fingerprintRows.reverse();
-    const reversed = await markLibraryStatus([result]);
-
-    for (const match of [forward[0], reversed[0]]) {
-      expect(match).toEqual(
-        expect.objectContaining({
-          inLibrary: true,
-          libraryWorkId: "compatible-work",
-          needsFulltext: true,
-        }),
-      );
-    }
+    await expect(markLibraryStatus([result], controller.signal)).resolves.toEqual([
+      expect.objectContaining({ inLibrary: false, matchedSources: ["crossref"] }),
+    ]);
+    expect(command).not.toHaveBeenCalled();
   });
 
-  it("does not use an ambiguous fingerprint fallback", async () => {
-    mocks.query.mockImplementation(async (sql: string, params: unknown[]) => {
-      if (sql.includes("doi IN")) return [];
-      if (sql.includes("fingerprint IN")) {
-        return ["work-a", "work-b"].map((id) => ({
-          arxiv_id: null,
-          doi: null,
-          fingerprint: params[1],
-          id,
-          openalex_id: null,
-          pmid: null,
-          s2_id: null,
-        }));
-      }
-      return [];
-    });
+  it("honors an aborted desktop search before it dispatches status work", async () => {
+    const controller = new AbortController();
+    controller.abort();
 
-    await expect(markLibraryStatus([result])).resolves.toEqual([
-      expect.objectContaining({
-        inLibrary: false,
-        libraryWorkId: undefined,
-        needsFulltext: undefined,
-      }),
-    ]);
-    expect(mocks.query).not.toHaveBeenCalledWith(
-      expect.stringContaining("FROM attachments"),
-      expect.anything(),
-    );
-  });
-
-  it("normalizes duplicate compatible fingerprint rows for one work", async () => {
-    mocks.query.mockImplementation(async (sql: string, params: unknown[]) => {
-      if (sql.includes("doi IN")) return [];
-      if (sql.includes("fingerprint IN")) {
-        return [
-          {
-            arxiv_id: null,
-            doi: null,
-            fingerprint: params[1],
-            id: "same-work",
-            openalex_id: "W-compatible",
-            pmid: null,
-            s2_id: null,
-          },
-          {
-            arxiv_id: null,
-            doi: null,
-            fingerprint: params[1],
-            id: "same-work",
-            openalex_id: null,
-            pmid: null,
-            s2_id: "S2-compatible",
-          },
-        ];
-      }
-      return [];
-    });
-
-    await expect(markLibraryStatus([result])).resolves.toEqual([
-      expect.objectContaining({
-        inLibrary: true,
-        libraryWorkId: "same-work",
-        needsFulltext: true,
-      }),
-    ]);
+    await expect(markLibraryStatus([result], controller.signal)).rejects.toThrow(/abort/i);
+    expect(command).not.toHaveBeenCalled();
   });
 });

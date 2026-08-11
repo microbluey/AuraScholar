@@ -486,7 +486,6 @@ export function DiscoveryPage() {
     desktopRuntime,
     ezproxy,
     initialTask: initialState.pendingTask,
-    onConfirmDraft: enqueueConfirmDraft,
     onMessage: setMessage,
     onMode: setMode,
     onQuery: setQuery,
@@ -632,25 +631,14 @@ export function DiscoveryPage() {
   // Closing the last tab returns to the site grid rather than stranding the
   // user on an empty "opening..." spinner.
   useEffect(() => {
-    if (
-      mode === "browser" &&
-      tabs.length === 0 &&
-      !openingBrowserTab &&
-      !pendingFulltextTask
-    ) {
+    if (mode === "browser" && tabs.length === 0 && !openingBrowserTab && !pendingFulltextTask) {
       const closeId = window.setTimeout(() => {
         void hideBrowserViewsWithFeedback();
         setMode("home");
       }, 0);
       return () => window.clearTimeout(closeId);
     }
-  }, [
-    hideBrowserViewsWithFeedback,
-    mode,
-    openingBrowserTab,
-    pendingFulltextTask,
-    tabs.length,
-  ]);
+  }, [hideBrowserViewsWithFeedback, mode, openingBrowserTab, pendingFulltextTask, tabs.length]);
 
   // Report the content-area rectangle to main, which positions the active view
   // exactly there. This is the whole reason the embedded view never overlaps.
@@ -748,18 +736,16 @@ export function DiscoveryPage() {
     taskRef: pendingFulltextTaskRef,
   });
 
-  const {
-    handleDedup: handleBrowserDedup,
-    queueConfirmation: queueBrowserConfirmation,
-  } = useBrowserDownloadImport({
-    enqueueDraft: enqueueConfirmDraft,
-    finish: finishBrowserImport,
-    hideBrowserViews: hideBrowserViewsWithFeedback,
-    modeRef,
-    onMessage: setMessage,
-    removeDraft: removeConfirmDraft,
-    resumeIfQueueEmpty,
-  });
+  const { handleDedup: handleBrowserDedup, queueConfirmation: queueBrowserConfirmation } =
+    useBrowserDownloadImport({
+      enqueueDraft: enqueueConfirmDraft,
+      finish: finishBrowserImport,
+      hideBrowserViews: hideBrowserViewsWithFeedback,
+      modeRef,
+      onMessage: setMessage,
+      removeDraft: removeConfirmDraft,
+      resumeIfQueueEmpty,
+    });
 
   // Subscribe to intercepted downloads while the browser view is active.
   // A task target only applies to the exact research tab bound to that task.
@@ -787,30 +773,18 @@ export function DiscoveryPage() {
       },
       (payload) => setMessage(`正在下载并识别:${payload.fileName}…`),
     );
-  }, [
-    handleBrowserDedup,
-    mode,
-    pendingFulltextTaskRef,
-    queueBrowserConfirmation,
-  ]);
+  }, [handleBrowserDedup, mode, pendingFulltextTaskRef, queueBrowserConfirmation]);
 
   const handleBrowserCommit = useCallback(
     async (decision: ImportDecision) => {
       const draft = confirmDraft;
-      const { attachStagedPdf, commitIngest, restoreDedup } =
-        await import("../services/library-actions");
+      const { finalizeIngest } = await import("../services/library-actions");
+      const result = await finalizeIngest(decision);
       let completedWorkId: string;
       if (decision.mode === "attach") {
-        await restoreDedup(decision.workId);
-        if (decision.pdf) await attachStagedPdf(decision.workId, decision.pdf);
         setMessage("已将 PDF 挂到所选文献");
-        completedWorkId = decision.workId;
+        completedWorkId = result.workId;
       } else {
-        const result = await commitIngest({
-          workInput: decision.workInput,
-          pdf: decision.pdf,
-          source: "browser",
-        });
         setMessage(`已入库:${result.title}`);
         completedWorkId = result.workId;
       }
@@ -829,12 +803,7 @@ export function DiscoveryPage() {
     setMessage(confirmDraft?.targetWorkId ? "已取消本次挂载，补全文目标仍保留" : "已取消入库");
     if (continueInBrowser && task) deferBrowserFallback(task);
     finishBrowserImport(confirmDraft);
-  }, [
-    confirmDraft,
-    deferBrowserFallback,
-    finishBrowserImport,
-    pendingFulltextTaskRef,
-  ]);
+  }, [confirmDraft, deferBrowserFallback, finishBrowserImport, pendingFulltextTaskRef]);
 
   const exitBrowser = useCallback(() => {
     markFulltextImportLeaving();
@@ -842,11 +811,7 @@ export function DiscoveryPage() {
     replacePendingFulltextTask(null);
     void hideBrowserViewsWithFeedback();
     setMode("home");
-  }, [
-    hideBrowserViewsWithFeedback,
-    markFulltextImportLeaving,
-    replacePendingFulltextTask,
-  ]);
+  }, [hideBrowserViewsWithFeedback, markFulltextImportLeaving, replacePendingFulltextTask]);
 
   const runSearch = useCallback(
     async (options: { query?: string; sources?: DiscoverySource[] } = {}): Promise<boolean> => {

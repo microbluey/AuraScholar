@@ -2,11 +2,12 @@ import { projectWorkMembershipId, type Database } from "@aurascholar/db";
 import { createNodeDatabase } from "@aurascholar/db/node";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { describe, expect, it } from "vitest";
-import { exportLibraryJsonFromDatabase, previewLibraryBackupJson } from "./sync";
 import {
+  exportLibraryBackupJsonFromDatabase,
   importParsedLibraryBackupIntoDatabase,
   parseLibraryBackupJson,
 } from "../shared/library-backup";
+import { previewLibraryBackupJson } from "./sync";
 
 type TestDatabase = Awaited<ReturnType<typeof createNodeDatabase>>;
 
@@ -117,7 +118,7 @@ describe("Research Project Library backup", () => {
     await addCanvas(db, "library-a", "project-a", "canvas-a");
     await addCanvas(db, "library-b", "project-b", "canvas-b");
 
-    const text = await (await exportLibraryJsonFromDatabase(db, "library-a")).text();
+    const text = await exportLibraryBackupJsonFromDatabase(db, "library-a");
     const backup = JSON.parse(text) as {
       version: number;
       tables: Record<string, Array<Record<string, unknown>>>;

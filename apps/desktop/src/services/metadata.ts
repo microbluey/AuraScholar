@@ -1,40 +1,20 @@
 // Bibliographic metadata service: load a work's full field set + author list
 // (with roles) for the detail panel and editor, and persist edits.
-import {
-  WorksRepo,
-  type WorkAuthorDetail,
-  type WorkPatch,
-  type WorkRow,
-} from "@aurascholar/db/repos/works";
-import { getLibraryDb } from "./aura-db";
+import type { WorkPatch } from "@aurascholar/db/repos/works";
+import type { WorkMetadataSnapshot } from "../../electron/data-command-contract";
 
-export interface WorkMetadata {
-  work: WorkRow;
-  authors: WorkAuthorDetail[];
-  keywords: string[];
+/** Kept as the existing renderer-facing metadata API. */
+export interface WorkMetadata extends WorkMetadataSnapshot {
+  authors: WorkMetadataSnapshot["authors"];
+  keywords: WorkMetadataSnapshot["keywords"];
+  work: WorkMetadataSnapshot["work"];
 }
 
 export async function loadWorkMetadata(workId: string): Promise<WorkMetadata | null> {
-  const { db, libraryId } = await getLibraryDb();
-  const repo = new WorksRepo(db, libraryId);
-  const work = await repo.get(workId);
-  if (!work) return null;
-  const authors = await repo.authorsOf(workId);
-  let keywords: string[] = [];
-  if (work.keywords_json) {
-    try {
-      const parsed = JSON.parse(work.keywords_json);
-      if (Array.isArray(parsed))
-        keywords = parsed.filter((k): k is string => typeof k === "string");
-    } catch {
-      keywords = [];
-    }
-  }
-  return { work, authors, keywords };
+  return (await window.aura.data.command("library.getWorkMetadata", { workId })).metadata;
 }
 
 export async function saveWorkMetadata(workId: string, patch: WorkPatch): Promise<void> {
-  const { db, libraryId } = await getLibraryDb();
-  await new WorksRepo(db, libraryId).update(workId, patch);
+  await window.aura.data.command("library.updateWorkMetadata", { patch, workId });
   window.dispatchEvent(new Event("aurascholar:library-updated"));
 }

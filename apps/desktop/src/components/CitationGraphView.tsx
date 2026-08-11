@@ -170,7 +170,7 @@ function compactGraphTitle(title: string, length = 30): string {
 
 export function CitationGraphView({ doi, height = 520 }: { doi: string; height?: number }) {
   // 以此为中心展开 re-centers locally without touching the caller.
-  const [centerDoi, setCenterDoi] = useState(doi);
+  const [recenteredDoi, setRecenteredDoi] = useState<[string, string] | null>(null);
   const [layout, setLayout] = useState<GraphLayout | null>(null);
   const [centerTitle, setCenterTitle] = useState("");
   const [loading, setLoading] = useState(false);
@@ -185,6 +185,7 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [expanded, setExpanded] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const importingDoiRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
   const dragRef = useRef<{
@@ -196,11 +197,8 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
   } | null>(null);
 
   const desktopRuntime = isDesktopRuntime();
-
-  useEffect(() => {
-    setCenterDoi(doi);
-  }, [doi]);
-
+  const centerDoi = recenteredDoi?.[0] === doi ? recenteredDoi[1] : doi;
+  const setCenterDoi = (value: string) => setRecenteredDoi([doi, value]);
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -362,6 +360,7 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
         startX: pan.x,
         startY: pan.y,
       };
+      setIsDragging(true);
       event.currentTarget.setPointerCapture(event.pointerId);
     },
     [pan.x, pan.y],
@@ -383,6 +382,7 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
   const finishPointerDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (dragRef.current?.pointerId !== event.pointerId) return;
     dragRef.current = null;
+    setIsDragging(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -583,7 +583,7 @@ export function CitationGraphView({ doi, height = 520 }: { doi: string; height?:
       </div>
 
       <div
-        className={`citation-graph-canvas${dragRef.current ? " citation-graph-canvas--dragging" : ""}`}
+        className={`citation-graph-canvas${isDragging ? " citation-graph-canvas--dragging" : ""}`}
         style={{ minHeight: height }}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}

@@ -1,5 +1,4 @@
 import type { CitationGraph } from "@aurascholar/core";
-import type { Database } from "@aurascholar/db";
 import { describe, expect, it, vi } from "vitest";
 import {
   loadCitationGraphPageSnapshot,
@@ -36,28 +35,22 @@ const GRAPH: CitationGraph = {
 };
 
 function dataSource(
-  query = vi.fn(async () => [{ doi: "10.1000/reference" }]),
+  getActiveLibraryDois = vi.fn(async () => ["10.1000/reference"]),
   loadGraph = vi.fn(async () => GRAPH as CitationGraph | null),
 ): {
-  db: Database;
+  getActiveLibraryDois: typeof getActiveLibraryDois;
   loadGraph: typeof loadGraph;
-  query: typeof query;
   source: CitationGraphPageDataSource;
 } {
-  const db = { query } as unknown as Database;
   return {
-    db,
+    getActiveLibraryDois,
     loadGraph,
-    query,
-    source: {
-      loadGraph,
-      open: vi.fn(async () => ({ db, libraryId: "library-1" })),
-    },
+    source: { getActiveLibraryDois, loadGraph },
   };
 }
 
 describe("citation graph page data gateway", () => {
-  it("loads graph and active in-library DOI state in one Library scope", async () => {
+  it("loads graph and active local Library DOI membership through the injected source", async () => {
     const fixture = dataSource();
     const buildGraph = vi.fn();
 
@@ -67,21 +60,72 @@ describe("citation graph page data gateway", () => {
       fixture.source,
     );
 
-    expect(fixture.source.open).toHaveBeenCalledTimes(1);
     expect(fixture.loadGraph).toHaveBeenCalledWith("10.1000/center", {
       buildGraph,
-      db: fixture.db,
       signal: undefined,
     });
-    expect(fixture.query).toHaveBeenCalledWith(
-      expect.stringMatching(/WHERE library_id = \\?.*deleted_at IS NULL/s),
-      ["library-1", "10.1000/center", "10.1000/reference"],
-    );
+    expect(fixture.getActiveLibraryDois).toHaveBeenCalledWith([
+      "10.1000/center",
+      "10.1000/reference",
+    ]);
     expect(snapshot.graph).toBe(GRAPH);
     expect([...snapshot.inLibraryDois]).toEqual(["10.1000/reference"]);
   });
 
-  it("does not open a Library scope when already aborted", async () => {
+  it("uses the typed active-Library DOI command in the production source", async () => {
+    const command = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    command
+      .mockResolvedValueOnce({ entry: null })
+      .mockResolvedValueOnce({ stored: true })
+      .mockResolvedValueOnce({
+        dois: ["10.1000/reference"],
+        libraryId: "library:active",
+      });
+
+    await expect(
+      loadCitationGraphPageSnapshot("10.1000/center", {
+        buildGraph: vi.fn(async () => GRAPH),
+      }),
+    ).resolves.toEqual({ graph: GRAPH, inLibraryDois: new Set(["10.1000/reference"]) });
+    expect(command).toHaveBeenNthCalledWith(3, "citationGraph.getActiveLibraryDois", {
+      dois: ["10.1000/center", "10.1000/reference"],
+    });
+  });
+
+  it("normalizes DOI variants for membership lookup and maps active results back to graph nodes", async () => {
+    const graphWithVariants: CitationGraph = {
+      ...GRAPH,
+      nodes: [
+        ...GRAPH.nodes,
+        {
+          ...GRAPH.nodes[1]!,
+          id: "reference-variant",
+          doi: "HTTPS://DOI.ORG/10.1000/REFERENCE",
+        },
+      ],
+    };
+    const fixture = dataSource(
+      vi.fn(async () => ["10.1000/reference"]),
+      vi.fn(async () => graphWithVariants),
+    );
+
+    const snapshot = await loadCitationGraphPageSnapshot("10.1000/center", {}, fixture.source);
+
+    expect(fixture.getActiveLibraryDois).toHaveBeenCalledWith([
+      "10.1000/center",
+      "10.1000/reference",
+    ]);
+    expect([...snapshot.inLibraryDois]).toEqual([
+      "10.1000/reference",
+      "HTTPS://DOI.ORG/10.1000/REFERENCE",
+    ]);
+  });
+
+  it("does not load a graph when already aborted", async () => {
     const fixture = dataSource();
     const controller = new AbortController();
     controller.abort();
@@ -93,10 +137,10 @@ describe("citation graph page data gateway", () => {
         fixture.source,
       ),
     ).rejects.toMatchObject({ name: "AbortError" });
-    expect(fixture.source.open).not.toHaveBeenCalled();
+    expect(fixture.loadGraph).not.toHaveBeenCalled();
   });
 
-  it("does not query Library membership after a stale graph load", async () => {
+  it("does not query active Library membership after a stale graph load", async () => {
     const controller = new AbortController();
     const fixture = dataSource(
       vi.fn(async () => []),
@@ -113,7 +157,7 @@ describe("citation graph page data gateway", () => {
         fixture.source,
       ),
     ).rejects.toMatchObject({ name: "AbortError" });
-    expect(fixture.query).not.toHaveBeenCalled();
+    expect(fixture.getActiveLibraryDois).not.toHaveBeenCalled();
   });
 
   it("skips the membership query when no graph was resolved", async () => {
@@ -125,7 +169,7 @@ describe("citation graph page data gateway", () => {
     await expect(
       loadCitationGraphPageSnapshot("10.1000/missing", {}, fixture.source),
     ).resolves.toEqual({ graph: null, inLibraryDois: new Set() });
-    expect(fixture.query).not.toHaveBeenCalled();
+    expect(fixture.getActiveLibraryDois).not.toHaveBeenCalled();
   });
 
   it("skips the membership query when graph nodes have no usable DOI", async () => {
@@ -144,15 +188,15 @@ describe("citation graph page data gateway", () => {
     await expect(
       loadCitationGraphPageSnapshot("10.1000/no-node-doi", {}, fixture.source),
     ).resolves.toEqual({ graph: graphWithoutDois, inLibraryDois: new Set() });
-    expect(fixture.query).not.toHaveBeenCalled();
+    expect(fixture.getActiveLibraryDois).not.toHaveBeenCalled();
   });
 
-  it("does not project membership returned after cancellation", async () => {
+  it("does not project active membership returned after cancellation", async () => {
     const controller = new AbortController();
     const fixture = dataSource(
       vi.fn(async () => {
         controller.abort();
-        return [{ doi: "10.1000/reference" }];
+        return ["10.1000/reference"];
       }),
     );
 

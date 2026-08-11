@@ -3,7 +3,7 @@ import type {
   KnowledgeContentSearchResult,
   SearchKnowledgeContentCommandInput,
 } from "../../electron/data-command-contract";
-import { getLibraryDb } from "./aura-db";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 
 export type {
   KnowledgeContentSearchRetrieval,
@@ -43,7 +43,7 @@ export async function searchKnowledgeContent(
     return { results: [], retrieval: DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL };
   }
 
-  const { libraryId } = await getLibraryDb();
+  const libraryId = await getActiveLibraryCommandScope();
   throwIfAborted(signal);
   const response = await window.aura.data.command("knowledge.searchContent", {
     ...filters,

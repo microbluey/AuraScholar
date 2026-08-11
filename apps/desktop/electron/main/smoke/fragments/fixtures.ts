@@ -13,6 +13,12 @@ export const smokeFixtures = String.raw`
           annotationId: "smoke-annotation-reader-delete-confirm",
           tagId: "smoke-tag-qa"
         };
+        const TYPED_INGEST_SMOKE = {
+          doi: "10.4242/aurascholar.typed-pdf-ingest",
+          fileName: "aurascholar-typed-pdf-ingest-smoke.pdf",
+          title: "Main-Owned Typed PDF Ingest Smoke",
+          venue: "Journal of Main-Process Boundaries"
+        };
         const READER_ANNOTATION_DELETE_FAILURE_SMOKE = {
           error: "Smoke reader annotation delete failure"
         };

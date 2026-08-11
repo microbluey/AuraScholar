@@ -21,9 +21,37 @@ beforeEach(async () => {
   }));
   const coordinator = new DatabaseCoordinator(database);
   dependencies = {
+    execute: (_commandName, operation) => coordinator.execute(operation),
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
   };
 });
+
+async function insertSavedSearch(
+  id: string,
+  options: {
+    createdAt: number;
+    deletedAt?: number | null;
+    libraryId?: string;
+    nextRunAt?: number | null;
+    query?: string;
+  },
+): Promise<void> {
+  await database.run(
+    `INSERT INTO saved_searches (
+       id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+       last_error, created_at, updated_at, deleted_at
+     ) VALUES (?, ?, ?, NULL, '[]', 0, NULL, ?, NULL, ?, ?, ?)`,
+    [
+      id,
+      options.libraryId ?? libraryId,
+      options.query ?? id,
+      options.nextRunAt ?? null,
+      options.createdAt,
+      options.createdAt,
+      options.deletedAt ?? null,
+    ],
+  );
+}
 
 describe("Saved Search data commands", () => {
   it("rejects malformed input before acquiring a database transaction", async () => {
@@ -95,6 +123,139 @@ describe("Saved Search data commands", () => {
       await expect(executeDataCommand(request, rejectingDependencies)).rejects.toThrow();
     }
     expect(transactionCalls).toBe(0);
+  });
+
+  it("rejects malformed scoped read input before obtaining a database lease", async () => {
+    let executeCalls = 0;
+    let transactionCalls = 0;
+    const rejectingDependencies: DataCommandDependencies = {
+      async execute() {
+        executeCalls += 1;
+        throw new Error("execute reached");
+      },
+      async transaction() {
+        transactionCalls += 1;
+        throw new Error("transaction reached");
+      },
+    };
+    const requests = [
+      { name: "savedSearch.getScope", input: { libraryId } },
+      { name: "savedSearch.list", input: { unexpected: true } },
+      { name: "savedSearch.get", input: {} },
+      { name: "savedSearch.get", input: { libraryId, savedSearchId: "saved-search" } },
+      { name: "savedSearch.listDue", input: { now: -1 } },
+      { name: "savedSearch.listDue", input: { savedSearchId: "saved-search" } },
+    ];
+
+    for (const request of requests) {
+      await expect(executeDataCommand(request, rejectingDependencies)).rejects.toThrow();
+    }
+    expect(executeCalls).toBe(0);
+    expect(transactionCalls).toBe(0);
+  });
+
+  it("derives saved-search reads from the active local Library", async () => {
+    const now = Date.now();
+    const foreignLibraryId = "foreign-saved-search-read-library";
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Foreign saved-search reads', 'personal', 1, 1)`,
+      [foreignLibraryId],
+    );
+    await insertSavedSearch("saved:never", { createdAt: 10 });
+    await insertSavedSearch("saved:due", { createdAt: 20, nextRunAt: now - 1 });
+    await insertSavedSearch("saved:active", { createdAt: 30, nextRunAt: now + 120_000 });
+    await insertSavedSearch("saved:future", { createdAt: 40, nextRunAt: now + 60_000 });
+    await insertSavedSearch("saved:deleted", { createdAt: 50, deletedAt: 60, nextRunAt: 0 });
+    await insertSavedSearch("saved:foreign", {
+      createdAt: 60,
+      libraryId: foreignLibraryId,
+      nextRunAt: 0,
+    });
+
+    await expect(
+      executeDataCommand({ name: "savedSearch.getScope", input: {} }, dependencies),
+    ).resolves.toEqual({ libraryId });
+    await expect(
+      executeDataCommand({ name: "savedSearch.list", input: {} }, dependencies),
+    ).resolves.toMatchObject({
+      savedSearches: [
+        { id: "saved:future" },
+        { id: "saved:active" },
+        { id: "saved:due" },
+        { id: "saved:never" },
+      ],
+    });
+    await expect(
+      executeDataCommand({ name: "savedSearch.listDue", input: {} }, dependencies),
+    ).resolves.toMatchObject({
+      savedSearches: [{ id: "saved:never" }, { id: "saved:due" }],
+    });
+    await expect(
+      executeDataCommand(
+        { name: "savedSearch.get", input: { savedSearchId: "saved:deleted" } },
+        dependencies,
+      ),
+    ).resolves.toMatchObject({ savedSearch: { deleted_at: 60, id: "saved:deleted" } });
+    await expect(
+      executeDataCommand(
+        { name: "savedSearch.get", input: { savedSearchId: "saved:foreign" } },
+        dependencies,
+      ),
+    ).resolves.toEqual({ savedSearch: null });
+  });
+
+  it("rejects unbounded saved-search read responses", async () => {
+    await database.run(
+      `WITH RECURSIVE rows(n) AS (
+         SELECT 1
+         UNION ALL
+         SELECT n + 1 FROM rows WHERE n < 1001
+       )
+       INSERT INTO saved_searches (
+         id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+         last_error, created_at, updated_at, deleted_at
+       )
+       SELECT 'saved:limit:' || n, ?, 'Bounded saved search', NULL, '[]', 0, NULL, 0,
+              NULL, n, n, NULL
+       FROM rows`,
+      [libraryId],
+    );
+
+    await expect(
+      executeDataCommand({ name: "savedSearch.list", input: {} }, dependencies),
+    ).rejects.toThrow("Saved search rows are limited to 1000");
+    await expect(
+      executeDataCommand({ name: "savedSearch.listDue", input: {} }, dependencies),
+    ).rejects.toThrow("Saved search rows are limited to 1000");
+  });
+
+  it("rejects oversized saved-search payloads before IPC serialization", async () => {
+    await insertSavedSearch("saved:oversized", {
+      createdAt: 1,
+      query: "x".repeat(8 * 1024 * 1024),
+    });
+
+    await expect(
+      executeDataCommand(
+        { name: "savedSearch.get", input: { savedSearchId: "saved:oversized" } },
+        dependencies,
+      ),
+    ).rejects.toThrow("Saved search output is limited to 8388608 bytes");
+    await expect(
+      executeDataCommand({ name: "savedSearch.list", input: {} }, dependencies),
+    ).rejects.toThrow("Saved search output is limited to 8388608 bytes");
+    await expect(
+      executeDataCommand({ name: "savedSearch.listDue", input: {} }, dependencies),
+    ).rejects.toThrow("Saved search output is limited to 8388608 bytes");
+  });
+
+  it("rejects scoped reads when the active local Library is deleted", async () => {
+    await database.run(`UPDATE libraries SET deleted_at = 10_000 WHERE id = ?`, [libraryId]);
+
+    await expect(
+      executeDataCommand({ name: "savedSearch.getScope", input: {} }, dependencies),
+    ).rejects.toThrow("Local Library identity is not active");
   });
 
   it("atomically creates and deduplicates equivalent subscriptions", async () => {

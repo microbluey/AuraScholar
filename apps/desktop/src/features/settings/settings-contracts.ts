@@ -5,12 +5,21 @@ export interface AiSettingsSnapshot {
   kind: AiProviderKind;
   baseUrl: string;
   model: string;
+  /** Main confirms a credential is bound, but never returns its value. */
+  hasApiKey: boolean;
+  /** Ephemeral editor-only replacement value; always blank after a reload/save. */
   apiKey: string;
 }
 
 export interface TranslateSettingsSnapshot {
   engine: TranslateEngine;
   targetLang: string;
+  /** Main confirms a key is bound, but never returns its value. */
+  hasBaiduApiKey: boolean;
+  hasDeepLApiKey: boolean;
+  /** Non-secret endpoint retained to preserve a main-bound DeepL target. */
+  deeplBaseUrl: string;
+  /** Ephemeral editor-only replacement values, blank after reload/save. */
   deeplKey: string;
   baiduAppid: string;
   baiduKey: string;
@@ -18,6 +27,7 @@ export interface TranslateSettingsSnapshot {
 
 export interface SyncSettingsSnapshot {
   baseUrl: string;
+  hasPassword: boolean;
   username: string;
   password: string;
 }
@@ -35,7 +45,6 @@ export type SettingsSection = "appearance" | "local-model" | SettingsTargetSecti
 
 export type SettingsSmokeFailureKey =
   | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_READ__"
-  | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_SAVE__"
   | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_TEST__"
   | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_TRANSLATE_READ__"
   | "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_TRANSLATE_SAVE__"
