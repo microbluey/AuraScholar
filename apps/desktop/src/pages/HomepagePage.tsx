@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { renderSite, type Profile, type ProfilePublication } from "@aurascholar/homepage";
-import { type WorkWithAuthors } from "@aurascholar/db";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
-import { listWorks } from "../services/library-list";
+import { listWorks, type LibraryListWork } from "../services/library-list";
 import { InlineNotice } from "../components/InlineNotice";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { writeClipboardText } from "../clipboard";
@@ -77,8 +76,6 @@ const EMPTY: StoredProfile = {
 };
 
 const PREVIEW_HOMEPAGE_TIMESTAMP = Date.UTC(2026, 6, 1, 10, 0, 0);
-const PREVIEW_HOMEPAGE_LIBRARY_ID = "library:preview-homepage";
-
 const PREVIEW_HOMEPAGE_PROFILE: StoredProfile = {
   displayName: "林知微",
   tagline: "博士候选人 · Human-centered AI",
@@ -105,56 +102,23 @@ function previewWork(
     year: number;
   },
   index: number,
-): WorkWithAuthors {
+): LibraryListWork {
   const timestamp = PREVIEW_HOMEPAGE_TIMESTAMP - index * 1000 * 60 * 42;
   return {
     abstract: input.abstract,
-    accessed_date: null,
-    accession_number: null,
-    arxiv_id: null,
     authorNames: input.authors,
-    call_number: null,
-    created_at: timestamp,
-    database_name: null,
-    deleted_at: null,
+    createdAt: timestamp,
     doi: input.doi ?? null,
-    edition: null,
-    fingerprint: null,
     id: input.id,
-    library_id: PREVIEW_HOMEPAGE_LIBRARY_ID,
-    isbn: null,
-    issn: null,
-    issue: null,
-    keywords_json: null,
-    label: null,
-    language: null,
-    notes_md: null,
-    number_of_volumes: null,
-    openalex_id: null,
-    original_title: null,
-    pages: null,
-    place_published: null,
-    pmid: null,
-    publication_date: `${input.year}`,
-    publisher: null,
-    reading_status: index < 3 ? "read" : "reading",
-    s2_id: null,
-    section: null,
-    series_title: null,
-    short_title: null,
-    starred: input.starred ? 1 : 0,
+    readingStatus: index < 3 ? "read" : "reading",
+    starred: Boolean(input.starred),
     title: input.title,
-    type: "article-journal",
-    updated_at: timestamp,
-    url: null,
-    venue_name: input.venueName,
-    venue_type: "conference",
-    volume: null,
+    venueName: input.venueName,
     year: input.year,
   };
 }
 
-const PREVIEW_HOMEPAGE_WORKS: WorkWithAuthors[] = [
+const PREVIEW_HOMEPAGE_WORKS: LibraryListWork[] = [
   previewWork(
     {
       abstract:
@@ -355,29 +319,29 @@ function homepageSelectionSaveFailureMessage(detail: string): string {
   return `主页成果已更新但草稿保存失败，撤销入口已保留，可重新调整或导出当前 HTML:${detail}`;
 }
 
-function workSearchText(work: WorkWithAuthors): string {
-  return [work.title, work.venue_name, work.year?.toString(), work.doi, work.authorNames.join(" ")]
+function workSearchText(work: LibraryListWork): string {
+  return [work.title, work.venueName, work.year?.toString(), work.doi, work.authorNames.join(" ")]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
 }
 
-function publicationFromWork(work: WorkWithAuthors, selfName: string): ProfilePublication {
+function publicationFromWork(work: LibraryListWork, selfName: string): ProfilePublication {
   return {
     title: work.title,
     authors: work.authorNames,
-    venue: work.venue_name ?? undefined,
+    venue: work.venueName ?? undefined,
     year: work.year ?? undefined,
     doi: work.doi ?? undefined,
     selfName: selfName || undefined,
   };
 }
 
-function sortWorksForHomepage(a: WorkWithAuthors, b: WorkWithAuthors): number {
+function sortWorksForHomepage(a: LibraryListWork, b: LibraryListWork): number {
   return (
-    (b.starred ?? 0) - (a.starred ?? 0) ||
+    Number(b.starred) - Number(a.starred) ||
     (b.year ?? 0) - (a.year ?? 0) ||
-    b.created_at - a.created_at ||
+    b.createdAt - a.createdAt ||
     a.title.localeCompare(b.title)
   );
 }
@@ -392,7 +356,7 @@ export function HomepagePage() {
   const navigate = useNavigate();
   const { confirm, confirmDialog } = useConfirmDialog();
   const [profile, setProfileState] = useState<StoredProfile>(() => initialHomepageProfile());
-  const [works, setWorks] = useState<WorkWithAuthors[]>([]);
+  const [works, setWorks] = useState<LibraryListWork[]>([]);
   const [worksStatus, setWorksStatus] = useState<WorksStatus>("loading");
   const [worksError, setWorksError] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -430,7 +394,7 @@ export function HomepagePage() {
     try {
       const smokeFailure = consumeHomepageSmokeReadFailure();
       if (smokeFailure) throw smokeFailure;
-      const rows = await listWorks(undefined, undefined, 500);
+      const rows = await listWorks(500);
       await waitForHomepageSmokeAfterReadDelay();
       if (worksLoadSeqRef.current !== seq) return;
       setWorks(rows);
@@ -1064,7 +1028,7 @@ export function HomepagePage() {
                       <small>
                         {work.authorNames.slice(0, 4).join(", ") || "无作者"}
                         {work.year ? ` · ${work.year}` : ""}
-                        {work.venue_name ? ` · ${work.venue_name}` : ""}
+                        {work.venueName ? ` · ${work.venueName}` : ""}
                       </small>
                     </span>
                     {work.starred ? <Badge variant="accent">星标</Badge> : null}

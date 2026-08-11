@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBlocker, useLocation } from "react-router-dom";
-import type { SyncResult } from "@aurascholar/sync";
 import { TARGET_LANGS, type TranslateEngine } from "@aurascholar/translate";
 import { Badge, Button, Card, Input, useTheme } from "@aurascholar/ui";
 import {
   loadAiSettingsDraft,
-  makeProvider,
   saveAiSettings,
+  testAiProvider,
   type AiProviderKind,
 } from "../services/ai";
 import {
@@ -21,7 +20,6 @@ import {
   previewLibraryBackupJson,
   runSync,
   saveSyncSettings,
-  type LibraryBackupImportSummary,
 } from "../services/sync";
 import { useConfirmDialog, type ConfirmFunction } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
@@ -32,13 +30,32 @@ import {
   type BackupSafetySnapshot,
 } from "../features/settings/backup-safety";
 import { LocalEmbeddingModelCard } from "../features/settings/LocalEmbeddingModelCard";
+import {
+  makeAiSettingsSnapshot,
+  makeTranslateSettingsSnapshot,
+  normalizeAiBaseUrl,
+  sameAiSettings,
+  sameTranslateSettings,
+  translateEngineLabel,
+  urlSafeHost,
+  validateTranslateConfig,
+} from "../features/settings/provider-settings";
+import {
+  describeSyncRunError,
+  formatBackupIgnoredTables,
+  formatBackupImportSuccessStatus,
+  formatBytes,
+  formatSyncSuccessStatus,
+  makeSyncSettingsSnapshot,
+  normalizeWebDavBaseUrl,
+  sameSyncSettings,
+} from "../features/settings/sync-settings";
 import type {
   AiSettingsSnapshot,
   BackupSafetyDisplay,
   SettingsSection,
   SettingsSmokeFailureKey,
   SettingsTargetSection,
-  SettingsUrlValidation,
   SyncSettingsSnapshot,
   TranslateSettingsSnapshot,
 } from "../features/settings/settings-contracts";
@@ -80,12 +97,16 @@ const DEFAULT_AI_SETTINGS: AiSettingsSnapshot = {
   kind: "openai-compatible",
   baseUrl: "https://api.deepseek.com/v1",
   model: "deepseek-chat",
+  hasApiKey: false,
   apiKey: "",
 };
 
 const DEFAULT_TRANSLATE_SETTINGS: TranslateSettingsSnapshot = {
   engine: "llm",
   targetLang: "zh",
+  hasBaiduApiKey: false,
+  hasDeepLApiKey: false,
+  deeplBaseUrl: "",
   deeplKey: "",
   baiduAppid: "",
   baiduKey: "",
@@ -93,6 +114,7 @@ const DEFAULT_TRANSLATE_SETTINGS: TranslateSettingsSnapshot = {
 
 const DEFAULT_SYNC_SETTINGS: SyncSettingsSnapshot = {
   baseUrl: "",
+  hasPassword: false,
   username: "",
   password: "",
 };
@@ -101,12 +123,16 @@ const PREVIEW_AI_SETTINGS: AiSettingsSnapshot = {
   kind: "openai-compatible",
   baseUrl: "https://api.deepseek.com/v1",
   model: "deepseek-chat",
+  hasApiKey: true,
   apiKey: "preview-key-not-saved",
 };
 
 const PREVIEW_TRANSLATE_SETTINGS: TranslateSettingsSnapshot = {
   engine: "llm",
   targetLang: "zh",
+  hasBaiduApiKey: false,
+  hasDeepLApiKey: false,
+  deeplBaseUrl: "",
   deeplKey: "",
   baiduAppid: "",
   baiduKey: "",
@@ -114,6 +140,7 @@ const PREVIEW_TRANSLATE_SETTINGS: TranslateSettingsSnapshot = {
 
 const PREVIEW_SYNC_SETTINGS: SyncSettingsSnapshot = {
   baseUrl: "https://dav.example.edu/remote.php/dav/files/aurascholar",
+  hasPassword: true,
   username: "preview-researcher",
   password: "preview-password-not-saved",
 };
@@ -131,97 +158,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 function describeUnknownError(value: unknown): string {
   return describeSafeError(value);
-}
-
-function describeSyncRunError(value: unknown): string {
-  const message = describeUnknownError(value);
-  if (/local sync log|local changes for|Invalid local sync log entry/i.test(message)) {
-    return "本机同步日志可能不完整，或包含当前版本还不支持的数据结构。本机数据未被覆盖；请先升级 AuraScholar，确认本机数据库来自兼容版本后再同步。";
-  }
-  if (/Unsupported sync (table|column)/i.test(message)) {
-    return "远端同步目录包含当前版本还不支持的数据结构。请先升级 AuraScholar，或确认所有设备使用同一版本后再同步。";
-  }
-  if (
-    /Invalid sync segment|malformed|non-monotonic|bad sequence range|sequence range does not match/i.test(
-      message,
-    )
-  ) {
-    return "远端同步日志可能已损坏或写入不完整。本机数据未被覆盖；请检查 WebDAV 目录中的 journal 文件，修复或移走异常文件后再同步。";
-  }
-  const webDavStatus = message.match(/WebDAV .* failed: (\d{3})|WebDAV unreachable: (\d{3})/i);
-  if (webDavStatus) {
-    const status = webDavStatus[1] ?? webDavStatus[2] ?? "未知";
-    return describeWebDavStatus(status);
-  }
-  return message;
-}
-
-function formatSyncSuccessStatus(result: SyncResult): string {
-  const changed = result.pushedEntries + result.pulledEntries + result.appliedEntries;
-  if (changed === 0 && result.conflicts === 0) {
-    return "同步完成：本机与远端已是最新。";
-  }
-  const summary = `同步完成：推送 ${result.pushedEntries} 条，拉取 ${result.pulledEntries} 条，应用 ${result.appliedEntries} 条`;
-  if (result.conflicts > 0) {
-    return `${summary}，${result.conflicts} 个冲突已记录，可稍后在同步冲突记录中检查。`;
-  }
-  return summary;
-}
-
-function formatBackupImportSuccessStatus(summary: LibraryBackupImportSummary): string {
-  const lead =
-    summary.imported > 0
-      ? `备份导入完成：新增 ${summary.imported} 条`
-      : "备份导入完成：没有新增记录，当前库可能已包含这些数据";
-  const skipped = summary.skipped > 0 ? `，跳过 ${summary.skipped} 条` : "";
-  return (
-    `${lead}${skipped}。` +
-    (summary.redirectedRows > 0 ? ` 已合并 ${summary.redirectedRows} 条关联数据到已有记录。` : "") +
-    (summary.deactivatedAttachments > 0
-      ? ` ${summary.deactivatedAttachments} 个附件记录已标记为待重新挂载。`
-      : "") +
-    (summary.skippedRuntimeRows > 0
-      ? ` ${summary.skippedRuntimeRows} 条旧设备未完成的 AI 任务未恢复，可在新设备重新生成。`
-      : "") +
-    (summary.ignoredTables.length > 0
-      ? ` 已忽略 ${formatBackupIgnoredTables(summary.ignoredTables)}。`
-      : "")
-  );
-}
-
-function describeWebDavStatus(status: string): string {
-  switch (status) {
-    case "401":
-    case "403":
-      return `WebDAV 服务返回 ${status}。认证失败或没有目录权限，请检查账号、应用密码和该目录的读写权限。`;
-    case "404":
-      return "WebDAV 服务返回 404。同步目录不存在，请确认地址是可写目录，必要时先在云盘中创建 AuraScholar 文件夹。";
-    case "409":
-      return "WebDAV 服务返回 409。父目录不存在或服务器拒绝创建目录，请确认同步地址指向已存在的可写目录。";
-    case "423":
-      return "WebDAV 服务返回 423。同步目录当前被锁定，请稍后重试，或在云盘/同步工具中解除目录锁定。";
-    case "507":
-      return "WebDAV 服务返回 507。远端空间不足，无法保存同步日志；请清理云盘空间后再同步。";
-    default:
-      return `WebDAV 服务返回 ${status}。请检查地址、账号、应用密码和该目录的读写权限。`;
-  }
-}
-
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "0 B";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatBackupIgnoredTables(ignoredTables: string[]): string {
-  const names = Array.from(new Set(ignoredTables.map((name) => name.trim()).filter(Boolean)));
-  if (names.length === 0) return "0 个不支持或运行态数据表";
-  const listed = names
-    .slice(0, 3)
-    .map((name) => (name.length > 40 ? `${name.slice(0, 37)}...` : name))
-    .join("、");
-  return `${names.length} 个不支持或运行态数据表（${listed}${names.length > 3 ? " 等" : ""}）`;
 }
 
 function formatBackupTimestamp(value: string): string {
@@ -405,6 +341,10 @@ export function SettingsPage() {
       const settings = await loadAiSettingsDraft();
       if (aiLoadSeqRef.current !== seq) return;
       if (!settings) {
+        setAiKind(DEFAULT_AI_SETTINGS.kind);
+        setBaseUrl(DEFAULT_AI_SETTINGS.baseUrl);
+        setModel(DEFAULT_AI_SETTINGS.model);
+        setApiKey("");
         setSavedAiSettings(DEFAULT_AI_SETTINGS);
         return;
       }
@@ -414,7 +354,8 @@ export function SettingsPage() {
         kind,
         settings.baseUrl || fallback.defaultBaseUrl,
         settings.model || fallback.defaultModel,
-        settings.apiKey ?? "",
+        "",
+        settings.hasApiKey,
       );
       setAiKind(next.kind);
       setBaseUrl(next.baseUrl);
@@ -456,9 +397,12 @@ export function SettingsPage() {
       const next = makeTranslateSettingsSnapshot(
         config.engine,
         config.targetLang,
-        config.deepl?.apiKey ?? "",
-        config.baidu?.appid ?? "",
-        config.baidu?.key ?? "",
+        "",
+        config.baidu.appid,
+        "",
+        config.deepl.baseUrl ?? "",
+        config.deepl.hasApiKey,
+        config.baidu.hasApiKey,
       );
       setTrEngine(next.engine);
       setTrTarget(next.targetLang);
@@ -498,13 +442,21 @@ export function SettingsPage() {
       const settings = await loadSyncSettings();
       if (syncLoadSeqRef.current !== seq) return;
       if (!settings) {
+        setDavUrl(DEFAULT_SYNC_SETTINGS.baseUrl);
+        setDavUser(DEFAULT_SYNC_SETTINGS.username);
+        setDavPass("");
         setSavedSyncSettings(DEFAULT_SYNC_SETTINGS);
         return;
       }
-      const next = makeSyncSettingsSnapshot(settings.baseUrl, settings.username, settings.password);
+      const next = makeSyncSettingsSnapshot(
+        settings.baseUrl,
+        settings.username,
+        "",
+        settings.hasPassword,
+      );
       setDavUrl(next.baseUrl);
       setDavUser(next.username);
-      setDavPass(next.password);
+      setDavPass("");
       setSavedSyncSettings(next);
     } catch (error) {
       if (syncLoadSeqRef.current !== seq) return;
@@ -542,17 +494,78 @@ export function SettingsPage() {
     return () => window.clearTimeout(timer);
   }, [targetSection]);
 
+  const canReuseSavedAiApiKey = useMemo(() => {
+    const normalized = normalizeAiBaseUrl(aiKind, baseUrl);
+    return (
+      normalized.ok &&
+      normalized.value === savedAiSettings.baseUrl &&
+      model.trim() === savedAiSettings.model &&
+      aiKind === savedAiSettings.kind &&
+      savedAiSettings.hasApiKey
+    );
+  }, [aiKind, baseUrl, model, savedAiSettings]);
   const currentAiSettings = useMemo(
-    () => makeAiSettingsSnapshot(aiKind, baseUrl, model, apiKey),
-    [aiKind, apiKey, baseUrl, model],
+    () =>
+      makeAiSettingsSnapshot(
+        aiKind,
+        baseUrl,
+        model,
+        apiKey,
+        Boolean(apiKey.trim()) || canReuseSavedAiApiKey,
+      ),
+    [aiKind, apiKey, baseUrl, canReuseSavedAiApiKey, model],
+  );
+  const canReuseSavedDeepLApiKey = useMemo(
+    () => savedTranslateSettings.hasDeepLApiKey,
+    [savedTranslateSettings.hasDeepLApiKey],
+  );
+  const canReuseSavedBaiduApiKey = useMemo(
+    () =>
+      savedTranslateSettings.hasBaiduApiKey &&
+      baiduAppid.trim() === savedTranslateSettings.baiduAppid,
+    [baiduAppid, savedTranslateSettings.baiduAppid, savedTranslateSettings.hasBaiduApiKey],
   );
   const currentTranslateSettings = useMemo(
-    () => makeTranslateSettingsSnapshot(trEngine, trTarget, deeplKey, baiduAppid, baiduKey),
-    [baiduAppid, baiduKey, deeplKey, trEngine, trTarget],
+    () =>
+      makeTranslateSettingsSnapshot(
+        trEngine,
+        trTarget,
+        deeplKey,
+        baiduAppid,
+        baiduKey,
+        savedTranslateSettings.deeplBaseUrl,
+        Boolean(deeplKey.trim()) || canReuseSavedDeepLApiKey,
+        Boolean(baiduKey.trim()) || canReuseSavedBaiduApiKey,
+      ),
+    [
+      baiduAppid,
+      baiduKey,
+      canReuseSavedBaiduApiKey,
+      canReuseSavedDeepLApiKey,
+      deeplKey,
+      savedTranslateSettings.deeplBaseUrl,
+      trEngine,
+      trTarget,
+    ],
   );
+  const canReuseSavedSyncPassword = useMemo(() => {
+    const normalized = normalizeWebDavBaseUrl(davUrl);
+    return (
+      normalized.ok &&
+      normalized.value === savedSyncSettings.baseUrl &&
+      davUser.trim() === savedSyncSettings.username &&
+      savedSyncSettings.hasPassword
+    );
+  }, [davUrl, davUser, savedSyncSettings]);
   const currentSyncSettings = useMemo(
-    () => makeSyncSettingsSnapshot(davUrl, davUser, davPass),
-    [davPass, davUrl, davUser],
+    () =>
+      makeSyncSettingsSnapshot(
+        davUrl,
+        davUser,
+        davPass,
+        Boolean(davPass.trim()) || canReuseSavedSyncPassword,
+      ),
+    [canReuseSavedSyncPassword, davPass, davUrl, davUser],
   );
 
   const aiDirty = !sameAiSettings(currentAiSettings, savedAiSettings);
@@ -605,16 +618,22 @@ export function SettingsPage() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasPendingOperations, hasUnsavedChanges]);
 
+  // A saved key is deliberately write-only. It is usable only when the
+  // currently edited target is identical to the main-owned, key-bound target.
   const aiConfigured = Boolean(
-    apiKey.trim() && model.trim() && (aiKind === "anthropic" || baseUrl.trim()),
+    (apiKey.trim() || canReuseSavedAiApiKey) &&
+    model.trim() &&
+    (aiKind === "anthropic" || baseUrl.trim()),
   );
   const translationReady =
     trEngine === "llm"
       ? aiConfigured
       : trEngine === "deepl"
-        ? Boolean(deeplKey.trim())
-        : Boolean(baiduAppid.trim() && baiduKey.trim());
-  const syncConfigured = Boolean(davUrl.trim() && davUser.trim() && davPass.trim());
+        ? Boolean(deeplKey.trim() || canReuseSavedDeepLApiKey)
+        : Boolean(baiduAppid.trim() && (baiduKey.trim() || canReuseSavedBaiduApiKey));
+  const syncConfigured = Boolean(
+    davUrl.trim() && davUser.trim() && (davPass.trim() || canReuseSavedSyncPassword),
+  );
   const activeProvider = AI_PROVIDER_OPTIONS.find((option) => option.id === aiKind)!;
   const backupSafetyDisplay = useMemo(() => describeBackupSafety(backupSafety), [backupSafety]);
 
@@ -800,7 +819,11 @@ export function SettingsPage() {
     if (!model.trim()) return "请填写模型名称。";
     const endpoint = normalizeAiBaseUrl(aiKind, baseUrl);
     if (!endpoint.ok) return endpoint.message;
-    if (!apiKey.trim()) return "请填写 API Key。本地兼容端点也可以填写占位 Key。";
+    if (!apiKey.trim() && !canReuseSavedAiApiKey) {
+      return savedAiSettings.hasApiKey
+        ? "更改 AI 服务地址、类型或模型时，请重新填写 API Key。"
+        : "请填写 API Key。本地兼容端点也可以填写占位 Key。";
+    }
     return null;
   };
 
@@ -816,7 +839,11 @@ export function SettingsPage() {
       setStatus(normalizedBaseUrl.message);
       return false;
     }
-    const next = { ...currentAiSettings, baseUrl: normalizedBaseUrl.value };
+    const next = {
+      ...currentAiSettings,
+      baseUrl: normalizedBaseUrl.value,
+      hasApiKey: Boolean(apiKey.trim()) || canReuseSavedAiApiKey,
+    };
     if (!desktopRuntime) {
       setAiSaving(true);
       setStatus("正在模拟保存 AI 配置...");
@@ -833,21 +860,32 @@ export function SettingsPage() {
     setAiSaving(true);
     setStatus("保存中...");
     try {
-      const smokeFailure = consumeSettingsSmokeFailure(
-        "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_SAVE__",
+      const saved = await withMinimumBusyTime(
+        saveAiSettings({
+          ...(apiKey.trim() ? { apiKey } : {}),
+          baseUrl: next.baseUrl,
+          kind: next.kind,
+          model: next.model,
+        }),
       );
-      await withMinimumBusyTime(smokeFailure ? Promise.reject(smokeFailure) : saveAiSettings(next));
+      const persisted = makeAiSettingsSnapshot(
+        saved.kind,
+        saved.baseUrl,
+        saved.model,
+        "",
+        saved.hasApiKey,
+      );
+      setAiKind(persisted.kind);
+      setBaseUrl(persisted.baseUrl);
+      setModel(persisted.model);
+      setApiKey("");
+      setSavedAiSettings(persisted);
     } catch (e) {
       setStatus(`保存失败，修改仍保留，可重新保存：${describeUnknownError(e)}`);
       return false;
     } finally {
       setAiSaving(false);
     }
-    setAiKind(next.kind);
-    setBaseUrl(next.baseUrl);
-    setModel(next.model);
-    setApiKey(next.apiKey);
-    setSavedAiSettings(next);
     window.dispatchEvent(new Event(AI_SETTINGS_UPDATED_EVENT));
     setStatus("已保存，新的 AI 配置会用于摘要、观点合成与翻译。");
     return true;
@@ -872,12 +910,7 @@ export function SettingsPage() {
             "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_AI_TEST__",
           );
           if (smokeFailure) throw smokeFailure;
-          const provider = await makeProvider();
-          if (!provider) throw new Error("配置不完整");
-          return provider.generateText({
-            messages: [{ role: "user", content: "Reply with exactly: ok" }],
-            maxTokens: 10,
-          });
+          return testAiProvider();
         })(),
       );
       setStatus(`连接成功，模型回复：${res.text.slice(0, 50)}`);
@@ -912,22 +945,36 @@ export function SettingsPage() {
     }
     setTranslateSaving(true);
     setTrStatus("保存中...");
+    let persisted: TranslateSettingsSnapshot;
     try {
       const smokeFailure = consumeSettingsSmokeFailure(
         "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_TRANSLATE_SAVE__",
       );
-      await withMinimumBusyTime(
+      const saved = await withMinimumBusyTime(
         smokeFailure
           ? Promise.reject(smokeFailure)
           : saveTranslateConfig({
+              baidu: {
+                ...(next.baiduAppid ? { appid: next.baiduAppid } : {}),
+                ...(next.baiduKey ? { apiKey: next.baiduKey } : {}),
+              },
+              deepl: {
+                ...(next.deeplBaseUrl ? { baseUrl: next.deeplBaseUrl } : {}),
+                ...(next.deeplKey ? { apiKey: next.deeplKey } : {}),
+              },
               engine: next.engine,
               targetLang: next.targetLang,
-              deepl: next.deeplKey ? { apiKey: next.deeplKey } : undefined,
-              baidu:
-                next.baiduAppid && next.baiduKey
-                  ? { appid: next.baiduAppid, key: next.baiduKey }
-                  : undefined,
             }),
+      );
+      persisted = makeTranslateSettingsSnapshot(
+        saved.engine,
+        saved.targetLang,
+        "",
+        saved.baidu.appid,
+        "",
+        saved.deepl.baseUrl ?? "",
+        saved.deepl.hasApiKey,
+        saved.baidu.hasApiKey,
       );
     } catch (e) {
       setTrStatus(`保存失败，修改仍保留，可重新保存：${describeUnknownError(e)}`);
@@ -935,15 +982,13 @@ export function SettingsPage() {
     } finally {
       setTranslateSaving(false);
     }
-    setTrEngine(next.engine);
-    setTrTarget(next.targetLang);
-    setDeeplKey(next.deeplKey);
-    setBaiduAppid(next.baiduAppid);
-    setBaiduKey(next.baiduKey);
-    setSavedTranslateSettings(next);
-    if (!desktopRuntime && (next.deeplKey || next.baiduKey)) {
-      setTrStatus("浏览器预览无法保存翻译密钥，请在桌面应用中完成配置。");
-    } else if (next.engine === "llm" && !aiConfigured) {
+    setTrEngine(persisted.engine);
+    setTrTarget(persisted.targetLang);
+    setDeeplKey("");
+    setBaiduAppid(persisted.baiduAppid);
+    setBaiduKey("");
+    setSavedTranslateSettings(persisted);
+    if (persisted.engine === "llm" && !aiConfigured) {
       setTrStatus("已保存；大模型翻译还需要先配置 AI 服务。");
     } else {
       setTrStatus("已保存。");
@@ -994,8 +1039,12 @@ export function SettingsPage() {
       setSyncStatus(normalizedDavUrl.message);
       return false;
     }
-    if (!davUser.trim() || !davPass.trim()) {
-      setSyncStatus("请填写用户名和密码 / 应用密码。");
+    if (!davUser.trim() || (!davPass.trim() && !canReuseSavedSyncPassword)) {
+      setSyncStatus(
+        savedSyncSettings.hasPassword && !canReuseSavedSyncPassword
+          ? "更改 WebDAV 地址或用户名时，请重新填写密码 / 应用密码。"
+          : "请填写用户名和密码 / 应用密码。",
+      );
       return false;
     }
     if (!desktopRuntime) {
@@ -1011,26 +1060,31 @@ export function SettingsPage() {
       setSyncStatus("预览已模拟保存；真实 WebDAV 密码只会在桌面应用中保存。");
       return true;
     }
-    const next = { ...currentSyncSettings, baseUrl: normalizedDavUrl.value };
+    const requestedSettings = {
+      baseUrl: normalizedDavUrl.value,
+      ...(davPass.trim() ? { password: davPass } : {}),
+      username: davUser,
+    };
     setSyncSaving(true);
     setSyncStatus("正在保存同步配置...");
     try {
       const smokeFailure = consumeSettingsSmokeFailure(
         "__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_SAVE__",
       );
-      await withMinimumBusyTime(
-        smokeFailure ? Promise.reject(smokeFailure) : saveSyncSettings(next),
+      const saved = await withMinimumBusyTime(
+        smokeFailure ? Promise.reject(smokeFailure) : saveSyncSettings(requestedSettings),
       );
+      const next = makeSyncSettingsSnapshot(saved.baseUrl, saved.username, "", saved.hasPassword);
+      setDavUrl(next.baseUrl);
+      setDavUser(next.username);
+      setDavPass("");
+      setSavedSyncSettings(next);
     } catch (e) {
       setSyncStatus(`保存失败，修改仍保留，可重新保存：${describeUnknownError(e)}`);
       return false;
     } finally {
       setSyncSaving(false);
     }
-    setDavUrl(next.baseUrl);
-    setDavUser(next.username);
-    setDavPass(next.password);
-    setSavedSyncSettings(next);
     setSyncStatus("同步配置已保存。");
     return true;
   };
@@ -1365,7 +1419,16 @@ export function SettingsPage() {
                       placeholder={activeProvider.defaultModel}
                     />
                   </Field>
-                  <Field label="API Key" hint="密钥通过桌面安全存储加密保存，不写入同步数据。">
+                  <Field
+                    label="API Key"
+                    hint={
+                      canReuseSavedAiApiKey
+                        ? "已安全保存；地址、类型和模型不变时可留空保留。"
+                        : savedAiSettings.hasApiKey
+                          ? "地址、类型或模型已更改；请重新填写 Key 后保存。"
+                          : "仅在保存时提交给桌面安全存储，不写入同步数据。"
+                    }
+                  >
                     <Input
                       disabled={aiBusy}
                       name="ai-api-key"
@@ -1376,7 +1439,7 @@ export function SettingsPage() {
                         setApiKey(e.target.value);
                         setStatus(null);
                       }}
-                      placeholder="sk-..."
+                      placeholder={canReuseSavedAiApiKey ? "已保存（留空不变）" : "sk-..."}
                     />
                   </Field>
                 </div>
@@ -1472,7 +1535,14 @@ export function SettingsPage() {
                 </Field>
 
                 {trEngine === "deepl" && (
-                  <Field label="DeepL API Key">
+                  <Field
+                    label="DeepL API Key"
+                    hint={
+                      canReuseSavedDeepLApiKey
+                        ? "已安全保存；保持当前接口时可留空，填写会替换旧密钥。"
+                        : "仅在保存时提交给桌面安全存储；旧版未绑定密钥需重新填写。"
+                    }
+                  >
                     <Input
                       disabled={translateBusy}
                       name="deepl-api-key"
@@ -1483,7 +1553,9 @@ export function SettingsPage() {
                         setDeeplKey(e.target.value);
                         setTrStatus(null);
                       }}
-                      placeholder="xxxxxxxx-xxxx-...:fx"
+                      placeholder={
+                        canReuseSavedDeepLApiKey ? "已保存（留空不变）" : "xxxxxxxx-xxxx-...:fx"
+                      }
                     />
                   </Field>
                 )}
@@ -1500,7 +1572,16 @@ export function SettingsPage() {
                         }}
                       />
                     </Field>
-                    <Field label="百度翻译密钥">
+                    <Field
+                      label="百度翻译密钥"
+                      hint={
+                        canReuseSavedBaiduApiKey
+                          ? "已安全保存；APPID 不变时可留空，填写会替换旧密钥。"
+                          : savedTranslateSettings.hasBaiduApiKey
+                            ? "APPID 已更改；请重新填写密钥后保存。"
+                            : "仅在保存时提交给桌面安全存储。"
+                      }
+                    >
                       <Input
                         disabled={translateBusy}
                         name="baidu-translate-key"
@@ -1511,6 +1592,7 @@ export function SettingsPage() {
                           setBaiduKey(e.target.value);
                           setTrStatus(null);
                         }}
+                        placeholder={canReuseSavedBaiduApiKey ? "已保存（留空不变）" : "密钥"}
                       />
                     </Field>
                   </>
@@ -1601,12 +1683,22 @@ export function SettingsPage() {
                       }}
                     />
                   </Field>
-                  <Field label="密码 / 应用密码">
+                  <Field
+                    label="密码 / 应用密码"
+                    hint={
+                      canReuseSavedSyncPassword
+                        ? "已安全保存；地址和用户名不变时可留空保留原密码。"
+                        : savedSyncSettings.hasPassword
+                          ? "地址或用户名已更改；请重新填写密码后保存。"
+                          : "仅在保存时提交给桌面安全存储。"
+                    }
+                  >
                     <Input
                       disabled={syncBusy}
                       name="webdav-password"
                       type="password"
                       autoComplete="current-password"
+                      placeholder={canReuseSavedSyncPassword ? "已保存（留空不变）" : "应用密码"}
                       value={davPass}
                       onChange={(e) => {
                         setDavPass(e.target.value);
@@ -1873,166 +1965,6 @@ function SettingsNavigationGuard({
   return null;
 }
 
-function translateEngineLabel(engine: TranslateEngine) {
-  if (engine === "deepl") return "DeepL";
-  if (engine === "baidu") return "百度翻译";
-  return "大模型";
-}
-
-function urlSafeHost(value: string): string {
-  const url = newURL(value);
-  return url?.host || "WebDAV 已填写";
-}
-
-function newURL(value: string): URL | null {
-  try {
-    return new URL(value);
-  } catch {
-    return null;
-  }
-}
-
 function providerDefaults(kind: AiProviderKind): (typeof AI_PROVIDER_OPTIONS)[number] {
   return AI_PROVIDER_OPTIONS.find((option) => option.id === kind) ?? DEFAULT_AI_PROVIDER_OPTION;
-}
-
-function makeAiSettingsSnapshot(
-  kind: AiProviderKind,
-  baseUrl: string,
-  model: string,
-  apiKey: string,
-): AiSettingsSnapshot {
-  return {
-    kind,
-    baseUrl: kind === "anthropic" ? baseUrl.trim() : baseUrl.trim().replace(/\/$/, ""),
-    model: model.trim(),
-    apiKey: apiKey.trim(),
-  };
-}
-
-function makeTranslateSettingsSnapshot(
-  engine: TranslateEngine,
-  targetLang: string,
-  deeplKey: string,
-  baiduAppid: string,
-  baiduKey: string,
-): TranslateSettingsSnapshot {
-  return {
-    engine,
-    targetLang: targetLang.trim() || DEFAULT_TRANSLATE_SETTINGS.targetLang,
-    deeplKey: deeplKey.trim(),
-    baiduAppid: baiduAppid.trim(),
-    baiduKey: baiduKey.trim(),
-  };
-}
-
-function validateTranslateConfig(settings: TranslateSettingsSnapshot): string | null {
-  if (settings.engine === "deepl" && !settings.deeplKey) {
-    return "请填写 DeepL API Key，或切换为大模型翻译。";
-  }
-  if (settings.engine === "baidu" && (!settings.baiduAppid || !settings.baiduKey)) {
-    return "请填写百度翻译 APPID 和密钥，或切换为大模型翻译。";
-  }
-  return null;
-}
-
-function makeSyncSettingsSnapshot(
-  baseUrl: string,
-  username: string,
-  password: string,
-): SyncSettingsSnapshot {
-  return {
-    baseUrl: baseUrl.trim(),
-    username: username.trim(),
-    password,
-  };
-}
-
-function normalizeAiBaseUrl(kind: AiProviderKind, value: string): SettingsUrlValidation {
-  const raw = value.trim();
-  if (!raw) {
-    return kind === "anthropic"
-      ? { ok: true, value: "" }
-      : { message: "请填写 OpenAI 兼容 API 地址。", ok: false };
-  }
-  const url = newURL(raw);
-  if (!url) {
-    return {
-      message: "AI API 地址格式不正确，请使用完整的 http:// 或 https:// 地址。",
-      ok: false,
-    };
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    return {
-      message: "AI API 地址仅支持 http:// 或 https://。",
-      ok: false,
-    };
-  }
-  if (url.username || url.password) {
-    return {
-      message: "AI API 地址不要包含密钥或账号，请填写在 API Key 字段中。",
-      ok: false,
-    };
-  }
-  if (url.search || url.hash) {
-    return {
-      message: "AI API 地址请填写接口根地址，不要包含查询参数或 # 片段。",
-      ok: false,
-    };
-  }
-  return { ok: true, value: url.toString().replace(/\/+$/, "") };
-}
-
-function normalizeWebDavBaseUrl(value: string): SettingsUrlValidation {
-  const raw = value.trim();
-  if (!raw) return { message: "请填写 WebDAV 地址。", ok: false };
-  const url = newURL(raw);
-  if (!url) {
-    return {
-      message: "WebDAV 地址格式不正确，请使用完整的 http:// 或 https:// 地址。",
-      ok: false,
-    };
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    return {
-      message: "WebDAV 地址仅支持 http:// 或 https://。",
-      ok: false,
-    };
-  }
-  if (url.username || url.password) {
-    return {
-      message: "WebDAV 地址不要包含用户名或密码，请填写在下方账号字段中。",
-      ok: false,
-    };
-  }
-  if (url.search || url.hash) {
-    return {
-      message: "WebDAV 地址请填写目录地址，不要包含查询参数或 # 片段。",
-      ok: false,
-    };
-  }
-  return { ok: true, value: url.toString().replace(/\/+$/, "") };
-}
-
-function sameAiSettings(a: AiSettingsSnapshot, b: AiSettingsSnapshot): boolean {
-  return (
-    a.kind === b.kind && a.baseUrl === b.baseUrl && a.model === b.model && a.apiKey === b.apiKey
-  );
-}
-
-function sameTranslateSettings(
-  a: TranslateSettingsSnapshot,
-  b: TranslateSettingsSnapshot,
-): boolean {
-  return (
-    a.engine === b.engine &&
-    a.targetLang === b.targetLang &&
-    a.deeplKey === b.deeplKey &&
-    a.baiduAppid === b.baiduAppid &&
-    a.baiduKey === b.baiduKey
-  );
-}
-
-function sameSyncSettings(a: SyncSettingsSnapshot, b: SyncSettingsSnapshot): boolean {
-  return a.baseUrl === b.baseUrl && a.username === b.username && a.password === b.password;
 }

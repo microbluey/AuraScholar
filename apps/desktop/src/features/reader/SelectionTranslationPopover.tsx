@@ -1,10 +1,14 @@
 import type { ReaderTextSelection } from "@aurascholar/reader";
-import { langLabel, type TranslateConfig } from "@aurascholar/translate";
+import { langLabel } from "@aurascholar/translate";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { writeClipboardText } from "../../clipboard";
 import { describeSafeError } from "../../services/sensitive-text";
-import { loadTranslateConfig, resolveTranslator } from "../../services/translate";
+import {
+  loadTranslateConfig,
+  resolveTranslator,
+  type TranslateConfig,
+} from "../../services/translate";
 
 const AI_CONFIGURATION_ERROR_RE = /配置 AI 服务|配置.*AI/;
 const TRANSLATION_CONFIGURATION_ERROR_RE = /填写 DeepL|填写百度翻译|配置.*翻译/;
@@ -37,7 +41,12 @@ export function SelectionTranslationPopover({
   const [engine, setEngine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
-  const [config, setConfig] = useState<TranslateConfig>({ engine: "llm", targetLang: "zh" });
+  const [config, setConfig] = useState<TranslateConfig>({
+    baidu: { appid: "", hasApiKey: false },
+    deepl: { hasApiKey: false },
+    engine: "llm",
+    targetLang: "zh",
+  });
 
   useEffect(() => {
     const controller = new AbortController();

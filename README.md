@@ -22,7 +22,7 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 
 - **Ingest from anywhere**: add papers by DOI / arXiv ID / URL / local PDF in one step; metadata is fetched automatically and open-access (OA) full text is downloaded when available. Local PDFs are matched back to their DOI from the body text.
 - **Bulk migration**: import BibTeX / RIS / CSL-JSON from Zotero / EndNote, with automatic deduplication by DOI and a title+year+authors fingerprint.
-- **Rollback-safe work state and recycle bin**: starred/read status updates plus single or bulk trash/restore operations cross a typed main-process command boundary; every batch is one Library-scoped transaction and cannot partially apply. Permanent deletion uses the same ownership guard, so failed dependent-record cleanup cannot leave a paper half-erased. Reclaiming unreferenced content-addressed blob files is intentionally deferred to a future serialized compactor.
+- **Rollback-safe work state and recycle bin**: starred/read status updates plus single or bulk trash/restore operations cross a typed main-process command boundary; every batch is one Library-scoped transaction and cannot partially apply. Permanent deletion uses the same ownership guard, so failed dependent-record cleanup cannot leave a paper half-erased. Bounded, main-process cleanup reclaims PDF blobs left by incomplete staged imports only after checking every attachment and document-revision reference; it never sweeps arbitrary historic blobs.
 - **Relationship-safe duplicate merging**: merging duplicate records runs as one Library-scoped main-process transaction. It unions valid folder and tag memberships, retargets PDFs, annotations, citations, Canvas references, derived data, and background tasks, and rolls every change back if any step fails.
 - **Metadata sources**: aggregates five open data sources — Crossref, OpenAlex, Semantic Scholar, Unpaywall, and arXiv.
 
@@ -35,6 +35,7 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 ### 🔍 Academic search
 
 - **Federated open-source search**: native aggregation across OpenAlex / Crossref / Semantic Scholar / arXiv with merged, deduplicated results, in-library markers, and one-click ingest (including OA PDF retrieval).
+- **Saved-search subscriptions**: saved open-source queries catch up at desktop-app startup; while the desktop window is open, an hourly scheduler checks due subscriptions. They do not poll in the background after the app is closed.
 - **Reliable full-text completion loop**: “Find full text” from Library, Reader, or a search result validates candidates in Unpaywall → arXiv → explicit OA-PDF order before falling back to the research browser. Each task carries a unique ID, target work, and origin; Reader/Library handoffs add a validated return route, while browser fallback binds the actual root tab and its child-tab chain. Late downloads therefore cannot attach to a newer target, and completion refreshes the full-text state before returning when a safe route exists.
 - **Built-in research browser**: open Google Scholar, Web of Science, Scopus, PubMed, CNKI, IEEE Xplore, ScienceDirect, SpringerLink, Wiley, ACM, JSTOR, ResearchGate, bioRxiv, DBLP, Baidu Scholar, Wanfang, VIP and more in in-app tabs (sites are customizable). Each site gets an isolated, persistent login session.
   - **Captured downloads with confirmation**: PDFs downloaded on site (including via institutional subscriptions) are captured and analyzed. New files and cross-work DOI/content-hash conflicts wait for destination confirmation; an exact duplicate already belonging to the explicit target can attach idempotently. Exported citation files are still recognized and deduplicated automatically.
@@ -47,7 +48,8 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 
 - Highlights, underlines, strikethroughs, sticky notes/comments, with multi-level text anchoring.
 - Selection / page / full-document translation (LLM / DeepL / Baidu), with cached results to avoid repeat token costs.
-- Three sidebar views: annotations · AI highlights · citation context.
+- Reader selections can be saved as revision-bound PDF text Evidence and reopened against the captured source revision.
+- Panel views: annotations · translation · citation context (for DOI-linked works).
 - **Citation context graph**: presents citation relationships on a timeline instead of a hard-to-read citation tree.
 
 ### 🧠 Spatial canvas & AI synthesis
@@ -79,7 +81,7 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 
 ### 📡 Indexing sentinel
 
-- Monitors each paper's journey from Accept → Online → Issue → database indexing, notifies you on every state change, and keeps evidence snapshots. Papers without a DOI can be tracked by title and are upgraded to DOI tracking automatically; published papers are ingested into the library on arrival.
+- Monitors each paper's journey from Accept → Online → Issue → database indexing, notifies you on every state change, and keeps evidence snapshots. Papers without a DOI can be tracked by title and are upgraded to DOI tracking automatically; published papers are ingested into the library on arrival. It catches up at desktop-app startup and polls hourly only while the desktop window is open; it is not a 24/7 background service after the app is closed.
 
 ![Indexing sentinel](./assets/screenshots/sentinel.png)
 
@@ -90,7 +92,8 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 ## Design principles
 
 - **Local-first**: your data lives on your device (SQLite) and can be backed up anywhere.
-- **Fully functional for free**: sync supported paper records, document/revision metadata, Evidence, annotations, and indexing state through your own WebDAV endpoint, including WebDAV-compatible NAS or cloud storage (hybrid logical clocks + per-field LWW conflict resolution); document blobs remain device-local and require explicit reattachment, while Spatial Canvas currently moves through whole-library JSON export/import. AI runs on your own model service and API key (OpenAI-compatible / Anthropic).
+- **WebDAV row sync (current scope)**: synchronize works, research projects and memberships, document asset/revision metadata, Evidence and project membership, annotations, flashcards, and Sentinel task state through your own WebDAV endpoint, including compatible NAS or cloud storage (hybrid logical clocks + per-field LWW conflict resolution).
+- **Device-local source files and Canvas**: WebDAV does not transfer source-document blobs, including PDFs; remote revisions require explicit reattachment. It also does not synchronize author, collection, or tag relationships; snippets; saved searches; or Spatial Canvas. Canvas currently moves through whole-library JSON export/import, whose backups also omit PDF bytes. AI runs on your own model service and API key (OpenAI-compatible / Anthropic).
 - **Pay for convenience**: official cloud sync, hosted AI, 24/7 cloud sentinel, and homepage hosting are optional paid services for users who prefer zero setup.
 - **Two themes**: a calm scholarly "Dawn" light theme and a technical "Nocturne" dark theme.
 
@@ -100,11 +103,9 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 apps/
   desktop/    # Electron desktop app (macOS / Windows / Linux)
   gallery/    # Dual-theme component gallery (design reference)
-  web/        # PWA (SQLite WASM + OPFS, planned)
-  mobile/     # Mobile (planned)
 packages/
   tokens/     # Dual-theme design tokens
-  ui/         # Component library (Radix + Tailwind)
+  ui/         # Shared React component primitives and styles
   db/         # Drizzle ORM schema and migrations
   platform/   # Platform abstractions (HTTP / FS / notifications / keychain / scheduling)
   connectors/ # Crossref / OpenAlex / Semantic Scholar / Unpaywall / arXiv clients
@@ -117,6 +118,8 @@ packages/
   sync/       # Sync engine (HLC + per-field LWW) and JSON backup/import remapping
   homepage/   # Homepage templates and CV generation
 ```
+
+Web and mobile clients are planned only; their app directories do not yet exist in this repository.
 
 The desktop shell is Electron. Shared, platform-agnostic domain logic lives in `packages/`; Electron-specific orchestration and UI live in `apps/desktop/`. The Electron main process provides SQLite / CORS-free HTTP / file system / notifications / the built-in browser, bridged to the renderer through the preload `window.aura` API. See [apps/desktop/README.md](./apps/desktop/README.md) for the architecture.
 

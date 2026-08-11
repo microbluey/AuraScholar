@@ -40,6 +40,14 @@ import {
   SelectionTranslationPopover,
   translationSettingsCta,
 } from "../features/reader/SelectionTranslationPopover";
+import {
+  consumeReaderSmokeAnnotationCreateFailure,
+  consumeReaderSmokeAnnotationDeleteFailure,
+  consumeReaderSmokeAnnotationRestoreFailure,
+  consumeReaderSmokeCommentSaveFailure,
+  consumeReaderSmokeOpenFailure,
+  consumeReaderSmokeSnippetSaveFailure,
+} from "../features/reader/reader-smoke-failures";
 import { useReaderEvidenceDeepLink } from "../features/reader/useReaderEvidenceDeepLink";
 import { resolveReaderScrollPage } from "../features/reader/evidence-deep-link";
 import { recoverReaderEvidenceSource } from "../features/reader/reader-evidence-recovery";
@@ -72,8 +80,12 @@ import {
 import { fulltextWorkHandoffPath } from "../services/fulltext";
 import { isDesktopRuntime } from "../services/aura-platform";
 import { describeSafeError } from "../services/sensitive-text";
-import { resolveTranslator, loadTranslateConfig } from "../services/translate";
-import { langLabel, splitForTranslation, type TranslateConfig } from "@aurascholar/translate";
+import {
+  resolveTranslator,
+  loadTranslateConfig,
+  type TranslateConfig,
+} from "../services/translate";
+import { langLabel, splitForTranslation } from "@aurascholar/translate";
 import { addSnippet } from "../services/snippets";
 
 const CitationGraphView = lazy(() =>
@@ -103,15 +115,6 @@ const EMPTY_SESSION_TRANSLATED_PAGES: ReaderSessionOwnedValue<TranslatedPages> =
   value: EMPTY_TRANSLATED_PAGES,
 };
 const PANEL_TABS = new Set<PanelTab>(["annotations", "translate", "graph"]);
-
-interface ReaderSmokeWindow extends Window {
-  __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_OPEN__?: string;
-  __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_COMMENT_SAVE__?: string;
-  __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_CREATE__?: string;
-  __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_DELETE__?: string;
-  __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_RESTORE__?: string;
-  __AURASCHOLAR_SMOKE_READER_FAIL_NEXT_SNIPPET_SAVE__?: string;
-}
 
 function normalizePanelTab(value: string | null): PanelTab | null {
   return value && PANEL_TABS.has(value as PanelTab) ? (value as PanelTab) : null;
@@ -193,54 +196,6 @@ async function waitForMinimumElapsed(startedAt: number, minimumMs: number): Prom
   if (remaining > 0) {
     await new Promise((resolve) => setTimeout(resolve, remaining));
   }
-}
-
-function consumeReaderSmokeOpenFailure(): Error | null {
-  const smokeWindow = window as ReaderSmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_OPEN__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_OPEN__;
-  return new Error(message);
-}
-
-function consumeReaderSmokeCommentSaveFailure(): Error | null {
-  const smokeWindow = window as ReaderSmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_COMMENT_SAVE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_COMMENT_SAVE__;
-  return new Error(message);
-}
-
-function consumeReaderSmokeAnnotationCreateFailure(): Error | null {
-  const smokeWindow = window as ReaderSmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_CREATE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_CREATE__;
-  return new Error(message);
-}
-
-function consumeReaderSmokeAnnotationDeleteFailure(): Error | null {
-  const smokeWindow = window as ReaderSmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_DELETE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_DELETE__;
-  return new Error(message);
-}
-
-function consumeReaderSmokeAnnotationRestoreFailure(): Error | null {
-  const smokeWindow = window as ReaderSmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_RESTORE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_ANNOTATION_RESTORE__;
-  return new Error(message);
-}
-
-function consumeReaderSmokeSnippetSaveFailure(): Error | null {
-  const smokeWindow = window as ReaderSmokeWindow;
-  const message = smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_SNIPPET_SAVE__;
-  if (!message) return null;
-  delete smokeWindow.__AURASCHOLAR_SMOKE_READER_FAIL_NEXT_SNIPPET_SAVE__;
-  return new Error(message);
 }
 
 interface OpenContext {
@@ -1735,12 +1690,21 @@ function TranslatePanel({
   const [copyingAll, setCopyingAll] = useState(false);
   const cancelRef = useRef<AbortController | null>(null);
   const copyingAllRef = useRef(false);
-  const [config, setConfig] = useState<TranslateConfig>({ engine: "llm", targetLang: "zh" });
+  const [config, setConfig] = useState<TranslateConfig>({
+    baidu: { appid: "", hasApiKey: false },
+    deepl: { hasApiKey: false },
+    engine: "llm",
+    targetLang: "zh",
+  });
   useEffect(() => {
     let cancelled = false;
-    void loadTranslateConfig().then((next) => {
-      if (!cancelled) setConfig(next);
-    });
+    void loadTranslateConfig()
+      .then((next) => {
+        if (!cancelled) setConfig(next);
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(describeSafeError(cause));
+      });
     return () => {
       cancelled = true;
     };
@@ -1807,7 +1771,9 @@ function TranslatePanel({
   }, [currentPage, doc, mode, onPagesChange, pages]);
 
   useEffect(() => {
-    if (!busy) setPageInput(String(currentPage + 1));
+    if (busy) return;
+    const timer = window.setTimeout(() => setPageInput(String(currentPage + 1)), 0);
+    return () => window.clearTimeout(timer);
   }, [busy, currentPage]);
 
   useEffect(() => {
@@ -1881,10 +1847,19 @@ function TranslatePanel({
               }));
             } catch (e) {
               if (controller.signal.aborted) return;
+              const message = describeSafeError(e);
+              // Main owns the LLM provider, so a missing configuration arrives
+              // here as a per-segment command error. Surface setup failures at
+              // panel level to preserve the actionable Settings CTA; ordinary
+              // provider failures remain attached to the affected segment.
+              if (translationSettingsCta(message)) {
+                setError(message);
+                return;
+              }
               onPagesChange((current) => ({
                 ...current,
                 [page.pageIndex]: (current[page.pageIndex] ?? []).map((segment, segmentIndex) =>
-                  segmentIndex === index ? { ...segment, error: describeSafeError(e) } : segment,
+                  segmentIndex === index ? { ...segment, error: message } : segment,
                 ),
               }));
             }

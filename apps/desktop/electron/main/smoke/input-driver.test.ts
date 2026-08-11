@@ -8,11 +8,13 @@ import {
 
 function createMockWindow(
   sendCommand = vi.fn(async (_method: string, _params?: Record<string, unknown>) => undefined),
+  sendInputEvent = vi.fn((_event: Record<string, unknown>) => undefined),
 ): {
   attach: ReturnType<typeof vi.fn>;
   detach: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   sendCommand: typeof sendCommand;
+  sendInputEvent: typeof sendInputEvent;
   show: ReturnType<typeof vi.fn>;
   win: BrowserWindow;
 } {
@@ -36,6 +38,7 @@ function createMockWindow(
     detach,
     focus,
     sendCommand,
+    sendInputEvent,
     show,
     win: {
       focus,
@@ -52,6 +55,7 @@ function createMockWindow(
         },
         focus,
         isDestroyed: () => false,
+        sendInputEvent,
       },
     } as unknown as BrowserWindow,
   };
@@ -167,15 +171,104 @@ describe("SmokeInputDriver", () => {
     ]);
   });
 
+  it("dispatches a native held-button drag before the connection-handshake move", async () => {
+    vi.useFakeTimers();
+    try {
+      const mock = createMockWindow();
+      const driver = new SmokeInputDriver(mock.win);
+      const drag = driver.enqueue(
+        `${SMOKE_INPUT_REQUEST_PREFIX}${JSON.stringify({
+          id: "drag:sequence",
+          kind: "mouse-drag",
+          source: { x: 20, y: 30 },
+          through: { x: 40, y: 50 },
+          target: { x: 100, y: 120 },
+        })}`,
+      );
+
+      await vi.advanceTimersByTimeAsync(16);
+      expect(mock.sendInputEvent.mock.calls.map(([event]) => event)).toMatchObject([
+        { type: "mouseMove", x: 20, y: 30 },
+      ]);
+      expect(mock.attach).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(16);
+      expect(mock.sendInputEvent.mock.calls.map(([event]) => event)).toMatchObject([
+        { type: "mouseMove", x: 20, y: 30 },
+        {
+          type: "mouseDown",
+          x: 20,
+          y: 30,
+          button: "left",
+          modifiers: ["leftButtonDown"],
+          clickCount: 1,
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(32);
+      expect(mock.sendInputEvent.mock.calls.map(([event]) => event)).toMatchObject([
+        { type: "mouseMove", x: 20, y: 30 },
+        {
+          type: "mouseDown",
+          x: 20,
+          y: 30,
+          button: "left",
+          modifiers: ["leftButtonDown"],
+          clickCount: 1,
+        },
+        { type: "mouseMove", x: 20, y: 30, modifiers: ["leftButtonDown"] },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(16);
+      expect(mock.sendInputEvent.mock.calls.map(([event]) => event)).toMatchObject([
+        { type: "mouseMove", x: 20, y: 30 },
+        {
+          type: "mouseDown",
+          x: 20,
+          y: 30,
+          button: "left",
+          modifiers: ["leftButtonDown"],
+          clickCount: 1,
+        },
+        { type: "mouseMove", x: 20, y: 30, modifiers: ["leftButtonDown"] },
+        { type: "mouseMove", x: 40, y: 50, modifiers: ["leftButtonDown"] },
+      ]);
+
+      await vi.runAllTimersAsync();
+      await expect(drag).resolves.toBe("drag:sequence");
+      const dispatchedEvents = mock.sendInputEvent.mock.calls.map(([event]) => event);
+      expect(dispatchedEvents).toHaveLength(6);
+      expect(dispatchedEvents).toMatchObject([
+        { type: "mouseMove", x: 20, y: 30 },
+        {
+          type: "mouseDown",
+          x: 20,
+          y: 30,
+          button: "left",
+          modifiers: ["leftButtonDown"],
+          clickCount: 1,
+        },
+        { type: "mouseMove", x: 20, y: 30, modifiers: ["leftButtonDown"] },
+        { type: "mouseMove", x: 40, y: 50, modifiers: ["leftButtonDown"] },
+        { type: "mouseMove", x: 100, y: 120, modifiers: ["leftButtonDown"] },
+        { type: "mouseUp", x: 100, y: 120, button: "left", clickCount: 1 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("best-effort releases the mouse when a drag command fails after press", async () => {
-    const sendCommand = vi.fn(
-      async (_method: string, params: Record<string, unknown> | undefined) => {
-        if (params?.type === "mouseMoved" && params.buttons === 1) {
-          throw new Error("move failed");
-        }
-      },
-    );
-    const mock = createMockWindow(sendCommand);
+    const sendInputEvent = vi.fn((event: Record<string, unknown>) => {
+      if (
+        event.type === "mouseMove" &&
+        Array.isArray(event.modifiers) &&
+        event.modifiers.includes("leftButtonDown")
+      ) {
+        throw new Error("move failed");
+      }
+    });
+    const mock = createMockWindow(undefined, sendInputEvent);
     const driver = new SmokeInputDriver(mock.win);
 
     await expect(
@@ -190,9 +283,9 @@ describe("SmokeInputDriver", () => {
       ),
     ).rejects.toThrow("move failed");
 
-    expect(sendCommand.mock.calls.at(-1)?.[1]).toMatchObject({
-      type: "mouseReleased",
-      buttons: 0,
+    expect(sendInputEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+      type: "mouseUp",
+      button: "left",
     });
   });
 

@@ -1,0 +1,166 @@
+import type { CitationGraph, DiscoverySearchReport, ResolvedWork } from "@aurascholar/core";
+import type { S2Enrichment } from "@aurascholar/connectors";
+import { describe, expect, it, vi } from "vitest";
+import { executeScholarlyCommand, type MainScholarlyService } from "./scholarly-commands";
+import { MainScholarlyRunRegistry } from "./scholarly-run-registry";
+
+const GRAPH: CitationGraph = {
+  centerId: "W-center",
+  edges: [],
+  nodes: [
+    {
+      citedByCount: 0,
+      id: "W-center",
+      relation: "center",
+      title: "Center work",
+    },
+  ],
+  truncated: false,
+};
+
+const RESOLVED: ResolvedWork = {
+  confidence: 1,
+  work: { authors: [], doi: "10.1000/resolved", source: "crossref", title: "Resolved work" },
+};
+
+function service(overrides: Partial<MainScholarlyService> = {}): MainScholarlyService {
+  return {
+    buildCitationGraph: vi.fn(async () => GRAPH),
+    enrichByDoi: vi.fn(async (): Promise<S2Enrichment | null> => null),
+    resolveClue: vi.fn(async () => RESOLVED),
+    searchDiscovery: vi.fn(
+      async (): Promise<DiscoverySearchReport> => ({
+        cursors: {
+          arxiv: { hasMore: false, page: 1 },
+          crossref: { hasMore: false, page: 1 },
+          openalex: { hasMore: false, page: 1 },
+          s2: { hasMore: false, page: 1 },
+        },
+        results: [],
+        sources: {
+          arxiv: { count: 0, source: "arxiv", status: "empty" },
+          crossref: { count: 0, source: "crossref", status: "empty" },
+          openalex: { count: 0, source: "openalex", status: "empty" },
+          s2: { count: 0, source: "s2", status: "empty" },
+        },
+      }),
+    ),
+    ...overrides,
+  };
+}
+
+describe("scholarly data commands", () => {
+  it("routes typed intent through a main-owned service and bounds the result", async () => {
+    const scholarlyService = service();
+    const runs = new MainScholarlyRunRegistry();
+
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: { doi: "HTTPS://DOI.ORG/10.1000/GRAPH", requestId: "graph-1" },
+          name: "citationGraph.build",
+        },
+        { runs, service: scholarlyService },
+      ),
+    ).resolves.toEqual({ graph: GRAPH });
+
+    expect(scholarlyService.buildCitationGraph).toHaveBeenCalledWith(
+      "10.1000/graph",
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("rejects HTTP-shaped and unsupported URL-clue input before any service call", async () => {
+    const scholarlyService = service();
+    const dependencies = { runs: new MainScholarlyRunRegistry(), service: scholarlyService };
+
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: {
+            query: { text: "unsafe" },
+            requestId: "unsafe-1",
+            url: "https://attacker.example/metadata",
+          },
+          name: "discovery.searchOpenSources",
+        } as never,
+        dependencies,
+      ),
+    ).rejects.toThrow("Invalid discovery.searchOpenSources input");
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: {
+            clue: { kind: "url", url: "https://attacker.example/work" },
+            requestId: "unsafe-2",
+          },
+          name: "library.resolveClue",
+        } as never,
+        dependencies,
+      ),
+    ).rejects.toThrow("unsupported");
+    expect(scholarlyService.searchDiscovery).not.toHaveBeenCalled();
+    expect(scholarlyService.resolveClue).not.toHaveBeenCalled();
+  });
+
+  it("passes a cancellation signal to the active operation and rejects after cancellation", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const scholarlyService = service({
+      enrichByDoi: vi.fn(
+        (_doi: string, signal: AbortSignal) =>
+          new Promise<S2Enrichment | null>((_, reject) => {
+            observedSignal = signal;
+            signal.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("cancelled");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      ),
+    });
+    const runs = new MainScholarlyRunRegistry();
+    const pending = executeScholarlyCommand(
+      {
+        input: { doi: "10.1000/cancel", requestId: "cancel-1" },
+        name: "scholar.enrichByDoi",
+      },
+      { runs, service: scholarlyService },
+    );
+
+    await vi.waitFor(() => expect(observedSignal).toBeDefined());
+    await expect(
+      executeScholarlyCommand(
+        { input: { requestId: "cancel-1" }, name: "scholarly.cancelRun" },
+        { runs, service: scholarlyService },
+      ),
+    ).resolves.toEqual({ cancelled: true });
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("sanitizes excessive public metadata before it can cross IPC", async () => {
+    const scholarlyService = service({
+      enrichByDoi: vi.fn(async () => ({
+        citationCount: 42,
+        tldr: "x".repeat(200_000),
+        url: "file:///private/secret",
+      })),
+    });
+
+    await expect(
+      executeScholarlyCommand(
+        { input: { doi: "10.1000/safe", requestId: "safe-1" }, name: "scholar.enrichByDoi" },
+        { runs: new MainScholarlyRunRegistry(), service: scholarlyService },
+      ),
+    ).resolves.toEqual({
+      enrichment: {
+        citationCount: 42,
+        tldr: "x".repeat(128 * 1024),
+      },
+    });
+  });
+});

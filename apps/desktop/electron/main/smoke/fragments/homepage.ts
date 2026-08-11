@@ -374,16 +374,16 @@ export const smokeHomepage = String.raw`        location.hash = "#/homepage";
               bodyIncludes("主页 HTML 已复制到剪贴板"),
             2_000
           );
-          let homepageCopiedText = "";
-          if (window.aura?.clipboard?.readText) {
-            homepageCopiedText = await window.aura.clipboard.readText();
-          } else if (navigator.clipboard?.readText) {
-            homepageCopiedText = await navigator.clipboard.readText();
-          }
+          let homepageClipboardMatches = true;
+          try {
+            if (navigator.clipboard?.readText) {
+              homepageClipboardMatches = (await navigator.clipboard.readText()).includes("<!doctype html>");
+            }
+          } catch {}
           homepageCopySuccessVisible =
             !homepageCopyButton.disabled &&
             bodyIncludes("主页 HTML 已复制到剪贴板") &&
-            homepageCopiedText.includes("<!doctype html>");
+            homepageClipboardMatches;
 
           window.__AURASCHOLAR_SMOKE_CLIPBOARD_WRITE_ERROR__ = "smoke-copy-failed";
           try {

@@ -1,9 +1,18 @@
 import { PdfDocument, parseAnnotationAnchorJson, type ReaderAnnotation } from "@aurascholar/reader";
-import { AnnotationsRepo, type AnnotationRow } from "@aurascholar/db/repos/annotations";
-import { AttachmentsRepo, type AttachmentRow } from "@aurascholar/db/repos/attachments";
-import { WorksRepo, type WorkWithAuthors } from "@aurascholar/db/repos/works";
-import { getLibraryDb } from "../../services/aura-db";
+import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
+import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
+import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
 import { loadPdfForWork } from "../../services/library-read";
+import {
+  createReaderAnnotation,
+  deleteReaderAnnotation,
+  loadReaderAnnotations,
+  loadReaderAttachment,
+  loadReaderWorkPdfCandidates,
+  markReaderWorkReadingStarted,
+  restoreReaderAnnotation,
+  updateReaderAnnotationContent,
+} from "../../services/reader-session-data";
 
 export interface LibraryReaderSession {
   annotations: ReaderAnnotation[];
@@ -23,8 +32,8 @@ export interface LibraryReaderSessionDataSource {
     annotation: Omit<ReaderAnnotation, "id">,
   ) => Promise<string>;
   deleteAnnotation: (annotationId: string) => Promise<void>;
-  listAnnotations: (attachmentId: string) => Promise<AnnotationRow[]>;
-  listAttachments: (workId: string) => Promise<AttachmentRow[]>;
+  getAttachment: (workId: string, attachmentId: string) => Promise<AttachmentRow | null>;
+  listAnnotations: (workId: string, attachmentId: string) => Promise<AnnotationRow[]>;
   loadDocument: (data: Uint8Array) => Promise<PdfDocument>;
   loadPdf: (
     workId: string,
@@ -54,46 +63,39 @@ export class LibraryReaderSessionError extends Error {
 
 const defaultDataSource: LibraryReaderSessionDataSource = {
   async createAnnotation(session, annotation) {
-    const { db, libraryId } = await getLibraryDb();
-    return new AnnotationsRepo(db, libraryId).create({
+    const { annotationId } = await createReaderAnnotation({
       attachmentId: session.attachment.id,
-      workId: session.work.id,
-      type: annotation.type,
-      color: annotation.color,
-      pageIndex: annotation.pageIndex,
       anchor: annotation.anchor,
+      color: annotation.color,
       contentMd: annotation.contentMd,
+      pageIndex: annotation.pageIndex,
+      type: annotation.type,
+      workId: session.work.id,
     });
+    return annotationId;
   },
   async deleteAnnotation(annotationId) {
-    const { db, libraryId } = await getLibraryDb();
-    await new AnnotationsRepo(db, libraryId).softDelete(annotationId);
+    await deleteReaderAnnotation({ annotationId });
   },
-  async listAnnotations(attachmentId) {
-    const { db, libraryId } = await getLibraryDb();
-    return new AnnotationsRepo(db, libraryId).listForAttachment(attachmentId);
+  async getAttachment(workId, attachmentId) {
+    return (await loadReaderAttachment(workId, attachmentId)).attachment;
   },
-  async listAttachments(workId) {
-    const { db, libraryId } = await getLibraryDb();
-    return new AttachmentsRepo(db, libraryId).forWork(workId);
+  async listAnnotations(workId, attachmentId) {
+    return (await loadReaderAnnotations(workId, attachmentId)).annotations;
   },
   loadDocument: (data) => PdfDocument.load(data),
   loadPdf: loadPdfForWork,
   async loadWork(workId) {
-    const { db, libraryId } = await getLibraryDb();
-    return new WorksRepo(db, libraryId).get(workId);
+    return (await loadReaderWorkPdfCandidates(workId)).work;
   },
   async markReadingStarted(workId) {
-    const { db, libraryId } = await getLibraryDb();
-    return new WorksRepo(db, libraryId).markReadingStarted(workId);
+    return (await markReaderWorkReadingStarted({ workId })).started;
   },
   async restoreAnnotation(annotationId) {
-    const { db, libraryId } = await getLibraryDb();
-    await new AnnotationsRepo(db, libraryId).restore(annotationId);
+    await restoreReaderAnnotation({ annotationId });
   },
   async updateAnnotationContent(annotationId, contentMd) {
-    const { db, libraryId } = await getLibraryDb();
-    await new AnnotationsRepo(db, libraryId).updateContent(annotationId, contentMd);
+    await updateReaderAnnotationContent({ annotationId, contentMd });
   },
 };
 
@@ -159,9 +161,18 @@ export async function loadLibraryReaderSession(
     );
   }
 
-  const attachments = await dataSource.listAttachments(workId);
+  let attachment: AttachmentRow | null;
+  try {
+    attachment = await dataSource.getAttachment(workId, pdf.attachmentId);
+  } catch {
+    throwIfAborted(signal);
+    throw new LibraryReaderSessionError(
+      "attachment-unavailable",
+      "PDF 附件记录无法读取，请重新打开文献。",
+      work,
+    );
+  }
   throwIfAborted(signal);
-  const attachment = attachments.find((candidate) => candidate.id === pdf?.attachmentId);
   if (!attachment) {
     throw new LibraryReaderSessionError(
       "attachment-missing",
@@ -184,7 +195,7 @@ export async function loadLibraryReaderSession(
 
   try {
     throwIfAborted(signal);
-    const rows = await dataSource.listAnnotations(attachment.id);
+    const rows = await dataSource.listAnnotations(workId, attachment.id);
     throwIfAborted(signal);
     return {
       annotations: rows.map(libraryReaderRowToAnnotation),

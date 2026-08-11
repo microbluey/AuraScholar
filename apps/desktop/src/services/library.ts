@@ -1,22 +1,24 @@
 // Library service: glues ingest pipeline (core), repositories, and blob storage together.
 import { normalizeDoi } from "@aurascholar/db/ids";
-import {
-  clueFromInput,
-  cluesFromPdfSource,
-  resolveClue,
-  titleCandidatesFromPdfSource,
-} from "@aurascholar/core";
+import { clueFromInput, cluesFromPdfSource, titleCandidatesFromPdfSource } from "@aurascholar/core";
 import type { Clue } from "@aurascholar/core";
 import type { ScholarIdentity } from "../../electron/shared";
 import type { NormalizedWork } from "@aurascholar/connectors";
 import { configureWorker, PdfDocument } from "@aurascholar/reader";
 import type { PdfDocumentMetadata } from "@aurascholar/reader";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { blobPath, sha256Hex, auraFs } from "./aura-platform";
-import { connectorContext } from "./connector-context";
+import { sha256Hex } from "./aura-platform";
+import {
+  discardStagedPdf,
+  finalizeIngest,
+  findIngestDedup,
+  stagePdf as stagePdfBytes,
+} from "./library-actions";
 import { fetchPdfForCommittedWork } from "./library-ingest-lifecycle";
-import { ensureOaPdfAttachment, fetchValidatedOaPdf, oaPdfFileName } from "./library-oa";
-import { libraryRepos as repos } from "./library-repos";
+import { ensureOaPdfAttachment } from "./library-oa";
+import { restoreAnnotationsForAttachment } from "./library-annotation-recovery";
+import { searchWorksByMetadata } from "./library-list";
+import { resolveLibraryScholarlyClue } from "./scholarly-data";
 import { toWorkInput } from "./work-input";
 import type {
   AttachPdfResult,
@@ -24,11 +26,9 @@ import type {
   IngestDraft,
   IngestResult,
   LocalMatch,
-  OaLookupWork,
   PendingPdf,
   PdfFields,
 } from "./library-types";
-import { getLibraryDb } from "./aura-db";
 
 configureWorker(workerSrc);
 
@@ -57,7 +57,7 @@ export async function ingestFromInput(input: string): Promise<IngestResult | nul
   if (smokeResult !== undefined) return smokeResult;
   const clue = clueFromInput(input);
   if (!clue) return null;
-  const resolved = await resolveClue(connectorContext, clue);
+  const resolved = await resolveSingleClue(clue);
   if (!resolved) return null;
   return ingestResolvedWork(resolved.work, { needsConfirmation: resolved.confidence < 0.7 });
 }
@@ -67,13 +67,20 @@ export async function ingestResolvedWork(
   work: NormalizedWork,
   options: { needsConfirmation?: boolean } = {},
 ): Promise<IngestResult> {
-  const { works } = await repos();
-  const { id, deduped } = await works.upsert(toWorkInput(work));
-  const pdf = await fetchPdfForCommittedWork(() => ensureOaPdfAttachment(id, work));
+  // Direct and automatic imports deliberately share the reviewed main-process
+  // finalizer with interactive imports. It derives the active local Library
+  // and owns the upsert; the renderer only follows up with best-effort OA PDF
+  // acquisition after metadata is durably committed.
+  const finalized = await finalizeIngest({
+    mode: "create",
+    pdf: null,
+    workInput: toWorkInput(work),
+  });
+  const pdf = await fetchPdfForCommittedWork(() => ensureOaPdfAttachment(finalized.workId));
   return {
-    workId: id,
-    deduped,
-    title: work.title,
+    workId: finalized.workId,
+    deduped: finalized.deduped,
+    title: finalized.title,
     ...pdf,
     needsConfirmation: options.needsConfirmation,
   };
@@ -81,7 +88,7 @@ export async function ingestResolvedWork(
 
 // ── Analyze: resolve candidates WITHOUT writing to works/attachments ────────
 // The user confirms (and may edit/pick) before anything is written. blob bytes
-// may be staged here (content-addressed, idempotent); only commitIngest writes
+// may be staged here (content-addressed, idempotent); only finalizeIngest writes
 // the library rows.
 
 /** Analyze pasted text (DOI / arXiv / URL / title). No PDF, no library write. */
@@ -301,18 +308,16 @@ async function loadPdfCopy(
 
 /** Hash the PDF, check exact-file dedup, and (if new) read its first pages. */
 async function exactFileDedup(fileName: string, data: Uint8Array): Promise<ExactFileResult> {
-  const { works, attachments } = await repos();
   const sha = await sha256Hex(data);
-  const dup = await attachments.bySha(sha);
-  if (dup) {
-    const existing = await works.get(dup.work_id);
-    const pageCount = dup.page_count ?? (await loadPdfCopy(data)).pageCount;
+  const hit = (await findIngestDedup({ kind: "attachmentSha", sha256: sha })).hit;
+  if (hit?.reason === "exact-file") {
+    const pageCount = hit.pageCount ?? (await loadPdfCopy(data)).pageCount;
     return {
       sha,
       pageCount,
       text: "",
       metadata: {},
-      dedup: { reason: "exact-file", workId: dup.work_id, title: existing?.title ?? fileName },
+      dedup: { reason: "exact-file", workId: hit.workId, title: hit.title || fileName },
     };
   }
 
@@ -321,9 +326,9 @@ async function exactFileDedup(fileName: string, data: Uint8Array): Promise<Exact
 }
 
 /**
- * Persist the PDF blob (idempotent, content-addressed) and build PendingPdf.
- * Writes from the original bytes; probing for the page count uses a copy so the
- * write isn't handed a detached buffer.
+ * Ask main to persist the canonical content-addressed blob and build a
+ * short-lived receipt. Probing for the page count uses a copy so pdf.js never
+ * detaches the bytes handed to main.
  */
 async function stagePdf(
   fileName: string,
@@ -331,11 +336,18 @@ async function stagePdf(
   relPath: string | null,
   fetchedVia: PendingPdf["fetchedVia"],
   pageCount?: number,
+  sourceUrl?: string,
 ): Promise<PendingPdf> {
-  const sha = await sha256Hex(data);
-  await auraFs.writeFile(blobPath(sha), data);
   const pages = pageCount ?? (await loadPdfCopy(data)).pageCount;
-  return { sha, fileName, byteSize: data.byteLength, pageCount: pages, relPath, fetchedVia };
+  const receipt = await stagePdfBytes(data);
+  return {
+    ...receipt,
+    fileName,
+    pageCount: pages,
+    relPath,
+    fetchedVia,
+    ...(sourceUrl === undefined ? {} : { sourceUrl }),
+  };
 }
 
 function draftWithDedup(
@@ -383,13 +395,12 @@ function pdfFieldsFrom(
   return { title, authors, year };
 }
 
-/** Find existing library works whose title resembles the query (FTS prefix). */
+/** Find up to five existing active works through the scoped metadata search. */
 async function searchLocalLibrary(query: string): Promise<LocalMatch[]> {
   const q = query.trim();
   if (q.length < 4) return [];
-  const { works } = await repos();
   try {
-    const rows = await works.list({ search: q, limit: 5 });
+    const rows = await searchWorksByMetadata(q, 5);
     return rows.map((w) => ({
       workId: w.id,
       title: w.title,
@@ -405,19 +416,24 @@ async function searchLocalLibrary(query: string): Promise<LocalMatch[]> {
 /** A clue whose stable identifier (DOI/arXiv) already exists in the library. */
 async function dedupForClue(clue: Clue): Promise<DedupHit | null> {
   if (clue.kind !== "doi") return null;
-  const { works } = await repos();
-  const existing = await works.findByDoi(clue.doi);
-  return existing ? { reason: "doi", workId: existing.id, title: existing.title } : null;
+  const hit = (await findIngestDedup({ doi: clue.doi, kind: "doi" })).hit;
+  return hit?.reason === "doi" ? { reason: "doi", workId: hit.workId, title: hit.title } : null;
 }
 
 /** Resolve a single clue into candidates (title clues keep all candidates). */
 async function resolveCandidates(
   clue: Clue,
 ): Promise<{ candidates: NormalizedWork[]; confidence: number }> {
-  const resolved = await resolveClue(connectorContext, clue).catch(() => null);
+  const resolved = await resolveSingleClue(clue).catch(() => null);
   if (!resolved) return { candidates: [], confidence: 0 };
   const candidates = dedupeWorks([resolved.work, ...(resolved.candidates ?? [])]);
   return { candidates, confidence: resolved.confidence };
+}
+
+/** URL clues need page-metadata capture, not a generic renderer HTTP fetch. */
+async function resolveSingleClue(clue: Clue) {
+  if (clue.kind === "url") return null;
+  return (await resolveLibraryScholarlyClue({ clue })).resolved;
 }
 
 /** Try clues in order, accumulating candidates; identifier hits win confidence. */
@@ -471,68 +487,27 @@ export async function attachPdfToWork(
   fileName: string,
   data: Uint8Array,
 ): Promise<AttachPdfResult> {
-  const { attachments } = await repos();
-  const sha = await sha256Hex(data);
-
-  // Write the blob from the original bytes first; probe page count with a copy
-  // (pdf.js detaches the buffer it's given).
-  await auraFs.writeFile(blobPath(sha), data);
-  const { pageCount } = await loadPdfCopy(data);
-
-  const { id, deduped } = await attachments.create({
-    workId,
-    sha256: sha,
-    byteSize: data.byteLength,
-    originalFilename: fileName,
-    fetchedVia: "manual",
-    pageCount,
+  const pdf = await stagePdf(fileName, data, null, "manual");
+  const result = await finalizeIngest({ mode: "attach", pdf, workId }).catch(async (error) => {
+    await discardStagedPdf(pdf);
+    throw error;
   });
-  const restoredAnnotationCount = await restoreAnnotationsFromInactiveAttachments(workId, id);
-  return { attachmentId: id, deduped, pageCount, restoredAnnotationCount };
-}
-
-async function restoreAnnotationsFromInactiveAttachments(
-  workId: string,
-  activeAttachmentId: string,
-): Promise<number> {
-  const { db } = await getLibraryDb();
-  return db.run(
-    `UPDATE annotations
-     SET attachment_id = ?, updated_at = ?
-     WHERE work_id = ?
-       AND deleted_at IS NULL
-       AND attachment_id IN (
-         SELECT id FROM attachments
-         WHERE work_id = ? AND kind = 'pdf' AND deleted_at IS NOT NULL
-       )`,
-    [activeAttachmentId, Date.now(), workId, workId],
+  if (!result.attachment) {
+    await discardStagedPdf(pdf);
+    throw new Error("Main did not create the staged PDF attachment");
+  }
+  const restoredAnnotationCount = await restoreAnnotationsForAttachment(
+    workId,
+    result.attachment.id,
   );
-}
-
-/**
- * "Find full text" fast path: try to fetch an OA PDF for an existing work and
- * stage it as a draft (targeted to attach to that work, pending confirmation).
- * Returns null when no OA PDF is available — caller then opens the browser.
- */
-export async function analyzeOaPdf(work: OaLookupWork): Promise<IngestDraft | null> {
-  const oa = await fetchValidatedOaPdf(work);
-  if (!oa) return null;
-  const fileName = oaPdfFileName(work.title, oa.url);
-  const pdf = await stagePdf(fileName, oa.bytes, null, "manual", oa.pageCount);
   return {
-    source: "pdf",
-    candidates: [],
-    bestIndex: -1,
-    confidence: 0,
-    pdf,
-    dedup: null,
-    fallbackTitle: work.title,
-    pdfFields: null,
-    localMatches: [],
+    attachmentId: result.attachment.id,
+    deduped: result.attachment.deduped,
+    pageCount: pdf.pageCount,
+    restoredAnnotationCount,
   };
 }
 
-export { libraryRepos as repos } from "./library-repos";
 export { toWorkInput };
 export type {
   AttachPdfResult,
@@ -540,7 +515,6 @@ export type {
   IngestDraft,
   IngestResult,
   LocalMatch,
-  OaLookupWork,
   PendingPdf,
   PdfFields,
 } from "./library-types";

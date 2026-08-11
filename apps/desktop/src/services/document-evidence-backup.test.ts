@@ -10,10 +10,11 @@ import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
 import { describe, expect, it } from "vitest";
 import {
+  exportLibraryBackupJsonFromDatabase,
   importParsedLibraryBackupIntoDatabase,
   parseLibraryBackupJson,
 } from "../shared/library-backup";
-import { exportLibraryJsonFromDatabase, previewLibraryBackupJson } from "./sync";
+import { previewLibraryBackupJson } from "./sync";
 
 type TestDatabase = Awaited<ReturnType<typeof createNodeDatabase>>;
 type BackupRow = Record<string, unknown>;
@@ -328,7 +329,7 @@ describe("Document/Evidence Library backup", () => {
       await addKnowledgeGraph(db, { attachmentId, libraryId, projectId, suffix, workId });
     }
 
-    const text = await (await exportLibraryJsonFromDatabase(db, "library-a")).text();
+    const text = await exportLibraryBackupJsonFromDatabase(db, "library-a");
     const backup = JSON.parse(text) as { tables: BackupTables; version: number };
     const tableNames = Object.keys(backup.tables);
 
@@ -385,9 +386,7 @@ describe("Document/Evidence Library backup", () => {
       workId: "work-sensitive",
     });
 
-    const exportedText = await (
-      await exportLibraryJsonFromDatabase(sourceDb, "source-library")
-    ).text();
+    const exportedText = await exportLibraryBackupJsonFromDatabase(sourceDb, "source-library");
     const exported = JSON.parse(exportedText) as { tables: BackupTables };
     const exportedEvidence = exported.tables.evidence_items?.find(
       (row) => row.id === ids.evidenceId,

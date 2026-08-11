@@ -78,6 +78,11 @@ export function buildLibraryCoreSmokeChecks(renderer: SmokeRendererResult): Smok
       detail: `busy=${renderer.libraryPdfUploadBusyVisible}; success=${renderer.libraryPdfUploadSuccessVisible}; persisted=${renderer.libraryPdfUploadPersisted}`,
     },
     {
+      name: "library-typed-pdf-ingest-main-owned",
+      pass: renderer.libraryTypedPdfIngestCommitted,
+      detail: renderer.libraryTypedPdfIngestDetail,
+    },
+    {
       name: "library-reading-status-action",
       pass:
         renderer.libraryReadingStatusBusyVisible &&

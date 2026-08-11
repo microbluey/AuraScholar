@@ -23,6 +23,8 @@ export interface CanvasSynthesisRequest {
   mode: CanvasSynthesisMode;
   sources: CanvasSynthesisSource[];
   language?: "zh" | "en";
+  /** Caller-controlled cancellation for provider transport. */
+  signal?: AbortSignal;
 }
 
 const StructuredTableSchema = z
@@ -109,6 +111,7 @@ export async function generateCanvasSynthesis(
 
   const output = await provider.generateObject({
     schema: CanvasSynthesisOutputSchema,
+    signal: request.signal,
     temperature: 0.2,
     maxTokens: 2400,
     messages: [

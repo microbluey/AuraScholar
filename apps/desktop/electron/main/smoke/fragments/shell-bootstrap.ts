@@ -18,7 +18,8 @@ export const smokeShellBootstrap = String.raw`        await waitFor(() => docume
               model: "smoke-shell-model-only"
             })
           );
-          await window.aura?.secrets?.delete?.("secret:ai:apiKey");
+          // No renderer-readable secret slot exists for AI. This legacy
+          // model-only record is intentionally adopted as unconfigured.
           window.dispatchEvent(new Event("aurascholar:ai-settings-updated"));
         } catch {}
         const appShellAiModelWithoutSecretRequiresConfig = Boolean(

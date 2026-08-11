@@ -32,6 +32,10 @@
       "types": "./dist/work-list.d.ts",
       "default": "./dist/work-list.js"
     },
+    "./work-page": {
+      "types": "./dist/work-page.d.ts",
+      "default": "./dist/work-page.js"
+    },
     "./knowledge-worker": {
       "types": "./dist/knowledge-worker.d.ts",
       "default": "./dist/knowledge-worker.js"
@@ -107,7 +111,7 @@
   },
   "dependencies": {
     "@aurascholar/platform": "workspace:*",
-    "drizzle-orm": "^0.38.3",
+    "drizzle-orm": "0.45.2",
     "uuidv7": "^1.0.2",
     "ts-fsrs": "^4.6.1"
   },

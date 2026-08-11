@@ -1,3 +1,9 @@
+export interface CitationBridgeSmoke {
+  methodGuard: boolean;
+  pingOk: boolean;
+  unauthRejected: boolean;
+}
+
 export interface SmokeRendererResult {
   appShellAiSettingsCtaNavigates: boolean;
   appShellAiSettingsCtaTargetsSection: boolean;
@@ -7,9 +13,6 @@ export interface SmokeRendererResult {
   aiSettingsFallbackVisible: boolean;
   bodyText: string;
   browserPreviewWarning: boolean;
-  citationBridgeMethodGuard: boolean;
-  citationBridgePingOk: boolean;
-  citationBridgeUnauthRejected: boolean;
   commandCompositionEscapeIgnored: boolean;
   commandCompositionIgnored: boolean;
   commandCloseRestoresFocus: boolean;
@@ -155,9 +158,7 @@ export interface SmokeRendererResult {
   canvasReaderAnnotationVisible: boolean;
   dbError: string | null;
   emptyStateVisible: boolean;
-  externalCredentialsRejected: boolean;
   externalNavigationBlocked: boolean;
-  externalUnsafeRejected: boolean;
   graphCachedVisible: boolean;
   graphEmptyLatestCtaHash: string;
   graphEmptyLatestCtaOpened: boolean;
@@ -208,9 +209,9 @@ export interface SmokeRendererResult {
   homepagePublicationFilterActionDetail: string;
   homepageSafeLinkRelHardened: boolean;
   initialWorkCount: number | null;
-  platformHttpUnsafeRejected: boolean;
+  platformGenericHttpRendererIsolated: boolean;
   researchUnsafeUrlRejected: boolean;
-  platformSecretsConcurrentWritesPreserved: boolean;
+  platformSecretsRendererIsolated: boolean;
   libraryBulkTagFailureBusyVisible: boolean;
   libraryBulkTagFailureDidNotPersist: boolean;
   libraryBulkTagFailurePreserved: boolean;
@@ -294,6 +295,8 @@ export interface SmokeRendererResult {
   libraryPdfUploadBusyVisible: boolean;
   libraryPdfUploadPersisted: boolean;
   libraryPdfUploadSuccessVisible: boolean;
+  libraryTypedPdfIngestCommitted: boolean;
+  libraryTypedPdfIngestDetail: string;
   libraryMergeBusyVisible: boolean;
   libraryMergeFailureBusyVisible: boolean;
   libraryMergeFailureDidNotPersist: boolean;
@@ -514,9 +517,9 @@ export interface SmokeRendererResult {
   settingsAiSaveFailureDidNotPersist: boolean;
   settingsAiSaveFailurePreserved: boolean;
   settingsAiSaveFailureVisible: boolean;
-  settingsInlineSecretMigrationFailurePreserved: boolean;
-  settingsInlineSecretMigrationRetrySanitized: boolean;
-  settingsInlineSecretMigrationVisible: boolean;
+  settingsAiLegacyModelOnlyFailsClosed: boolean;
+  settingsAiLegacyTargetSanitized: boolean;
+  settingsAiLegacyModelOnlyVisible: boolean;
   settingsAiUrlCredentialsRejected: boolean;
   settingsAiUrlInvalidDidNotPersist: boolean;
   settingsAiUrlInvalidVisible: boolean;

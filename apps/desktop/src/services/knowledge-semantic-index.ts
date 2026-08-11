@@ -2,7 +2,7 @@ import type {
   BuildKnowledgeSemanticIndexResult,
   KnowledgeSemanticIndexStatus,
 } from "../../electron/data-command-contract";
-import { getLibraryDb } from "./aura-db";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 
 export type {
   BuildKnowledgeSemanticIndexResult,
@@ -14,7 +14,7 @@ export async function buildKnowledgeSemanticIndex(
   options: { signal?: AbortSignal } = {},
 ): Promise<BuildKnowledgeSemanticIndexResult> {
   options.signal?.throwIfAborted();
-  const { libraryId } = await getLibraryDb();
+  const libraryId = await getActiveLibraryCommandScope();
   options.signal?.throwIfAborted();
   const result = await window.aura.data.command("knowledge.buildSemanticIndex", { libraryId });
   options.signal?.throwIfAborted();
@@ -26,7 +26,7 @@ export async function getKnowledgeSemanticIndexStatus(
   options: { signal?: AbortSignal } = {},
 ): Promise<KnowledgeSemanticIndexStatus> {
   options.signal?.throwIfAborted();
-  const { libraryId } = await getLibraryDb();
+  const libraryId = await getActiveLibraryCommandScope();
   options.signal?.throwIfAborted();
   const result = await window.aura.data.command("knowledge.getSemanticIndexStatus", { libraryId });
   options.signal?.throwIfAborted();

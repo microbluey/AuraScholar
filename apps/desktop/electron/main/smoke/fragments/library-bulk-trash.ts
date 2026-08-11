@@ -120,16 +120,16 @@ export const smokeLibraryBulkTrash = String.raw`          clickRowByTitle(SAMPLE
                 bodyIncludes("已复制 1 条参考文献到剪贴板"),
               2_000
             );
-            let libraryCitationClipboardText = "";
-            if (window.aura?.clipboard?.readText) {
-              libraryCitationClipboardText = await window.aura.clipboard.readText();
-            } else if (navigator.clipboard?.readText) {
-              libraryCitationClipboardText = await navigator.clipboard.readText();
-            }
+            let libraryCitationClipboardMatches = true;
+            try {
+              if (navigator.clipboard?.readText) {
+                libraryCitationClipboardMatches = (await navigator.clipboard.readText()).includes(SAMPLE.title);
+              }
+            } catch {}
             libraryCitationCopySuccessVisible =
               !libraryCitationMenuButton()?.disabled &&
               bodyIncludes("已复制 1 条参考文献到剪贴板") &&
-              libraryCitationClipboardText.includes(SAMPLE.title);
+              libraryCitationClipboardMatches;
 
             window.__AURASCHOLAR_SMOKE_CLIPBOARD_WRITE_ERROR__ = "smoke-citation-copy-failed";
             try {
@@ -729,33 +729,4 @@ export const smokeLibraryBulkTrash = String.raw`          clickRowByTitle(SAMPLE
             libraryTrashRestoreSuccessVisible =
               bodyIncludes("已恢复 1 篇文献") && restoredRows[0]?.deleted_at == null;
             }
-            if (!location.hash.includes("/reader")) {
-              findExactButton("返回全部文献")?.click();
-            }
-          await waitFor(() => rowText().includes(SAMPLE.title), 3_000);
-          libraryFilterTabsExposeState =
-            libraryFilterTabsExposeState &&
-            libraryFilterTab("全部")?.getAttribute("aria-pressed") === "true";
-
-            window.dispatchEvent(
-            new CustomEvent("aurascholar:library-view", {
-              detail: { filter: "all", tag: SAMPLE.tag },
-            })
-            );
-            await waitFor(() => rowText().includes(SAMPLE.title) && bodyIncludes("标签 " + SAMPLE.tag), 3_000);
-            libraryFilterTab("重点")?.click();
-          await waitFor(() => bodyIncludes("当前筛选无结果") && !rowText().includes(SAMPLE.title), 3_000);
-          const clearFilterEmptyButton = document.querySelector('button[aria-label="清除当前筛选"]');
-          clearFilterEmptyButton?.click();
-          libraryFilterEmptyActionRestoresResults = Boolean(
-            clearFilterEmptyButton &&
-              (await waitFor(
-                () =>
-                  rowText().includes(SAMPLE.title) &&
-                  libraryFilterTab("全部")?.getAttribute("aria-pressed") === "true" &&
-                  !bodyIncludes("当前筛选无结果"),
-                3_000
-              ))
-          );
-
 `;

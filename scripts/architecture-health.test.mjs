@@ -169,9 +169,6 @@ test("exempts renderer data gateways, declarations, tests, styles, and exact all
     "apps/desktop/src/hooks/probe.spec.ts",
     "apps/desktop/src/types/database.d.ts",
     "apps/desktop/src/styles/probe.css",
-    "apps/desktop/src/features/reader/library-reader-session.ts",
-    "apps/desktop/src/features/canvas/canvas-citation-resolver.ts",
-    "apps/desktop/src/features/canvas/persistence.ts",
     "apps/desktop/src/shared/library-backup.ts",
     "apps/desktop/src/shared/sqlite-sync-storage.ts",
   ];

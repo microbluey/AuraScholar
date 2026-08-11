@@ -1,20 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  DownloadFinishedPayload,
-  DownloadStartedPayload,
-} from "../../electron/shared";
+import type { DownloadFinishedPayload, DownloadStartedPayload } from "../../electron/shared";
 
 const mocks = vi.hoisted(() => ({
   deleteFile: vi.fn(),
   offFinished: vi.fn(),
   offStarted: vi.fn(),
-  readFile: vi.fn(),
+  readResearchDownload: vi.fn(),
 }));
 
 vi.mock("./aura-platform", () => ({
   auraFs: {
     deleteFile: mocks.deleteFile,
-    readFile: mocks.readFile,
+  },
+  auraFiles: {
+    readResearchDownload: mocks.readResearchDownload,
   },
 }));
 
@@ -31,7 +30,7 @@ describe("research download source-tab propagation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.deleteFile.mockResolvedValue(undefined);
-    mocks.readFile.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    mocks.readResearchDownload.mockResolvedValue(new Uint8Array([1, 2, 3]));
     vi.stubGlobal("window", {
       aura: {
         research: {
@@ -113,7 +112,7 @@ describe("research download source-tab propagation", () => {
 
   it("buffers an analysis that finishes after its page subscriber leaves", async () => {
     let resolveRead: ((bytes: Uint8Array) => void) | undefined;
-    mocks.readFile.mockReturnValueOnce(
+    mocks.readResearchDownload.mockReturnValueOnce(
       new Promise<Uint8Array>((resolve) => {
         resolveRead = resolve;
       }),

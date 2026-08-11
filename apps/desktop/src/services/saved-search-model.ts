@@ -1,7 +1,7 @@
 import type { NormalizedWork } from "@aurascholar/connectors";
 import type { DiscoverySource } from "@aurascholar/core";
 import { workFingerprint } from "@aurascholar/db/ids";
-import type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
+import type { SavedSearchRow } from "../../electron/data-command-contract";
 import { describeSafeError } from "./sensitive-text";
 
 export interface SavedSearchView {

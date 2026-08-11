@@ -1123,7 +1123,7 @@ function sentinelPollMessage(
   if (summary.failures.length > 0) {
     const first = summary.failures[0];
     if (!first) return `${label}失败`;
-    const more = summary.failures.length > 1 ? `等 ${summary.failures.length} 个任务` : "该任务";
+    const more = summary.failed > 1 ? `等 ${summary.failed} 个任务` : "该任务";
     const progress = summary.changes > 0 ? `，同时发现 ${summary.changes} 个状态变化` : "";
     return `${label}失败${progress}:${more}《${first.title}》 - ${first.error}`;
   }

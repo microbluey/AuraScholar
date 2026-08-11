@@ -252,17 +252,18 @@ export const smokeCanvas = String.raw`        location.hash = "#/canvas?workId="
             Array.from(document.querySelectorAll(".react-flow__node")).find(
               (node) => node.getAttribute("data-id") === nodeId
             ) ?? null;
-          const resolveQuickLinkSourceHandle = () => {
+          const resolveQuickLinkSourceHandle = (handleId) => {
             const handle = quickLinkNode(
               persistedCanvasPaper.id
             )?.querySelector(
-              '[data-canvas-connection-handle="link-right"]'
+              '[data-canvas-connection-handle="' + handleId + '"]'
             );
             if (
               !(handle instanceof HTMLElement) ||
               !handle.isConnected ||
               !handle.classList.contains("connectablestart") ||
-              handle.getAttribute("data-nodeid") !== persistedCanvasPaper.id
+              handle.getAttribute("data-nodeid") !== persistedCanvasPaper.id ||
+              handle.getAttribute("data-canvas-connection-ready") !== "true"
             ) {
               return null;
             }
@@ -276,12 +277,6 @@ export const smokeCanvas = String.raw`        location.hash = "#/canvas?workId="
               ? handle
               : null;
           };
-          const quickLinkSourceHandle = await waitFor(
-            resolveQuickLinkSourceHandle,
-            3_000
-          );
-          canvasQuickLinkSourceReady =
-            quickLinkSourceHandle instanceof HTMLElement;
           const quickLinkEdgeRowsBefore = await window.aura.db.query(
             "SELECT id FROM canvas_edges WHERE workspace_id = ?",
             ["canvas:default"]
@@ -347,68 +342,161 @@ export const smokeCanvas = String.raw`        location.hash = "#/canvas?workId="
             3_000
           );
           canvasQuickLinkDropPointReady = Boolean(quickLinkDropPoint);
-          if (
-            quickLinkSourceHandle instanceof HTMLElement &&
-            quickLinkDropPoint
-          ) {
-            await new Promise((resolve) =>
+          const selectQuickLinkSourceHandleId = (dropPoint) => {
+            const sourceNode = quickLinkNode(persistedCanvasPaper.id);
+            if (!(sourceNode instanceof HTMLElement)) return null;
+            const sourceRect = sourceNode.getBoundingClientRect();
+            if (sourceRect.width <= 0 || sourceRect.height <= 0) return null;
+            const sourceCenter = {
+              x: sourceRect.left + sourceRect.width / 2,
+              y: sourceRect.top + sourceRect.height / 2
+            };
+            const deltaX = dropPoint.x - sourceCenter.x;
+            const deltaY = dropPoint.y - sourceCenter.y;
+            if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+              return deltaX >= 0 ? "link-right" : "link-left";
+            }
+            return deltaY >= 0 ? "link-bottom" : "link-top";
+          };
+          const resolveQuickLinkAttemptGeometry = () => {
+            const liveDropPoint = resolveQuickLinkDropPoint();
+            if (!liveDropPoint) return null;
+            const sourceHandleId = selectQuickLinkSourceHandleId(liveDropPoint);
+            if (!sourceHandleId) return null;
+            const liveSourceHandle = resolveQuickLinkSourceHandle(sourceHandleId);
+            if (!(liveSourceHandle instanceof HTMLElement)) return null;
+            const sourceRect = liveSourceHandle.getBoundingClientRect();
+            const sourcePoint = {
+              x: sourceRect.left + sourceRect.width / 2,
+              y: sourceRect.top + sourceRect.height / 2
+            };
+            const dragDistance = Math.hypot(
+              liveDropPoint.x - sourcePoint.x,
+              liveDropPoint.y - sourcePoint.y
+            );
+            if (dragDistance < 24) return null;
+            return {
+              sourcePoint,
+              targetPoint: liveDropPoint,
+              handshakePoint: {
+                x:
+                  sourcePoint.x +
+                  ((liveDropPoint.x - sourcePoint.x) / dragDistance) * 16,
+                y:
+                  sourcePoint.y +
+                  ((liveDropPoint.y - sourcePoint.y) / dragDistance) * 16
+              }
+            };
+          };
+          const quickLinkGeometry = await waitFor(
+            resolveQuickLinkAttemptGeometry,
+            3_000
+          );
+          canvasQuickLinkSourceReady = Boolean(quickLinkGeometry);
+          canvasQuickLinkDropPointReady =
+            canvasQuickLinkDropPointReady || Boolean(quickLinkGeometry);
+          const isQuickLinkConnectionActive = () =>
+            Boolean(
+              document.querySelector(
+                ".canvas-workspace--connecting, " +
+                  ".react-flow__connection, " +
+                  ".react-flow__handle.connectingfrom"
+              )
+            );
+          const hasNewQuickLinkMutation = async () => {
+            const [edgeRows, nodeRows] = await Promise.all([
+              window.aura.db.query(
+                "SELECT id FROM canvas_edges WHERE workspace_id = ?",
+                ["canvas:default"]
+              ),
+              window.aura.db.query(
+                "SELECT id FROM canvas_nodes WHERE workspace_id = ?",
+                ["canvas:default"]
+              )
+            ]);
+            if (
+              edgeRows.some((row) => !quickLinkEdgeIdsBefore.has(row.id)) ||
+              nodeRows.some((row) => !quickLinkNodeIdsBefore.has(row.id))
+            ) {
+              return true;
+            }
+            return (
+              Array.from(
+                document.querySelectorAll("[data-canvas-edge-id]")
+              ).some((edge) => {
+                const id = edge.getAttribute("data-canvas-edge-id");
+                return Boolean(id && !quickLinkEdgeIdsBefore.has(id));
+              }) ||
+              Array.from(
+                document.querySelectorAll("[data-canvas-node-id]")
+              ).some((node) => {
+                const id = node.getAttribute("data-canvas-node-id");
+                return Boolean(id && !quickLinkNodeIdsBefore.has(id));
+              })
+            );
+          };
+          const waitForQuickLinkFrames = () =>
+            new Promise((resolve) =>
               window.requestAnimationFrame(() =>
                 window.requestAnimationFrame(() => resolve(undefined))
               )
             );
-            const liveSourceHandle = resolveQuickLinkSourceHandle();
-            const liveDropPoint = resolveQuickLinkDropPoint();
-            if (liveSourceHandle instanceof HTMLElement && liveDropPoint) {
-              const sourceRect = liveSourceHandle.getBoundingClientRect();
-              const sourcePoint = {
-                x: sourceRect.left + sourceRect.width / 2,
-                y: sourceRect.top + sourceRect.height / 2
-              };
-              const dragDistance = Math.hypot(
-                liveDropPoint.x - sourcePoint.x,
-                liveDropPoint.y - sourcePoint.y
-              );
-              if (dragDistance >= 24) {
-                const handshakePoint = {
-                  x:
-                    sourcePoint.x +
-                    ((liveDropPoint.x - sourcePoint.x) / dragDistance) * 16,
-                  y:
-                    sourcePoint.y +
-                    ((liveDropPoint.y - sourcePoint.y) / dragDistance) * 16
-                };
-                let observedConnectionStart = false;
-                const connectionObserver = new MutationObserver(() => {
-                  if (
-                    document.querySelector(
-                      ".canvas-workspace--connecting, " +
-                        ".react-flow__connection, " +
-                        ".react-flow__handle.connectingfrom"
-                    )
-                  ) {
-                    observedConnectionStart = true;
-                  }
-                });
-                connectionObserver.observe(document.documentElement, {
-                  attributes: true,
-                  attributeFilter: ["class"],
-                  childList: true,
-                  subtree: true
-                });
-                const dragInputCompleted = await requestSmokeMouseInput({
-                  kind: "mouse-drag",
-                  source: sourcePoint,
-                  through: handshakePoint,
-                  target: liveDropPoint
-                });
-                canvasQuickLinkConnectionStarted =
-                  dragInputCompleted && observedConnectionStart;
-                connectionObserver.disconnect();
-              }
+          const runQuickLinkDrag = async () => {
+            await waitForQuickLinkFrames();
+            const geometry = resolveQuickLinkAttemptGeometry();
+            if (!geometry) {
+              return { inputCompleted: false, observedConnectionStart: false };
+            }
+            let observedConnectionStart = isQuickLinkConnectionActive();
+            let inputCompleted = false;
+            const connectionObserver = new MutationObserver(() => {
+              if (isQuickLinkConnectionActive()) observedConnectionStart = true;
+            });
+            connectionObserver.observe(document.documentElement, {
+              attributes: true,
+              attributeFilter: ["class"],
+              childList: true,
+              subtree: true
+            });
+            try {
+              inputCompleted = await requestSmokeMouseInput({
+                kind: "mouse-drag",
+                source: geometry.sourcePoint,
+                through: geometry.handshakePoint,
+                target: geometry.targetPoint
+              });
+              observedConnectionStart =
+                observedConnectionStart || isQuickLinkConnectionActive();
+              return { inputCompleted, observedConnectionStart };
+            } finally {
+              connectionObserver.disconnect();
+            }
+          };
+          if (quickLinkGeometry) {
+            const initialQuickLinkDrag = await runQuickLinkDrag();
+            canvasQuickLinkConnectionStarted =
+              initialQuickLinkDrag.inputCompleted &&
+              initialQuickLinkDrag.observedConnectionStart;
+            const quickLinkMutationAfterInitialDrag = await waitFor(
+              hasNewQuickLinkMutation,
+              5_000
+            );
+            const quickLinkCanRetry =
+              initialQuickLinkDrag.inputCompleted &&
+              !initialQuickLinkDrag.observedConnectionStart &&
+              !quickLinkMutationAfterInitialDrag &&
+              !isQuickLinkConnectionActive() &&
+              !(await hasNewQuickLinkMutation());
+            if (quickLinkCanRetry) {
+              const retryQuickLinkDrag = await runQuickLinkDrag();
+              canvasQuickLinkConnectionStarted =
+                canvasQuickLinkConnectionStarted ||
+                (retryQuickLinkDrag.inputCompleted &&
+                  retryQuickLinkDrag.observedConnectionStart);
             }
           }
 
-          const persistedQuickLinkEdge = await waitFor(async () => {
+          const persistedQuickLinkEdges = await waitFor(async () => {
             const rows = await window.aura.db.query(
               "SELECT e.id, e.relation_type, e.label, e.target_id " +
                 "FROM canvas_edges e " +
@@ -418,14 +506,14 @@ export const smokeCanvas = String.raw`        location.hash = "#/canvas?workId="
                 "AND n.type = 'idea-note'",
               ["canvas:default", persistedCanvasPaper.id]
             );
-            return (
-              rows.find(
-                (row) =>
-                  !quickLinkEdgeIdsBefore.has(row.id) &&
-                  !quickLinkNodeIdsBefore.has(row.target_id)
-              ) ?? null
+            const candidates = rows.filter(
+              (row) =>
+                !quickLinkEdgeIdsBefore.has(row.id) &&
+                !quickLinkNodeIdsBefore.has(row.target_id)
             );
+            return candidates.length === 1 ? candidates : null;
           }, 5_000);
+          const persistedQuickLinkEdge = persistedQuickLinkEdges?.[0] ?? null;
           const persistedQuickLinkNode = persistedQuickLinkEdge?.target_id
             ? quickLinkNode(persistedQuickLinkEdge.target_id)
             : null;

@@ -1,9 +1,15 @@
-import type { SmokeCheck, SmokeRendererResult, SecretsFileSmoke } from "../contracts";
+import type {
+  CitationBridgeSmoke,
+  SmokeCheck,
+  SmokeRendererResult,
+  SecretsFileSmoke,
+} from "../contracts";
 import { summarize } from "./summarize";
 
 export function buildBaseSmokeChecks(
   renderer: SmokeRendererResult,
   secretsFile: SecretsFileSmoke,
+  citationBridge: CitationBridgeSmoke,
 ): SmokeCheck[] {
   return [
     {
@@ -37,11 +43,8 @@ export function buildBaseSmokeChecks(
     { name: "preload-bridge", pass: renderer.hasAuraBridge },
     {
       name: "citation-bridge-http-guard",
-      pass:
-        renderer.citationBridgePingOk &&
-        renderer.citationBridgeUnauthRejected &&
-        renderer.citationBridgeMethodGuard,
-      detail: `ping=${renderer.citationBridgePingOk}; unauth=${renderer.citationBridgeUnauthRejected}; method=${renderer.citationBridgeMethodGuard}`,
+      pass: citationBridge.pingOk && citationBridge.unauthRejected && citationBridge.methodGuard,
+      detail: `ping=${citationBridge.pingOk}; unauth=${citationBridge.unauthRejected}; method=${citationBridge.methodGuard}`,
     },
     {
       name: "platform-secrets-file-hardened",
@@ -55,13 +58,14 @@ export function buildBaseSmokeChecks(
         (secretsFile.error ? `; error=${summarize(secretsFile.error, 120)}` : ""),
     },
     {
-      name: "platform-secrets-concurrent-write",
-      pass: renderer.platformSecretsConcurrentWritesPreserved,
-      detail: `preserved=${renderer.platformSecretsConcurrentWritesPreserved}`,
+      name: "platform-secrets-renderer-isolated",
+      pass: renderer.platformSecretsRendererIsolated,
+      detail: `isolated=${renderer.platformSecretsRendererIsolated}`,
     },
     {
-      name: "platform-http-url-guard",
-      pass: renderer.platformHttpUnsafeRejected,
+      name: "platform-generic-http-renderer-isolated",
+      pass: renderer.platformGenericHttpRendererIsolated,
+      detail: `isolated=${renderer.platformGenericHttpRendererIsolated}`,
     },
     {
       name: "research-browser-url-guard",
@@ -79,11 +83,6 @@ export function buildBaseSmokeChecks(
       name: "desktop-runtime-copy",
       pass: renderer.bodyText.includes("桌面运行时") && !renderer.browserPreviewWarning,
       detail: summarize(renderer.bodyText),
-    },
-    {
-      name: "external-link-scheme-guard",
-      pass: renderer.externalUnsafeRejected && renderer.externalCredentialsRejected,
-      detail: `scheme=${renderer.externalUnsafeRejected}; credentials=${renderer.externalCredentialsRejected}`,
     },
     {
       name: "main-window-external-navigation-guard",

@@ -48,14 +48,16 @@ export function useBrowserDownloadImport({
   const handleDedup = useCallback(
     async (draft: IngestDraft) => {
       if (!draft.dedup) return;
-      const { attachStagedPdf, restoreDedup } =
-        await import("../../services/library-actions");
+      const { finalizeIngest } = await import("../../services/library-actions");
       try {
-        await restoreDedup(draft.dedup.workId);
+        const result = await finalizeIngest({
+          mode: "attach",
+          pdf: draft.pdf,
+          workId: draft.dedup.workId,
+        });
         let pdfMessage = "已定位已有文献";
-        if (draft.pdf) {
-          const attachment = await attachStagedPdf(draft.dedup.workId, draft.pdf);
-          pdfMessage = attachment.deduped ? "PDF 已经挂过" : "PDF 已挂到该文献";
+        if (result.attachment) {
+          pdfMessage = result.attachment.deduped ? "PDF 已经挂过" : "PDF 已挂到该文献";
         }
         onMessage(`已在库中:${draft.dedup.title}，${pdfMessage}`);
         window.dispatchEvent(new Event("aurascholar:library-updated"));

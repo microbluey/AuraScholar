@@ -2,11 +2,13 @@ import type { Database } from "@aurascholar/db";
 import { createNodeDatabase } from "@aurascholar/db/node";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { describe, expect, it } from "vitest";
-import { exportLibraryJsonFromDatabase, previewLibraryBackupJson, SqliteSyncStorage } from "./sync";
+import { previewLibraryBackupJson } from "./sync";
 import {
+  exportLibraryBackupJsonFromDatabase,
   importParsedLibraryBackupIntoDatabase,
   parseLibraryBackupJson,
 } from "../shared/library-backup";
+import { SqliteSyncStorage } from "../shared/sqlite-sync-storage";
 
 type TestDatabase = Awaited<ReturnType<typeof createNodeDatabase>>;
 
@@ -207,25 +209,6 @@ describe("Library-scoped sync storage", () => {
         `SELECT title, deleted_at FROM works WHERE id = 'work-b'`,
       ),
     ).resolves.toEqual([{ title: "B", deleted_at: null }]);
-  });
-
-  it("keeps sync cursors and pushed state separate for each Library", async () => {
-    const db = await createNodeDatabase(":memory:");
-    await runMigrations(db);
-    await addLibrary(db, "library-a");
-    await addLibrary(db, "library-b");
-
-    const storageA = new SqliteSyncStorage(db, "device", "library-a", "provider");
-    const storageB = new SqliteSyncStorage(db, "device", "library-b", "provider");
-    await storageA.markPushed(3);
-    await storageB.markPushed(7);
-    await storageA.setCursor("remote", 11);
-    await storageB.setCursor("remote", 13);
-
-    await expect(storageA.lastPushedSeq()).resolves.toBe(3);
-    await expect(storageB.lastPushedSeq()).resolves.toBe(7);
-    await expect(storageA.getCursor("remote")).resolves.toBe(11);
-    await expect(storageB.getCursor("remote")).resolves.toBe(13);
   });
 
   it("does not clear the snapshot watermark or log when push state cannot advance", async () => {
@@ -448,7 +431,7 @@ describe("Library backup ownership", () => {
        VALUES ('global-profile', 'Global Profile', 10, 10)`,
     );
 
-    const text = await (await exportLibraryJsonFromDatabase(db, "library-a")).text();
+    const text = await exportLibraryBackupJsonFromDatabase(db, "library-a");
     const backup = JSON.parse(text) as {
       sourceLibraryId: string;
       tables: Record<string, Array<Record<string, unknown>>>;

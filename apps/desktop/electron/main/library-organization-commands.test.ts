@@ -26,6 +26,7 @@ beforeEach(async () => {
   }));
   coordinator = new DatabaseCoordinator(database);
   dependencies = {
+    execute: (_commandName, operation) => coordinator.execute(operation),
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
   };
   works = new WorksRepo(database, libraryId);
@@ -33,8 +34,13 @@ beforeEach(async () => {
 
 describe("Library organization data commands", () => {
   it("rejects malformed requests before acquiring a database transaction", async () => {
+    let executeCalls = 0;
     let transactionCalls = 0;
     const rejectingDependencies: DataCommandDependencies = {
+      async execute() {
+        executeCalls += 1;
+        throw new Error("must not run");
+      },
       async transaction() {
         transactionCalls += 1;
         throw new Error("must not run");
@@ -61,12 +67,49 @@ describe("Library organization data commands", () => {
         name: "library.restoreCollection",
         input: { libraryId, collectionId: "collection", workIds: "not-an-array" },
       },
+      {
+        name: "library.listTags",
+        input: { libraryId: "foreign-library" },
+      },
     ];
 
     for (const request of requests) {
       await expect(executeDataCommand(request, rejectingDependencies)).rejects.toThrow();
     }
+    expect(executeCalls).toBe(0);
     expect(transactionCalls).toBe(0);
+  });
+
+  it("lists only local tag summaries with active-work counts", async () => {
+    const first = await works.upsert({ title: "First tagged work" });
+    const second = await works.upsert({ title: "Second tagged work" });
+    const removed = await works.upsert({ title: "Removed tagged work" });
+    const tags = new TagsRepo(database, libraryId);
+    const evidenceId = await tags.ensure("Evidence", "#7566f0");
+    const alphaId = await tags.ensure("Alpha", "#25bfae");
+    await database.run(
+      `INSERT INTO work_tags (work_id, tag_id) VALUES
+         (?, ?), (?, ?), (?, ?), (?, ?)`,
+      [first.id, evidenceId, second.id, evidenceId, removed.id, evidenceId, first.id, alphaId],
+    );
+    await works.softDelete(removed.id);
+
+    const foreignLibraryId = "library:foreign-tags";
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Foreign tags', 'personal', 1, 1)`,
+      [foreignLibraryId],
+    );
+    await new TagsRepo(database, foreignLibraryId).ensure("Foreign", "#ffffff");
+
+    await expect(
+      executeDataCommand({ name: "library.listTags", input: {} }, dependencies),
+    ).resolves.toEqual({
+      tags: [
+        { color: "#7566f0", count: 2, id: evidenceId, name: "Evidence" },
+        { color: "#25bfae", count: 1, id: alphaId, name: "Alpha" },
+      ],
+    });
   });
 
   it("accepts Library bulk selections larger than the legacy 500-item ceiling", async () => {

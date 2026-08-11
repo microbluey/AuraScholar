@@ -31,6 +31,7 @@ export const attachments = sqliteTable(
   },
   (table) => [
     index("attachments_work_idx").on(table.workId),
+    index("attachments_work_kind_active_idx").on(table.workId, table.kind, table.deletedAt),
     index("attachments_sha_idx").on(table.sha256),
   ],
 );

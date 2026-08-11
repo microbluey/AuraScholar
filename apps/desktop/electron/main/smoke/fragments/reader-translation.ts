@@ -78,14 +78,26 @@ export const smokeReaderTranslation = String.raw`        const translationSelect
               : null;
           }, 1_000)
         );
-        await waitFor(() => bodyIncludes("请先在设置页配置 AI 服务"), 3_000);
+        const readerTranslationError = await waitFor(() => {
+          const panel = document.querySelector(".reader-translate-panel");
+          const errorAlert = panel?.querySelector(".reader-translate-error");
+          return errorAlert?.textContent?.includes("请先在设置页配置 AI 服务")
+            ? errorAlert
+            : null;
+        }, 3_000);
         readerTranslationStartErrorVisible =
           translationModesVisible &&
           readerTranslationStartBusyVisible &&
-          bodyIncludes("请先在设置页配置 AI 服务");
-        const translateSettingsButton = Array.from(
-          document.querySelectorAll(".reader-translate-panel button")
-        ).find((button) => button.textContent?.replace(/\s+/g, " ").trim() === "去配置 AI");
+          Boolean(readerTranslationError);
+        const translateSettingsButton = await waitFor(() => {
+          const errorAlert = document.querySelector(".reader-translate-panel .reader-translate-error");
+          const button = Array.from(errorAlert?.querySelectorAll("button") ?? []).find(
+            (candidate) => candidate.textContent?.replace(/\s+/g, " ").trim() === "去配置 AI"
+          );
+          return errorAlert?.textContent?.includes("请先在设置页配置 AI 服务") && button
+            ? button
+            : null;
+        }, 3_000);
         readerTranslationSettingsCtaVisible =
           readerTranslationStartErrorVisible && Boolean(translateSettingsButton);
         translateSettingsButton?.click();
@@ -183,10 +195,7 @@ export const smokeReaderTranslation = String.raw`        const translationSelect
           "已复制 2 段译文"
         );
         try {
-          if (window.aura?.clipboard?.readText) {
-            const clipboardText = await window.aura.clipboard.readText();
-            readerTranslationClipboardMatches = clipboardText === expectedTranslationCopy;
-          } else if (navigator.clipboard?.readText) {
+          if (navigator.clipboard?.readText) {
             const clipboardText = await navigator.clipboard.readText();
             readerTranslationClipboardMatches = clipboardText === expectedTranslationCopy;
           } else {

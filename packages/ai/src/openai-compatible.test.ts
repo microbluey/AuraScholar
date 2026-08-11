@@ -19,11 +19,16 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "k",
     });
 
-    const out = await provider.generateText({ messages: [{ role: "user", content: "hi" }] });
+    const controller = new AbortController();
+    const out = await provider.generateText({
+      messages: [{ role: "user", content: "hi" }],
+      signal: controller.signal,
+    });
 
     expect(out.text).toBe("hello");
     expect(out.usage).toEqual({ inputTokens: 2, outputTokens: 1 });
     expect(http.requests[0]?.url).toBe("https://api.example.com/v1/chat/completions");
+    expect(http.requests[0]?.signal).toBe(controller.signal);
   });
 
   it("rejects unsafe base URLs", () => {
@@ -57,9 +62,13 @@ describe("OpenAICompatibleProvider", () => {
       apiKey: "local-key",
     });
 
-    await expect(provider.generateText({ messages: [{ role: "user", content: "hi" }] })).rejects
-      .toThrow(/AI request failed \(401\).*Authorization: \[redacted\].*apiKey=\[redacted\]/);
-    await expect(provider.generateText({ messages: [{ role: "user", content: "hi" }] })).rejects
-      .not.toThrow(/sk-live-openai|provider-secret/);
+    await expect(
+      provider.generateText({ messages: [{ role: "user", content: "hi" }] }),
+    ).rejects.toThrow(
+      /AI request failed \(401\).*Authorization: \[redacted\].*apiKey=\[redacted\]/,
+    );
+    await expect(
+      provider.generateText({ messages: [{ role: "user", content: "hi" }] }),
+    ).rejects.not.toThrow(/sk-live-openai|provider-secret/);
   });
 });

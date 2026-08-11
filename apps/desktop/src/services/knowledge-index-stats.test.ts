@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeContentIndexStats } from "../../electron/data-command-contract";
-import { getLibraryDb } from "./aura-db";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 import { getKnowledgeContentIndexStats } from "./knowledge-index-stats";
 
-vi.mock("./aura-db", () => ({ getLibraryDb: vi.fn() }));
+vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScope: vi.fn() }));
 
 const stats: KnowledgeContentIndexStats = {
   totalContentUnits: 16,
@@ -22,7 +22,7 @@ describe("Knowledge index statistics desktop gateway", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    vi.mocked(getLibraryDb).mockResolvedValue({ db: {} as never, libraryId: "library:service" });
+    vi.mocked(getActiveLibraryCommandScope).mockResolvedValue("library:service");
   });
 
   it("obtains the local scope before requesting active corpus counts", async () => {
@@ -43,7 +43,17 @@ describe("Knowledge index statistics desktop gateway", () => {
     ).rejects.toMatchObject({
       name: "AbortError",
     });
-    expect(getLibraryDb).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+
+    const afterScope = new AbortController();
+    vi.mocked(getActiveLibraryCommandScope).mockImplementationOnce(async () => {
+      afterScope.abort();
+      return "library:service";
+    });
+    await expect(
+      getKnowledgeContentIndexStats({ signal: afterScope.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
     expect(command).not.toHaveBeenCalled();
   });
 });

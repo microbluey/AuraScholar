@@ -1,16 +1,29 @@
-import { AttachmentsRepo } from "@aurascholar/db/repos/attachments";
-import { getLibraryDb } from "./aura-db";
-import { blobPath, auraFs } from "./aura-platform";
+import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
+import { auraFiles } from "./aura-platform";
+import { loadReaderWorkPdfCandidates } from "./reader-session-data";
 import { describeSafeError } from "./sensitive-text";
 
+/**
+ * Resolves Reader-owned PDF candidates through the typed command boundary,
+ * then reads blob bytes through the filesystem capability.
+ */
 export async function loadPdfForWork(
   workId: string,
   preferredAttachmentId?: string,
 ): Promise<{ attachmentId: string; data: Uint8Array } | null> {
-  const { db, libraryId } = await getLibraryDb();
-  const attachments = new AttachmentsRepo(db, libraryId);
-  const list = await attachments.forWork(workId);
-  let pdfs = list.filter((attachment) => attachment.kind === "pdf");
+  const { pdfAttachments } = await loadReaderWorkPdfCandidates(workId);
+  return loadPdfFromCandidates(pdfAttachments, preferredAttachmentId);
+}
+
+/**
+ * File-only portion of Reader PDF loading. It keeps the historical fallback
+ * behavior: try every candidate in order unless the caller chose one PDF.
+ */
+export async function loadPdfFromCandidates(
+  candidates: readonly AttachmentRow[],
+  preferredAttachmentId?: string,
+): Promise<{ attachmentId: string; data: Uint8Array } | null> {
+  let pdfs = candidates.filter((attachment) => attachment.kind === "pdf");
   if (pdfs.length === 0) return null;
   if (preferredAttachmentId) {
     const preferred = pdfs.find((pdf) => pdf.id === preferredAttachmentId);
@@ -21,13 +34,7 @@ export async function loadPdfForWork(
   let lastError: unknown = null;
   for (const pdf of pdfs) {
     try {
-      const path = blobPath(pdf.sha256);
-      const exists = await auraFs.exists(path);
-      if (!exists) {
-        lastError = new Error(`blob missing:${path}`);
-        continue;
-      }
-      const data = await auraFs.readFile(path);
+      const data = await auraFiles.readBlobPdf(pdf.sha256);
       return { attachmentId: pdf.id, data };
     } catch (error) {
       lastError = error;

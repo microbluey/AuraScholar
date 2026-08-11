@@ -4,7 +4,6 @@ import { AttachmentsRepo, WorksRepo } from "@aurascholar/db";
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
-import { segmentPath, type ApplyRemoteSegmentCommand } from "@aurascholar/sync";
 import { exportLibraryBackupJsonFromDatabase } from "../../src/shared/library-backup";
 import { DatabaseCoordinator } from "./database-coordinator";
 import { executeDataCommand, type DataCommandDependencies } from "./data-commands";
@@ -39,44 +38,8 @@ async function createLibraryDatabase(deviceId: string): Promise<{
 function dependenciesFor(coordinator: DatabaseCoordinator): DataCommandDependencies {
   return {
     getDeviceId: async () => "local-device",
+    inspect: (operation) => coordinator.execute(operation),
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
-  };
-}
-
-const PROVIDER_SCOPE = "webdav-00000000000000";
-const REMOTE_OWNER = `remote:${PROVIDER_SCOPE}`;
-
-function workSegment(
-  entries: Array<{ omitOwner?: boolean; owner?: string; rowId: string; seq: number }>,
-): ApplyRemoteSegmentCommand {
-  const remoteDeviceId = "remote-device";
-  const startSeq = entries[0]!.seq;
-  const endSeq = entries.at(-1)!.seq;
-  return {
-    path: segmentPath(remoteDeviceId, startSeq, endSeq),
-    deviceId: remoteDeviceId,
-    startSeq,
-    endSeq,
-    expectedCursor: startSeq - 1,
-    entries: entries.map(({ omitOwner = false, owner = REMOTE_OWNER, rowId, seq }) => {
-      const hlc = `${String(1_000 + seq).padStart(15, "0")}-000000-${remoteDeviceId}`;
-      const values: Record<string, unknown> = {
-        title: `Remote work ${seq}`,
-        created_at: 1_000 + seq,
-        updated_at: 1_000 + seq,
-      };
-      if (!omitOwner) values.library_id = owner;
-      return {
-        seq,
-        table: "works",
-        rowId,
-        op: "upsert" as const,
-        values,
-        columnHlcs: Object.fromEntries(Object.keys(values).map((column) => [column, hlc])),
-        hlc,
-        deviceId: remoteDeviceId,
-      };
-    }),
   };
 }
 
@@ -923,38 +886,36 @@ describe("main-process data commands", () => {
       executeDataCommand(
         {
           name: "library.importBackup",
-          input: { backupText, libraryId: " " },
+          input: { backupText, libraryId: "renderer-selected-library" },
         },
         dependencies,
       ),
-    ).rejects.toThrow("Library id is required");
+    ).rejects.toThrow("Invalid library.importBackup input");
     expect(transactionCalls).toBe(0);
   });
 
-  it("revalidates the durable active Library inside the transaction", async () => {
+  it("fails closed when the durable active Library has been deleted", async () => {
     const target = await createLibraryDatabase("backup-target-device");
-    const now = Date.now();
-    await target.database.run(
-      `INSERT INTO libraries (id, name, kind, created_at, updated_at, deleted_at)
-       VALUES ('foreign-library', 'Foreign', 'personal', ?, ?, NULL)`,
-      [now, now],
-    );
+    await target.database.run("UPDATE libraries SET deleted_at = ? WHERE id = ?", [
+      Date.now(),
+      target.libraryId,
+    ]);
     const coordinator = new DatabaseCoordinator(target.database);
 
     await expect(
       executeDataCommand(
         {
           name: "library.importBackup",
-          input: { backupText, libraryId: "foreign-library" },
+          input: { backupText },
         },
         dependenciesFor(coordinator),
       ),
-    ).rejects.toThrow("Rejected stale or foreign Library scope");
+    ).rejects.toThrow("Local Library identity is not active");
 
     await expect(
-      target.database.query<{ id: string }>(
-        `SELECT id FROM works WHERE library_id = 'foreign-library'`,
-      ),
+      target.database.query<{ id: string }>("SELECT id FROM works WHERE library_id = ?", [
+        target.libraryId,
+      ]),
     ).resolves.toEqual([]);
   });
 
@@ -965,7 +926,7 @@ describe("main-process data commands", () => {
     const result = await executeDataCommand(
       {
         name: "library.importBackup",
-        input: { backupText, libraryId: target.libraryId },
+        input: { backupText },
       },
       dependenciesFor(coordinator),
     );
@@ -977,6 +938,33 @@ describe("main-process data commands", () => {
         [target.libraryId, "10.4242/main-process-backup"],
       ),
     ).resolves.toEqual([{ title: "Main process backup command" }]);
+  });
+
+  it("exports only the main-resolved active Library without accepting a renderer scope", async () => {
+    const target = await createLibraryDatabase("backup-export-device");
+    const works = new WorksRepo(target.database, target.libraryId);
+    await works.upsert({ doi: "10.4242/main-export", title: "Main backup export" });
+    const coordinator = new DatabaseCoordinator(target.database);
+
+    const result = (await executeDataCommand(
+      { name: "library.exportBackup", input: {} },
+      dependenciesFor(coordinator),
+    )) as { backupText: string };
+    const backup = JSON.parse(result.backupText) as {
+      sourceLibraryId: string;
+      tables: { works?: Array<{ doi: string | null }> };
+    };
+    expect(backup.sourceLibraryId).toBe(target.libraryId);
+    expect(backup.tables.works).toEqual(
+      expect.arrayContaining([expect.objectContaining({ doi: "10.4242/main-export" })]),
+    );
+
+    await expect(
+      executeDataCommand(
+        { name: "library.exportBackup", input: { libraryId: "renderer-selected-library" } },
+        dependenciesFor(coordinator),
+      ),
+    ).rejects.toThrow("Invalid library.exportBackup input");
   });
 
   it("rolls back a failed import before allowing a queued unrelated write", async () => {
@@ -1008,7 +996,7 @@ describe("main-process data commands", () => {
     const importResult = executeDataCommand(
       {
         name: "library.importBackup",
-        input: { backupText, libraryId: target.libraryId },
+        input: { backupText },
       },
       dependenciesFor(coordinator),
     );
@@ -1033,178 +1021,5 @@ describe("main-process data commands", () => {
         `SELECT key FROM settings WHERE key = 'uow.concurrent-write'`,
       ),
     ).resolves.toEqual([{ key: "uow.concurrent-write" }]);
-  });
-
-  it("applies one remote sync segment and its cursor in the same command", async () => {
-    const target = await createLibraryDatabase("sync-target-device");
-    const coordinator = new DatabaseCoordinator(target.database);
-    const segment = workSegment([{ rowId: "remote-work", seq: 1 }]);
-
-    const result = await executeDataCommand(
-      {
-        name: "sync.applyRemoteSegment",
-        input: {
-          libraryId: target.libraryId,
-          providerScope: PROVIDER_SCOPE,
-          segment,
-        },
-      },
-      dependenciesFor(coordinator),
-    );
-
-    expect(result).toEqual({
-      appliedEntries: 1,
-      conflicts: 0,
-      cursor: 1,
-      pulledEntries: 1,
-    });
-    await expect(
-      target.database.query<{ id: string; library_id: string }>(
-        `SELECT id, library_id FROM works WHERE id = 'remote-work'`,
-      ),
-    ).resolves.toEqual([{ id: "remote-work", library_id: target.libraryId }]);
-    await expect(
-      target.database.query<{ last_pulled_cursor: string }>(
-        `SELECT last_pulled_cursor
-         FROM sync_state
-         WHERE library_id = ? AND provider_id = ?`,
-        [
-          target.libraryId,
-          `webdav:${PROVIDER_SCOPE}:${target.libraryId}:library-scope-v3-evidence:remote-device`,
-        ],
-      ),
-    ).resolves.toEqual([{ last_pulled_cursor: "1" }]);
-  });
-
-  it("rejects a foreign remote owner without partially applying the segment", async () => {
-    const target = await createLibraryDatabase("sync-target-device");
-    const coordinator = new DatabaseCoordinator(target.database);
-    const segment = workSegment([
-      { rowId: "valid-first-work", seq: 1 },
-      { owner: "remote:another-library", rowId: "foreign-second-work", seq: 2 },
-    ]);
-
-    await expect(
-      executeDataCommand(
-        {
-          name: "sync.applyRemoteSegment",
-          input: {
-            libraryId: target.libraryId,
-            providerScope: PROVIDER_SCOPE,
-            segment,
-          },
-        },
-        dependenciesFor(coordinator),
-      ),
-    ).rejects.toThrow("Rejected cross-library sync owner");
-
-    await expect(
-      target.database.query<{ id: string }>(
-        `SELECT id FROM works WHERE id IN ('valid-first-work', 'foreign-second-work')`,
-      ),
-    ).resolves.toEqual([]);
-    await expect(
-      target.database.query<{ row_id: string }>(
-        `SELECT row_id FROM sync_row_clocks WHERE library_id = ?`,
-        [target.libraryId],
-      ),
-    ).resolves.toEqual([]);
-    await expect(
-      target.database.query<{ provider_id: string }>(
-        `SELECT provider_id FROM sync_state WHERE library_id = ?`,
-        [target.libraryId],
-      ),
-    ).resolves.toEqual([]);
-  });
-
-  it("rejects a missing remote owner and rolls back rows, clocks, and cursor", async () => {
-    const target = await createLibraryDatabase("sync-target-device");
-    const coordinator = new DatabaseCoordinator(target.database);
-    const segment = workSegment([
-      { rowId: "valid-first-work", seq: 1 },
-      { omitOwner: true, rowId: "unowned-second-work", seq: 2 },
-    ]);
-
-    await expect(
-      executeDataCommand(
-        {
-          name: "sync.applyRemoteSegment",
-          input: {
-            libraryId: target.libraryId,
-            providerScope: PROVIDER_SCOPE,
-            segment,
-          },
-        },
-        dependenciesFor(coordinator),
-      ),
-    ).rejects.toThrow("Rejected cross-library sync owner");
-
-    await expect(
-      target.database.query<{ id: string }>(
-        `SELECT id FROM works WHERE id IN ('valid-first-work', 'unowned-second-work')`,
-      ),
-    ).resolves.toEqual([]);
-    await expect(
-      target.database.query<{ row_id: string }>(
-        `SELECT row_id
-         FROM sync_row_clocks
-         WHERE library_id = ?
-           AND row_id IN ('valid-first-work', 'unowned-second-work')`,
-        [target.libraryId],
-      ),
-    ).resolves.toEqual([]);
-    await expect(
-      target.database.query<{ provider_id: string }>(
-        `SELECT provider_id
-         FROM sync_state
-         WHERE library_id = ?
-           AND provider_id = ?`,
-        [
-          target.libraryId,
-          `webdav:${PROVIDER_SCOPE}:${target.libraryId}:library-scope-v3-evidence:remote-device`,
-        ],
-      ),
-    ).resolves.toEqual([]);
-  });
-
-  it("rolls back remote rows and clocks when cursor persistence fails", async () => {
-    const target = await createLibraryDatabase("sync-target-device");
-    const cursorFailingDatabase: Database = {
-      query: target.database.query.bind(target.database),
-      queryScalar: target.database.queryScalar.bind(target.database),
-      exec: target.database.exec.bind(target.database),
-      async run(sql, params = []) {
-        if (sql.includes("INSERT INTO sync_state")) {
-          throw new Error("injected sync cursor failure");
-        }
-        return target.database.run(sql, params);
-      },
-    };
-    const coordinator = new DatabaseCoordinator(cursorFailingDatabase);
-
-    await expect(
-      executeDataCommand(
-        {
-          name: "sync.applyRemoteSegment",
-          input: {
-            libraryId: target.libraryId,
-            providerScope: PROVIDER_SCOPE,
-            segment: workSegment([{ rowId: "rolled-back-remote-work", seq: 1 }]),
-          },
-        },
-        dependenciesFor(coordinator),
-      ),
-    ).rejects.toThrow("injected sync cursor failure");
-
-    await expect(
-      target.database.query<{ id: string }>(
-        `SELECT id FROM works WHERE id = 'rolled-back-remote-work'`,
-      ),
-    ).resolves.toEqual([]);
-    await expect(
-      target.database.query<{ row_id: string }>(
-        `SELECT row_id FROM sync_row_clocks WHERE row_id = 'rolled-back-remote-work'`,
-      ),
-    ).resolves.toEqual([]);
   });
 });

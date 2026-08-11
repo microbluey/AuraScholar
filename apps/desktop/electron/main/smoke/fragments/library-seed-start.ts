@@ -46,6 +46,55 @@ export const smokeLibrarySeedStart = String.raw`        if (Number(initialWorkCo
         }
 
         if (!dbError && window.aura?.db?.run && window.aura?.db?.exec) {
+          if (!window.aura?.data?.command) {
+            throw new Error("Smoke test requires the typed data-command bridge");
+          }
+          const typedIngestWorkInput = {
+            authors: [{ displayName: "Katherine Johnson", position: 0 }],
+            doi: TYPED_INGEST_SMOKE.doi,
+            title: TYPED_INGEST_SMOKE.title,
+            type: "article",
+            venueName: TYPED_INGEST_SMOKE.venue,
+            year: 2026
+          };
+          const typedIngestPdfInput = (receipt) => ({
+            fetchedVia: "manual",
+            fileName: TYPED_INGEST_SMOKE.fileName,
+            pageCount: 1,
+            stageId: receipt.stageId
+          });
+          const typedIngestInitialReceipt = await window.aura.data.command("library.stagePdf", {
+            bytes: makeSmokePdf(TYPED_INGEST_SMOKE.title)
+          });
+          const typedIngestInitial = await window.aura.data.command("library.finalizeIngest", {
+            mode: "create",
+            pdf: typedIngestPdfInput(typedIngestInitialReceipt),
+            workInput: typedIngestWorkInput
+          });
+          const typedIngestDuplicateReceipt = await window.aura.data.command("library.stagePdf", {
+            bytes: makeSmokePdf(TYPED_INGEST_SMOKE.title)
+          });
+          const typedIngestDuplicate = await window.aura.data.command("library.finalizeIngest", {
+            mode: "create",
+            pdf: typedIngestPdfInput(typedIngestDuplicateReceipt),
+            workInput: typedIngestWorkInput
+          });
+          libraryTypedPdfIngestCommitted =
+            typedIngestInitial.pdfFetched === true &&
+            typedIngestInitial.deduped === false &&
+            typedIngestInitial.attachment?.deduped === false &&
+            typedIngestDuplicate.pdfFetched === true &&
+            typedIngestDuplicate.deduped === true &&
+            typedIngestDuplicate.workId === typedIngestInitial.workId &&
+            typedIngestDuplicate.attachment?.deduped === true &&
+            typedIngestDuplicate.attachment?.id === typedIngestInitial.attachment?.id;
+          libraryTypedPdfIngestDetail =
+            "created=" +
+            typedIngestInitial.workId +
+            "; duplicate=" +
+            typedIngestDuplicate.workId +
+            "; attachment=" +
+            (typedIngestInitial.attachment?.id ?? "missing");
           const now = Date.now();
           await window.aura.db.exec("BEGIN");
 `;

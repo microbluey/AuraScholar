@@ -1,106 +1,19 @@
-// Citation service: turns selected library works into CSL items, then formats
-// or exports them. Reads csl_json directly (WorkRow doesn't carry it) and
-// backfills from columns via @aurascholar/cite's toCslItem.
+// Citation service: asks main for scoped CSL items, then formats or exports
+// them entirely in the renderer. No raw work rows cross into this service.
 import {
-  toCslItem,
   toBibTeX,
   toRIS,
   toCslJson,
   formatBibliography,
   formatEntry,
   type CslItem,
-  type WorkLike,
 } from "@aurascholar/cite";
 import { downloadBlob } from "../download";
-import { getLibraryDb } from "./aura-db";
-
-interface CiteRow {
-  id: string;
-  title: string;
-  doi: string | null;
-  pmid: string | null;
-  year: number | null;
-  publication_date: string | null;
-  venue_name: string | null;
-  type: string;
-  csl_json: unknown;
-  volume: string | null;
-  issue: string | null;
-  pages: string | null;
-  publisher: string | null;
-  place_published: string | null;
-  edition: string | null;
-  issn: string | null;
-  isbn: string | null;
-  language: string | null;
-  url: string | null;
-}
 
 /** Loads CSL items for the given work ids, preserving the requested order. */
 export async function cslItemsForWorks(workIds: string[]): Promise<CslItem[]> {
   if (workIds.length === 0) return [];
-  const { db, libraryId } = await getLibraryDb();
-  const placeholders = workIds.map(() => "?").join(",");
-  const rows = await db.query<CiteRow>(
-    `SELECT id, title, doi, pmid, year, publication_date, venue_name, type, csl_json,
-            volume, issue, pages, publisher, place_published, edition, issn, isbn, language, url
-     FROM works
-     WHERE library_id = ? AND id IN (${placeholders}) AND deleted_at IS NULL`,
-    [libraryId, ...workIds],
-  );
-  // Author/editor list with roles — feeds CSL author vs editor split.
-  const authorRows = await db.query<{ work_id: string; display_name: string; role: string }>(
-    `SELECT wa.work_id, a.display_name, wa.role
-     FROM work_authors wa
-     JOIN works w
-       ON w.id = wa.work_id
-      AND w.library_id = ?
-      AND w.deleted_at IS NULL
-     JOIN authors a
-       ON a.id = wa.author_id
-      AND a.library_id = w.library_id
-     WHERE wa.work_id IN (${placeholders})
-     ORDER BY wa.position`,
-    [libraryId, ...workIds],
-  );
-  const authorsByWork = new Map<string, Array<{ displayName: string; role?: string }>>();
-  for (const r of authorRows) {
-    const list = authorsByWork.get(r.work_id) ?? [];
-    list.push({ displayName: r.display_name, role: r.role });
-    authorsByWork.set(r.work_id, list);
-  }
-
-  const byId = new Map<string, WorkLike>();
-  for (const row of rows) {
-    const detail = authorsByWork.get(row.id) ?? [];
-    byId.set(row.id, {
-      id: row.id,
-      title: row.title,
-      doi: row.doi,
-      pmid: row.pmid,
-      year: row.year,
-      publicationDate: row.publication_date,
-      venueName: row.venue_name,
-      type: row.type,
-      authorNames: detail.map((a) => a.displayName),
-      authorsDetail: detail,
-      volume: row.volume,
-      issue: row.issue,
-      pages: row.pages,
-      publisher: row.publisher,
-      placePublished: row.place_published,
-      edition: row.edition,
-      issn: row.issn,
-      isbn: row.isbn,
-      language: row.language,
-      url: row.url,
-      cslJson: parseJson(row.csl_json),
-    });
-  }
-  return workIds
-    .map((id) => byId.get(id))
-    .filter((w): w is WorkLike => !!w)
-    .map(toCslItem);
+  return (await window.aura.data.command("library.getCslItems", { workIds })).items;
 }
 
 export type ExportFormat = "bibtex" | "ris" | "csljson";
@@ -126,19 +39,4 @@ export async function bibliographyText(workIds: string[], styleId: string): Prom
 export async function referenceForWork(workId: string, styleId: string): Promise<string> {
   const [item] = await cslItemsForWorks([workId]);
   return item ? formatEntry(item, styleId) : "";
-}
-
-// csl_json may arrive as a string (raw SQL driver) or already-parsed
-// object (drizzle json mode) depending on the driver — handle both.
-function parseJson(value: unknown): unknown {
-  if (!value) return null;
-  if (typeof value === "object") return value;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }

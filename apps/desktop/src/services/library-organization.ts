@@ -1,14 +1,10 @@
-import type { TagRow } from "@aurascholar/db";
-import { TagsRepo } from "@aurascholar/db/repos/tags";
-import { getLibraryDb } from "./aura-db";
+import type { LibraryTagSummary } from "../../electron/data-command-contract";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 
-async function commandScope(): Promise<string> {
-  return (await getLibraryDb()).libraryId;
-}
+export type LibraryTag = LibraryTagSummary;
 
-export async function listLibraryTags(): Promise<TagRow[]> {
-  const { db, libraryId } = await getLibraryDb();
-  return new TagsRepo(db, libraryId).list();
+export async function listLibraryTags(): Promise<LibraryTag[]> {
+  return (await window.aura.data.command("library.listTags", {})).tags;
 }
 
 export async function createLibraryCollection(
@@ -16,7 +12,7 @@ export async function createLibraryCollection(
   parentId: string | null = null,
 ): Promise<string> {
   const result = await window.aura.data.command("library.createCollection", {
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     name,
     parentId,
   });
@@ -26,7 +22,7 @@ export async function createLibraryCollection(
 export async function renameLibraryCollection(collectionId: string, name: string): Promise<void> {
   await window.aura.data.command("library.renameCollection", {
     collectionId,
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     name,
   });
 }
@@ -38,7 +34,7 @@ export async function moveLibraryCollection(
 ): Promise<void> {
   await window.aura.data.command("library.moveCollection", {
     collectionId,
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     parentId,
     position,
   });
@@ -49,7 +45,7 @@ export async function deleteLibraryCollection(
 ): Promise<{ workIds: string[] }> {
   return window.aura.data.command("library.deleteCollection", {
     collectionId,
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
   });
 }
 
@@ -59,7 +55,7 @@ export async function restoreLibraryCollection(
 ): Promise<{ restoredWorkIds: string[]; skippedWorkIds: string[] }> {
   return window.aura.data.command("library.restoreCollection", {
     collectionId,
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     workIds,
   });
 }
@@ -70,7 +66,7 @@ export async function setWorksLibraryCollection(
 ): Promise<number> {
   const result = await window.aura.data.command("library.setWorksCollection", {
     collectionId,
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     workIds,
   });
   return result.updated;
@@ -79,7 +75,7 @@ export async function setWorksLibraryCollection(
 export async function createLibraryTag(name: string, color?: string): Promise<string> {
   const result = await window.aura.data.command("library.createTag", {
     color,
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     name,
   });
   return result.tagId;
@@ -87,7 +83,7 @@ export async function createLibraryTag(name: string, color?: string): Promise<st
 
 export async function renameLibraryTag(tagId: string, name: string): Promise<string> {
   const result = await window.aura.data.command("library.renameTag", {
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     name,
     tagId,
   });
@@ -97,21 +93,21 @@ export async function renameLibraryTag(tagId: string, name: string): Promise<str
 export async function setLibraryTagColor(tagId: string, color: string | null): Promise<void> {
   await window.aura.data.command("library.setTagColor", {
     color,
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     tagId,
   });
 }
 
 export async function deleteLibraryTag(tagId: string): Promise<{ workIds: string[] }> {
   return window.aura.data.command("library.deleteTag", {
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     tagId,
   });
 }
 
 export async function restoreLibraryTag(tagId: string, workIds: string[]): Promise<number> {
   const result = await window.aura.data.command("library.restoreTag", {
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     tagId,
     workIds,
   });
@@ -123,7 +119,7 @@ export async function addLibraryTagToWorks(
   name: string,
 ): Promise<{ tagId: string; updated: number }> {
   return window.aura.data.command("library.addTagToWorks", {
-    libraryId: await commandScope(),
+    libraryId: await getActiveLibraryCommandScope(),
     name,
     workIds,
   });

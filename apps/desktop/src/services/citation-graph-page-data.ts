@@ -1,11 +1,10 @@
 import type { CitationGraph } from "@aurascholar/core";
-import type { Database } from "@aurascholar/db";
 import {
   loadCitationGraphByDoi,
+  normalizeCitationGraphDoi,
   type CitationGraphBuilder,
   type LoadCitationGraphOptions,
 } from "./citation-graph";
-import { getLibraryDb } from "./aura-db";
 
 export interface CitationGraphPageSnapshot {
   graph: CitationGraph | null;
@@ -17,19 +16,16 @@ export interface LoadCitationGraphPageOptions {
   signal?: AbortSignal;
 }
 
-export interface CitationGraphPageScope {
-  db: Database;
-  libraryId: string;
-}
-
 export interface CitationGraphPageDataSource {
+  getActiveLibraryDois: (dois: string[]) => Promise<string[]>;
   loadGraph: (rawDoi: string, options: LoadCitationGraphOptions) => Promise<CitationGraph | null>;
-  open: () => Promise<CitationGraphPageScope>;
 }
 
 const defaultDataSource: CitationGraphPageDataSource = {
+  async getActiveLibraryDois(dois) {
+    return (await window.aura.data.command("citationGraph.getActiveLibraryDois", { dois })).dois;
+  },
   loadGraph: loadCitationGraphByDoi,
-  open: getLibraryDb,
 };
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -43,26 +39,33 @@ export async function loadCitationGraphPageSnapshot(
 ): Promise<CitationGraphPageSnapshot> {
   const { buildGraph, signal } = options;
   throwIfAborted(signal);
-  const { db, libraryId } = await dataSource.open();
-  throwIfAborted(signal);
-  const graph = await dataSource.loadGraph(rawDoi, { buildGraph, db, signal });
+  const graph = await dataSource.loadGraph(rawDoi, { buildGraph, signal });
   throwIfAborted(signal);
   if (!graph) return { graph: null, inLibraryDois: new Set() };
 
-  const dois = [
-    ...new Set(
-      graph.nodes.map((node) => node.doi?.trim()).filter((doi): doi is string => Boolean(doi)),
-    ),
-  ];
+  const graphDois = graph.nodes.flatMap((node) => {
+    if (!node.doi) return [];
+    const normalizedDoi = normalizeCitationGraphDoi(node.doi);
+    return normalizedDoi ? [{ normalizedDoi, rawDoi: node.doi }] : [];
+  });
+  const dois = [...new Set(graphDois.map(({ normalizedDoi }) => normalizedDoi))];
   if (dois.length === 0) return { graph, inLibraryDois: new Set() };
 
-  const placeholders = dois.map(() => "?").join(",");
-  const rows = await db.query<{ doi: string }>(
-    `SELECT doi
-     FROM works
-     WHERE library_id = ? AND doi IN (${placeholders}) AND deleted_at IS NULL`,
-    [libraryId, ...dois],
-  );
+  const activeLibraryDois = await dataSource.getActiveLibraryDois(dois);
   throwIfAborted(signal);
-  return { graph, inLibraryDois: new Set(rows.map((row) => row.doi)) };
+  const activeNormalizedDois = new Set(
+    activeLibraryDois
+      .map((doi) => normalizeCitationGraphDoi(doi))
+      .filter((doi): doi is string => Boolean(doi)),
+  );
+  return {
+    graph,
+    // View rendering compares this set against each graph node's original DOI,
+    // so map active canonical results back to their raw graph-node forms.
+    inLibraryDois: new Set(
+      graphDois
+        .filter(({ normalizedDoi }) => activeNormalizedDois.has(normalizedDoi))
+        .map(({ rawDoi }) => rawDoi),
+    ),
+  };
 }

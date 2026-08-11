@@ -21,8 +21,11 @@ import {
   hostRuntimeTarget,
   parseEmbeddingRuntimeSmokeResult,
 } from "./embedding-runtime-package-smoke-support.mjs";
+import {
+  createEmbeddingRuntimeSmokeFixturePackage,
+  EMBEDDING_RUNTIME_SMOKE_SHARP_VERSION,
+} from "./embedding-runtime-package-smoke-fixture.mjs";
 
-const TRANSFORMERS_VERSION = "3.8.1";
 const EXECUTABLE_NAME = "aurascholar-embedding-runtime-smoke";
 const keepFixture = process.env.AURASCHOLAR_EMBEDDING_SMOKE_KEEP === "1";
 const require = createRequire(import.meta.url);
@@ -36,6 +39,7 @@ try {
   const electronVersion = await installedElectronVersion();
   await writeFixture(electronVersion);
   await installFixtureDependencies();
+  await assertInstalledFixtureSharpVersion();
   await packageFixture();
 
   const nativeRoot = await findStagedOnnxRuntimeNativeRoot(releaseDirectory, target);
@@ -84,7 +88,15 @@ async function installedElectronVersion() {
 async function writeFixture(electronVersion) {
   await writeFile(
     join(fixtureRoot, "package.json"),
-    JSON.stringify(fixturePackage(electronVersion), null, 2),
+    JSON.stringify(
+      createEmbeddingRuntimeSmokeFixturePackage({
+        afterPack: join(appDirectory, "scripts", "prune-onnxruntime-platform.mjs"),
+        electronVersion,
+        executableName: EXECUTABLE_NAME,
+      }),
+      null,
+      2,
+    ),
   );
   await writeFile(join(fixtureRoot, "main.mjs"), packagedMainSource());
 }
@@ -94,6 +106,17 @@ async function installFixtureDependencies() {
     cwd: fixtureRoot,
     stdio: "inherit",
   });
+}
+
+async function assertInstalledFixtureSharpVersion() {
+  const sharpEntry = require.resolve("sharp", { paths: [fixtureRoot] });
+  const sharpPackageJsonPath = join(dirname(dirname(sharpEntry)), "package.json");
+  const sharpPackage = JSON.parse(await readFile(sharpPackageJsonPath, "utf8"));
+  if (sharpPackage.version !== EMBEDDING_RUNTIME_SMOKE_SHARP_VERSION) {
+    throw new Error(
+      `Embedding runtime smoke expected sharp ${EMBEDDING_RUNTIME_SMOKE_SHARP_VERSION}, received ${String(sharpPackage.version)}`,
+    );
+  }
 }
 
 async function packageFixture() {
@@ -109,36 +132,6 @@ async function launchPackagedSmoke(executable) {
       ? { args: ["--auto-servernum", executable, "--disable-gpu"], command: "xvfb-run" }
       : { args: ["--disable-gpu"], command: executable };
   return runCommand(launch.command, launch.args, { cwd: fixtureRoot, stdio: "pipe" });
-}
-
-function fixturePackage(electronVersion) {
-  return {
-    name: "aurascholar-embedding-runtime-smoke",
-    version: "0.0.0",
-    private: true,
-    type: "module",
-    main: "main.mjs",
-    dependencies: {
-      "@huggingface/transformers": TRANSFORMERS_VERSION,
-    },
-    devDependencies: {
-      electron: electronVersion,
-    },
-    build: {
-      appId: "app.aurascholar.embedding-runtime-smoke",
-      productName: "AuraScholar Embedding Runtime Smoke",
-      executableName: EXECUTABLE_NAME,
-      electronVersion,
-      directories: {
-        output: "release",
-      },
-      files: ["**/*"],
-      asar: true,
-      asarUnpack: ["node_modules/onnxruntime-node/**/*"],
-      npmRebuild: true,
-      afterPack: join(appDirectory, "scripts", "prune-onnxruntime-platform.mjs"),
-    },
-  };
 }
 
 function packagedMainSource() {

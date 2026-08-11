@@ -62,9 +62,8 @@ export const smokeLibrarySeedSitesGraph = String.raw`            await window.au
               ]
             );
             const corruptBytes = new TextEncoder().encode("this is not a pdf");
-            const corruptSha = await sha256Hex(corruptBytes);
-            const corruptPath = "blobs/" + corruptSha.slice(0, 2) + "/" + corruptSha + ".pdf";
-            await window.aura.fs.writeFile(corruptPath, corruptBytes);
+            const stagedCorruptPdf = await window.aura.data.command("library.stagePdf", { bytes: corruptBytes });
+            const corruptSha = stagedCorruptPdf.sha;
             await window.aura.db.run(
               "INSERT OR IGNORE INTO attachments (id, work_id, kind, sha256, byte_size, original_filename, fetched_via, page_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
               [

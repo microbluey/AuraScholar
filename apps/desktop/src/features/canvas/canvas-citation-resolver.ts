@@ -1,7 +1,4 @@
 import type { CanvasCitationRelation, CitationGraph } from "@aurascholar/core";
-import type { Database } from "@aurascholar/db";
-import { citationRelationsForWorks, type WorkCitationRelation } from "@aurascholar/db/work-list";
-import { getLibraryDb } from "../../services/aura-db";
 import { loadCitationGraphByDoi } from "../../services/citation-graph";
 import {
   canvasCitationRelationsFromGraph,
@@ -11,6 +8,19 @@ import {
 } from "./canvas-citation";
 
 export const MAX_CANVAS_CITATION_GRAPH_LOADS = 12;
+/**
+ * The main-process local-relation query needs two SQLite bind parameters per
+ * work id. Keep this in lockstep with its scoped-command validation, but fail
+ * before starting any IPC or remote graph work so an oversized canvas has a
+ * clear, recoverable error.
+ */
+export const MAX_CANVAS_CITATION_WORK_IDS = 400;
+/**
+ * Keep a graph's Cartesian DOI matches from producing an oversized IPC batch.
+ * This is an explicit failure, never a silent truncation, so `truncated`
+ * continues to describe only the bounded DOI graph-load budget.
+ */
+export const MAX_CANVAS_CITATION_RELATIONS_TO_PERSIST = 1000;
 
 export interface CanvasCitationResolution {
   graphCount: number;
@@ -20,20 +30,10 @@ export interface CanvasCitationResolution {
 }
 
 export interface ResolveCanvasCitationRelationsOptions {
-  db?: Database;
-  libraryId?: string;
-  listLocalRelations?: (
-    db: Database,
-    libraryId: string,
-    workIds: string[],
-  ) => Promise<WorkCitationRelation[]>;
+  listLocalRelations?: (workIds: string[]) => Promise<CanvasCitationRelation[]>;
   loadGraph?: (doi: string, signal?: AbortSignal) => Promise<CitationGraph | null>;
   maxGraphLoads?: number;
-  persistRelation?: (
-    db: Database,
-    libraryId: string,
-    relation: CanvasCitationRelation,
-  ) => Promise<void>;
+  persistRelations?: (relations: CanvasCitationRelation[]) => Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -59,30 +59,24 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-async function defaultPersistRelation(
-  db: Database,
-  libraryId: string,
-  relation: CanvasCitationRelation,
-): Promise<void> {
-  await db.run(
-    `INSERT OR IGNORE INTO citations (citing_work_id, cited_work_id, source)
-     SELECT ?, ?, 'openalex'
-     FROM works citing
-     JOIN works cited ON cited.id = ?
-     WHERE citing.id = ?
-       AND citing.library_id = ?
-       AND cited.library_id = ?
-       AND citing.deleted_at IS NULL
-       AND cited.deleted_at IS NULL`,
-    [
-      relation.citingWorkId,
-      relation.citedWorkId,
-      relation.citedWorkId,
-      relation.citingWorkId,
-      libraryId,
-      libraryId,
-    ],
-  );
+function assertCanvasCitationRelationLimit(
+  relations: readonly CanvasCitationRelation[],
+): void {
+  if (relations.length > MAX_CANVAS_CITATION_RELATIONS_TO_PERSIST) {
+    throw new Error(
+      `引用关系过多（最多 ${MAX_CANVAS_CITATION_RELATIONS_TO_PERSIST} 条），请缩小画布选择范围后重试。`,
+    );
+  }
+}
+
+async function loadLocalCanvasCitationRelations(
+  workIds: string[],
+): Promise<CanvasCitationRelation[]> {
+  return (await window.aura.data.command("canvas.getCitationRelations", { workIds })).relations;
+}
+
+async function persistCanvasCitationRelations(relations: CanvasCitationRelation[]): Promise<void> {
+  await window.aura.data.command("canvas.persistCitationRelations", { relations });
 }
 
 export async function resolveCanvasCitationRelations(
@@ -91,25 +85,21 @@ export async function resolveCanvasCitationRelations(
 ): Promise<CanvasCitationResolution> {
   const signal = options.signal;
   throwIfAborted(signal);
-  const context = options.db
-    ? { db: options.db, libraryId: options.libraryId?.trim() ?? "" }
-    : await getLibraryDb();
-  if (!context.libraryId) {
-    throw new Error("libraryId is required when resolving citations with an injected database");
-  }
-  const { db, libraryId } = context;
-  throwIfAborted(signal);
 
   const workIds = [...new Set(selectedPapers.map((paper) => paper.workId).filter(Boolean))].sort(
     compareText,
   );
-  const localRelations = await (options.listLocalRelations ?? citationRelationsForWorks)(
-    db,
-    libraryId,
-    workIds,
-  );
+  if (workIds.length > MAX_CANVAS_CITATION_WORK_IDS) {
+    throw new Error(
+      `画布论文过多（最多 ${MAX_CANVAS_CITATION_WORK_IDS} 篇），请缩小画布选择范围后重试。`,
+    );
+  }
+  const localRelations = workIds.length
+    ? await (options.listLocalRelations ?? loadLocalCanvasCitationRelations)(workIds)
+    : [];
   throwIfAborted(signal);
   const normalizedLocalRelations = mergeCanvasCitationRelations(localRelations);
+  assertCanvasCitationRelationLimit(normalizedLocalRelations);
   const locallyConnectedWorkIds = new Set(
     normalizedLocalRelations.flatMap((relation) => [relation.citingWorkId, relation.citedWorkId]),
   );
@@ -153,16 +143,16 @@ export async function resolveCanvasCitationRelations(
   }
 
   const newGraphRelations = mergeCanvasCitationRelations(...graphRelations);
+  throwIfAborted(signal);
+  assertCanvasCitationRelationLimit(newGraphRelations);
+  const relations = mergeCanvasCitationRelations(normalizedLocalRelations, newGraphRelations);
+  assertCanvasCitationRelationLimit(relations);
   if (newGraphRelations.length > 0) {
-    const persistRelation = options.persistRelation ?? defaultPersistRelation;
-    for (const relation of newGraphRelations) {
-      throwIfAborted(signal);
-      await persistRelation(db, libraryId, relation);
-    }
+    throwIfAborted(signal);
+    await (options.persistRelations ?? persistCanvasCitationRelations)(newGraphRelations);
   }
   throwIfAborted(signal);
 
-  const relations = mergeCanvasCitationRelations(normalizedLocalRelations, newGraphRelations);
   if (relations.length > 0) {
     return {
       graphCount,

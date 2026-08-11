@@ -2,7 +2,12 @@
 // independent title-search corroboration source. https://api.semanticscholar.org
 // The public (keyless) endpoint is heavily rate-limited; the shared interval
 // limiter in client.ts uses the conservative 250ms default for this host.
-import { getJson, ApiError, type ConnectorContext, type ConnectorRequestOptions } from "./client.js";
+import {
+  getJson,
+  ApiError,
+  type ConnectorContext,
+  type ConnectorRequestOptions,
+} from "./client.js";
 import type { ConnectorSearchFilters, NormalizedWork } from "./types.js";
 
 const BASE = "https://api.semanticscholar.org/graph/v1";
@@ -130,12 +135,14 @@ export async function s2SearchByTitle(
 export async function s2EnrichByDoi(
   ctx: ConnectorContext,
   doi: string,
+  opts?: ConnectorRequestOptions,
 ): Promise<S2Enrichment | null> {
   let p: S2PaperFull;
   try {
     p = await getJson<S2PaperFull>(
       ctx,
       `${BASE}/paper/DOI:${encodeURIComponent(doi)}?fields=${ENRICH_FIELDS}`,
+      opts,
     );
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return null;

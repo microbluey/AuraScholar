@@ -19,25 +19,24 @@ describe("AnthropicProvider", () => {
       });
     });
     const p = new AnthropicProvider({ http, model: "claude-x", apiKey: "k" });
+    const controller = new AbortController();
     const out = await p.generateText({
       messages: [
         { role: "system", content: "You are helpful." },
         { role: "user", content: "hi" },
       ],
+      signal: controller.signal,
     });
     expect(out.text).toBe("hello");
     expect(out.usage).toEqual({ inputTokens: 3, outputTokens: 1 });
+    expect(http.requests[0]?.signal).toBe(controller.signal);
   });
 
   it("concatenates multiple text blocks", async () => {
     const http = new StubHttpClient();
     http.on(/anthropic/, () =>
       jsonResponse(200, {
-        content: [
-          { type: "text", text: "a" },
-          { type: "tool_use" },
-          { type: "text", text: "b" },
-        ],
+        content: [{ type: "text", text: "a" }, { type: "tool_use" }, { type: "text", text: "b" }],
       }),
     );
     const p = new AnthropicProvider({ http, model: "claude-x", apiKey: "k" });
@@ -101,8 +100,8 @@ describe("AnthropicProvider", () => {
     await expect(p.generateText({ messages: [{ role: "user", content: "x" }] })).rejects.toThrow(
       /401.*client_secret": "\[redacted\]".*authorization": "\[redacted\]"/,
     );
-    await expect(p.generateText({ messages: [{ role: "user", content: "x" }] })).rejects.not.toThrow(
-      /anthropic-secret|sk-ant-secret/,
-    );
+    await expect(
+      p.generateText({ messages: [{ role: "user", content: "x" }] }),
+    ).rejects.not.toThrow(/anthropic-secret|sk-ant-secret/);
   });
 });

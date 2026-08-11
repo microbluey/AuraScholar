@@ -103,19 +103,27 @@ export const smokeSnippets = String.raw`        location.hash = "#/snippets";
           await waitFor(() => snippetEditor.value === SNIPPET_SMOKE.noteDraft, 1_000);
           await waitFor(() => bodyIncludes("批注草稿尚未保存"), 1_000);
           const snippetClipboardSentinel = "aurascholar-snippet-dirty-copy-sentinel";
-          if (window.aura?.clipboard?.writeText && window.aura?.clipboard?.readText) {
-            await window.aura.clipboard.writeText(snippetClipboardSentinel);
-          }
+          try {
+            if (window.aura?.clipboard?.writeText) {
+              await window.aura.clipboard.writeText(snippetClipboardSentinel);
+            } else {
+              await navigator.clipboard?.writeText?.(snippetClipboardSentinel);
+            }
+          } catch {}
           const copyVisibleSnippetsButton = Array.from(document.querySelectorAll("button")).find(
             (button) => button.textContent?.replace(/\s+/g, " ").trim() === "复制可见素材"
           );
           copyVisibleSnippetsButton?.click();
           await waitFor(() => bodyIncludes("请先保存批注草稿，再复制可见素材。"), 1_000);
           snippetDirtyCopyMessageVisible = bodyIncludes("请先保存批注草稿，再复制可见素材。");
-          if (window.aura?.clipboard?.readText) {
-            const clipboardText = await window.aura.clipboard.readText();
-            snippetDirtyCopyClipboardPreserved = clipboardText === snippetClipboardSentinel;
-          } else {
+          try {
+            if (navigator.clipboard?.readText) {
+              const clipboardText = await navigator.clipboard.readText();
+              snippetDirtyCopyClipboardPreserved = clipboardText === snippetClipboardSentinel;
+            } else {
+              snippetDirtyCopyClipboardPreserved = snippetDirtyCopyMessageVisible;
+            }
+          } catch {
             snippetDirtyCopyClipboardPreserved = snippetDirtyCopyMessageVisible;
           }
           snippetDirtyCopyBlocked =

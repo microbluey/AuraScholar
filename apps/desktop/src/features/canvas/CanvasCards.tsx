@@ -107,7 +107,7 @@ function CardShell({
         });
       }}
     >
-      <CanvasConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
+      <CanvasConnectionHandles isConnectable={isConnectable} nodeId={nodeId} nodeLabel={label} />
       {children}
     </article>
   );
@@ -654,7 +654,7 @@ export function GroupCard({ data, isConnectable, selected }: NodeProps<CanvasFlo
         });
       }}
     >
-      <CanvasConnectionHandles isConnectable={isConnectable} nodeLabel={label} />
+      <CanvasConnectionHandles isConnectable={isConnectable} nodeId={node.id} nodeLabel={label} />
       <div className="canvas-group-node__label">
         <button
           className="canvas-group-node__toggle nodrag nopan"

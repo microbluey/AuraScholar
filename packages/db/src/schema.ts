@@ -25,7 +25,6 @@ export {
   projectEvidence,
 } from "./document-evidence-schema.js";
 export * from "./schema-knowledge.js";
-
 // Convention: UUIDv7 string PKs (time-ordered, sync-friendly); timestamps are epoch milliseconds.
 // deleted_at is a soft-delete tombstone required by the sync engine — hard deletes only happen during snapshot compaction.
 
@@ -33,7 +32,6 @@ const id = () => text("id").primaryKey();
 const createdAt = () => integer("created_at").notNull();
 const updatedAt = () => integer("updated_at").notNull();
 const deletedAt = () => integer("deleted_at");
-
 export const authors = sqliteTable(
   "authors",
   {
@@ -70,7 +68,6 @@ export const workAuthors = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.workId, t.authorId] })],
 );
-
 // ---------------------------------------------------------------------------
 // Organization: collections (hierarchical) and tags
 // ---------------------------------------------------------------------------
@@ -162,7 +159,10 @@ export const annotations = sqliteTable(
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
   },
-  (t) => [index("annotations_attachment_idx").on(t.attachmentId, t.sortKey)],
+  (t) => [
+    index("annotations_attachment_idx").on(t.attachmentId, t.sortKey),
+    index("annotations_work_active_idx").on(t.workId, t.deletedAt),
+  ],
 );
 
 export const annotationComments = sqliteTable(

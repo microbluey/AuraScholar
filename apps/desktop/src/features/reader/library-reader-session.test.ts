@@ -115,8 +115,8 @@ function dataSource(
   return {
     createAnnotation: vi.fn(async () => "annotation-new"),
     deleteAnnotation: vi.fn(async () => undefined),
+    getAttachment: vi.fn(async () => attachment()),
     listAnnotations: vi.fn(async () => [annotationRow()]),
-    listAttachments: vi.fn(async () => [attachment()]),
     loadDocument: vi.fn(async () => doc),
     loadPdf: vi.fn(async () => ({
       attachmentId: "attachment-1",
@@ -152,6 +152,8 @@ describe("library reader session", () => {
     );
 
     expect(source.loadPdf).toHaveBeenCalledWith("work-1", "attachment-1");
+    expect(source.getAttachment).toHaveBeenCalledWith("work-1", "attachment-1");
+    expect(source.listAnnotations).toHaveBeenCalledWith("work-1", "attachment-1");
     expect(session.work.title).toBe("Evidence Graphs");
     expect(session.attachment.original_filename).toBe("evidence.pdf");
     expect(session.annotations).toEqual([
@@ -216,6 +218,41 @@ describe("library reader session", () => {
     writtenId.resolve("annotation-committed");
 
     await expect(pending).resolves.toEqual({ ...draft, id: "annotation-committed" });
+  });
+
+  it("uses the scoped Reader command facade for the default annotation writer", async () => {
+    const command = vi.fn(async () => ({ annotationId: "annotation-command" }));
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    const draft: Omit<ReaderAnnotation, "id"> = {
+      type: "note",
+      color: "#ffd866",
+      pageIndex: 1,
+      anchor: {
+        version: 1,
+        pageIndex: 1,
+        quote: { exact: "saved evidence", prefix: "", suffix: "" },
+      },
+      contentMd: "saved note",
+    };
+
+    await expect(
+      createLibraryReaderAnnotation({ work: work(), attachment: attachment() }, draft),
+    ).resolves.toEqual({
+      ...draft,
+      id: "annotation-command",
+    });
+    expect(command).toHaveBeenCalledWith("reader.createAnnotation", {
+      anchor: draft.anchor,
+      attachmentId: "attachment-1",
+      color: "#ffd866",
+      contentMd: "saved note",
+      pageIndex: 1,
+      type: "note",
+      workId: "work-1",
+    });
   });
 
   it("does not start any write after its request has already been aborted", async () => {
@@ -366,6 +403,40 @@ describe("library reader session", () => {
     const source = dataSource({
       loadPdf: vi.fn(async () => {
         throw new Error("blob unavailable");
+      }),
+      loadWork: vi.fn(async () => loadedWork),
+    });
+
+    await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
+      expect.objectContaining<Partial<LibraryReaderSessionError>>({
+        code: "attachment-unavailable",
+        work: loadedWork,
+      }),
+    );
+  });
+
+  it("revalidates the chosen PDF attachment under its work before parsing", async () => {
+    const loadedWork = work();
+    const source = dataSource({
+      getAttachment: vi.fn(async () => null),
+      loadWork: vi.fn(async () => loadedWork),
+    });
+
+    await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
+      expect.objectContaining<Partial<LibraryReaderSessionError>>({
+        code: "attachment-missing",
+        work: loadedWork,
+      }),
+    );
+    expect(source.getAttachment).toHaveBeenCalledWith("work-1", "attachment-1");
+    expect(source.loadDocument).not.toHaveBeenCalled();
+  });
+
+  it("preserves loaded work context when attachment revalidation fails", async () => {
+    const loadedWork = work();
+    const source = dataSource({
+      getAttachment: vi.fn(async () => {
+        throw new Error("attachment scope unavailable");
       }),
       loadWork: vi.fn(async () => loadedWork),
     });

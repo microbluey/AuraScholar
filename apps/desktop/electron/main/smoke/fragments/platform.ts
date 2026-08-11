@@ -20,47 +20,15 @@ export const smokePlatform = String.raw`        let dbError = null;
         } catch (error) {
           dbError = error instanceof Error ? error.message : String(error);
         }
-        try {
-          const secretKeys = Array.from({ length: 8 }, (_item, index) =>
-            "smoke:concurrent-secret:" + index
-          );
-          await Promise.all(secretKeys.map((key) => window.aura?.secrets?.delete?.(key)));
-          await Promise.all(
-            secretKeys.map((key, index) =>
-              window.aura?.secrets?.set?.(key, "concurrent-secret-value-" + index)
-            )
-          );
-          const secretValues = await Promise.all(
-            secretKeys.map((key) => window.aura?.secrets?.get?.(key))
-          );
-          platformSecretsConcurrentWritesPreserved = secretValues.every(
-            (value, index) => value === "concurrent-secret-value-" + index
-          );
-          await Promise.all(secretKeys.map((key) => window.aura?.secrets?.delete?.(key)));
-        } catch {
-          platformSecretsConcurrentWritesPreserved = false;
-        }
-        try {
-          await window.aura?.openExternal?.("javascript:alert('aurascholar-smoke')");
-        } catch {
-          externalUnsafeRejected = true;
-        }
-        try {
-          await window.aura?.openExternal?.("https://user:pass@example.com/aurascholar-smoke");
-        } catch {
-          externalCredentialsRejected = true;
-        }
-        try {
-          await window.aura?.http?.({ url: "file:///private/tmp/aurascholar-smoke-http" });
-        } catch {
-          try {
-            await window.aura?.http?.({
-              url: "https://user:pass@example.com/aurascholar-smoke-http",
-            });
-          } catch {
-            platformHttpUnsafeRejected = true;
-          }
-        }
+        // Credentials are no longer a renderer capability. Dedicated settings
+        // commands exercise main-owned encryption later in this smoke flow;
+        // this check specifically guards against reintroducing a preload slot.
+        platformSecretsRendererIsolated = !Object.hasOwn(window.aura ?? {}, "secrets");
+        // Arbitrary network transport is main-owned by narrow commands. The
+        // renderer must not receive a generic HTTP proxy or abort handle.
+        platformGenericHttpRendererIsolated =
+          !Object.hasOwn(window.aura ?? {}, "http") &&
+          !Object.hasOwn(window.aura ?? {}, "cancelHttp");
         try {
           await window.aura?.research?.open?.(
             "smoke-unsafe-url",
@@ -75,38 +43,6 @@ export const smokePlatform = String.raw`        let dbError = null;
           } catch {
             researchUnsafeUrlRejected = true;
           }
-        }
-        try {
-          const citationBridgePort = await waitFor(
-            async () => window.aura?.citationBridgePort?.(),
-            2_000
-          );
-          if (citationBridgePort) {
-            const bridgeBase = "http://127.0.0.1:" + citationBridgePort;
-            const pingRes = await fetch(bridgeBase + "/ping");
-            const pingJson = await pingRes.json().catch(() => null);
-            citationBridgePingOk =
-              pingRes.status === 200 &&
-              pingJson?.ok === true &&
-              pingJson?.app === "aurascholar" &&
-              pingRes.headers.get("cache-control") === "no-store";
-
-            const unauthRes = await fetch(bridgeBase + "/works/search?q=smoke");
-            const unauthJson = await unauthRes.json().catch(() => null);
-            citationBridgeUnauthRejected =
-              unauthRes.status === 401 && unauthJson?.error === "bad token";
-
-            const methodRes = await fetch(bridgeBase + "/ping", { method: "POST" });
-            const methodJson = await methodRes.json().catch(() => null);
-            citationBridgeMethodGuard =
-              methodRes.status === 405 &&
-              methodJson?.error === "method not allowed" &&
-              (methodRes.headers.get("allow") ?? "").includes("GET");
-          }
-        } catch {
-          citationBridgePingOk = false;
-          citationBridgeUnauthRejected = false;
-          citationBridgeMethodGuard = false;
         }
         const beforeExternalNavigation = location.href;
         try {

@@ -1,13 +1,9 @@
 import type { ReadingStatus } from "@aurascholar/db";
-import { getLibraryDb } from "./aura-db";
-
-async function activeLibraryId(): Promise<string> {
-  return (await getLibraryDb()).libraryId;
-}
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 
 export async function setLibraryWorkStarred(workId: string, starred: boolean): Promise<void> {
   await window.aura.data.command("library.setWorkStarred", {
-    libraryId: await activeLibraryId(),
+    libraryId: await getActiveLibraryCommandScope(),
     starred,
     workId,
   });
@@ -18,7 +14,7 @@ export async function setLibraryWorkReadingStatus(
   status: ReadingStatus,
 ): Promise<void> {
   await window.aura.data.command("library.setWorkReadingStatus", {
-    libraryId: await activeLibraryId(),
+    libraryId: await getActiveLibraryCommandScope(),
     status,
     workId,
   });
@@ -26,21 +22,21 @@ export async function setLibraryWorkReadingStatus(
 
 export async function trashLibraryWorks(workIds: string[]): Promise<void> {
   await window.aura.data.command("library.trashWorks", {
-    libraryId: await activeLibraryId(),
+    libraryId: await getActiveLibraryCommandScope(),
     workIds,
   });
 }
 
 export async function restoreLibraryWorks(workIds: string[]): Promise<void> {
   await window.aura.data.command("library.restoreWorks", {
-    libraryId: await activeLibraryId(),
+    libraryId: await getActiveLibraryCommandScope(),
     workIds,
   });
 }
 
 export async function purgeLibraryWorks(workIds: string[]): Promise<void> {
   await window.aura.data.command("library.purgeDeletedWorks", {
-    libraryId: await activeLibraryId(),
+    libraryId: await getActiveLibraryCommandScope(),
     workIds,
   });
 }
@@ -48,7 +44,7 @@ export async function purgeLibraryWorks(workIds: string[]): Promise<void> {
 export async function mergeLibraryWorks(primaryId: string, duplicateIds: string[]) {
   return window.aura.data.command("library.mergeWorks", {
     duplicateIds,
-    libraryId: await activeLibraryId(),
+    libraryId: await getActiveLibraryCommandScope(),
     primaryId,
   });
 }

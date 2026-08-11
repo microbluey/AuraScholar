@@ -275,7 +275,7 @@ export function SnippetsPage() {
       if (smokeFailure) throw smokeFailure;
       const [rows, recentWorks] = await Promise.all([
         listAllSnippets(),
-        listWorks(undefined, undefined, 1).catch(() => []),
+        listWorks(1).catch(() => []),
       ]);
       await waitForSnippetsSmokeAfterReadDelay();
       if (refreshSeqRef.current !== seq) return;

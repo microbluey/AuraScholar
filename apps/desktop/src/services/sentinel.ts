@@ -1,63 +1,55 @@
-// Sentinel runner for the desktop app: catch-up poll on startup + periodic
-// in-app timer. State transitions write evidence events, fire OS
-// notifications, and auto-import the work once formally published.
-import {
-  SentinelRepo,
-  type SentinelCheckUpdate,
-  type SentinelEventInput,
-  type SentinelTaskRow,
-} from "@aurascholar/db/repos/sentinel";
-import {
-  checkDoi,
-  findDoiByTitle,
-  isTerminal,
-  nextPollInterval,
-  SENTINEL_STATES,
-  STATE_LABEL,
-  TITLE_MATCH_THRESHOLD,
-  type SentinelState,
-} from "@aurascholar/core";
-import type { ConnectorContext } from "@aurascholar/connectors";
-import { getLibraryDb } from "./aura-db";
-import { auraHttp, auraNotifier } from "./aura-platform";
-import { describeSafeError } from "./sensitive-text";
+// Renderer facade for the main-owned Sentinel runner. The renderer requests a
+// bounded semantic operation and refreshes its view; it never receives a
+// connector, chooses an endpoint, writes Sentinel evidence, or sends OS
+// notifications itself.
+import type { SentinelPollSummary } from "../../electron/sentinel-run-command-contract";
 
-const ctx: ConnectorContext = { http: auraHttp, mailto: "contact@aurascholar.app" };
+export type {
+  SentinelPollFailure,
+  SentinelPollSummary,
+} from "../../electron/sentinel-run-command-contract";
 
-export interface SentinelPollFailure {
-  taskId: string;
-  title: string;
-  error: string;
+export interface SentinelPollOptions {
+  signal?: AbortSignal;
 }
 
-export interface SentinelPollSummary {
-  checked: number;
-  changes: number;
-  failures: SentinelPollFailure[];
+/** Small injectable seam for renderer tests; production stays typed IPC-only. */
+export interface SentinelPollDataSource {
+  cancelRun: (requestId: string) => Promise<{ cancelled: boolean }>;
+  runDuePolls: (requestId: string) => Promise<SentinelPollSummary>;
+  runTaskNow: (taskId: string, requestId: string) => Promise<SentinelPollSummary>;
 }
 
-/** Polls every due task once. Returns the number of state changes found. */
-export async function runDuePolls(): Promise<number> {
-  const summary = await runDuePollsDetailed();
-  return summary.changes;
+const defaultDataSource: SentinelPollDataSource = {
+  cancelRun: (requestId) => window.aura.data.command("sentinel.cancelRun", { requestId }),
+  runDuePolls: (requestId) => window.aura.data.command("sentinel.runDuePolls", { requestId }),
+  runTaskNow: (taskId, requestId) =>
+    window.aura.data.command("sentinel.runTaskNow", { requestId, taskId }),
+};
+
+/** Polls every due task once. Returns the number of durable state changes found. */
+export async function runDuePolls(
+  options: SentinelPollOptions = {},
+  dataSource: SentinelPollDataSource = defaultDataSource,
+): Promise<number> {
+  return (await runDuePollsDetailed(options, dataSource)).changes;
 }
 
-export async function runDuePollsDetailed(): Promise<SentinelPollSummary> {
-  const { db, libraryId } = await getLibraryDb();
-  const repo = new SentinelRepo(db, libraryId);
-  const due = await repo.duePolls();
-  const summary = await pollTasks(repo, libraryId, due);
+export async function runDuePollsDetailed(
+  options: SentinelPollOptions = {},
+  dataSource: SentinelPollDataSource = defaultDataSource,
+): Promise<SentinelPollSummary> {
+  const summary = await invokeDueSentinelRun(options.signal, dataSource);
   notifySentinelUpdated();
   return summary;
 }
 
-export async function runSentinelTaskNow(taskId: string): Promise<SentinelPollSummary> {
-  const { db, libraryId } = await getLibraryDb();
-  const repo = new SentinelRepo(db, libraryId);
-  const task = await repo.get(taskId);
-  if (!task || task.deleted_at) throw new Error("监控任务不存在或已删除");
-  if (task.status !== "active") throw new Error("只能检查监控中的任务");
-  const summary = await pollTasks(repo, libraryId, [task]);
+export async function runSentinelTaskNow(
+  taskId: string,
+  options: SentinelPollOptions = {},
+  dataSource: SentinelPollDataSource = defaultDataSource,
+): Promise<SentinelPollSummary> {
+  const summary = await invokeTaskSentinelRun(taskId, options.signal, dataSource);
   notifySentinelUpdated();
   return summary;
 }
@@ -66,173 +58,66 @@ function notifySentinelUpdated(): void {
   window.dispatchEvent(new Event("aurascholar:sentinel-updated"));
 }
 
-function parseTargetFlags(value: string | null): SentinelState[] {
-  if (!value) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) {
-      throw new Error("监控目标配置不是有效 JSON 数组");
-    }
-    return [...new Set(parsed.filter(isSentinelState))];
-  } catch (error) {
-    throw new Error(`监控目标配置不是有效 JSON:${describeSafeError(error)}`, { cause: error });
-  }
-}
-
-function isSentinelState(value: unknown): value is SentinelState {
-  return typeof value === "string" && (SENTINEL_STATES as readonly string[]).includes(value);
-}
-
-async function pollTasks(
-  repo: SentinelRepo,
-  libraryId: string,
-  tasks: SentinelTaskRow[],
+async function invokeDueSentinelRun(
+  signal: AbortSignal | undefined,
+  dataSource: SentinelPollDataSource,
 ): Promise<SentinelPollSummary> {
-  let changes = 0;
-  const failures: SentinelPollFailure[] = [];
-
-  for (const task of tasks) {
-    const result = await pollTask(repo, libraryId, task);
-    changes += result.changes;
-    if (result.failure) failures.push(result.failure);
-  }
-  return { checked: tasks.length, changes, failures };
+  return invokeCancellableSentinelRun(signal, dataSource, (requestId) =>
+    dataSource.runDuePolls(requestId),
+  );
 }
 
-async function pollTask(
-  repo: SentinelRepo,
-  libraryId: string,
-  task: SentinelTaskRow,
-): Promise<{ changes: number; failure?: SentinelPollFailure }> {
-  const previousState = task.current_state as SentinelState;
-
-  try {
-    const targets = parseTargetFlags(task.target_flags);
-    const priorEvents = await repo.events(task.id);
-    const alreadyReached = priorEvents.map((e) => e.to_state as SentinelState);
-    const pendingEvents: SentinelEventInput[] = [];
-    const notifications: Array<{ title: string; body: string; tag: string }> = [];
-
-    // Title-monitoring mode: no DOI yet — search Crossref by title (+hints)
-    // until a confident match appears, then continue as a DOI task.
-    let doi = task.doi;
-    if (!doi) {
-      const match = await findDoiByTitle(ctx, task.title, {
-        venue: task.hint_venue ?? undefined,
-        author: task.hint_author ?? undefined,
-      });
-      if (!match || match.confidence < TITLE_MATCH_THRESHOLD) {
-        const commit = await commitSentinelCheck(libraryId, task.id, {
-          expectedUpdatedAt: task.updated_at,
-          nextPollS: nextPollInterval("accepted", 0),
-          errored: false,
-        });
-        if (!commit.committed) return { changes: 0 };
-        return { changes: 0 };
-      }
-      doi = match.doi;
-      alreadyReached.push("registered");
-      pendingEvents.push({
-        fromState: previousState,
-        toState: "registered",
-        evidence: match.evidence,
-      });
-      notifications.push({
-        title: "📡 已找到论文 DOI",
-        body: `${task.title} → ${doi}`,
-        tag: `sentinel:${task.id}`,
-      });
-    }
-
-    const result = await checkDoi(ctx, doi, previousState, alreadyReached);
-
-    for (const milestone of result.newMilestones) {
-      pendingEvents.push({
-        fromState: previousState,
-        toState: milestone.state,
-        evidence: milestone.evidence,
-      });
-      notifications.push({
-        title: `📡 ${STATE_LABEL[milestone.state]}`,
-        body: task.title,
-        tag: `sentinel:${task.id}`,
-      });
-    }
-
-    const done = isTerminal(result.highestState, targets);
-    const commit = await commitSentinelCheck(libraryId, task.id, {
-      expectedUpdatedAt: task.updated_at,
-      doi: task.doi ? undefined : doi,
-      events: pendingEvents,
-      newState: result.highestState !== previousState ? result.highestState : undefined,
-      nextPollS: nextPollInterval(result.highestState, 0),
-      errored: false,
-      done,
-    });
-    if (!commit.committed || commit.updatedAt === null) return { changes: 0 };
-    for (const notification of notifications) {
-      await notifyBestEffort(notification);
-    }
-
-    // Formal publication → import into the library automatically.
-    const crossedInIssue = result.newMilestones.some(
-      (m) => m.state === "in_issue" || m.state === "indexed_openalex",
-    );
-    if (crossedInIssue && !task.work_id) {
-      const { ingestFromInput } = await import("./library");
-      const imported = await ingestFromInput(doi).catch(() => null);
-      if (imported) {
-        await window.aura.data.command("sentinel.linkWork", {
-          expectedUpdatedAt: commit.updatedAt,
-          libraryId,
-          taskId: task.id,
-          workId: imported.workId,
-        });
-        await notifyBestEffort({
-          title: "📚 已自动导入文献库",
-          body: task.title,
-          tag: `sentinel:${task.id}`,
-        });
-      }
-    }
-
-    return { changes: pendingEvents.length };
-  } catch (error) {
-    const message = describeSafeError(error);
-    const commit = await commitSentinelCheck(libraryId, task.id, {
-      expectedUpdatedAt: task.updated_at,
-      nextPollS: nextPollInterval(previousState, task.error_count + 1),
-      errored: true,
-      error: message,
-    });
-    if (!commit.committed) return { changes: 0 };
-    return { changes: 0, failure: { taskId: task.id, title: task.title, error: message } };
-  }
-}
-
-function commitSentinelCheck(
-  libraryId: string,
+async function invokeTaskSentinelRun(
   taskId: string,
-  update: SentinelCheckUpdate & { expectedUpdatedAt: number },
-): Promise<{ committed: boolean; eventIds: string[]; updatedAt: number | null }> {
-  return window.aura.data.command("sentinel.recordCheck", { libraryId, taskId, update });
+  signal: AbortSignal | undefined,
+  dataSource: SentinelPollDataSource,
+): Promise<SentinelPollSummary> {
+  return invokeCancellableSentinelRun(signal, dataSource, (requestId) =>
+    dataSource.runTaskNow(taskId, requestId),
+  );
 }
 
-async function notifyBestEffort(notification: {
-  title: string;
-  body: string;
-  tag: string;
-}): Promise<void> {
+async function invokeCancellableSentinelRun(
+  signal: AbortSignal | undefined,
+  dataSource: SentinelPollDataSource,
+  invoke: (requestId: string) => Promise<SentinelPollSummary>,
+): Promise<SentinelPollSummary> {
+  if (signal?.aborted) throw abortError();
+  const requestId = newSentinelRunRequestId();
+  let cancellationRequested = false;
+  const cancel = () => {
+    if (cancellationRequested) return;
+    cancellationRequested = true;
+    // The original request remains authoritative. Main may have entered its
+    // short commit boundary when this best-effort cancellation arrives.
+    void dataSource.cancelRun(requestId).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
   try {
-    await auraNotifier.notify(notification);
-  } catch {
-    // Poll state and evidence are already durable; OS notification delivery is best-effort.
+    const result = await invoke(requestId);
+    if (signal?.aborted) throw abortError();
+    return result;
+  } finally {
+    signal?.removeEventListener("abort", cancel);
   }
+}
+
+function newSentinelRunRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `sentinel-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function abortError(): Error {
+  const error = new Error("Sentinel request cancelled");
+  error.name = "AbortError";
+  return error;
 }
 
 let started = false;
 
-/** Startup catch-up + hourly re-check while the app is open. */
+/** Startup catch-up + hourly re-check while the app is open. Egress is in main. */
 export function startSentinelLoop(): void {
   if (started) return;
   started = true;

@@ -4,6 +4,9 @@ export const SMOKE_INPUT_REQUEST_PREFIX = "AURASCHOLAR_SMOKE_INPUT ";
 export const SMOKE_INPUT_RESULT_EVENT = "aurascholar:smoke-input-result";
 
 const MAX_COORDINATE = 100_000;
+const DRAG_HOVER_DELAY_MS = 16;
+const DRAG_PRESS_SETTLE_DELAY_MS = 32;
+const DRAG_HELD_MOVE_DELAY_MS = 16;
 const DRAG_HANDSHAKE_DELAY_MS = 180;
 const DRAG_RELEASE_DELAY_MS = 32;
 const CLICK_PRESS_DELAY_MS = 16;
@@ -144,35 +147,39 @@ export class SmokeInputDriver {
   }
 
   private async dispatch(request: SmokeInputRequest): Promise<void> {
-    const browserDebugger = this.win.webContents.debugger;
     this.validatePoint(request.target, "target");
     if (request.kind === "mouse-drag") {
       this.validatePoint(request.source, "source");
       this.validatePoint(request.through, "through");
       await this.prepareWindowForInput();
-      this.ensureAttached(browserDebugger);
       let pressed = false;
       let lastPoint = request.source;
       try {
-        await this.dispatchMouse(browserDebugger, "mouseMoved", request.source, 0);
-        await this.dispatchMouse(browserDebugger, "mousePressed", request.source, 1, 1);
+        this.dispatchNativeMouse("mouseMove", request.source, false);
+        await wait(DRAG_HOVER_DELAY_MS);
+        this.dispatchNativeMouse("mouseDown", request.source, true, 1);
         pressed = true;
+        await wait(DRAG_PRESS_SETTLE_DELAY_MS);
+        this.dispatchNativeMouse("mouseMove", request.source, true);
+        await wait(DRAG_HELD_MOVE_DELAY_MS);
         lastPoint = request.through;
-        await this.dispatchMouse(browserDebugger, "mouseMoved", request.through, 1);
+        this.dispatchNativeMouse("mouseMove", request.through, true);
         await wait(DRAG_HANDSHAKE_DELAY_MS);
         lastPoint = request.target;
-        await this.dispatchMouse(browserDebugger, "mouseMoved", request.target, 1);
+        this.dispatchNativeMouse("mouseMove", request.target, true);
         await wait(DRAG_RELEASE_DELAY_MS);
-        await this.dispatchMouse(browserDebugger, "mouseReleased", request.target, 0, 1);
+        this.dispatchNativeMouse("mouseUp", request.target, false, 1);
         pressed = false;
+        await wait(DRAG_RELEASE_DELAY_MS);
       } finally {
         if (pressed) {
-          await this.releaseMouse(browserDebugger, lastPoint, 1);
+          this.releaseNativeMouse(lastPoint, 1);
         }
       }
       return;
     }
 
+    const browserDebugger = this.win.webContents.debugger;
     await this.prepareWindowForInput();
     this.ensureAttached(browserDebugger);
     let pressed = false;
@@ -240,6 +247,22 @@ export class SmokeInputDriver {
     });
   }
 
+  private dispatchNativeMouse(
+    type: "mouseDown" | "mouseMove" | "mouseUp",
+    point: SmokePoint,
+    buttonDown: boolean,
+    clickCount?: 1 | 2,
+  ): void {
+    this.win.webContents.sendInputEvent({
+      type,
+      x: point.x,
+      y: point.y,
+      ...(type === "mouseMove" ? {} : { button: "left" }),
+      ...(buttonDown ? { modifiers: ["leftButtonDown"] } : {}),
+      ...(clickCount ? { clickCount } : {}),
+    });
+  }
+
   private async releaseMouse(
     browserDebugger: Debugger,
     point: SmokePoint,
@@ -248,6 +271,16 @@ export class SmokeInputDriver {
     try {
       if (!this.win.webContents.isDestroyed() && browserDebugger.isAttached()) {
         await this.dispatchMouse(browserDebugger, "mouseReleased", point, 0, clickCount);
+      }
+    } catch {
+      // Preserve the original input error while best-effort clearing button state.
+    }
+  }
+
+  private releaseNativeMouse(point: SmokePoint, clickCount: 1 | 2): void {
+    try {
+      if (!this.win.webContents.isDestroyed()) {
+        this.dispatchNativeMouse("mouseUp", point, false, clickCount);
       }
     } catch {
       // Preserve the original input error while best-effort clearing button state.

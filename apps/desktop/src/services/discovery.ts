@@ -1,7 +1,5 @@
 import {
-  hasConflictingDiscoveryIdentifiers,
   mergeDiscoveryResults,
-  searchOpenSourcesDetailed,
   type DiscoveryQuery,
   type DiscoveryResult,
   type DiscoverySort,
@@ -10,12 +8,14 @@ import {
   type SourceCursor,
 } from "@aurascholar/core";
 import { type NormalizedWork } from "@aurascholar/connectors";
-import { workFingerprint } from "@aurascholar/db/ids";
-import { getLibraryDb } from "./aura-db";
-import { auraHttp } from "./aura-platform";
+import { isDesktopRuntime } from "./aura-platform";
+import {
+  discoveryLibraryStatusInput,
+  loadDiscoveryLibraryStatuses,
+  type DiscoveryLibraryStatusCommandClient,
+} from "./discovery-library-status";
 import type { IngestResult } from "./library-types";
-
-const ctx = { http: auraHttp, mailto: "contact@aurascholar.app" };
+import { searchScholarlyOpenSources } from "./scholarly-data";
 
 export interface DiscoveryResultWithLibrary extends DiscoveryResult {
   inLibrary: boolean;
@@ -28,15 +28,6 @@ export interface DiscoveryResultWithLibrary extends DiscoveryResult {
 
 export interface DiscoverySearchReportWithLibrary extends Omit<DiscoverySearchReport, "results"> {
   results: DiscoveryResultWithLibrary[];
-}
-
-interface FingerprintLibraryCandidate {
-  arxivId?: string;
-  doi?: string;
-  id: string;
-  openalexId?: string;
-  pmid?: string;
-  s2Id?: string;
 }
 
 export { mergeDiscoveryResults };
@@ -62,16 +53,19 @@ export async function searchDiscoveryDetailed(
 ): Promise<DiscoverySearchReportWithLibrary> {
   const smokeReport = await smokeDiscoveryReport(query, sources, signal);
   if (smokeReport) return smokeReport;
-  const report = await searchOpenSourcesDetailed(ctx, query, {
-    sources,
-    limit: opts?.limit ?? 20,
-    timeoutMs: 5_000,
+  const normalizedQuery: DiscoveryQuery = typeof query === "string" ? { text: query } : query;
+  const { report } = await searchScholarlyOpenSources(
+    {
+      cursors: opts?.cursors,
+      limit: opts?.limit ?? 20,
+      page: opts?.page,
+      query: normalizedQuery,
+      sort: opts?.sort,
+      sources,
+    },
     signal,
-    sort: opts?.sort,
-    page: opts?.page,
-    cursors: opts?.cursors,
-  });
-  const results = await markLibraryStatus(report.results);
+  );
+  const results = await markLibraryStatus(report.results, signal);
   return { ...report, results };
 }
 
@@ -84,8 +78,9 @@ export async function importDiscoveryResult(work: NormalizedWork): Promise<Inges
 
 export async function markLibraryStatus(
   results: DiscoveryResult[],
+  signal?: AbortSignal,
 ): Promise<DiscoveryResultWithLibrary[]> {
-  if (!("aura" in window) || results.length === 0) {
+  if (!isDesktopRuntime() || results.length === 0) {
     return results.map((result) => ({
       ...result,
       inLibrary: false,
@@ -93,158 +88,29 @@ export async function markLibraryStatus(
     }));
   }
 
-  const { db, libraryId } = await getLibraryDb();
-  const dois = [...new Set(results.map((r) => r.work.doi).filter((doi): doi is string => !!doi))];
-  const arxivIds = [
-    ...new Set(results.map((r) => r.work.arxivId).filter((id): id is string => !!id)),
-  ];
-  const openalexIds = [
-    ...new Set(results.map((r) => r.work.openalexId).filter((id): id is string => !!id)),
-  ];
-  const s2Ids = [...new Set(results.map((r) => r.work.s2Id).filter((id): id is string => !!id))];
-  const pmids = [...new Set(results.map((r) => r.work.pmid).filter((id): id is string => !!id))];
-  const fingerprints = [
-    ...new Set(
-      results
-        .map((r) => fingerprintForWork(r.work))
-        .filter((fingerprint): fingerprint is string => !!fingerprint),
-    ),
-  ];
-
-  const byDoi = new Map<string, string>();
-  const byArxiv = new Map<string, string>();
-  const byOpenAlex = new Map<string, string>();
-  const byS2 = new Map<string, string>();
-  const byPmid = new Map<string, string>();
-  const byFingerprint = new Map<string, FingerprintLibraryCandidate[]>();
-
-  if (dois.length > 0) {
-    const rows = await db.query<{ id: string; doi: string }>(
-      `SELECT id, doi
-       FROM works
-       WHERE library_id = ? AND doi IN (${dois.map(() => "?").join(",")}) AND deleted_at IS NULL`,
-      [libraryId, ...dois],
-    );
-    for (const row of rows) byDoi.set(row.doi.toLowerCase(), row.id);
-  }
-
-  if (arxivIds.length > 0) {
-    const rows = await db.query<{ id: string; arxiv_id: string }>(
-      `SELECT id, arxiv_id
-       FROM works
-       WHERE library_id = ?
-         AND arxiv_id IN (${arxivIds.map(() => "?").join(",")})
-         AND deleted_at IS NULL`,
-      [libraryId, ...arxivIds],
-    );
-    for (const row of rows) byArxiv.set(row.arxiv_id.toLowerCase(), row.id);
-  }
-
-  if (openalexIds.length > 0) {
-    const rows = await db.query<{ id: string; openalex_id: string }>(
-      `SELECT id, openalex_id
-       FROM works
-       WHERE library_id = ?
-         AND openalex_id IN (${openalexIds.map(() => "?").join(",")})
-         AND deleted_at IS NULL`,
-      [libraryId, ...openalexIds],
-    );
-    for (const row of rows) byOpenAlex.set(row.openalex_id.toLowerCase(), row.id);
-  }
-
-  if (s2Ids.length > 0) {
-    const rows = await db.query<{ id: string; s2_id: string }>(
-      `SELECT id, s2_id
-       FROM works
-       WHERE library_id = ? AND s2_id IN (${s2Ids.map(() => "?").join(",")}) AND deleted_at IS NULL`,
-      [libraryId, ...s2Ids],
-    );
-    for (const row of rows) byS2.set(row.s2_id.toLowerCase(), row.id);
-  }
-
-  if (pmids.length > 0) {
-    const rows = await db.query<{ id: string; pmid: string }>(
-      `SELECT id, pmid
-       FROM works
-       WHERE library_id = ? AND pmid IN (${pmids.map(() => "?").join(",")}) AND deleted_at IS NULL`,
-      [libraryId, ...pmids],
-    );
-    for (const row of rows) byPmid.set(row.pmid.toLowerCase(), row.id);
-  }
-
-  if (fingerprints.length > 0) {
-    const rows = await db.query<{
-      arxiv_id: string | null;
-      doi: string | null;
-      fingerprint: string;
-      id: string;
-      openalex_id: string | null;
-      pmid: string | null;
-      s2_id: string | null;
-    }>(
-      `SELECT id, fingerprint, doi, arxiv_id, openalex_id, s2_id, pmid
-       FROM works
-       WHERE library_id = ?
-         AND fingerprint IN (${fingerprints.map(() => "?").join(",")})
-         AND deleted_at IS NULL`,
-      [libraryId, ...fingerprints],
-    );
-    for (const row of rows) {
-      const candidate: FingerprintLibraryCandidate = {
-        arxivId: row.arxiv_id ?? undefined,
-        doi: row.doi ?? undefined,
-        id: row.id,
-        openalexId: row.openalex_id ?? undefined,
-        pmid: row.pmid ?? undefined,
-        s2Id: row.s2_id ?? undefined,
-      };
-      const candidates = byFingerprint.get(row.fingerprint);
-      if (candidates) candidates.push(candidate);
-      else byFingerprint.set(row.fingerprint, [candidate]);
-    }
-  }
-
-  const matches = results.map((result) => {
-    const work = result.work;
-    const fingerprint = fingerprintForWork(work);
-    const directId =
-      (work.doi ? byDoi.get(work.doi.toLowerCase()) : undefined) ??
-      (work.arxivId ? byArxiv.get(work.arxivId.toLowerCase()) : undefined) ??
-      (work.openalexId ? byOpenAlex.get(work.openalexId.toLowerCase()) : undefined) ??
-      (work.s2Id ? byS2.get(work.s2Id.toLowerCase()) : undefined) ??
-      (work.pmid ? byPmid.get(work.pmid.toLowerCase()) : undefined);
-    const fingerprintCandidates = fingerprint ? byFingerprint.get(fingerprint) : undefined;
-    const id = directId ?? uniqueCompatibleFingerprintWorkId(work, fingerprintCandidates);
-    return { id, result };
-  });
-  const matchedWorkIds = [...new Set(matches.flatMap(({ id }) => (id ? [id] : [])))];
-  const workIdsWithPdf = new Set<string>();
-  if (matchedWorkIds.length > 0) {
-    const rows = await db.query<{ work_id: string }>(
-      `SELECT DISTINCT a.work_id
-       FROM attachments a
-       JOIN works w
-         ON w.id = a.work_id
-        AND w.library_id = ?
-        AND w.deleted_at IS NULL
-       WHERE a.work_id IN (${matchedWorkIds.map(() => "?").join(",")})
-         AND a.kind = 'pdf'
-         AND a.deleted_at IS NULL`,
-      [libraryId, ...matchedWorkIds],
-    );
-    for (const row of rows) workIdsWithPdf.add(row.work_id);
-  }
-
-  return matches.map(({ id, result }) => {
+  const { statuses } = await loadDiscoveryLibraryStatuses(
+    discoveryLibraryStatusCommandClient,
+    discoveryLibraryStatusInput(results),
+    { signal },
+  );
+  return results.map((result, index) => {
+    const status = statuses[index]!;
+    const workId = status.workId ?? undefined;
     return {
       ...result,
-      inLibrary: !!id,
-      libraryWorkId: id,
+      inLibrary: workId !== undefined,
+      libraryWorkId: workId,
       matchedSources: [result.source],
-      needsFulltext: id ? !workIdsWithPdf.has(id) : undefined,
+      needsFulltext: workId ? !status.hasPdf : undefined,
     };
   });
 }
+
+const discoveryLibraryStatusCommandClient: DiscoveryLibraryStatusCommandClient = {
+  command(name, input) {
+    return window.aura.data.command(name, input);
+  },
+};
 
 interface DiscoverySmokeImportFixture {
   delayMs?: number;
@@ -394,22 +260,4 @@ function waitForSmokeDelay(ms: number, signal?: AbortSignal): Promise<void> {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function fingerprintForWork(work: NormalizedWork): string | null {
-  const firstAuthor = work.authors[0]?.family ?? work.authors[0]?.displayName?.split(/\s+/).pop();
-  if (!work.title) return null;
-  return workFingerprint(work.title, work.year ?? null, firstAuthor ?? null);
-}
-
-function uniqueCompatibleFingerprintWorkId(
-  work: NormalizedWork,
-  candidates: readonly FingerprintLibraryCandidate[] | undefined,
-): string | undefined {
-  const compatibleIds = new Set(
-    candidates
-      ?.filter((candidate) => !hasConflictingDiscoveryIdentifiers(work, candidate))
-      .map((candidate) => candidate.id),
-  );
-  return compatibleIds.size === 1 ? compatibleIds.values().next().value : undefined;
 }

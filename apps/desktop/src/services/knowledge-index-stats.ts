@@ -1,5 +1,5 @@
 import type { KnowledgeContentIndexStats } from "../../electron/data-command-contract";
-import { getLibraryDb } from "./aura-db";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 
 export type { KnowledgeContentIndexStats } from "../../electron/data-command-contract";
 
@@ -11,7 +11,7 @@ export async function getKnowledgeContentIndexStats(
   options: { signal?: AbortSignal } = {},
 ): Promise<KnowledgeContentIndexStats> {
   options.signal?.throwIfAborted();
-  const { libraryId } = await getLibraryDb();
+  const libraryId = await getActiveLibraryCommandScope();
   options.signal?.throwIfAborted();
   const response = await window.aura.data.command("knowledge.getContentStats", { libraryId });
   options.signal?.throwIfAborted();

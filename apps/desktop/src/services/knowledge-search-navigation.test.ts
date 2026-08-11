@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeContentSearchResult } from "../../electron/data-command-contract";
-import { getLibraryDb } from "./aura-db";
+import { getActiveLibraryCommandScope } from "./library-command-scope";
 import {
   knowledgeSearchReaderPath,
   knowledgeSearchReaderTarget,
   resolveKnowledgeSearchReaderPath,
 } from "./knowledge-search-navigation";
 
-vi.mock("./aura-db", () => ({ getLibraryDb: vi.fn() }));
+vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScope: vi.fn() }));
 
 function result(
   overrides: Partial<KnowledgeContentSearchResult> = {},
@@ -43,7 +43,7 @@ describe("Knowledge search Reader navigation", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    vi.mocked(getLibraryDb).mockResolvedValue({ db: {} as never, libraryId: "library:one" });
+    vi.mocked(getActiveLibraryCommandScope).mockResolvedValue("library:one");
   });
 
   it("creates source-aware Reader targets from revision-bound PDF anchors", () => {
@@ -85,7 +85,7 @@ describe("Knowledge search Reader navigation", () => {
     await expect(
       resolveKnowledgeSearchReaderPath(result({ anchor: { kind: "pdf", version: 1 } })),
     ).resolves.toBeNull();
-    expect(getLibraryDb).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
     expect(command).not.toHaveBeenCalled();
   });
 
@@ -112,6 +112,26 @@ describe("Knowledge search Reader navigation", () => {
       revisionId: "revision:one",
       workId: "work:one",
     });
+  });
+
+  it("does not resolve a scope or revision command after cancellation", async () => {
+    const beforeScope = new AbortController();
+    beforeScope.abort();
+    await expect(
+      resolveKnowledgeSearchReaderPath(result(), { signal: beforeScope.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+
+    const afterScope = new AbortController();
+    vi.mocked(getActiveLibraryCommandScope).mockImplementationOnce(async () => {
+      afterScope.abort();
+      return "library:one";
+    });
+    await expect(
+      resolveKnowledgeSearchReaderPath(result(), { signal: afterScope.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(command).not.toHaveBeenCalled();
   });
 
   it("refuses unavailable or mismatched revision records instead of falling back", async () => {

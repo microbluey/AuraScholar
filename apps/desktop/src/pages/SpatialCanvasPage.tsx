@@ -49,6 +49,7 @@ import {
   createPaperNode,
   type CanvasLibraryWork,
 } from "../features/canvas/model";
+import { toCanvasLibraryWork } from "../features/canvas/library-work";
 import {
   createCanvasWorkspace,
   deleteCanvasWorkspace,
@@ -85,22 +86,6 @@ import {
   searchWorksByMetadata,
 } from "../services/library-list";
 import "../features/canvas/canvas.css";
-
-function canvasLibraryWork(
-  row: Awaited<ReturnType<typeof listWorks>>[number] & { tagNames?: string[] },
-): CanvasLibraryWork {
-  return {
-    id: row.id,
-    title: row.title,
-    abstract: row.abstract,
-    authorNames: row.authorNames,
-    year: row.year,
-    venue: row.venue_name,
-    doi: row.doi,
-    readingStatus: row.reading_status,
-    tags: row.tagNames ?? [],
-  };
-}
 
 export function SpatialCanvasIndexPage() {
   const location = useLocation();
@@ -382,7 +367,7 @@ export function SpatialCanvasPage() {
     async (query: string): Promise<CanvasLibraryWork[]> => {
       if (desktopRuntime) {
         const rows = await searchWorksByMetadata(query, 40);
-        return rows.map(canvasLibraryWork);
+        return rows.map(toCanvasLibraryWork);
       }
       const { normalized, tokens } = parseWorkMetadataSearch(query);
       if (!normalized) return PREVIEW_LIBRARY_WORKS.slice(0, 40);
@@ -601,7 +586,7 @@ export function SpatialCanvasPage() {
   useEffect(() => {
     let cancelled = false;
     const workRequest = desktopRuntime
-      ? listWorks(undefined, undefined, 500).then((rows) => rows.map(canvasLibraryWork))
+      ? listWorks(500).then((rows) => rows.map(toCanvasLibraryWork))
       : Promise.resolve(PREVIEW_LIBRARY_WORKS);
     void workRequest
       .then((nextWorks) => {
@@ -953,7 +938,7 @@ export function SpatialCanvasPage() {
     )
       .then(({ annotation, work: sourceWork }) => {
         if (controller.signal.aborted) return;
-        const work = canvasLibraryWork(sourceWork);
+        const work = toCanvasLibraryWork(sourceWork);
         let updaterRan = false;
         let changed = false;
         let ingressResult: ReturnType<typeof applyCanvasAnnotationIngress> | undefined;
@@ -1031,7 +1016,7 @@ export function SpatialCanvasPage() {
       ? Promise.resolve(listed)
       : desktopRuntime
         ? loadCanvasActiveWork(requestedWorkId, controller.signal).then((row) =>
-            row ? canvasLibraryWork(row) : null,
+            row ? toCanvasLibraryWork(row) : null,
           )
         : Promise.resolve(null);
 

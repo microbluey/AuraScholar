@@ -1,5 +1,5 @@
 import type { DiscoverySource } from "@aurascholar/core";
-import type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
+import type { SavedSearchRow } from "../../electron/data-command-contract";
 import type { DiscoverySearchReportWithLibrary } from "./discovery";
 
 export interface CreateSavedSearchResult {
@@ -8,7 +8,7 @@ export interface CreateSavedSearchResult {
 }
 
 export interface SavedSearchReadRepository {
-  due(now?: number): Promise<SavedSearchRow[]>;
+  due(): Promise<SavedSearchRow[]>;
   get(id: string): Promise<SavedSearchRow | null>;
   list(): Promise<SavedSearchRow[]>;
 }

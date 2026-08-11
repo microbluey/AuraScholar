@@ -1,32 +1,32 @@
-import type { WorkWithAuthors } from "@aurascholar/db/work-list";
-import {
-  listDeletedWorks as listDbDeletedWorks,
-  listWorks as listDbWorks,
-  parseWorkMetadataSearch,
-  searchWorksByMetadata as searchDbWorksByMetadata,
-} from "@aurascholar/db/work-list";
-import { getLibraryDb } from "./aura-db";
+import { parseWorkMetadataSearch } from "@aurascholar/db/work-list";
+import type {
+  LibraryListWork,
+  LibraryMetadataSearchWork,
+} from "../../electron/data-command-contract";
 
-export async function listWorks(
-  search?: string,
-  collectionId?: string,
-  limit?: number,
-): Promise<WorkWithAuthors[]> {
-  const { db, libraryId } = await getLibraryDb();
-  return listDbWorks(db, libraryId, { search, collectionId, limit });
+export type {
+  LibraryListWork,
+  LibraryMetadataSearchWork,
+} from "../../electron/data-command-contract";
+
+/**
+ * Lists recently added active works for lightweight desktop surfaces. The
+ * main process owns scope resolution and database access.
+ */
+export async function listWorks(limit?: number): Promise<LibraryListWork[]> {
+  return (
+    await window.aura.data.command("library.listWorks", {
+      ...(limit === undefined ? {} : { limit }),
+    })
+  ).works;
 }
 
-export async function listDeletedWorks(
-  search?: string,
-  limit?: number,
-): Promise<WorkWithAuthors[]> {
-  const { db, libraryId } = await getLibraryDb();
-  return listDbDeletedWorks(db, libraryId, { search, limit });
-}
-
-export async function searchWorksByMetadata(search: string, limit = 40) {
-  const { db, libraryId } = await getLibraryDb();
-  return searchDbWorksByMetadata(db, libraryId, search, limit);
+/** Searches active works across title, author, venue, year, and active tags. */
+export async function searchWorksByMetadata(
+  search: string,
+  limit = 40,
+): Promise<LibraryMetadataSearchWork[]> {
+  return (await window.aura.data.command("library.searchWorksByMetadata", { limit, search })).works;
 }
 
 export { parseWorkMetadataSearch };

@@ -45,9 +45,8 @@ export const smokeSettingsSync = String.raw`        location.hash = "#/library";
         const syncUserInput = syncFailureInputs[1];
         const syncPassInput = syncFailureInputs[2];
         if (syncUrlInput && syncUserInput && syncPassInput) {
-          const syncSettingsBeforeInvalidUrl = localStorage.getItem("sync-settings");
-          const syncSecretBeforeInvalidUrl = await window.aura?.secrets?.get?.(
-            "secret:sync:password"
+          const syncSettingsBeforeInvalidUrl = JSON.stringify(
+            await window.aura?.data?.command?.("sync.getSettings", {})
           );
           const syncInvalidUrl = "dav.example.invalid/aurascholar";
           const syncCredentialUrl = "https://user:pass@dav.example.invalid/aurascholar";
@@ -96,18 +95,17 @@ export const smokeSettingsSync = String.raw`        location.hash = "#/library";
                 : null;
             }, 1_000)
           );
-          const syncSettingsAfterInvalidUrl = localStorage.getItem("sync-settings");
-          const syncSecretAfterInvalidUrl = await window.aura?.secrets?.get?.(
-            "secret:sync:password"
+          const syncSettingsAfterInvalidUrl = JSON.stringify(
+            await window.aura?.data?.command?.("sync.getSettings", {})
           );
           settingsSyncUrlInvalidVisible = invalidUrlMessageVisible;
           settingsSyncUrlCredentialsRejected = credentialUrlMessageVisible;
           settingsSyncUrlInvalidDidNotPersist =
-            syncSettingsAfterInvalidUrl === syncSettingsBeforeInvalidUrl &&
-            syncSecretAfterInvalidUrl === syncSecretBeforeInvalidUrl;
+            syncSettingsAfterInvalidUrl === syncSettingsBeforeInvalidUrl;
 
-          const syncSettingsBeforeFailure = localStorage.getItem("sync-settings");
-          const syncSecretBeforeFailure = await window.aura?.secrets?.get?.("secret:sync:password");
+          const syncSettingsBeforeFailure = JSON.stringify(
+            await window.aura?.data?.command?.("sync.getSettings", {})
+          );
           const syncFailureUrl = "https://dav.example.invalid/aurascholar";
           const syncFailureUser = "smoke-sync-save-failure-user";
           const syncFailurePass = "smoke-sync-save-failure-pass";
@@ -121,7 +119,7 @@ export const smokeSettingsSync = String.raw`        location.hash = "#/library";
               syncPassInput.value === syncFailurePass,
             1_000
           );
-          window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__ =
+          window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_SAVE__ =
             "Smoke settings sync save failure";
           const failSaveSyncButton = Array.from(
             syncCardForFailure?.querySelectorAll("button") ?? []
@@ -144,17 +142,17 @@ export const smokeSettingsSync = String.raw`        location.hash = "#/library";
               ? inputs[2]
               : null;
           }, 3_000);
-          delete window.__AURASCHOLAR_SMOKE_FAIL_NEXT_SECRET_WRITE__;
-          const syncSettingsAfterFailure = localStorage.getItem("sync-settings");
-          const syncSecretAfterFailure = await window.aura?.secrets?.get?.("secret:sync:password");
+          delete window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_SAVE__;
+          const syncSettingsAfterFailure = JSON.stringify(
+            await window.aura?.data?.command?.("sync.getSettings", {})
+          );
           settingsSyncSaveFailureVisible =
             bodyIncludes("保存失败，修改仍保留，可重新保存") &&
             bodyIncludes("Smoke settings sync save failure");
           settingsSyncSaveFailurePreserved =
             Boolean(preservedSyncPassInput) && preservedSyncPassInput.value === syncFailurePass;
           settingsSyncSaveFailureDidNotPersist =
-            syncSettingsAfterFailure === syncSettingsBeforeFailure &&
-            syncSecretAfterFailure === syncSecretBeforeFailure;
+            syncSettingsAfterFailure === syncSettingsBeforeFailure;
           const resetSyncButton = Array.from(
             document.querySelector('[data-settings-section="sync"]')?.querySelectorAll("button") ??
               []
@@ -229,24 +227,14 @@ export const smokeSettingsSync = String.raw`        location.hash = "#/library";
                 : null;
             }, 3_000);
             delete window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_RUN__;
-            const syncRunSettingsRows = localStorage.getItem("sync-settings");
-            const syncRunSecret = await window.aura?.secrets?.get?.("secret:sync:password");
+            const syncRunSettings = await window.aura?.data?.command?.("sync.getSettings", {});
             let syncRunStoredUrl = "";
             let syncRunStoredUser = "";
-            try {
-              const parsedSyncRunSettings = JSON.parse(syncRunSettingsRows ?? "null");
-              syncRunStoredUrl =
-                typeof parsedSyncRunSettings?.baseUrl === "string"
-                  ? parsedSyncRunSettings.baseUrl
-                  : "";
-              syncRunStoredUser =
-                typeof parsedSyncRunSettings?.username === "string"
-                  ? parsedSyncRunSettings.username
-                  : "";
-            } catch {
-              syncRunStoredUrl = "";
-              syncRunStoredUser = "";
-            }
+            const syncRunHasPassword = Boolean(syncRunSettings?.hasPassword);
+            syncRunStoredUrl =
+              typeof syncRunSettings?.baseUrl === "string" ? syncRunSettings.baseUrl : "";
+            syncRunStoredUser =
+              typeof syncRunSettings?.username === "string" ? syncRunSettings.username : "";
             settingsSyncRunFailureVisible =
               bodyIncludes("同步失败，配置已保留，可重新同步") &&
               bodyIncludes("远端同步目录包含当前版本还不支持的数据结构");
@@ -259,10 +247,10 @@ export const smokeSettingsSync = String.raw`        location.hash = "#/library";
             settingsSyncRunFailureConfigPreserved =
               syncRunStoredUrl === syncRunUrl &&
               syncRunStoredUser === syncRunUser &&
-              syncRunSecret === syncRunPass &&
+              syncRunHasPassword &&
               syncRunUrlInput.value === syncRunUrl &&
               syncRunUserInput.value === syncRunUser &&
-              syncRunPassInput.value === syncRunPass;
+              syncRunPassInput.value === "";
             window.__AURASCHOLAR_SMOKE_SETTINGS_FAIL_NEXT_SYNC_RUN__ =
               "WebDAV MOVE journal/dev-a/0001-0002.jsonl failed: 507";
             syncRunRetryButton?.click();

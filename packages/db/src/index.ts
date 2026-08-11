@@ -19,6 +19,16 @@ export {
 } from "./local-first.js";
 export type { LocalFirstState, EnsureLocalFirstOptions } from "./local-first.js";
 export type { Database } from "./database.js";
+export { locateWorkPageOffset, queryWorkPage } from "./work-page.js";
+export type {
+  WorkPageBrowseSummary,
+  WorkPageDeletedScope,
+  WorkPageFilter,
+  WorkPagePdfFilter,
+  WorkPageQuery,
+  WorkPageResult,
+  WorkPageSort,
+} from "./work-page.js";
 export { KnowledgeJobWorker } from "./knowledge-worker.js";
 export type {
   KnowledgeJobExecutor,
