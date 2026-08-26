@@ -7,7 +7,9 @@ import {
 } from "@aurascholar/db/ids";
 
 export const SYNC_OWNER_COLUMN = "library_id";
-export const DOCUMENT_EVIDENCE_SYNC_SCOPE_VERSION = "library-scope-v3-evidence";
+// Bump this whenever a newly portable table must be projected even for a
+// library whose prior sync watermark is newer than its existing rows.
+export const DOCUMENT_EVIDENCE_SYNC_SCOPE_VERSION = "library-scope-v4-snippets";
 
 const columns = (value: string): readonly string[] => Object.freeze(value.trim().split(/\s+/));
 
@@ -47,6 +49,7 @@ export const SYNCED_TABLE_COLUMNS = {
     "attachment_id work_id type color page_index anchor_json content_md ink_paths_json " +
       "sort_key orphaned created_at updated_at deleted_at",
   ),
+  snippets: columns("work_id page_index quote note_md tag created_at updated_at deleted_at"),
   flashcards: columns(
     "work_id front_md back_md card_type source ai_model generation_id created_at updated_at deleted_at",
   ),
@@ -83,6 +86,7 @@ export const SYNC_APPLY_ORDER: readonly SyncedTable[] = [
   "evidence_items",
   "project_evidence",
   "annotations",
+  "snippets",
   "flashcards",
   "sentinel_tasks",
 ];
@@ -102,7 +106,7 @@ export function isDirectLibraryOwnedSyncTable(table: string): table is SyncedTab
 export function syncScopePredicate(table: string, alias: string): string {
   if (!isSyncedTable(table)) throw new Error(`Unsupported sync table "${table}"`);
   if (isDirectLibraryOwnedSyncTable(table)) return `${alias}.library_id = ?`;
-  if (table === "annotations" || table === "flashcards") {
+  if (table === "annotations" || table === "snippets" || table === "flashcards") {
     return `EXISTS (
       SELECT 1 FROM works scope_work
       WHERE scope_work.id = ${alias}.work_id AND scope_work.library_id = ?
@@ -200,7 +204,7 @@ export async function assertSyncParentScope(input: AssertSyncParentScopeInput): 
     if (workId) await requireWork(db, workId, libraryId, `${table}.work_id`);
     return;
   }
-  if (table === "annotations" || table === "flashcards") {
+  if (table === "annotations" || table === "snippets" || table === "flashcards") {
     const workId = relation("work_id")!;
     await requireWork(db, workId, libraryId, `${table}.work_id`);
     if (table === "annotations") {
@@ -259,7 +263,9 @@ export async function assertSyncParentScope(input: AssertSyncParentScopeInput): 
 }
 
 function relationFieldsForTable(table: SyncedTable): readonly string[] {
-  if (table === "sentinel_tasks" || table === "flashcards") return ["work_id"];
+  if (table === "sentinel_tasks" || table === "snippets" || table === "flashcards") {
+    return ["work_id"];
+  }
   if (table === "annotations") return ["work_id", "attachment_id"];
   if (table === "project_works") return ["project_id", "work_id"];
   if (table === "document_assets") return ["work_id", "current_revision_id"];

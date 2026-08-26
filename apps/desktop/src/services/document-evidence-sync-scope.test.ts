@@ -50,6 +50,12 @@ async function seedLibraryGraph(db: TestDatabase, suffix: "a" | "b"): Promise<vo
     [workId, libraryId, `Work ${suffix}`],
   );
   await db.run(
+    `INSERT INTO snippets
+       (id, work_id, page_index, quote, note_md, tag, created_at, updated_at, deleted_at)
+     VALUES (?, ?, 1, ?, NULL, NULL, 10, 10, NULL)`,
+    [`snippet-${suffix}`, workId, `Snippet ${suffix}`],
+  );
+  await db.run(
     `INSERT INTO research_projects
        (id, library_id, name, description, status, created_at, updated_at, deleted_at)
      VALUES (?, ?, ?, NULL, 'active', 10, 10, NULL)`,
@@ -160,7 +166,7 @@ function validation(
 
 describe("document/evidence row-sync table contract", () => {
   it("declares canonical and legacy tables while excluding revision-local state", () => {
-    expect(DOCUMENT_EVIDENCE_SYNC_SCOPE_VERSION).toBe("library-scope-v3-evidence");
+    expect(DOCUMENT_EVIDENCE_SYNC_SCOPE_VERSION).toBe("library-scope-v4-snippets");
     expect(SYNC_APPLY_ORDER).toEqual([
       "works",
       "research_projects",
@@ -171,6 +177,7 @@ describe("document/evidence row-sync table contract", () => {
       "evidence_items",
       "project_evidence",
       "annotations",
+      "snippets",
       "flashcards",
       "sentinel_tasks",
     ]);
@@ -185,6 +192,17 @@ describe("document/evidence row-sync table contract", () => {
     expect(isDirectLibraryOwnedSyncTable("evidence_items")).toBe(true);
     expect(isDirectLibraryOwnedSyncTable("sentinel_tasks")).toBe(true);
     expect(isDirectLibraryOwnedSyncTable("project_assets")).toBe(false);
+    expect(isDirectLibraryOwnedSyncTable("snippets")).toBe(false);
+    expect(SYNCED_TABLE_COLUMNS.snippets).toEqual([
+      "work_id",
+      "page_index",
+      "quote",
+      "note_md",
+      "tag",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+    ]);
   });
 
   it("produces executable Library scope predicates for every table", async () => {
@@ -199,6 +217,7 @@ describe("document/evidence row-sync table contract", () => {
       evidence_items: "evidence-a",
       project_evidence: projectEvidenceMembershipId("project-a", "evidence-a"),
       annotations: "annotation-a",
+      snippets: "snippet-a",
       flashcards: "flashcard-a",
       sentinel_tasks: "sentinel-a",
     };
@@ -270,6 +289,9 @@ describe("document/evidence parent scope validation", () => {
       validation(db, "flashcards", "new-flashcard", { work_id: "work-a" }),
     ).resolves.toBeUndefined();
     await expect(
+      validation(db, "snippets", "new-snippet", { work_id: "work-a" }),
+    ).resolves.toBeUndefined();
+    await expect(
       validation(db, "project_works", projectWorkMembershipId("project-a", "work-a"), {
         project_id: "project-a",
         work_id: "work-a",
@@ -318,6 +340,7 @@ describe("document/evidence parent scope validation", () => {
         { work_id: "work-a", attachment_id: "attachment-b" },
         "annotations.attachment_id",
       ],
+      ["snippets", "bad-snippet", { work_id: "work-b" }, "snippets.work_id"],
       ["flashcards", "bad-flashcard", { work_id: "missing" }, "flashcards.work_id"],
       [
         "project_works",
@@ -371,6 +394,9 @@ describe("document/evidence parent scope validation", () => {
     ).resolves.toBeUndefined();
     await expect(
       validation(db, "document_assets", "asset-a", { title: "Renamed" }, true),
+    ).resolves.toBeUndefined();
+    await expect(
+      validation(db, "snippets", "snippet-a", { note_md: "Updated" }, true),
     ).resolves.toBeUndefined();
     await expect(
       validation(

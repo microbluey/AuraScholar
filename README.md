@@ -92,8 +92,8 @@ AuraScholar helps master's/PhD students, postdocs, and early-career faculty run 
 ## Design principles
 
 - **Local-first**: your data lives on your device (SQLite) and can be backed up anywhere.
-- **WebDAV row sync (current scope)**: synchronize works, research projects and memberships, document asset/revision metadata, Evidence and project membership, annotations, flashcards, and Sentinel task state through your own WebDAV endpoint, including compatible NAS or cloud storage (hybrid logical clocks + per-field LWW conflict resolution).
-- **Device-local source files and Canvas**: WebDAV does not transfer source-document blobs, including PDFs; remote revisions require explicit reattachment. It also does not synchronize author, collection, or tag relationships; snippets; saved searches; or Spatial Canvas. Canvas currently moves through whole-library JSON export/import, whose backups also omit PDF bytes. AI runs on your own model service and API key (OpenAI-compatible / Anthropic).
+- **WebDAV row sync (current scope)**: synchronize works, research projects and memberships, document asset/revision metadata, Evidence and project membership, annotations, writing snippets, flashcards, and Sentinel task state through your own WebDAV endpoint, including compatible NAS or cloud storage (hybrid logical clocks + per-field LWW conflict resolution).
+- **Device-local source files and Canvas**: WebDAV does not transfer source-document blobs, including PDFs; remote revisions require explicit reattachment. It also does not synchronize author, collection, or tag relationships; saved searches; or Spatial Canvas. Canvas currently moves through whole-library JSON export/import, whose backups also omit PDF bytes. AI runs on your own model service and API key (OpenAI-compatible / Anthropic).
 - **Pay for convenience**: official cloud sync, hosted AI, 24/7 cloud sentinel, and homepage hosting are optional paid services for users who prefer zero setup.
 - **Two themes**: a calm scholarly "Dawn" light theme and a technical "Nocturne" dark theme.
 

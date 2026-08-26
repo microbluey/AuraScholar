@@ -248,7 +248,7 @@ describe("Library-scoped sync storage", () => {
     await expect(
       db.query<{ key: string }>(
         `SELECT key FROM settings
-         WHERE key = 'sync.library-a.provider.library-scope-v3-evidence.last_pushed_at'`,
+         WHERE key = 'sync.library-a.provider.library-scope-v4-snippets.last_pushed_at'`,
       ),
     ).resolves.toEqual([]);
   });
@@ -291,7 +291,7 @@ describe("Library-scoped sync storage", () => {
     await expect(
       db.query<{ key: string }>(
         `SELECT key FROM settings
-         WHERE key = 'sync.library-a.provider.library-scope-v3-evidence.last_pushed_at'`,
+         WHERE key = 'sync.library-a.provider.library-scope-v4-snippets.last_pushed_at'`,
       ),
     ).resolves.toEqual([]);
 
@@ -327,7 +327,7 @@ describe("Library-scoped sync storage", () => {
     await expect(
       db.query<{ key: string }>(
         `SELECT key FROM settings
-         WHERE key = 'sync.library-a.provider.library-scope-v3-evidence.last_pushed_at'`,
+         WHERE key = 'sync.library-a.provider.library-scope-v4-snippets.last_pushed_at'`,
       ),
     ).resolves.toEqual([]);
 
