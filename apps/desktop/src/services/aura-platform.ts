@@ -7,16 +7,10 @@ export function isDesktopRuntime(): boolean {
   return "aura" in window;
 }
 
-/** Renderer-owned mutations are intentionally narrower than generic FileSystem. */
+/** Renderer cleanup only; all durable writes are owned by main-process commands. */
 export const auraFs = {
-  writeFile(path: string, data: Uint8Array): Promise<void> {
-    return window.aura.fs.writeFile(path, data);
-  },
   deleteFile(path: string): Promise<void> {
     return window.aura.fs.deleteFile(path);
-  },
-  mkdirp(path: string): Promise<void> {
-    return window.aura.fs.mkdirp(path);
   },
 };
 

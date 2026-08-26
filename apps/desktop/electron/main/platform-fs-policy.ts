@@ -1,59 +1,34 @@
 import { constants, promises as fs } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 
-/** These directories are exclusively written by main-process workflows. */
-export const MAIN_OWNED_MUTATION_DIRECTORIES = new Set([".ingest-staging", "blobs"]);
-
-export type RendererMutationOperation = "delete" | "mkdirp" | "write";
-
-export interface RendererMutablePath {
+interface RendererPath {
   absolutePath: string;
   appDataRoot: string;
   segments: readonly string[];
 }
+
+/** The only app-data path the renderer may mutate: a temporary download. */
+export type RendererDeletablePath = RendererPath;
 
 /** A main-validated renderer read target; never a generic app-data path. */
-export interface RendererReadablePath {
-  absolutePath: string;
-  appDataRoot: string;
-  segments: readonly string[];
-}
-
-const MUTABLE_ROOTS_BY_OPERATION: Readonly<Record<RendererMutationOperation, ReadonlySet<string>>> =
-  {
-    // Downloads are created by the research-browser main process. The renderer
-    // only needs to remove its completed/cancelled top-level temporary file.
-    delete: new Set(["exports", "research-downloads"]),
-    // Export creation remains available without granting a generic app-data
-    // writer that could reach databases, secrets, staged receipts, or blobs.
-    mkdirp: new Set(["exports"]),
-    write: new Set(["exports"]),
-  };
+export type RendererReadablePath = RendererPath;
 
 const WINDOWS_DEVICE_SEGMENT =
   /^(?:aux|clock\$|com[1-9¹²³]|con|conin\$|conout\$|lpt[1-9¹²³]|nul|prn)(?:\..*)?$/iu;
 
 /**
- * Resolve a renderer mutation target through a small, operation-specific
- * allowlist. The parser intentionally treats both slash styles as separators
- * on every platform, so a value rejected on Windows cannot become accepted by
- * a POSIX-only test run.
+ * Resolve the single renderer deletion target. The parser intentionally treats
+ * both slash styles as separators on every platform, so a value rejected on
+ * Windows cannot become accepted by a POSIX-only test run.
  */
-export function resolveRendererMutableAppDataPath(
+export function resolveRendererResearchDownloadDeletePath(
   appDataRoot: string,
   rel: string,
-  operation: RendererMutationOperation,
-): RendererMutablePath {
+): RendererDeletablePath {
   const segments = parseRendererRelativePath(rel);
   const root = segments[0]!.toLowerCase();
 
-  if (MAIN_OWNED_MUTATION_DIRECTORIES.has(root)) {
-    throw new Error("Renderer may not mutate main-owned app data");
-  }
-  if (!MUTABLE_ROOTS_BY_OPERATION[operation].has(root)) {
-    throw new Error("Renderer may not mutate this app-data directory");
-  }
-  if (root === "research-downloads" && (operation !== "delete" || segments.length !== 2)) {
+  if (root !== "research-downloads" || segments.length !== 2) {
     throw new Error("Renderer may only delete individual research downloads");
   }
 
@@ -85,71 +60,11 @@ export function resolveRendererResearchDownloadPath(
   return resolveRendererReadablePath(appDataRoot, segments);
 }
 
-/**
- * Compatibility predicate for callers that only need to know whether a path
- * is mutable by at least one renderer operation. Mutations must still resolve
- * with their concrete operation before touching disk.
- */
-export function isRendererMutableAppDataPath(appDataRoot: string, absolutePath: string): boolean {
-  const rel = relative(appDataRoot, absolutePath);
-  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
-  return (Object.keys(MUTABLE_ROOTS_BY_OPERATION) as RendererMutationOperation[]).some(
-    (operation) => {
-      try {
-        resolveRendererMutableAppDataPath(appDataRoot, rel, operation);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-  );
-}
-
-/** Write an export file without following a symlink at any mutable path segment. */
-export async function writeRendererMutableFile(
-  target: RendererMutablePath,
-  data: Uint8Array,
+/** Delete only a regular, unlinked main-created research download. */
+export async function deleteRendererResearchDownloadFile(
+  target: RendererDeletablePath,
 ): Promise<void> {
-  if (!(data instanceof Uint8Array)) throw new Error("Renderer file payload is invalid");
-  await ensureSafeDirectories(target, target.segments.slice(0, -1), true);
-
-  const before = await lstatOrMissing(target.absolutePath);
-  if (before) assertSafeRegularFile(before);
-
-  // Do not truncate until the opened handle is proved to refer to the inode
-  // we checked. This matters on Windows, where O_NOFOLLOW is not reliable.
-  const handle = before
-    ? await fs.open(target.absolutePath, existingWriteFlags())
-    : await fs.open(target.absolutePath, newWriteFlags(), 0o600);
-  try {
-    const opened = await handle.stat();
-    assertSafeRegularFile(opened);
-    if (before && !sameFile(before, opened)) {
-      throw new Error("Renderer mutation target changed during validation");
-    }
-
-    await ensureSafeDirectories(target, target.segments.slice(0, -1), false);
-    const current = await fs.lstat(target.absolutePath);
-    assertSafeRegularFile(current);
-    if (!sameFile(current, opened)) {
-      throw new Error("Renderer mutation target changed during validation");
-    }
-
-    const beforeWrite = await handle.stat();
-    assertSafeRegularFile(beforeWrite);
-    if (!sameFile(beforeWrite, opened)) {
-      throw new Error("Renderer mutation target changed during validation");
-    }
-    await handle.truncate(0);
-    await handle.writeFile(data);
-  } finally {
-    await handle.close().catch(() => {});
-  }
-}
-
-/** Delete only a regular, unlinked renderer-owned temporary/export file. */
-export async function deleteRendererMutableFile(target: RendererMutablePath): Promise<void> {
-  const parentsExist = await ensureSafeDirectories(target, target.segments.slice(0, -1), false);
+  const parentsExist = await ensureSafeDirectories(target, target.segments.slice(0, -1));
   if (!parentsExist) return;
   const stat = await lstatOrMissing(target.absolutePath);
   if (!stat) return;
@@ -159,14 +74,9 @@ export async function deleteRendererMutableFile(target: RendererMutablePath): Pr
   await fs.unlink(target.absolutePath);
 }
 
-/** Create export directories one component at a time, rejecting symlinks. */
-export async function mkdirpRendererMutablePath(target: RendererMutablePath): Promise<void> {
-  await ensureSafeDirectories(target, target.segments, true);
-}
-
 /** Read an already-existing regular file without following a symlink. */
 export async function readRendererReadableFile(target: RendererReadablePath): Promise<Uint8Array> {
-  const parentsExist = await ensureSafeDirectories(target, target.segments.slice(0, -1), false);
+  const parentsExist = await ensureSafeDirectories(target, target.segments.slice(0, -1));
   if (!parentsExist) throw new Error("Renderer readable file is unavailable");
   const before = await lstatOrMissing(target.absolutePath);
   if (!before) throw new Error("Renderer readable file is unavailable");
@@ -231,25 +141,16 @@ function assertSafePathSegment(segment: string): void {
 }
 
 async function ensureSafeDirectories(
-  target: RendererMutablePath,
+  target: RendererPath,
   segments: readonly string[],
-  createMissing: boolean,
 ): Promise<boolean> {
   let current = target.appDataRoot;
   for (const segment of segments) {
     current = join(current, segment);
-    let stat = await lstatOrMissing(current);
-    if (!stat) {
-      if (!createMissing) return false;
-      try {
-        await fs.mkdir(current, { mode: 0o700 });
-      } catch (error) {
-        if (!isNodeError(error) || error.code !== "EEXIST") throw error;
-      }
-      stat = await fs.lstat(current);
-    }
+    const stat = await lstatOrMissing(current);
+    if (!stat) return false;
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error("Renderer mutation path contains an unsafe directory");
+      throw new Error("Renderer path contains an unsafe directory");
     }
   }
   return true;
@@ -267,8 +168,8 @@ function assertSafeRegularFile(stat: {
   isSymbolicLink(): boolean;
   nlink: number | bigint;
 }): void {
-  // A hard link can make an otherwise ordinary export name alias a canonical
-  // blob, so do not mutate a file with more than one directory entry.
+  // A hard link can make a seemingly ordinary temporary-download name alias a
+  // canonical blob, so do not mutate a file with more than one directory entry.
   const hasMultipleLinks = typeof stat.nlink === "bigint" ? stat.nlink > 1n : stat.nlink > 1;
   if (!stat.isFile() || stat.isSymbolicLink() || hasMultipleLinks) {
     throw new Error("Renderer mutation target is unsafe");
@@ -284,18 +185,6 @@ function assertSafeReadableFile(stat: {
   if (!stat.isFile() || stat.isSymbolicLink() || hasMultipleLinks) {
     throw new Error("Renderer readable file is unsafe");
   }
-}
-
-function existingWriteFlags(): number {
-  return process.platform === "win32"
-    ? constants.O_WRONLY
-    : constants.O_WRONLY | constants.O_NOFOLLOW;
-}
-
-function newWriteFlags(): number {
-  return process.platform === "win32"
-    ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
-    : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
 }
 
 function readFlags(): number {

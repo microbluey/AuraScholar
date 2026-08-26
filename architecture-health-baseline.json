@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 78463,
+        ".ts": 78325,
         ".tsx": 35777
       },
       "files": {
@@ -88,8 +88,8 @@
         "apps/desktop/electron/main/main-ai-http.ts": 106,
         "apps/desktop/electron/main/main-sync-storage.ts": 107,
         "apps/desktop/electron/main/oa-pdf-http.ts": 390,
-        "apps/desktop/electron/main/platform-fs-policy.ts": 325,
-        "apps/desktop/electron/main/platform.ts": 183,
+        "apps/desktop/electron/main/platform-fs-policy.ts": 214,
+        "apps/desktop/electron/main/platform.ts": 170,
         "apps/desktop/electron/main/reader-commands.ts": 361,
         "apps/desktop/electron/main/reference-import-command-input.ts": 178,
         "apps/desktop/electron/main/reference-import-commands.ts": 56,
@@ -127,7 +127,7 @@
         "apps/desktop/electron/main/translation-provider-http.ts": 106,
         "apps/desktop/electron/main/translation-provider-settings-store.ts": 450,
         "apps/desktop/electron/main/work-metadata-commands.ts": 369,
-        "apps/desktop/electron/preload.ts": 239,
+        "apps/desktop/electron/preload.ts": 233,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/reader-command-contract.ts": 132,
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
@@ -135,7 +135,7 @@
         "apps/desktop/electron/scholarly-command-contract.ts": 100,
         "apps/desktop/electron/sentinel-read-command-contract.ts": 71,
         "apps/desktop/electron/sentinel-run-command-contract.ts": 66,
-        "apps/desktop/electron/shared.ts": 140,
+        "apps/desktop/electron/shared.ts": 138,
         "apps/desktop/electron/smoke-mode.ts": 15,
         "apps/desktop/electron/snippet-command-contract.ts": 63,
         "apps/desktop/electron/sync-command-contract.ts": 68,
@@ -319,7 +319,7 @@
         "apps/desktop/src/services/ai-data.ts": 100,
         "apps/desktop/src/services/ai.ts": 164,
         "apps/desktop/src/services/app-shell-data.ts": 15,
-        "apps/desktop/src/services/aura-platform.ts": 67,
+        "apps/desktop/src/services/aura-platform.ts": 61,
         "apps/desktop/src/services/canvas-ai.ts": 38,
         "apps/desktop/src/services/canvas-page-data.ts": 68,
         "apps/desktop/src/services/canvas-workspace-data.ts": 56,
@@ -552,11 +552,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 133561
+      "totalLines": 133423
     },
     "tests": {
       "byExtension": {
-        ".ts": 77688,
+        ".ts": 77658,
         ".tsx": 1034
       },
       "files": {
@@ -589,7 +589,7 @@
         "apps/desktop/electron/main/library-backup-commands.test.ts": 19,
         "apps/desktop/electron/main/library-csl-commands-architecture.test.ts": 44,
         "apps/desktop/electron/main/library-csl-commands.test.ts": 225,
-        "apps/desktop/electron/main/library-ingest-commands-architecture.test.ts": 167,
+        "apps/desktop/electron/main/library-ingest-commands-architecture.test.ts": 170,
         "apps/desktop/electron/main/library-ingest-commands.test.ts": 542,
         "apps/desktop/electron/main/library-ingest-dedup-commands.test.ts": 150,
         "apps/desktop/electron/main/library-list-commands-architecture.test.ts": 76,
@@ -619,13 +619,13 @@
         "apps/desktop/electron/main/main-ai-http.test.ts": 48,
         "apps/desktop/electron/main/oa-pdf-http.test.ts": 171,
         "apps/desktop/electron/main/platform-external-url.test.ts": 48,
-        "apps/desktop/electron/main/platform-fs-policy.test.ts": 235,
-        "apps/desktop/electron/main/platform-fs-read-architecture.test.ts": 46,
+        "apps/desktop/electron/main/platform-fs-policy.test.ts": 177,
+        "apps/desktop/electron/main/platform-fs-read-architecture.test.ts": 54,
         "apps/desktop/electron/main/raw-db-bridge-architecture.test.ts": 59,
         "apps/desktop/electron/main/reader-commands.test.ts": 504,
         "apps/desktop/electron/main/reference-import-commands-architecture.test.ts": 70,
         "apps/desktop/electron/main/reference-import-commands.test.ts": 192,
-        "apps/desktop/electron/main/renderer-capability-audit-architecture.test.ts": 100,
+        "apps/desktop/electron/main/renderer-capability-audit-architecture.test.ts": 109,
         "apps/desktop/electron/main/renderer-http-capability-architecture.test.ts": 54,
         "apps/desktop/electron/main/renderer-secret-capability-architecture.test.ts": 63,
         "apps/desktop/electron/main/research-project-commands.test.ts": 378,
@@ -726,7 +726,7 @@
         "apps/desktop/electron/main/translation-provider-settings-store.test.ts": 254,
         "apps/desktop/electron/main/work-metadata-commands-architecture.test.ts": 46,
         "apps/desktop/electron/main/work-metadata-commands.test.ts": 307,
-        "apps/desktop/electron/preload.capability-audit.test.ts": 68,
+        "apps/desktop/electron/preload.capability-audit.test.ts": 76,
         "apps/desktop/electron/preload.smoke-db-bridge.test.ts": 75,
         "apps/desktop/electron/preload/close-lifecycle.test.ts": 110,
         "apps/desktop/electron/smoke-mode.test.ts": 19,
@@ -936,7 +936,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 78722
+      "totalLines": 78692
     }
   },
   "uiDatabaseBoundary": {}

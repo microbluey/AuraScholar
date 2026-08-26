@@ -8,14 +8,11 @@ import { dirname, join } from "node:path";
 import { app, clipboard, Notification, safeStorage, shell } from "electron";
 import { handle } from "./ipc";
 import {
-  deleteRendererMutableFile,
-  mkdirpRendererMutablePath,
+  deleteRendererResearchDownloadFile,
   readRendererReadableFile,
   resolveRendererBlobPdfPath,
-  resolveRendererMutableAppDataPath,
+  resolveRendererResearchDownloadDeletePath,
   resolveRendererResearchDownloadPath,
-  writeRendererMutableFile,
-  type RendererMutationOperation,
 } from "./platform-fs-policy";
 import { CH } from "../shared";
 
@@ -36,11 +33,6 @@ export async function openExternalUrl(rawUrl: string): Promise<void> {
     throw new Error("外部链接不能包含用户名或密码");
   }
   await shell.openExternal(url.toString());
-}
-
-/** Generic renderer mutations are limited to operation-specific safe roots. */
-function resolveRendererMutableRel(rel: string, operation: RendererMutationOperation) {
-  return resolveRendererMutableAppDataPath(appData(), rel, operation);
 }
 
 const SECRETS_FILE = () => join(appData(), "secrets.json");
@@ -126,11 +118,10 @@ function decode(stored: string): string {
 }
 
 export function registerPlatformHandlers(): void {
-  handle(CH.fsWrite, async (_e, rel: string, data: Uint8Array) => {
-    await writeRendererMutableFile(resolveRendererMutableRel(rel, "write"), data);
-  });
   handle(CH.fsDelete, async (_e, rel: string) => {
-    await deleteRendererMutableFile(resolveRendererMutableRel(rel, "delete"));
+    await deleteRendererResearchDownloadFile(
+      resolveRendererResearchDownloadDeletePath(appData(), rel),
+    );
   });
   handle(CH.fsReadBlobPdf, async (_e, sha256: string) => {
     return readRendererReadableFile(resolveRendererBlobPdfPath(appData(), sha256));
@@ -138,10 +129,6 @@ export function registerPlatformHandlers(): void {
   handle(CH.fsReadResearchDownload, async (_e, relPath: string) => {
     return readRendererReadableFile(resolveRendererResearchDownloadPath(appData(), relPath));
   });
-  handle(CH.fsMkdirp, async (_e, rel: string) => {
-    await mkdirpRendererMutablePath(resolveRendererMutableRel(rel, "mkdirp"));
-  });
-
   handle(CH.notify, (_e, title: string, body?: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show();
   });

@@ -3,14 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  deleteRendererMutableFile,
-  isRendererMutableAppDataPath,
-  mkdirpRendererMutablePath,
+  deleteRendererResearchDownloadFile,
   readRendererReadableFile,
   resolveRendererBlobPdfPath,
-  resolveRendererMutableAppDataPath,
+  resolveRendererResearchDownloadDeletePath,
   resolveRendererResearchDownloadPath,
-  writeRendererMutableFile,
 } from "./platform-fs-policy";
 
 const roots: string[] = [];
@@ -47,61 +44,39 @@ afterEach(async () => {
   );
 });
 
-describe("renderer filesystem mutation policy", () => {
-  it("keeps normal export writes and download cleanup inside explicit operation roots", async () => {
+describe("renderer filesystem deletion policy", () => {
+  it("allows only individual main-created research downloads", async () => {
     const root = await appDataRoot();
-    const exportFile = resolveRendererMutableAppDataPath(root, "exports/bib/works.bib", "write");
-    await writeRendererMutableFile(exportFile, new TextEncoder().encode("@article{demo}"));
-    await expect(fs.readFile(join(root, "exports", "bib", "works.bib"), "utf8")).resolves.toBe(
-      "@article{demo}",
-    );
-
-    await mkdirpRendererMutablePath(
-      resolveRendererMutableAppDataPath(root, "exports/reports/2026", "mkdirp"),
-    );
-    expect((await fs.stat(join(root, "exports", "reports", "2026"))).isDirectory()).toBe(true);
-
     const download = join(root, "research-downloads", "captured.pdf");
     await fs.mkdir(join(root, "research-downloads"), { recursive: true });
     await fs.writeFile(download, "temporary PDF");
-    await deleteRendererMutableFile(
-      resolveRendererMutableAppDataPath(root, "research-downloads/captured.pdf", "delete"),
+    await deleteRendererResearchDownloadFile(
+      resolveRendererResearchDownloadDeletePath(root, "research-downloads/captured.pdf"),
     );
     await expect(fs.access(download)).rejects.toThrow();
-
-    expect(isRendererMutableAppDataPath(root, join(root, "research-downloads", "other.pdf"))).toBe(
-      true,
-    );
-    expect(isRendererMutableAppDataPath(root, join(root, "exports", "references.bib"))).toBe(true);
+    expect(() =>
+      resolveRendererResearchDownloadDeletePath(root, "research-downloads/nested/file.pdf"),
+    ).toThrow();
+    expect(() =>
+      resolveRendererResearchDownloadDeletePath(root, "exports/references.bib"),
+    ).toThrow();
   });
 
-  it("denies every mutation operation outside its allowlist", () => {
+  it("denies protected and non-download paths", () => {
     const root = join(tmpdir(), "aurascholar-user-data");
-    const operations = ["delete", "mkdirp", "write"] as const;
     for (const rel of [
       "blobs/ab/hash.pdf",
       ".ingest-staging/receipt",
       "library.sqlite",
       "secrets.json",
+      "exports/report.bib",
+      "research-downloads/nested/file.pdf",
     ]) {
-      for (const operation of operations) {
-        expect(() => resolveRendererMutableAppDataPath(root, rel, operation)).toThrow();
-      }
+      expect(() => resolveRendererResearchDownloadDeletePath(root, rel)).toThrow();
     }
-    for (const [rel, operation] of [
-      ["research-downloads/new.pdf", "write"],
-      ["research-downloads/new-directory", "mkdirp"],
-      ["research-downloads/nested/file.pdf", "delete"],
-    ] as const) {
-      expect(() => resolveRendererMutableAppDataPath(root, rel, operation)).toThrow();
-    }
-    expect(isRendererMutableAppDataPath(root, join(root, "blobs", "ab", "hash.pdf"))).toBe(false);
-    expect(isRendererMutableAppDataPath(root, join(root, ".ingest-staging", "receipt"))).toBe(
-      false,
-    );
   });
 
-  it("rejects Windows aliases, alternate data streams, and mixed path separators on every OS", () => {
+  it("rejects Windows aliases, alternate data streams, and mixed path separators", () => {
     const root = join(tmpdir(), "aurascholar-user-data");
     const aliases = [
       "blobs. /ab/hash.pdf",
@@ -120,10 +95,10 @@ describe("renderer filesystem mutation policy", () => {
     ];
 
     for (const rel of aliases) {
-      expect(() => resolveRendererMutableAppDataPath(root, rel, "write")).toThrow();
+      expect(() => resolveRendererResearchDownloadDeletePath(root, rel)).toThrow();
     }
     expect(() =>
-      resolveRendererMutableAppDataPath(root, "exports\\report.bib", "write"),
+      resolveRendererResearchDownloadDeletePath(root, "research-downloads\\report.pdf"),
     ).not.toThrow();
   });
 
@@ -133,63 +108,30 @@ describe("renderer filesystem mutation policy", () => {
     const victim = join(blobs, "canonical.pdf");
     await fs.mkdir(blobs, { recursive: true });
     await fs.writeFile(victim, "canonical bytes");
-    await fs.mkdir(join(root, "exports"), { recursive: true });
-
-    const nestedLink = join(root, "exports", "blob-link");
+    const downloadRoot = join(root, "research-downloads");
     if (
-      !(await createSymlink(blobs, nestedLink, process.platform === "win32" ? "junction" : "dir"))
+      !(await createSymlink(blobs, downloadRoot, process.platform === "win32" ? "junction" : "dir"))
     ) {
       return;
     }
 
     await expect(
-      writeRendererMutableFile(
-        resolveRendererMutableAppDataPath(root, "exports/blob-link/canonical.pdf", "write"),
-        new TextEncoder().encode("renderer replacement"),
-      ),
-    ).rejects.toThrow("unsafe directory");
-    await expect(
-      deleteRendererMutableFile(
-        resolveRendererMutableAppDataPath(root, "exports/blob-link/canonical.pdf", "delete"),
-      ),
-    ).rejects.toThrow("unsafe directory");
-    await expect(
-      mkdirpRendererMutablePath(
-        resolveRendererMutableAppDataPath(root, "exports/blob-link/new-directory", "mkdirp"),
+      deleteRendererResearchDownloadFile(
+        resolveRendererResearchDownloadDeletePath(root, "research-downloads/canonical.pdf"),
       ),
     ).rejects.toThrow("unsafe directory");
     await expect(fs.readFile(victim, "utf8")).resolves.toBe("canonical bytes");
 
-    const leafLink = join(root, "exports", "leaf-link.pdf");
+    await fs.unlink(downloadRoot);
+    await fs.mkdir(downloadRoot);
+    const leafLink = join(downloadRoot, "leaf-link.pdf");
     if (!(await createSymlink(victim, leafLink, "file"))) return;
     await expect(
-      writeRendererMutableFile(
-        resolveRendererMutableAppDataPath(root, "exports/leaf-link.pdf", "write"),
-        new TextEncoder().encode("renderer replacement"),
+      deleteRendererResearchDownloadFile(
+        resolveRendererResearchDownloadDeletePath(root, "research-downloads/leaf-link.pdf"),
       ),
     ).rejects.toThrow("target is unsafe");
     await expect(fs.readFile(victim, "utf8")).resolves.toBe("canonical bytes");
-  });
-
-  it("rejects an allowlisted root when the directory itself is a blob symlink", async () => {
-    const root = await appDataRoot();
-    const blobs = join(root, "blobs");
-    await fs.mkdir(blobs, { recursive: true });
-    if (
-      !(await createSymlink(
-        blobs,
-        join(root, "research-downloads"),
-        process.platform === "win32" ? "junction" : "dir",
-      ))
-    ) {
-      return;
-    }
-
-    await expect(
-      deleteRendererMutableFile(
-        resolveRendererMutableAppDataPath(root, "research-downloads/canonical.pdf", "delete"),
-      ),
-    ).rejects.toThrow("unsafe directory");
   });
 });
 

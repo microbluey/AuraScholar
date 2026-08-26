@@ -18,15 +18,23 @@ describe("renderer filesystem read boundary", () => {
     expect(preload).not.toContain("readFile(path: string)");
     expect(preload).not.toContain("exists(path: string)");
     expect(preload).not.toContain("listDir(path: string)");
+    expect(preload).not.toContain("writeFile(path: string");
+    expect(preload).not.toContain("mkdirp(path: string");
     expect(shared).not.toContain('fsRead: "platform:fs:read"');
     expect(shared).not.toContain('fsExists: "platform:fs:exists"');
     expect(shared).not.toContain('fsListDir: "platform:fs:listDir"');
+    expect(shared).not.toContain("fsWrite");
+    expect(shared).not.toContain("fsMkdirp");
     expect(platform).not.toContain("handle(CH.fsRead,");
     expect(platform).not.toContain("handle(CH.fsExists,");
     expect(platform).not.toContain("handle(CH.fsListDir,");
+    expect(platform).not.toContain("handle(CH.fsWrite,");
+    expect(platform).not.toContain("handle(CH.fsMkdirp,");
     expect(rendererPlatform).not.toContain("window.aura.fs.readFile");
     expect(rendererPlatform).not.toContain("window.aura.fs.exists");
     expect(rendererPlatform).not.toContain("window.aura.fs.listDir");
+    expect(rendererPlatform).not.toContain("window.aura.fs.writeFile");
+    expect(rendererPlatform).not.toContain("window.aura.fs.mkdirp");
   });
 
   it("keeps PDF/download consumers on constrained reads and OA acquisition main-owned", () => {
