@@ -2,9 +2,7 @@
 // and the renderer. Channel names live here so both sides can't drift.
 
 export const CH = {
-  fsWrite: "platform:fs:write",
   fsDelete: "platform:fs:delete",
-  fsMkdirp: "platform:fs:mkdirp",
   fsReadBlobPdf: "platform:fs:blob-pdf:read",
   fsReadResearchDownload: "platform:fs:research-download:read",
   notify: "platform:notify",

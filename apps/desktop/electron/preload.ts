@@ -57,14 +57,8 @@ ipcRenderer.on(EV.lifecycleCloseCancelled, (_event, value: unknown) => {
 // everything funnels through these typed calls.
 const api = {
   fs: {
-    writeFile(path: string, data: Uint8Array): Promise<void> {
-      return ipcRenderer.invoke(CH.fsWrite, path, data);
-    },
     deleteFile(path: string): Promise<void> {
       return ipcRenderer.invoke(CH.fsDelete, path);
-    },
-    mkdirp(path: string): Promise<void> {
-      return ipcRenderer.invoke(CH.fsMkdirp, path);
     },
   },
   files: {

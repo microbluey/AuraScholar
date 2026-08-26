@@ -107,8 +107,11 @@ describe("Library finalize-ingest command architecture", () => {
     expect(claim).toContain("dependencies.verifyStagedPdf");
     expect(claim).toContain("claim.release()");
     expect(dataCommands).toContain("verifyStagedPdf,");
-    expect(platformPolicy).toContain("MAIN_OWNED_MUTATION_DIRECTORIES");
-    expect(platform).toContain("resolveRendererMutableRel");
+    expect(platformPolicy).toContain("resolveRendererResearchDownloadDeletePath");
+    expect(platformPolicy).not.toContain("writeRendererMutableFile");
+    expect(platformPolicy).not.toContain("mkdirpRendererMutablePath");
+    expect(platformPolicy).not.toContain('"exports"');
+    expect(platform).toContain("deleteRendererResearchDownloadFile");
   });
 
   it("keeps renderer callers on the facade and removes active-dedup restore calls", () => {

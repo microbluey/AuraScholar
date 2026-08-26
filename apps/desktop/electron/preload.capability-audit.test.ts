@@ -29,6 +29,11 @@ interface ExposedAuraApi {
   deviceId?: unknown;
   http?: unknown;
   openExternal?: unknown;
+  fs: {
+    deleteFile(path: string): Promise<void>;
+    writeFile?: unknown;
+    mkdirp?: unknown;
+  };
 }
 
 const originalArgv = [...process.argv];
@@ -58,6 +63,9 @@ describe("preload unused capability audit", () => {
     expect(api).not.toHaveProperty("cancelHttp");
     expect(api).not.toHaveProperty("openExternal");
     expect(api).not.toHaveProperty("citationBridgePort");
+    expect(api.fs).not.toHaveProperty("writeFile");
+    expect(api.fs).not.toHaveProperty("mkdirp");
+    expect(Object.keys(api.fs)).toEqual(["deleteFile"]);
 
     await api.clipboard.writeText("clipboard write remains available");
     expect(mocks.invoke).toHaveBeenCalledWith(

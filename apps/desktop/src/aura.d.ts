@@ -3,6 +3,7 @@
 import type { AuraApi } from "../electron/preload";
 
 type AssertFalse<Value extends false> = Value;
+type AssertTrue<Value extends true> = Value;
 // The raw SQL bridge may exist in the dedicated smoke process but is not part
 // of the production renderer API contract.
 type _AuraApiExcludesRawDatabase = AssertFalse<"db" extends keyof AuraApi ? true : false>;
@@ -27,6 +28,9 @@ type _AuraApiExcludesOpenExternal = AssertFalse<
 >;
 type _AuraApiExcludesCitationBridgePort = AssertFalse<
   "citationBridgePort" extends keyof AuraApi ? true : false
+>;
+type _AuraApiFsOnlyDeletesResearchDownloads = AssertTrue<
+  keyof AuraApi["fs"] extends "deleteFile" ? true : false
 >;
 
 declare global {
