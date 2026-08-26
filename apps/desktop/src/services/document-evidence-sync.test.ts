@@ -721,16 +721,22 @@ describe("Document revision and Evidence row-level sync", () => {
     ).rejects.toThrow(/invalid evidence_items\.anchor_json/);
   });
 
-  it("uses a new Evidence-aware scope state so a v2 watermark cannot hide v19 rows", async () => {
+  it("uses a v4 snippets-aware scope state so a v3 watermark cannot hide historical snippets", async () => {
     const db = await createNodeDatabase(":memory:");
     await runMigrations(db);
     const ids = graphIds("library-scope-upgrade", "scope-upgrade");
     await seedDocumentEvidenceGraph(db, ids, 100);
     await db.run(
+      `INSERT INTO snippets
+         (id, work_id, page_index, quote, note_md, tag, created_at, updated_at, deleted_at)
+       VALUES ('snippet-scope-upgrade', ?, 1, 'Historical snippet', NULL, NULL, 100, 100, NULL)`,
+      [ids.workId],
+    );
+    await db.run(
       `INSERT INTO settings (key, value_json, scope, updated_at)
        VALUES (?, ?, 'local', 200)`,
       [
-        `sync.${ids.libraryId}.document-evidence-provider.library-scope-v2.last_pushed_at`,
+        `sync.${ids.libraryId}.document-evidence-provider.library-scope-v3-evidence.last_pushed_at`,
         JSON.stringify(Date.now() + 60_000),
       ],
     );
@@ -742,8 +748,12 @@ describe("Document revision and Evidence row-level sync", () => {
       "document-evidence-provider",
       TRANSPORT_LIBRARY_ID,
     );
-    const changes = relevantChanges(await storage.unsyncedChanges(0), ids);
+    const allChanges = await storage.unsyncedChanges(0);
+    const changes = relevantChanges(allChanges, ids);
     expect(changes.map((change) => change.table)).toEqual(NEW_SYNC_TABLES);
+    expect(requireChange(allChanges, "snippets", "snippet-scope-upgrade").values.quote).toBe(
+      "Historical snippet",
+    );
 
     await storage.markPushed(changes.at(-1)!.seq, { complete: true });
     await expect(
@@ -751,17 +761,17 @@ describe("Document revision and Evidence row-level sync", () => {
         `SELECT key FROM settings
          WHERE key = ?`,
         [
-          `sync.${ids.libraryId}.document-evidence-provider.library-scope-v3-evidence.last_pushed_at`,
+          `sync.${ids.libraryId}.document-evidence-provider.library-scope-v4-snippets.last_pushed_at`,
         ],
       ),
     ).resolves.toEqual([
       {
-        key: `sync.${ids.libraryId}.document-evidence-provider.library-scope-v3-evidence.last_pushed_at`,
+        key: `sync.${ids.libraryId}.document-evidence-provider.library-scope-v4-snippets.last_pushed_at`,
       },
     ]);
   });
 });
 
 function deferredPointerKey(libraryId: string, assetId: string): string {
-  return `sync.${libraryId}.document-evidence-provider.library-scope-v3-evidence.pending-current-revision.${assetId}`;
+  return `sync.${libraryId}.document-evidence-provider.library-scope-v4-snippets.pending-current-revision.${assetId}`;
 }

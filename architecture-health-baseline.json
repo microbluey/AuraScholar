@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 78325,
+        ".ts": 78331,
         ".tsx": 35777
       },
       "files": {
@@ -329,7 +329,7 @@
         "apps/desktop/src/services/discovery-library-status.ts": 70,
         "apps/desktop/src/services/discovery-sites.ts": 182,
         "apps/desktop/src/services/discovery.ts": 263,
-        "apps/desktop/src/services/document-evidence-sync-scope.ts": 468,
+        "apps/desktop/src/services/document-evidence-sync-scope.ts": 474,
         "apps/desktop/src/services/exit-barriers.ts": 95,
         "apps/desktop/src/services/fulltext.ts": 222,
         "apps/desktop/src/services/import-refs.ts": 21,
@@ -552,11 +552,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 133423
+      "totalLines": 133429
     },
     "tests": {
       "byExtension": {
-        ".ts": 77658,
+        ".ts": 77835,
         ".tsx": 1034
       },
       "files": {
@@ -569,7 +569,7 @@
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 257,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 728,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 731,
         "apps/desktop/electron/main/data-command-core-architecture.test.ts": 109,
         "apps/desktop/electron/main/data-command-lockstep.test.ts": 82,
         "apps/desktop/electron/main/data-commands.test.ts": 1025,
@@ -818,8 +818,9 @@
         "apps/desktop/src/services/discovery-sites.test.ts": 256,
         "apps/desktop/src/services/discovery.test.ts": 111,
         "apps/desktop/src/services/document-evidence-backup.test.ts": 715,
-        "apps/desktop/src/services/document-evidence-sync-scope.test.ts": 479,
-        "apps/desktop/src/services/document-evidence-sync.test.ts": 767,
+        "apps/desktop/src/services/document-evidence-sync-scope.test.ts": 505,
+        "apps/desktop/src/services/document-evidence-sync-snippets.test.ts": 138,
+        "apps/desktop/src/services/document-evidence-sync.test.ts": 777,
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
         "apps/desktop/src/services/fulltext.test.ts": 171,
         "apps/desktop/src/services/import-refs.test.ts": 60,
@@ -936,7 +937,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 78692
+      "totalLines": 78869
     }
   },
   "uiDatabaseBoundary": {}

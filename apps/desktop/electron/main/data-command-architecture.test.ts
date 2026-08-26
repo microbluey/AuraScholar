@@ -683,7 +683,10 @@ describe("main-process data command architecture", () => {
       expect(libraryBackup).toContain(`"${legacyTable}"`);
     }
     expect(syncScope).toContain("flashcards: columns(");
-    expect(syncScope).toContain('table === "annotations" || table === "flashcards"');
+    expect(syncScope).toContain("snippets: columns(");
+    expect(syncScope).toContain(
+      'table === "annotations" || table === "snippets" || table === "flashcards"',
+    );
     expect(syncStorage).toContain("syncedColumnsForTable");
   });
 
