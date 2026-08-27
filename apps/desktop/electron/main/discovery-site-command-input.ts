@@ -266,7 +266,7 @@ function parseHttpUrl(input: string, label: string): URL {
   return parsed;
 }
 
-function normalizeProxyAddress(value: unknown): string {
+export function normalizeProxyAddress(value: unknown): string {
   if (typeof value !== "string") throw new Error("代理地址必须是文本");
   const raw = value.trim();
   if (!raw) return "";

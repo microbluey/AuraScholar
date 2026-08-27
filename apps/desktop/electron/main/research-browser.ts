@@ -12,8 +12,15 @@ import { describeSafeError } from "@aurascholar/platform";
 import { handle } from "./ipc";
 import {
   isAllowedResearchUrl,
+  MAX_RESEARCH_TABS,
+  parseResearchBounds,
+  parseResearchNavigateInput,
+  parseResearchOpenInput,
+  parseResearchSiteIds,
   researchPartition,
   validateResearchUrl,
+  validateResearchSiteId,
+  validateResearchTabId,
 } from "./research-browser-policy";
 import {
   CH,
@@ -239,11 +246,15 @@ function createView(tab: Tab): WebContentsView {
     },
   });
   view.webContents.setWindowOpenHandler(({ url }) => {
-    // target=_blank / window.open — publishers open PDFs and full-text in a new
-    // window. Open them in a fresh tab (same site session, so login/cookies
-    // carry over) instead of hijacking the current page, which would strip the
-    // user of their search-results context with no way back.
-    if (isAllowedResearchUrl(url)) spawnTab(tab.siteId, url, tab.proxy, tab.ownerTabId);
+    // Open publisher target=_blank/PDF links in a fresh tab with the same session.
+    if (isAllowedResearchUrl(url) && tabs.size < MAX_RESEARCH_TABS) {
+      try {
+        spawnTab(tab.siteId, url, tab.proxy, tab.ownerTabId);
+      } catch {
+        // Fail closed if a concurrent tab limit or URL-policy check changes
+        // between the guard above and the synchronous tab creation.
+      }
+    }
     return { action: "deny" };
   });
   view.webContents.on("will-navigate", (event, url) => {
@@ -278,12 +289,11 @@ function createView(tab: Tab): WebContentsView {
   return view;
 }
 
-/**
- * Create a new tab for a site and make it active. Shared by the researchOpen
- * IPC handler and by in-page window.open / target=_blank navigations so that
- * external links open beside the current page instead of replacing it.
- */
+/** Create and activate a tab for IPC opens and in-page target=_blank links. */
 function spawnTab(siteId: string, url: string, proxy: string, ownerTabId?: string): string {
+  if (tabs.size >= MAX_RESEARCH_TABS) {
+    throw new Error(`Research tabs are limited to ${MAX_RESEARCH_TABS}`);
+  }
   const safeUrl = validateResearchUrl(url).toString();
   const tabId = randomUUID();
   tabs.set(tabId, {
@@ -343,25 +353,24 @@ export function hideResearchViews(): void {
 }
 
 export function registerResearchHandlers(): void {
-  handle(
-    CH.researchOpen,
-    (_e, siteId: string, url: string, proxy: string, options?: { reuseExisting?: boolean }) => {
-      // Reuse an existing tab for the same site unless this is an isolated task.
-      const existing =
-        options?.reuseExisting === false
-          ? undefined
-          : [...tabs.values()].find((t) => t.siteId === siteId);
-      if (existing) {
-        existing.proxy = proxy;
-        showTab(existing.tabId);
-        return existing.tabId;
-      }
-      return spawnTab(siteId, url, proxy);
-    },
-  );
+  handle(CH.researchOpen, (_e, siteId: unknown, url: unknown, proxy: unknown, options: unknown) => {
+    const input = parseResearchOpenInput(siteId, url, proxy, options);
+    // Reuse an existing tab for the same site unless this is an isolated task.
+    const existing =
+      input.options?.reuseExisting === false
+        ? undefined
+        : [...tabs.values()].find((t) => t.siteId === input.siteId);
+    if (existing) {
+      existing.proxy = input.proxy;
+      showTab(existing.tabId);
+      return existing.tabId;
+    }
+    return spawnTab(input.siteId, input.url, input.proxy);
+  });
 
-  handle(CH.researchActivate, (_e, tabId: string) => {
-    showTab(tabId);
+  handle(CH.researchActivate, (_e, tabId: unknown) => {
+    const validTabId = validateResearchTabId(tabId);
+    showTab(validTabId);
   });
 
   handle(CH.researchGoBack, () => {
@@ -384,24 +393,26 @@ export function registerResearchHandlers(): void {
   });
 
   // null arg = read the active tab's current URL; a string = navigate to it.
-  handle(CH.researchNavigate, (_e, url: string | null) => {
+  handle(CH.researchNavigate, (_e, url: unknown) => {
+    const parsedUrl = parseResearchNavigateInput(url);
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (!tab) return "";
-    if (url === null) {
+    if (parsedUrl === null) {
       return tab.view ? tab.view.webContents.getURL() : tab.url;
     }
-    const safeUrl = validateResearchUrl(url).toString();
+    const safeUrl = parsedUrl;
     tab.url = safeUrl;
     if (tab.view) void tab.view.webContents.loadURL(safeUrl);
     return safeUrl;
   });
 
-  handle(CH.researchClose, (_e, tabId: string) => {
-    const tab = tabs.get(tabId);
+  handle(CH.researchClose, (_e, tabId: unknown) => {
+    const validTabId = validateResearchTabId(tabId);
+    const tab = tabs.get(validTabId);
     if (!tab) return;
     if (tab.view && win) win.contentView.removeChildView(tab.view);
-    tabs.delete(tabId);
-    if (activeTabId === tabId) {
+    tabs.delete(validTabId);
+    if (activeTabId === validTabId) {
       activeTabId = null;
       const next = [...tabs.keys()][0];
       if (next) showTab(next);
@@ -413,10 +424,10 @@ export function registerResearchHandlers(): void {
     detachActiveView();
   });
 
-  handle(CH.researchSetBounds, (_e, b: Bounds) => {
-    bounds = b;
+  handle(CH.researchSetBounds, (_e, b: unknown) => {
+    bounds = parseResearchBounds(b);
     const cur = activeTabId ? tabs.get(activeTabId) : null;
-    cur?.view?.setBounds(b);
+    cur?.view?.setBounds(bounds);
   });
 
   handle(CH.researchList, () => snapshot());
@@ -426,15 +437,7 @@ export function registerResearchHandlers(): void {
     return consumeResearchDownload(downloadId);
   });
 
-  // Capture the active tab for ingest. Many publishers render full-text inline
-  // (Content-Disposition: inline, an embedded viewer, or a blob: URL) so the
-  // will-download interceptor never fires. This gives the user an explicit
-  // "capture" action with two strategies:
-  //   • a direct .pdf URL → downloadURL() reuses the authed session + the
-  //     existing will-download → ingest pipeline (emits download-finished);
-  //   • anything else → printToPDF() renders the page as it stands (behind any
-  //     paywall the user already cleared) and exposes the result through the
-  //     same one-time opaque lease used by streamed downloads.
+  // Capture inline/embedded full-text pages through downloadURL or printToPDF.
   handle(CH.researchCapture, async (): Promise<CaptureResult> => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (!tab?.view) return { kind: "none", error: "no active page" };
@@ -476,13 +479,15 @@ export function registerResearchHandlers(): void {
     }
   });
 
-  handle(CH.researchClearSiteData, async (_e, siteId: string) => {
-    await session.fromPartition(researchPartition(siteId)).clearStorageData();
+  handle(CH.researchClearSiteData, async (_e, siteId: unknown) => {
+    const validSiteId = validateResearchSiteId(siteId);
+    await session.fromPartition(researchPartition(validSiteId)).clearStorageData();
   });
 
-  handle(CH.researchSiteData, async (_e, siteIds: string[]) => {
+  handle(CH.researchSiteData, async (_e, siteIds: unknown) => {
+    const validSiteIds = parseResearchSiteIds(siteIds);
     const withData: string[] = [];
-    for (const id of siteIds) {
+    for (const id of validSiteIds) {
       const cookies = await session.fromPartition(researchPartition(id)).cookies.get({});
       if (cookies.length > 0) withData.push(id);
     }
