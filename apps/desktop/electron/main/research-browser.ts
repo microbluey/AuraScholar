@@ -1,6 +1,5 @@
 // Multi-tab research browser with persistent per-site sessions and archivable views.
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
 import { app, BrowserWindow, session, WebContentsView, type Session } from "electron";
 import { describeSafeError } from "@aurascholar/platform";
 import { handle } from "./ipc";
@@ -37,10 +36,9 @@ import {
   ensureSafeResearchDownloadDirectory,
   openResearchDownloads,
   registerResearchDownload,
-  researchDownloadPath,
 } from "./research-download-store";
-import { createResearchDownloadFileName } from "./research-download-file-name";
 import { wireResearchDownloadSession } from "./research-download-events";
+import { writeResearchPrintedFile } from "./research-download-print-file";
 
 interface Tab {
   tabId: string;
@@ -463,9 +461,7 @@ export function registerResearchHandlers(): void {
       const pdf = await wc.printToPDF({ printBackground: true });
       const base =
         (wc.getTitle() || "page").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 80) || "page";
-      fileName = createResearchDownloadFileName(`${base}.pdf`);
-      const abs = researchDownloadPath(app.getPath("userData"), fileName);
-      writeFileSync(abs, pdf, { mode: 0o600, flag: "wx" });
+      fileName = writeResearchPrintedFile(app.getPath("userData"), `${base}.pdf`, pdf);
       wroteFile = true;
       const { downloadId } = await registerResearchDownload(fileName, tab.ownerTabId);
       win?.webContents.send(EV.researchDownloadFinished, {
