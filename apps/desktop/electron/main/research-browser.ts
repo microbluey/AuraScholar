@@ -1,6 +1,4 @@
-// Multi-tab research browser, main-process side. Each tab is a WebContentsView
-// with a per-site persistent session partition; archived tabs retain their URL
-// and recreate their view when activated.
+// Multi-tab research browser with persistent per-site sessions and archivable views.
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { app, BrowserWindow, session, WebContentsView, type Session } from "electron";
@@ -23,6 +21,7 @@ import {
   commitResearchMainFrameUrl,
   guardResearchNavigation,
 } from "./research-browser-navigation-policy";
+import { ResearchBrowserViewLifecycle } from "./research-browser-view-lifecycle";
 import {
   CH,
   EV,
@@ -43,8 +42,6 @@ import {
 import { createResearchDownloadFileName } from "./research-download-file-name";
 import { wireResearchDownloadSession } from "./research-download-events";
 
-const ARCHIVE_MS = 30 * 60 * 1000; // 30 minutes idle → archive
-
 interface Tab {
   tabId: string;
   ownerTabId: string;
@@ -62,8 +59,7 @@ let bounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 let activeTabId: string | null = null;
 const tabs = new Map<string, Tab>();
 const wiredSessions = new Set<string>();
-// Map a sniffed citation_pdf_url back to the abstract-page identity. Clicking
-// “Paper” may navigate away before the download starts.
+// Map citation_pdf_url values back to abstract-page identity for downloads.
 const identityByPdfUrl = new Map<string, ScholarIdentity>();
 
 function snapshot(): ResearchTab[] {
@@ -87,7 +83,6 @@ function ensureDownloadDir(): void {
   ensureSafeResearchDownloadDirectory(app.getPath("userData"));
 }
 
-/** Wire download interception once per site session. */
 function wireSession(sess: Session, siteId: string): void {
   const key = researchPartition(siteId);
   if (wiredSessions.has(key)) return;
@@ -102,10 +97,22 @@ function wireSession(sess: Session, siteId: string): void {
 
 function detachActiveView(): void {
   const cur = activeTabId ? tabs.get(activeTabId) : null;
-  if (cur?.view && win) win.contentView.removeChildView(cur.view);
+  if (cur?.view) detachView(cur.view);
 }
+
+function detachView(view: WebContentsView): void {
+  if (win && !win.isDestroyed()) win.contentView.removeChildView(view);
+}
+
+const viewLifecycle = new ResearchBrowserViewLifecycle({
+  acceptUrl: (url) => acceptResearchMainFrameUrl(url, true),
+  activeTabId: () => activeTabId,
+  detachView,
+  emitTabs,
+  tabs,
+});
+
 async function applyProxy(sess: Session, proxy: string): Promise<void> {
-  // Route only this site's traffic through its per-session proxy.
   if (proxy) {
     await sess.setProxy({ proxyRules: proxy });
   } else {
@@ -115,13 +122,11 @@ async function applyProxy(sess: Session, proxy: string): Promise<void> {
 
 const DOI_RE = /10\.\d{4,9}\/[^\s"'<>]+/;
 
-/** Normalize sniffed meta tags into a scholarly identity (pure, no network). */
 function normalizeScholarMeta(
   meta: Record<string, string[]>,
   pageUrl: string,
 ): ScholarIdentity | undefined {
   const first = (key: string): string | undefined => meta[key]?.[0]?.trim() || undefined;
-  // citation_doi is authoritative; other fields may carry a DOI prefix.
   let doi: string | undefined;
   for (const candidate of [
     ...(meta["citation_doi"] ?? []),
@@ -156,8 +161,9 @@ function normalizeScholarMeta(
 
 /** Read scholarly meta tags in the isolated world; failures are a no-op. */
 async function sniffScholar(tab: Tab): Promise<void> {
-  const wc = tab.view?.webContents;
-  if (!wc) return;
+  const view = tab.view;
+  const wc = view?.webContents;
+  if (!wc || wc.isDestroyed()) return;
   const pageUrl = acceptResearchMainFrameUrl(wc.getURL(), true);
   if (!pageUrl) return;
   const meta = await wc
@@ -176,13 +182,11 @@ async function sniffScholar(tab: Tab): Promise<void> {
       })()`,
     )
     .catch(() => null);
-  if (!meta || typeof meta !== "object") return;
-  // Do not associate metadata with a document that navigated during collection.
+  if (!meta || typeof meta !== "object" || wc.isDestroyed() || tab.view !== view) return;
   const settledUrl = acceptResearchMainFrameUrl(wc.getURL(), true);
   if (!settledUrl || settledUrl !== pageUrl) return;
   const identity = normalizeScholarMeta(meta as Record<string, string[]>, settledUrl);
   tab.scholar = identity;
-  // Remember the identity by full-text URL for later download attribution.
   if (identity?.pdfUrl) identityByPdfUrl.set(identity.pdfUrl, identity);
 }
 
@@ -246,6 +250,11 @@ function createView(tab: Tab): WebContentsView {
   view.webContents.on("will-frame-navigate", guardResearchNavigation);
   view.webContents.on("will-redirect", guardResearchNavigation);
   view.webContents.on("will-navigate", guardResearchNavigation);
+  view.webContents.once("destroyed", () => {
+    if (tab.view !== view) return;
+    tab.view = null;
+    emitTabs();
+  });
   view.webContents.on("page-title-updated", (_e, title) => {
     tab.title = title;
     emitTabs();
@@ -303,7 +312,7 @@ function spawnTab(siteId: string, url: string, proxy: string, ownerTabId?: strin
 
 function showTab(tabId: string): void {
   const tab = tabs.get(tabId);
-  if (!tab || !win) return;
+  if (!tab || !win || win.isDestroyed()) return;
   detachActiveView();
   if (!tab.view) tab.view = createView(tab); // un-archive
   win.contentView.addChildView(tab.view);
@@ -313,27 +322,24 @@ function showTab(tabId: string): void {
   emitTabs();
 }
 
-/** Periodic sweep: archive tabs idle past the threshold (never the active one). */
-function sweep(): void {
-  const now = Date.now();
-  for (const tab of tabs.values()) {
-    if (tab.tabId === activeTabId || !tab.view) continue;
-    if (now - tab.lastActiveAt > ARCHIVE_MS) {
-      if (win) win.contentView.removeChildView(tab.view);
-      tab.url = tab.view.webContents.getURL() || tab.url;
-      // WebContentsView has no destroy(); dropping the reference + removing it
-      // from the tree lets it be GC'd and its renderer process torn down.
-      tab.view = null;
-    }
-  }
-  emitTabs();
+function disposeResearchBrowser(): void {
+  viewLifecycle.disposeAll();
+  tabs.clear();
+  identityByPdfUrl.clear();
+  activeTabId = null;
+  win = null;
 }
 
 export function initResearchBrowser(window: BrowserWindow): void {
+  if (win === window) return;
+  if (win) disposeResearchBrowser();
   win = window;
   openResearchDownloads();
   ensureDownloadDir();
-  setInterval(sweep, 60_000);
+  viewLifecycle.start();
+  window.once("closed", () => {
+    if (win === window) disposeResearchBrowser();
+  });
 }
 
 export function hideResearchViews(): void {
@@ -398,7 +404,7 @@ export function registerResearchHandlers(): void {
     const validTabId = validateResearchTabId(tabId);
     const tab = tabs.get(validTabId);
     if (!tab) return;
-    if (tab.view && win) win.contentView.removeChildView(tab.view);
+    viewLifecycle.disposeTab(tab);
     tabs.delete(validTabId);
     if (activeTabId === validTabId) {
       activeTabId = null;
@@ -428,14 +434,18 @@ export function registerResearchHandlers(): void {
   // Capture inline/embedded full-text pages through downloadURL or printToPDF.
   handle(CH.researchCapture, async (): Promise<CaptureResult> => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
-    if (!tab?.view) return { kind: "none", error: "no active page" };
-    const wc = tab.view.webContents;
+    const view = tab?.view;
+    if (!tab || !view) return { kind: "none", error: "no active page" };
+    const wc = view.webContents;
+    if (wc.isDestroyed()) return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
     if (!acceptResearchMainFrameUrl(wc.getURL(), true)) {
       return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
     }
 
-    // Refresh the page identity so both capture paths carry the latest meta.
     await sniffScholar(tab);
+    if (tab.view !== view || wc.isDestroyed()) {
+      return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
+    }
     const url = acceptResearchMainFrameUrl(wc.getURL(), true);
     if (!url) return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
 
