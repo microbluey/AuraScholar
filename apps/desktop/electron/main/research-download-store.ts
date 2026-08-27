@@ -21,24 +21,19 @@ import {
   resolveResearchDownloadStreamTarget,
   type ResearchDownloadStreamStorage,
 } from "./research-download-stream-target";
+import * as downloadLimits from "./research-download-limits";
 
-/**
- * A research download is a short-lived main-process capability.  The renderer
- * receives only the opaque id; the pathname never crosses the preload bridge.
- */
-export const RESEARCH_DOWNLOAD_TTL_MS = 30 * 60 * 1000;
-export const MAX_PENDING_RESEARCH_DOWNLOADS = 128;
-export const MAX_PENDING_RESEARCH_DOWNLOAD_BYTES = 4 * 1024 * 1024 * 1024;
-// IPC returns the complete file to the renderer, so keep the one-shot memory
-// bound below the larger canonical-PDF staging limit.
-export const MAX_RESEARCH_DOWNLOAD_BYTES = 512 * 1024 * 1024;
-export const MAX_RESEARCH_DOWNLOAD_ID_LENGTH = 128;
+export * from "./research-download-limits";
 
 const DOWNLOAD_ID_BYTES = 32;
 const DOWNLOAD_ID_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const RESEARCH_DOWNLOAD_DIR = "research-downloads";
 function assertDownloadId(value: unknown): asserts value is string {
-  assertOpaqueDownloadId(value, DOWNLOAD_ID_PATTERN, MAX_RESEARCH_DOWNLOAD_ID_LENGTH);
+  assertOpaqueDownloadId(
+    value,
+    DOWNLOAD_ID_PATTERN,
+    downloadLimits.MAX_RESEARCH_DOWNLOAD_ID_LENGTH,
+  );
 }
 
 export interface ResearchDownloadLease {
@@ -101,9 +96,11 @@ export function createResearchDownloadStore(
   const cleanupPaths = new Set<string>();
   const now = options.now ?? Date.now;
   const newId = options.id ?? (() => randomBytes(DOWNLOAD_ID_BYTES).toString("base64url"));
-  const maxPendingDownloads = options.maxPendingDownloads ?? MAX_PENDING_RESEARCH_DOWNLOADS;
-  const maxDownloadBytes = options.maxDownloadBytes ?? MAX_RESEARCH_DOWNLOAD_BYTES;
-  const maxPendingBytes = options.maxPendingBytes ?? MAX_PENDING_RESEARCH_DOWNLOAD_BYTES;
+  const maxPendingDownloads =
+    options.maxPendingDownloads ?? downloadLimits.MAX_PENDING_RESEARCH_DOWNLOADS;
+  const maxDownloadBytes = options.maxDownloadBytes ?? downloadLimits.MAX_RESEARCH_DOWNLOAD_BYTES;
+  const maxPendingBytes =
+    options.maxPendingBytes ?? downloadLimits.MAX_PENDING_RESEARCH_DOWNLOAD_BYTES;
   let pendingBytes = 0;
   let reservedRegistrations = 0;
   let reservedBytes = 0;
@@ -317,7 +314,7 @@ export function createResearchDownloadStore(
         entries.set(downloadId, {
           ...target,
           byteSize,
-          expiresAt: now() + RESEARCH_DOWNLOAD_TTL_MS,
+          expiresAt: now() + downloadLimits.RESEARCH_DOWNLOAD_TTL_MS,
           fileName,
           ownerTabId,
           state: "available",

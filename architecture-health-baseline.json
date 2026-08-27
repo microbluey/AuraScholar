@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 79717,
+        ".ts": 79980,
         ".tsx": 35776
       },
       "files": {
@@ -96,12 +96,14 @@
         "apps/desktop/electron/main/research-browser-navigation-policy.ts": 120,
         "apps/desktop/electron/main/research-browser-policy.ts": 225,
         "apps/desktop/electron/main/research-browser-view-lifecycle.ts": 98,
-        "apps/desktop/electron/main/research-browser.ts": 496,
-        "apps/desktop/electron/main/research-download-events.ts": 103,
+        "apps/desktop/electron/main/research-browser.ts": 498,
+        "apps/desktop/electron/main/research-download-events.ts": 188,
         "apps/desktop/electron/main/research-download-file-name.ts": 43,
+        "apps/desktop/electron/main/research-download-inflight.ts": 171,
+        "apps/desktop/electron/main/research-download-limits.ts": 8,
         "apps/desktop/electron/main/research-download-print-file.ts": 50,
         "apps/desktop/electron/main/research-download-store-io.ts": 160,
-        "apps/desktop/electron/main/research-download-store.ts": 500,
+        "apps/desktop/electron/main/research-download-store.ts": 497,
         "apps/desktop/electron/main/research-download-stream-target.ts": 158,
         "apps/desktop/electron/main/research-project-commands.ts": 360,
         "apps/desktop/electron/main/research-project-query-data.ts": 218,
@@ -560,11 +562,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 134814
+      "totalLines": 135077
     },
     "tests": {
       "byExtension": {
-        ".ts": 79080,
+        ".ts": 79444,
         ".tsx": 1034
       },
       "files": {
@@ -641,8 +643,9 @@
         "apps/desktop/electron/main/research-browser-navigation-policy.test.ts": 117,
         "apps/desktop/electron/main/research-browser-policy.test.ts": 158,
         "apps/desktop/electron/main/research-browser-view-lifecycle.test.ts": 116,
-        "apps/desktop/electron/main/research-download-events.test.ts": 196,
+        "apps/desktop/electron/main/research-download-events.test.ts": 415,
         "apps/desktop/electron/main/research-download-file-name.test.ts": 34,
+        "apps/desktop/electron/main/research-download-inflight.test.ts": 145,
         "apps/desktop/electron/main/research-download-print-file.test.ts": 92,
         "apps/desktop/electron/main/research-download-store.test.ts": 286,
         "apps/desktop/electron/main/research-download-stream-target.test.ts": 73,
@@ -955,7 +958,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 80114
+      "totalLines": 80478
     }
   },
   "uiDatabaseBoundary": {}
