@@ -322,6 +322,8 @@ function showTab(tabId: string): void {
 
 function disposeResearchBrowser(): void {
   viewLifecycle.disposeAll();
+  // DownloadItem completion can outlive a closed view. Its admission remains
+  // reserved until the download event's terminal cleanup releases it.
   tabs.clear();
   identityByPdfUrl.clear();
   activeTabId = null;

@@ -1,7 +1,12 @@
 import { app, type BrowserWindow, type Session, type WebContentsView } from "electron";
 import { EV, type ScholarIdentity } from "../shared";
-import { discardResearchDownload, registerResearchDownload } from "./research-download-store";
+import {
+  admitResearchDownloadInFlight,
+  type ResearchDownloadInFlightAdmission,
+  type ResearchDownloadInFlightGate,
+} from "./research-download-inflight";
 import { createResearchDownloadFileName } from "./research-download-file-name";
+import { discardResearchDownload, registerResearchDownload } from "./research-download-store";
 import { createResearchDownloadStreamTarget } from "./research-download-stream-target";
 
 export interface ResearchDownloadSourceTab {
@@ -14,6 +19,7 @@ export interface ResearchDownloadSourceTab {
 export interface ResearchDownloadEventContext {
   findSourceTab(sourceWebContents: unknown): ResearchDownloadSourceTab | undefined;
   getWindow(): BrowserWindow | null;
+  inFlightGate?: ResearchDownloadInFlightGate;
   resolveIdentity(
     tab: ResearchDownloadSourceTab | undefined,
     url: string,
@@ -28,76 +34,155 @@ export function wireResearchDownloadSession(
   sess.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
-  sess.on("will-download", (_event, item, sourceWebContents) => {
+  sess.on("will-download", (event, item, sourceWebContents) => {
     const sourceTab = context.findSourceTab(sourceWebContents);
-    const sourceTabId = sourceTab?.tabId ?? "";
-    const ownerTabId = sourceTab?.ownerTabId ?? "";
-    const scholar = context.resolveIdentity(sourceTab, item.getURL());
-    const fileName = createResearchDownloadFileName(item.getFilename());
-    const displayName =
-      item
-        .getFilename()
-        .replace(/[^a-zA-Z0-9._-]/g, "-")
-        .slice(0, 120) || "download";
-    const window = context.getWindow();
-    window?.webContents.send(EV.researchDownloadStarted, {
-      tabId: sourceTabId,
-      fileName: displayName,
-    });
-
-    let target: ReturnType<typeof createResearchDownloadStreamTarget> | null = null;
-    try {
-      target = createResearchDownloadStreamTarget(app.getPath("userData"));
-      item.setSavePath(target.absolutePath);
-    } catch {
-      item.cancel();
-      if (target) void discardResearchDownload(fileName, target).catch(() => {});
-      window?.webContents.send(EV.researchDownloadFinished, {
-        tabId: sourceTabId,
-        ownerTabId,
-        fileName,
-        downloadId: null,
-        success: false,
-        scholar,
-      });
+    // A session can host untrusted pages. Only a live research tab is allowed
+    // to allocate a main-owned stream directory or a download receipt.
+    if (!sourceTab) {
+      event.preventDefault();
       return;
     }
 
-    item.once("done", (_doneEvent, state) => {
-      if (state !== "completed") {
-        void discardResearchDownload(fileName, target).catch(() => {});
-        context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
-          tabId: sourceTabId,
-          ownerTabId,
-          fileName,
-          downloadId: null,
-          success: false,
-          scholar,
+    const sourceTabId = sourceTab.tabId;
+    const ownerTabId = sourceTab.ownerTabId;
+    const scholar = context.resolveIdentity(sourceTab, item.getURL());
+    const originalFileName = item.getFilename();
+    const fileName = createResearchDownloadFileName(originalFileName);
+    const displayName =
+      originalFileName.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120) || "download";
+    let admission: ResearchDownloadInFlightAdmission | null;
+    try {
+      admission = context.inFlightGate
+        ? context.inFlightGate.admit(item.getTotalBytes())
+        : admitResearchDownloadInFlight(item.getTotalBytes());
+    } catch {
+      admission = null;
+    }
+    // `preventDefault` rejects before Electron starts the write. Do not touch
+    // the item afterwards: Electron invalidates it on the next tick.
+    if (!admission) {
+      event.preventDefault();
+      sendDownloadFinished(context, sourceTabId, ownerTabId, fileName, null, false, scholar);
+      return;
+    }
+
+    let target: ReturnType<typeof createResearchDownloadStreamTarget>;
+    try {
+      target = createResearchDownloadStreamTarget(app.getPath("userData"));
+    } catch {
+      event.preventDefault();
+      admission.release();
+      sendDownloadFinished(context, sourceTabId, ownerTabId, fileName, null, false, scholar);
+      return;
+    }
+
+    let settling = false;
+    let cancelRequested = false;
+    const sendFinished = (downloadId: string | null, success: boolean): void => {
+      sendDownloadFinished(
+        context,
+        sourceTabId,
+        ownerTabId,
+        fileName,
+        downloadId,
+        success,
+        scholar,
+      );
+    };
+    const finishFailure = (): void => {
+      if (settling) return;
+      settling = true;
+      void discardResearchDownload(fileName, target)
+        .catch(() => {})
+        .then(() => {
+          admission.release();
+          sendFinished(null, false);
         });
-        return;
-      }
+    };
+    const finishSuccess = (): void => {
+      if (settling) return;
+      settling = true;
       void registerResearchDownload(fileName, ownerTabId, target)
         .then(({ downloadId }) => {
-          context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
-            tabId: sourceTabId,
-            ownerTabId,
-            fileName,
-            downloadId,
-            success: true,
-            scholar,
-          });
+          admission.release();
+          sendFinished(downloadId, true);
         })
-        .catch(() => {
-          void discardResearchDownload(fileName, target).catch(() => {});
-          context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
-            tabId: sourceTabId,
-            ownerTabId,
-            fileName,
-            downloadId: null,
-            success: false,
-            scholar,
-          });
-        });
+        .catch(() =>
+          discardResearchDownload(fileName, target)
+            .catch(() => {})
+            .then(() => {
+              admission.release();
+              sendFinished(null, false);
+            }),
+        );
+    };
+    const cancelOnce = (): void => {
+      if (cancelRequested) return;
+      cancelRequested = true;
+      try {
+        item.cancel();
+      } catch {
+        // A terminal item cannot be cancelled, but it still needs cleanup.
+      }
+    };
+    const exceedsAdmission = (): boolean => {
+      try {
+        return !admission.observe(item.getReceivedBytes(), item.getTotalBytes());
+      } catch {
+        return true;
+      }
+    };
+
+    // Register terminal listeners before setting the target. This keeps a
+    // rapid cancellation from leaking an admission reservation.
+    item.on("updated", (_updatedEvent, _state) => {
+      if (exceedsAdmission()) cancelOnce();
     });
+    item.once("done", (_doneEvent, state) => {
+      if (exceedsAdmission()) cancelOnce();
+      if (state !== "completed" || cancelRequested) {
+        finishFailure();
+        return;
+      }
+      finishSuccess();
+    });
+
+    try {
+      item.setSavePath(target.absolutePath);
+    } catch {
+      event.preventDefault();
+      finishFailure();
+      return;
+    }
+
+    if (settling) return;
+    context.getWindow()?.webContents.send(EV.researchDownloadStarted, {
+      tabId: sourceTabId,
+      fileName: displayName,
+    });
+    if (exceedsAdmission()) cancelOnce();
   });
+}
+
+function sendDownloadFinished(
+  context: ResearchDownloadEventContext,
+  tabId: string,
+  ownerTabId: string,
+  fileName: string,
+  downloadId: string | null,
+  success: boolean,
+  scholar: ScholarIdentity | undefined,
+): void {
+  try {
+    context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
+      tabId,
+      ownerTabId,
+      fileName,
+      downloadId,
+      success,
+      scholar,
+    });
+  } catch {
+    // A closing BrowserWindow must not strand a completed reservation.
+  }
 }
