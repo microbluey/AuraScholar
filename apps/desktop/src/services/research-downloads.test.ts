@@ -330,6 +330,54 @@ describe("research download source-tab propagation", () => {
     );
   });
 
+  it("does not import an in-flight reference download after its broker generation is disposed", async () => {
+    const staleText = "TY  - JOUR\nTI  - Stale reference\nER  -";
+    const currentText = "TY  - JOUR\nTI  - Current reference\nER  -";
+    let resolveRead: ((content: ResearchDownloadContent) => void) | undefined;
+    mocks.consumeDownload
+      .mockReturnValueOnce(
+        new Promise<ResearchDownloadContent>((resolve) => {
+          resolveRead = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({ kind: "references", bytes: new TextEncoder().encode(currentText) });
+    subscribeResearchDownloads(vi.fn());
+
+    emitFinished?.({
+      tabId: "research-tab-in-flight-stale",
+      ownerTabId: "research-tab-in-flight-stale",
+      fileName: "1710000000011-stale.ris",
+      downloadId: "download-in-flight-stale",
+      success: true,
+    });
+    await vi.waitFor(() =>
+      expect(mocks.consumeDownload).toHaveBeenCalledWith({
+        downloadId: "download-in-flight-stale",
+      }),
+    );
+
+    disposeResearchDownloadBroker();
+    const currentResults = vi.fn();
+    subscribeResearchDownloads(currentResults);
+    resolveRead?.({ kind: "references", bytes: new TextEncoder().encode(staleText) });
+    emitFinished?.({
+      tabId: "research-tab-current",
+      ownerTabId: "research-tab-current",
+      fileName: "1710000000012-current.ris",
+      downloadId: "download-current",
+      success: true,
+    });
+
+    await vi.waitFor(() => expect(mocks.importReferences).toHaveBeenCalledWith(currentText));
+    expect(mocks.importReferences).toHaveBeenCalledTimes(1);
+    expect(mocks.importReferences).not.toHaveBeenCalledWith(staleText);
+    await vi.waitFor(() =>
+      expect(currentResults).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "references", tabId: "research-tab-current" }),
+      ),
+    );
+  });
+
   it("continues the queue after a failed consume", async () => {
     const captures: CapturedDownload[] = [];
     mocks.consumeDownload.mockRejectedValueOnce(new Error("read failed"));
