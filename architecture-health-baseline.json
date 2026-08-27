@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 80409,
+        ".ts": 80438,
         ".tsx": 35776
       },
       "files": {
@@ -98,6 +98,7 @@
         "apps/desktop/electron/main/research-browser-policy.ts": 225,
         "apps/desktop/electron/main/research-browser-view-lifecycle.ts": 98,
         "apps/desktop/electron/main/research-browser.ts": 499,
+        "apps/desktop/electron/main/research-download-cleanup-tracker.ts": 28,
         "apps/desktop/electron/main/research-download-consume-gate.ts": 77,
         "apps/desktop/electron/main/research-download-events.ts": 236,
         "apps/desktop/electron/main/research-download-file-name.ts": 43,
@@ -107,7 +108,7 @@
         "apps/desktop/electron/main/research-download-limits.ts": 8,
         "apps/desktop/electron/main/research-download-print-file.ts": 92,
         "apps/desktop/electron/main/research-download-store-io.ts": 160,
-        "apps/desktop/electron/main/research-download-store.ts": 499,
+        "apps/desktop/electron/main/research-download-store.ts": 500,
         "apps/desktop/electron/main/research-download-stream-target.ts": 158,
         "apps/desktop/electron/main/research-download-user-intent.ts": 163,
         "apps/desktop/electron/main/research-project-commands.ts": 360,
@@ -567,11 +568,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 135506
+      "totalLines": 135535
     },
     "tests": {
       "byExtension": {
-        ".ts": 80116,
+        ".ts": 80312,
         ".tsx": 1034
       },
       "files": {
@@ -654,7 +655,7 @@
         "apps/desktop/electron/main/research-download-file-policy.test.ts": 62,
         "apps/desktop/electron/main/research-download-inflight.test.ts": 145,
         "apps/desktop/electron/main/research-download-print-file.test.ts": 179,
-        "apps/desktop/electron/main/research-download-store.test.ts": 375,
+        "apps/desktop/electron/main/research-download-store.test.ts": 571,
         "apps/desktop/electron/main/research-download-stream-target.test.ts": 73,
         "apps/desktop/electron/main/research-download-user-intent.test.ts": 112,
         "apps/desktop/electron/main/research-project-commands.test.ts": 378,
@@ -966,7 +967,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 81150
+      "totalLines": 81346
     }
   },
   "uiDatabaseBoundary": {}

@@ -25,6 +25,7 @@ import {
   defaultResearchDownloadConsumeGate,
   type ResearchDownloadConsumeGate,
 } from "./research-download-consume-gate";
+import { createResearchDownloadCleanupTracker } from "./research-download-cleanup-tracker";
 import { describeResearchDownloadFile } from "./research-download-file-policy";
 import { assertResearchDownloadId } from "./research-download-id";
 import * as downloadLimits from "./research-download-limits";
@@ -74,10 +75,8 @@ export interface ResearchDownloadStoreOptions {
 type Entry = DownloadTarget & {
   readonly byteSize: number;
   readonly expiresAt: number;
-  readonly fileName: string;
   readonly contentKind: ResearchDownloadContent["kind"];
   readonly maxByteSize: number;
-  readonly ownerTabId: string;
   state: "available" | "claimed";
 };
 type DownloadTarget =
@@ -90,7 +89,7 @@ export function createResearchDownloadStore(
 ): ResearchDownloadStore {
   const entries = new Map<string, Entry>();
   const reservedPaths = new Set<string>();
-  const cleanupPaths = new Set<string>();
+  const cleanupTracker = createResearchDownloadCleanupTracker();
   const now = options.now ?? Date.now;
   const newId = options.id ?? (() => randomBytes(DOWNLOAD_ID_BYTES).toString("base64url"));
   const maxPendingDownloads =
@@ -177,17 +176,18 @@ export function createResearchDownloadStore(
     scheduleExpiryPurge();
   }
 
-  async function discardSafePath(target: DownloadTarget, byteLimit: number): Promise<void> {
+  async function discardSafePath(target: DownloadTarget, byteLimit: number): Promise<boolean> {
     try {
       await assertSafeTargetParentDirectories(target);
       const stat = await lstatOrMissing(target.absolutePath);
-      if (!stat) return;
+      if (!stat) return true;
       assertSafeRegularFile(stat);
       if (target.kind === "flat") assertByteSize(stat.size, byteLimit);
       await fs.unlink(target.absolutePath);
+      return true;
     } catch {
-      // A suspicious path is deliberately left untouched.  The lease is still
-      // retired so an untrusted caller cannot retry a dangerous pathname.
+      // Suspicious paths are left untouched; their lease is still retired.
+      return false;
     } finally {
       await removeEmptyResearchDownloadStreamDirectory(
         userDataRoot,
@@ -196,12 +196,11 @@ export function createResearchDownloadStore(
     }
   }
 
-  function scheduleSafeDiscard(target: DownloadTarget): Promise<void> {
-    // Tombstone the pathname synchronously before any await. A concurrent
-    // registration must not reuse it while this cleanup is in flight.
-    cleanupPaths.add(target.absolutePath);
-    return discardSafePath(target, maxDownloadBytes).finally(() => {
-      cleanupPaths.delete(target.absolutePath);
+  function scheduleSafeDiscard(target: DownloadTarget): Promise<boolean> {
+    cleanupTracker.hold(target.absolutePath);
+    return discardSafePath(target, maxDownloadBytes).then((discarded) => {
+      cleanupTracker.settle(target.absolutePath, discarded);
+      return discarded;
     });
   }
 
@@ -263,7 +262,7 @@ export function createResearchDownloadStore(
       if (entries.size + reservedRegistrations >= maxPendingDownloads) {
         throw new Error("Too many pending research download receipts");
       }
-      if (reservedPaths.has(absolutePath) || cleanupPaths.has(absolutePath)) {
+      if (reservedPaths.has(absolutePath) || cleanupTracker.has(absolutePath)) {
         throw new Error("Research download file is already leased");
       }
       for (const entry of entries.values()) {
@@ -314,10 +313,8 @@ export function createResearchDownloadStore(
           ...target,
           byteSize,
           expiresAt: now() + downloadLimits.RESEARCH_DOWNLOAD_TTL_MS,
-          fileName,
           contentKind: filePolicy.kind,
           maxByteSize: entryMaxBytes,
-          ownerTabId,
           state: "available",
         });
         registered = true;
@@ -397,17 +394,21 @@ export function createResearchDownloadStore(
           bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytesRead),
         };
       } catch (error) {
-        const cleanup = unlinked ? null : scheduleSafeDiscard(entry);
+        if (!unlinked) cleanupTracker.hold(entry.absolutePath);
         await removeEntry(downloadId, entry);
-        await cleanup;
         throw error;
       } finally {
         try {
           await handle?.close().catch(() => {});
-          await removeEmptyResearchDownloadStreamDirectory(
-            userDataRoot,
-            entry.kind === "stream" ? entry.cleanupDirectory : undefined,
-          );
+          if (!unlinked) {
+            const discarded = await discardSafePath(entry, maxDownloadBytes);
+            cleanupTracker.settle(entry.absolutePath, discarded, true);
+          } else {
+            await removeEmptyResearchDownloadStreamDirectory(
+              userDataRoot,
+              entry.kind === "stream" ? entry.cleanupDirectory : undefined,
+            );
+          }
         } finally {
           admission.release();
         }
@@ -417,7 +418,7 @@ export function createResearchDownloadStore(
     async discard(fileName, streamStorage) {
       const target = targetFor(fileName, streamStorage);
       const { absolutePath } = target;
-      if (reservedPaths.has(absolutePath) || cleanupPaths.has(absolutePath)) return;
+      if (reservedPaths.has(absolutePath) || cleanupTracker.has(absolutePath)) return;
       const cleanup = scheduleSafeDiscard(target);
       for (const [downloadId, entry] of entries) {
         if (entry.absolutePath !== absolutePath || entry.state === "claimed") continue;

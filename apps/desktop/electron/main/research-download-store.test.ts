@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertResearchDownloadConsumeInput,
   createResearchDownloadStore,
@@ -146,6 +146,167 @@ describe("main-owned research download leases", () => {
     await expect(fs.access(filePath)).rejects.toThrow();
   });
 
+  it("tombstones a failed consume until its descriptor closes and retries cleanup", async () => {
+    const userDataRoot = await root();
+    const fileName = "locked.pdf";
+    const filePath = join(userDataRoot, "research-downloads", fileName);
+    await fs.writeFile(filePath, BYTES);
+    const store = createResearchDownloadStore(userDataRoot, { id: () => "locked-id" });
+    const lease = await store.register(fileName, "owner-tab");
+    const closeStarted = deferred();
+    const closeGate = deferred();
+    const calls: string[] = [];
+    const locked = Object.assign(new Error("temporarily locked"), { code: "EBUSY" });
+    const originalOpen = fs.open;
+    const originalUnlink = fs.unlink.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (path, flags, mode) => {
+      const handle = await originalOpen(path, flags, mode);
+      return {
+        close: async () => {
+          calls.push("close");
+          closeStarted.resolve();
+          await closeGate.promise;
+          await handle.close();
+        },
+        read: handle.read.bind(handle),
+        stat: handle.stat.bind(handle),
+      } as unknown as Awaited<ReturnType<typeof fs.open>>;
+    });
+    const unlink = vi.spyOn(fs, "unlink").mockImplementation(async (path) => {
+      calls.push("unlink");
+      if (calls.filter((call) => call === "unlink").length === 1) throw locked;
+      await originalUnlink(path);
+    });
+
+    try {
+      const consuming = store.consume(lease.downloadId);
+      await closeStarted.promise;
+      expect(calls).toEqual(["unlink", "close"]);
+      await expect(store.register(fileName, "owner-tab")).rejects.toThrow("already leased");
+
+      closeGate.resolve();
+      await expect(consuming).rejects.toThrow(locked);
+      expect(calls).toEqual(["unlink", "close", "unlink"]);
+      await expect(fs.access(filePath)).rejects.toThrow();
+      await expect(store.consume(lease.downloadId)).rejects.toThrow("unavailable");
+    } finally {
+      closeGate.resolve();
+      open.mockRestore();
+      unlink.mockRestore();
+    }
+  });
+
+  it("keeps a failed consume tombstoned when an earlier cleanup settles before close", async () => {
+    const userDataRoot = await root();
+    const fileName = "overlap.pdf";
+    const filePath = join(userDataRoot, "research-downloads", fileName);
+    await fs.writeFile(filePath, BYTES);
+    const store = createResearchDownloadStore(userDataRoot, { id: () => "overlap-id" });
+    const lease = await store.register(fileName, "owner-tab");
+    const consumeUnlinkStarted = deferred();
+    const discardUnlinkStarted = deferred();
+    const consumeUnlinkGate = deferred();
+    const discardUnlinkGate = deferred();
+    const closeStarted = deferred();
+    const closeGate = deferred();
+    const locked = Object.assign(new Error("temporarily locked"), { code: "EBUSY" });
+    const originalOpen = fs.open;
+    const originalUnlink = fs.unlink.bind(fs);
+    let unlinkCount = 0;
+    const open = vi.spyOn(fs, "open").mockImplementation(async (path, flags, mode) => {
+      const handle = await originalOpen(path, flags, mode);
+      return {
+        close: async () => {
+          closeStarted.resolve();
+          await closeGate.promise;
+          await handle.close();
+        },
+        read: handle.read.bind(handle),
+        stat: handle.stat.bind(handle),
+      } as unknown as Awaited<ReturnType<typeof fs.open>>;
+    });
+    const unlink = vi.spyOn(fs, "unlink").mockImplementation(async (path) => {
+      unlinkCount += 1;
+      if (unlinkCount === 1) {
+        consumeUnlinkStarted.resolve();
+        await consumeUnlinkGate.promise;
+        throw locked;
+      }
+      if (unlinkCount === 2) {
+        discardUnlinkStarted.resolve();
+        await discardUnlinkGate.promise;
+        throw locked;
+      }
+      await originalUnlink(path);
+    });
+    let consuming: Promise<unknown> | null = null;
+
+    try {
+      consuming = store.consume(lease.downloadId);
+      await consumeUnlinkStarted.promise;
+      const discarding = store.discard(fileName);
+      await discardUnlinkStarted.promise;
+
+      consumeUnlinkGate.resolve();
+      await closeStarted.promise;
+      discardUnlinkGate.resolve();
+      await discarding;
+      await expect(store.register(fileName, "owner-tab")).rejects.toThrow("already leased");
+
+      closeGate.resolve();
+      await expect(consuming).rejects.toThrow(locked);
+      await expect(fs.access(filePath)).rejects.toThrow();
+    } finally {
+      consumeUnlinkGate.resolve();
+      discardUnlinkGate.resolve();
+      closeGate.resolve();
+      await consuming?.catch(() => {});
+      open.mockRestore();
+      unlink.mockRestore();
+    }
+  });
+
+  it("keeps a failed post-close cleanup tombstoned while releasing the consume gate", async () => {
+    const userDataRoot = await root();
+    const fileName = "still-locked.pdf";
+    const secondName = "next.pdf";
+    const directory = join(userDataRoot, "research-downloads");
+    await fs.writeFile(join(directory, fileName), BYTES);
+    await fs.writeFile(join(directory, secondName), BYTES);
+    const consumeGate = createResearchDownloadConsumeGate({ maxConsumes: 1, maxBytes: 1024 });
+    const store = createResearchDownloadStore(userDataRoot, {
+      consumeGate,
+      id: (() => {
+        let sequence = 0;
+        return () => `retry-${++sequence}`;
+      })(),
+    });
+    const lease = await store.register(fileName, "owner-tab");
+    const locked = Object.assign(new Error("still locked"), { code: "EPERM" });
+    const unlink = vi.spyOn(fs, "unlink").mockRejectedValue(locked);
+
+    try {
+      await expect(store.consume(lease.downloadId)).rejects.toThrow(locked);
+      await store.recover();
+      await expect(store.register(fileName, "owner-tab")).rejects.toThrow("already leased");
+      unlink.mockRestore();
+
+      await expect(store.register(fileName, "owner-tab")).rejects.toThrow("already leased");
+      const next = await store.register(secondName, "owner-tab");
+      await expect(store.consume(next.downloadId)).resolves.toEqual({ kind: "pdf", bytes: BYTES });
+
+      await store.recover();
+      await fs.writeFile(join(directory, fileName), BYTES);
+      const recovered = await store.register(fileName, "owner-tab");
+      await expect(store.consume(recovered.downloadId)).resolves.toEqual({
+        kind: "pdf",
+        bytes: BYTES,
+      });
+    } finally {
+      unlink.mockRestore();
+    }
+  });
+
   it("counts in-flight registrations toward the bounded receipt cap", async () => {
     const userDataRoot = await root();
     const directory = join(userDataRoot, "research-downloads");
@@ -281,6 +442,33 @@ describe("main-owned research download leases", () => {
     await expect(fs.access(abandoned.directory)).rejects.toThrow();
   });
 
+  it("removes an owned stream directory after a post-close cleanup retry", async () => {
+    const userDataRoot = await root();
+    const store = createResearchDownloadStore(userDataRoot, { id: () => "locked-stream-id" });
+    const target = createResearchDownloadStreamTarget(userDataRoot, {
+      id: () => "99999999-9999-4999-8999-999999999999",
+    });
+    await fs.writeFile(target.absolutePath, BYTES);
+    const lease = await store.register("stream.pdf", "owner-tab", target);
+    const locked = Object.assign(new Error("temporarily locked"), { code: "EBUSY" });
+    const originalUnlink = fs.unlink.bind(fs);
+    let failedPayloadUnlink = false;
+    const unlink = vi.spyOn(fs, "unlink").mockImplementation(async (path) => {
+      if (!failedPayloadUnlink && path === target.absolutePath) {
+        failedPayloadUnlink = true;
+        throw locked;
+      }
+      await originalUnlink(path);
+    });
+
+    try {
+      await expect(store.consume(lease.downloadId)).rejects.toThrow(locked);
+      await expect(fs.access(target.directory)).rejects.toThrow();
+    } finally {
+      unlink.mockRestore();
+    }
+  });
+
   it("cleans oversized owned stream payloads after rejection and recovery", async () => {
     const userDataRoot = await root();
     const store = createResearchDownloadStore(userDataRoot, {
@@ -372,4 +560,12 @@ async function exists(path: string): Promise<boolean> {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
