@@ -2,9 +2,9 @@ import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { app } from "electron";
+import type { ResearchDownloadContent } from "../shared";
 import {
   assertByteSize,
-  assertOpaqueDownloadId,
   assertOpaqueText,
   assertSafeFileName,
   assertSafeParentDirectories,
@@ -21,20 +21,18 @@ import {
   resolveResearchDownloadStreamTarget,
   type ResearchDownloadStreamStorage,
 } from "./research-download-stream-target";
+import {
+  defaultResearchDownloadConsumeGate,
+  type ResearchDownloadConsumeGate,
+} from "./research-download-consume-gate";
+import { describeResearchDownloadFile } from "./research-download-file-policy";
+import { assertResearchDownloadId } from "./research-download-id";
 import * as downloadLimits from "./research-download-limits";
 
 export * from "./research-download-limits";
 
 const DOWNLOAD_ID_BYTES = 32;
-const DOWNLOAD_ID_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const RESEARCH_DOWNLOAD_DIR = "research-downloads";
-function assertDownloadId(value: unknown): asserts value is string {
-  assertOpaqueDownloadId(
-    value,
-    DOWNLOAD_ID_PATTERN,
-    downloadLimits.MAX_RESEARCH_DOWNLOAD_ID_LENGTH,
-  );
-}
 
 export interface ResearchDownloadLease {
   downloadId: string;
@@ -51,7 +49,7 @@ export interface ResearchDownloadStore {
     streamStorage?: ResearchDownloadStreamStorage,
   ): Promise<ResearchDownloadLease>;
   /** Consume one receipt exactly once and remove its file before returning bytes. */
-  consume(downloadId: string): Promise<Uint8Array>;
+  consume(downloadId: string): Promise<ResearchDownloadContent>;
   /** Best-effort main-owned cleanup for a failed download. */
   discard(fileName: string, streamStorage?: ResearchDownloadStreamStorage): Promise<void>;
   /** Remove unclaimed receipts and their files during window/process teardown. */
@@ -65,6 +63,7 @@ export interface ResearchDownloadStore {
 }
 
 export interface ResearchDownloadStoreOptions {
+  consumeGate?: ResearchDownloadConsumeGate;
   now?(): number;
   id?(): string;
   maxPendingDownloads?: number;
@@ -76,17 +75,15 @@ type Entry = DownloadTarget & {
   readonly byteSize: number;
   readonly expiresAt: number;
   readonly fileName: string;
+  readonly contentKind: ResearchDownloadContent["kind"];
+  readonly maxByteSize: number;
   readonly ownerTabId: string;
   state: "available" | "claimed";
 };
 type DownloadTarget =
   | { absolutePath: string; kind: "flat" }
   | { absolutePath: string; cleanupDirectory: string; kind: "stream" };
-/**
- * Main-only registry for temporary research-browser files.  No durable table
- * is needed: a receipt is intentionally invalid after restart, and `recover`
- * cleans safe leftovers without scanning outside the dedicated directory.
- */
+/** Main-only registry; receipts expire on restart and `recover` cleans safe leftovers. */
 export function createResearchDownloadStore(
   userDataRoot: string,
   options: ResearchDownloadStoreOptions = {},
@@ -101,6 +98,7 @@ export function createResearchDownloadStore(
   const maxDownloadBytes = options.maxDownloadBytes ?? downloadLimits.MAX_RESEARCH_DOWNLOAD_BYTES;
   const maxPendingBytes =
     options.maxPendingBytes ?? downloadLimits.MAX_PENDING_RESEARCH_DOWNLOAD_BYTES;
+  const consumeGate = options.consumeGate ?? defaultResearchDownloadConsumeGate;
   let pendingBytes = 0;
   let reservedRegistrations = 0;
   let reservedBytes = 0;
@@ -259,6 +257,8 @@ export function createResearchDownloadStore(
       assertSafeFileName(fileName);
       assertOpaqueText(ownerTabId, "Research download owner tab id", 256);
       const target = targetFor(fileName, streamStorage);
+      const filePolicy = describeResearchDownloadFile(fileName, maxDownloadBytes);
+      const entryMaxBytes = filePolicy.maxByteSize;
       const { absolutePath } = target;
       if (entries.size + reservedRegistrations >= maxPendingDownloads) {
         throw new Error("Too many pending research download receipts");
@@ -286,12 +286,11 @@ export function createResearchDownloadStore(
             throw new Error("Research download file is already leased");
           }
         }
-
         await assertSafeTargetParentDirectories(target);
         const stat = await lstatOrMissing(absolutePath);
         if (!stat) throw new Error("Research download file is unavailable");
         assertSafeRegularFile(stat);
-        const byteSize = assertByteSize(stat.size, maxDownloadBytes);
+        const byteSize = assertByteSize(stat.size, entryMaxBytes);
         if (!acceptingRegistrations) throw new Error("Research download store is closed");
         if (pendingBytes + reservedBytes + byteSize > maxPendingBytes) {
           throw new Error("Pending research download byte quota exceeded");
@@ -302,7 +301,7 @@ export function createResearchDownloadStore(
         let downloadId = "";
         for (let attempt = 0; attempt < 8; attempt += 1) {
           const candidate = newId();
-          assertDownloadId(candidate);
+          assertResearchDownloadId(candidate);
           if (!entries.has(candidate)) {
             downloadId = candidate;
             break;
@@ -316,6 +315,8 @@ export function createResearchDownloadStore(
           byteSize,
           expiresAt: now() + downloadLimits.RESEARCH_DOWNLOAD_TTL_MS,
           fileName,
+          contentKind: filePolicy.kind,
+          maxByteSize: entryMaxBytes,
           ownerTabId,
           state: "available",
         });
@@ -339,14 +340,15 @@ export function createResearchDownloadStore(
         reservedPaths.delete(absolutePath);
       }
     },
-
     async consume(downloadId) {
       await purgeExpired();
-      assertDownloadId(downloadId);
+      assertResearchDownloadId(downloadId);
       const entry = entries.get(downloadId);
       if (!entry || entry.state !== "available") {
         throw new Error("Research download receipt is unavailable");
       }
+      const admission = consumeGate.admit(entry.byteSize);
+      if (!admission) throw new Error("Research download consumer is busy");
       // Claim synchronously before the first await below. Concurrent consumers
       // therefore cannot both open or unlink the same file.
       entry.state = "claimed";
@@ -359,7 +361,7 @@ export function createResearchDownloadStore(
         const before = await lstatOrMissing(entry.absolutePath);
         if (!before) throw new Error("Research download file is unavailable");
         assertSafeRegularFile(before);
-        assertByteSize(before.size, maxDownloadBytes);
+        assertByteSize(before.size, entry.maxByteSize);
 
         handle = await fs.open(entry.absolutePath, readFlags());
         const opened = await handle.stat();
@@ -374,6 +376,10 @@ export function createResearchDownloadStore(
         // validation/read sequence and makes the receipt genuinely one-time.
         await fs.unlink(entry.absolutePath);
         unlinked = true;
+        if (entry.contentKind === "ignored") {
+          await removeEntry(downloadId, entry);
+          return { kind: "ignored" };
+        }
         // Read into the already-validated, fixed-size buffer. `readFile()` would
         // size a new allocation from a concurrently changed inode and could
         // turn a bounded receipt into an unbounded OOM attempt.
@@ -386,18 +392,25 @@ export function createResearchDownloadStore(
         }
 
         await removeEntry(downloadId, entry);
-        return new Uint8Array(bytes.buffer, bytes.byteOffset, bytesRead);
+        return {
+          kind: entry.contentKind,
+          bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytesRead),
+        };
       } catch (error) {
         const cleanup = unlinked ? null : scheduleSafeDiscard(entry);
         await removeEntry(downloadId, entry);
         await cleanup;
         throw error;
       } finally {
-        await handle?.close().catch(() => {});
-        await removeEmptyResearchDownloadStreamDirectory(
-          userDataRoot,
-          entry.kind === "stream" ? entry.cleanupDirectory : undefined,
-        );
+        try {
+          await handle?.close().catch(() => {});
+          await removeEmptyResearchDownloadStreamDirectory(
+            userDataRoot,
+            entry.kind === "stream" ? entry.cleanupDirectory : undefined,
+          );
+        } finally {
+          admission.release();
+        }
       }
     },
 
@@ -450,7 +463,7 @@ export function registerResearchDownload(
   return mainStore().register(fileName, ownerTabId, streamStorage);
 }
 
-export function consumeResearchDownload(downloadId: string): Promise<Uint8Array> {
+export function consumeResearchDownload(downloadId: string): Promise<ResearchDownloadContent> {
   return mainStore().consume(downloadId);
 }
 
@@ -483,15 +496,4 @@ export function researchDownloadPath(userDataRoot: string, fileName: string): st
 
 export { ensureSafeResearchDownloadDirectory } from "./research-download-store-io";
 
-export function assertResearchDownloadConsumeInput(value: unknown): { downloadId: string } {
-  if (!isRecord(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, "downloadId")) {
-    throw new Error("Invalid research.consumeDownload input");
-  }
-  const downloadId = value.downloadId;
-  assertDownloadId(downloadId);
-  return { downloadId };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export { assertResearchDownloadConsumeInput } from "./research-download-id";

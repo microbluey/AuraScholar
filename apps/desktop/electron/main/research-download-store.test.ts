@@ -9,6 +9,8 @@ import {
   MAX_PENDING_RESEARCH_DOWNLOAD_BYTES,
   RESEARCH_DOWNLOAD_TTL_MS,
 } from "./research-download-store";
+import { createResearchDownloadConsumeGate } from "./research-download-consume-gate";
+import { MAX_REFERENCE_IMPORT_INPUT_BYTES } from "./reference-import-limits";
 import { createResearchDownloadStreamTarget } from "./research-download-stream-target";
 
 const roots: string[] = [];
@@ -37,7 +39,7 @@ describe("main-owned research download leases", () => {
 
     const lease = await store.register(fileName, "owner-tab");
     expect(lease).toEqual({ downloadId: "download-id", fileName, ownerTabId: "owner-tab" });
-    await expect(store.consume(lease.downloadId)).resolves.toEqual(BYTES);
+    await expect(store.consume(lease.downloadId)).resolves.toEqual({ kind: "pdf", bytes: BYTES });
     await expect(fs.access(filePath)).rejects.toThrow();
     await expect(store.consume(lease.downloadId)).rejects.toThrow("unavailable");
   });
@@ -54,6 +56,93 @@ describe("main-owned research download leases", () => {
     const second = store.consume(lease.downloadId);
     await expect(Promise.all([first, second])).rejects.toThrow("unavailable");
     await first.catch(() => {});
+    await expect(fs.access(filePath)).rejects.toThrow();
+  });
+
+  it("keeps a busy receipt available for teardown instead of claiming it", async () => {
+    const userDataRoot = await root();
+    const fileName = "busy.pdf";
+    const filePath = join(userDataRoot, "research-downloads", fileName);
+    await fs.writeFile(filePath, BYTES);
+    const consumeGate = createResearchDownloadConsumeGate({ maxConsumes: 1, maxBytes: 1024 });
+    const heldAdmission = consumeGate.admit(BYTES.byteLength);
+    const store = createResearchDownloadStore(userDataRoot, { consumeGate, id: () => "busy-id" });
+    const lease = await store.register(fileName, "owner-tab");
+
+    await expect(store.consume(lease.downloadId)).rejects.toThrow("consumer is busy");
+    await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(BYTES));
+    await store.clear();
+    await expect(fs.access(filePath)).rejects.toThrow();
+    heldAdmission?.release();
+  });
+
+  it("allows a receipt to consume after the temporary gate reservation releases", async () => {
+    const userDataRoot = await root();
+    const fileName = "released.pdf";
+    const filePath = join(userDataRoot, "research-downloads", fileName);
+    await fs.writeFile(filePath, BYTES);
+    const consumeGate = createResearchDownloadConsumeGate({ maxConsumes: 1, maxBytes: 1024 });
+    const heldAdmission = consumeGate.admit(BYTES.byteLength);
+    const store = createResearchDownloadStore(userDataRoot, {
+      consumeGate,
+      id: () => "released-id",
+    });
+    const lease = await store.register(fileName, "owner-tab");
+
+    await expect(store.consume(lease.downloadId)).rejects.toThrow("consumer is busy");
+    heldAdmission?.release();
+    await expect(store.consume(lease.downloadId)).resolves.toEqual({ kind: "pdf", bytes: BYTES });
+  });
+
+  it("releases its consume admission after each completed receipt", async () => {
+    const userDataRoot = await root();
+    const firstName = "first.pdf";
+    const secondName = "second.pdf";
+    const directory = join(userDataRoot, "research-downloads");
+    await fs.writeFile(join(directory, firstName), BYTES);
+    await fs.writeFile(join(directory, secondName), BYTES);
+    const consumeGate = createResearchDownloadConsumeGate({ maxConsumes: 1, maxBytes: 1024 });
+    const store = createResearchDownloadStore(userDataRoot, {
+      consumeGate,
+      id: (() => {
+        let sequence = 0;
+        return () => `released-${++sequence}`;
+      })(),
+    });
+    const first = await store.register(firstName, "owner-tab");
+    const second = await store.register(secondName, "owner-tab");
+
+    await expect(store.consume(first.downloadId)).resolves.toEqual({ kind: "pdf", bytes: BYTES });
+    await expect(store.consume(second.downloadId)).resolves.toEqual({ kind: "pdf", bytes: BYTES });
+  });
+
+  it("uses the stricter reference bound for registration and later consumption", async () => {
+    const userDataRoot = await root();
+    const fileName = "references.BIB";
+    const filePath = join(userDataRoot, "research-downloads", fileName);
+    await fs.writeFile(filePath, "");
+    await fs.truncate(filePath, MAX_REFERENCE_IMPORT_INPUT_BYTES + 1);
+    const store = createResearchDownloadStore(userDataRoot, { id: () => "references-id" });
+
+    await expect(store.register(fileName, "owner-tab")).rejects.toThrow("too large");
+    await expect(fs.access(filePath)).rejects.toThrow();
+
+    await fs.writeFile(filePath, BYTES);
+    const lease = await store.register(fileName, "owner-tab");
+    await fs.truncate(filePath, MAX_REFERENCE_IMPORT_INPUT_BYTES + 1);
+    await expect(store.consume(lease.downloadId)).rejects.toThrow("too large");
+    await expect(fs.access(filePath)).rejects.toThrow();
+  });
+
+  it("retires ignored files without returning their bytes over IPC", async () => {
+    const userDataRoot = await root();
+    const fileName = "supplement.zip";
+    const filePath = join(userDataRoot, "research-downloads", fileName);
+    await fs.writeFile(filePath, BYTES);
+    const store = createResearchDownloadStore(userDataRoot, { id: () => "ignored-id" });
+    const lease = await store.register(fileName, "owner-tab");
+
+    await expect(store.consume(lease.downloadId)).resolves.toEqual({ kind: "ignored" });
     await expect(fs.access(filePath)).rejects.toThrow();
   });
 
@@ -181,7 +270,7 @@ describe("main-owned research download leases", () => {
     await fs.writeFile(target.absolutePath, BYTES);
 
     const lease = await store.register("stream.pdf", "owner-tab", target);
-    await expect(store.consume(lease.downloadId)).resolves.toEqual(BYTES);
+    await expect(store.consume(lease.downloadId)).resolves.toEqual({ kind: "pdf", bytes: BYTES });
     await expect(fs.access(target.directory)).rejects.toThrow();
 
     const abandoned = createResearchDownloadStreamTarget(userDataRoot, {

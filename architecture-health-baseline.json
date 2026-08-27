@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 80172,
+        ".ts": 80367,
         ".tsx": 35776
       },
       "files": {
@@ -91,19 +91,23 @@
         "apps/desktop/electron/main/platform-fs-policy.ts": 121,
         "apps/desktop/electron/main/platform.ts": 152,
         "apps/desktop/electron/main/reader-commands.ts": 412,
-        "apps/desktop/electron/main/reference-import-command-input.ts": 178,
+        "apps/desktop/electron/main/reference-import-command-input.ts": 179,
         "apps/desktop/electron/main/reference-import-commands.ts": 56,
+        "apps/desktop/electron/main/reference-import-limits.ts": 2,
         "apps/desktop/electron/main/research-browser-navigation-policy.ts": 120,
         "apps/desktop/electron/main/research-browser-policy.ts": 225,
         "apps/desktop/electron/main/research-browser-view-lifecycle.ts": 98,
         "apps/desktop/electron/main/research-browser.ts": 499,
-        "apps/desktop/electron/main/research-download-events.ts": 216,
+        "apps/desktop/electron/main/research-download-consume-gate.ts": 77,
+        "apps/desktop/electron/main/research-download-events.ts": 236,
         "apps/desktop/electron/main/research-download-file-name.ts": 43,
+        "apps/desktop/electron/main/research-download-file-policy.ts": 50,
+        "apps/desktop/electron/main/research-download-id.ts": 21,
         "apps/desktop/electron/main/research-download-inflight.ts": 171,
         "apps/desktop/electron/main/research-download-limits.ts": 8,
         "apps/desktop/electron/main/research-download-print-file.ts": 50,
         "apps/desktop/electron/main/research-download-store-io.ts": 160,
-        "apps/desktop/electron/main/research-download-store.ts": 497,
+        "apps/desktop/electron/main/research-download-store.ts": 499,
         "apps/desktop/electron/main/research-download-stream-target.ts": 158,
         "apps/desktop/electron/main/research-download-user-intent.ts": 163,
         "apps/desktop/electron/main/research-project-commands.ts": 360,
@@ -138,7 +142,7 @@
         "apps/desktop/electron/main/translation-provider-http.ts": 106,
         "apps/desktop/electron/main/translation-provider-settings-store.ts": 450,
         "apps/desktop/electron/main/work-metadata-commands.ts": 369,
-        "apps/desktop/electron/preload.ts": 224,
+        "apps/desktop/electron/preload.ts": 225,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/reader-command-contract.ts": 146,
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
@@ -146,7 +150,7 @@
         "apps/desktop/electron/scholarly-command-contract.ts": 100,
         "apps/desktop/electron/sentinel-read-command-contract.ts": 71,
         "apps/desktop/electron/sentinel-run-command-contract.ts": 66,
-        "apps/desktop/electron/shared.ts": 151,
+        "apps/desktop/electron/shared.ts": 157,
         "apps/desktop/electron/smoke-mode.ts": 15,
         "apps/desktop/electron/snippet-command-contract.ts": 63,
         "apps/desktop/electron/sync-command-contract.ts": 68,
@@ -367,7 +371,7 @@
         "apps/desktop/src/services/preview-library.ts": 70,
         "apps/desktop/src/services/reader-session-data.ts": 90,
         "apps/desktop/src/services/research-browser.ts": 91,
-        "apps/desktop/src/services/research-downloads.ts": 218,
+        "apps/desktop/src/services/research-downloads.ts": 233,
         "apps/desktop/src/services/research-project-desktop-service.ts": 74,
         "apps/desktop/src/services/research-project-preview-service.ts": 201,
         "apps/desktop/src/services/research-project-service.ts": 57,
@@ -563,11 +567,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 135269
+      "totalLines": 135464
     },
     "tests": {
       "byExtension": {
-        ".ts": 79623,
+        ".ts": 80029,
         ".tsx": 1034
       },
       "files": {
@@ -644,11 +648,13 @@
         "apps/desktop/electron/main/research-browser-navigation-policy.test.ts": 117,
         "apps/desktop/electron/main/research-browser-policy.test.ts": 158,
         "apps/desktop/electron/main/research-browser-view-lifecycle.test.ts": 116,
-        "apps/desktop/electron/main/research-download-events.test.ts": 482,
+        "apps/desktop/electron/main/research-download-consume-gate.test.ts": 34,
+        "apps/desktop/electron/main/research-download-events.test.ts": 535,
         "apps/desktop/electron/main/research-download-file-name.test.ts": 34,
+        "apps/desktop/electron/main/research-download-file-policy.test.ts": 62,
         "apps/desktop/electron/main/research-download-inflight.test.ts": 145,
         "apps/desktop/electron/main/research-download-print-file.test.ts": 92,
-        "apps/desktop/electron/main/research-download-store.test.ts": 286,
+        "apps/desktop/electron/main/research-download-store.test.ts": 375,
         "apps/desktop/electron/main/research-download-stream-target.test.ts": 73,
         "apps/desktop/electron/main/research-download-user-intent.test.ts": 112,
         "apps/desktop/electron/main/research-project-commands.test.ts": 378,
@@ -865,7 +871,7 @@
         "apps/desktop/src/services/preview-library.test.ts": 18,
         "apps/desktop/src/services/reader-session-data.test.ts": 150,
         "apps/desktop/src/services/research-browser.test.ts": 23,
-        "apps/desktop/src/services/research-downloads.test.ts": 190,
+        "apps/desktop/src/services/research-downloads.test.ts": 358,
         "apps/desktop/src/services/research-project-backup.test.ts": 434,
         "apps/desktop/src/services/research-project-desktop-service.test.ts": 65,
         "apps/desktop/src/services/research-project-preview-service.test.ts": 49,
@@ -960,7 +966,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 80657
+      "totalLines": 81063
     }
   },
   "uiDatabaseBoundary": {}
