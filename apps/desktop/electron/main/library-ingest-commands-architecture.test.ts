@@ -107,11 +107,11 @@ describe("Library finalize-ingest command architecture", () => {
     expect(claim).toContain("dependencies.verifyStagedPdf");
     expect(claim).toContain("claim.release()");
     expect(dataCommands).toContain("verifyStagedPdf,");
-    expect(platformPolicy).toContain("resolveRendererResearchDownloadDeletePath");
+    expect(platformPolicy).not.toContain("resolveRendererResearchDownloadDeletePath");
     expect(platformPolicy).not.toContain("writeRendererMutableFile");
     expect(platformPolicy).not.toContain("mkdirpRendererMutablePath");
     expect(platformPolicy).not.toContain('"exports"');
-    expect(platform).toContain("deleteRendererResearchDownloadFile");
+    expect(platform).not.toContain("deleteRendererResearchDownloadFile");
   });
 
   it("keeps renderer callers on the facade and removes active-dedup restore calls", () => {
@@ -132,7 +132,7 @@ describe("Library finalize-ingest command architecture", () => {
     expect(actions).not.toContain("WorksRepo");
     expect(actions).not.toContain("AttachmentsRepo");
     expect(actions).toContain("discardStagedPdf");
-    expect(actions).toContain("pdf.relPath");
+    expect(actions).not.toContain("pdf.relPath");
     expect(library).toContain("stagePdf as stagePdfBytes");
     expect(library).toContain("findIngestDedup");
     expect(library).toContain("searchWorksByMetadata");

@@ -3,7 +3,6 @@
 import type { AuraApi } from "../electron/preload";
 
 type AssertFalse<Value extends false> = Value;
-type AssertTrue<Value extends true> = Value;
 // The raw SQL bridge may exist in the dedicated smoke process but is not part
 // of the production renderer API contract.
 type _AuraApiExcludesRawDatabase = AssertFalse<"db" extends keyof AuraApi ? true : false>;
@@ -18,7 +17,8 @@ type _AuraApiExcludesGenericHttpCancel = AssertFalse<
 >;
 // These renderer capabilities had no production consumer. Keep clipboard
 // writing, but do not reintroduce clipboard reads, device identity, external
-// shell launches, or local citation-service discovery through preload.
+// shell launches, local citation-service discovery, or renderer filesystem
+// mutation through preload.
 type _AuraApiExcludesClipboardReadText = AssertFalse<
   "readText" extends keyof AuraApi["clipboard"] ? true : false
 >;
@@ -29,8 +29,8 @@ type _AuraApiExcludesOpenExternal = AssertFalse<
 type _AuraApiExcludesCitationBridgePort = AssertFalse<
   "citationBridgePort" extends keyof AuraApi ? true : false
 >;
-type _AuraApiFsOnlyDeletesResearchDownloads = AssertTrue<
-  keyof AuraApi["fs"] extends "deleteFile" ? true : false
+type _AuraApiExcludesRendererFilesystemMutation = AssertFalse<
+  "fs" extends keyof AuraApi ? true : false
 >;
 
 declare global {

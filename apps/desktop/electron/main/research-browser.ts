@@ -5,9 +5,8 @@
 // exactly in place. Arc-style archiving reclaims memory from tabs left idle
 // past ARCHIVE_MS by destroying the view while keeping the tab entry; clicking
 // an archived tab recreates it at its stored URL.
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { app, BrowserWindow, session, WebContentsView, type Session } from "electron";
 import { describeSafeError } from "@aurascholar/platform";
 import { handle } from "./ipc";
@@ -24,9 +23,19 @@ import {
   type ResearchTab,
   type ScholarIdentity,
 } from "../shared";
+import {
+  assertResearchDownloadConsumeInput,
+  consumeResearchDownload,
+  discardResearchDownload,
+  ensureSafeResearchDownloadDirectory,
+  openResearchDownloads,
+  registerResearchDownload,
+  researchDownloadPath,
+} from "./research-download-store";
+import { createResearchDownloadFileName } from "./research-download-file-name";
+import { wireResearchDownloadSession } from "./research-download-events";
 
 const ARCHIVE_MS = 30 * 60 * 1000; // 30 minutes idle → archive
-const DOWNLOAD_SUBDIR = "research-downloads";
 
 interface Tab {
   tabId: string;
@@ -69,7 +78,7 @@ function emitTabs(): void {
 }
 
 function ensureDownloadDir(): void {
-  mkdirSync(join(app.getPath("userData"), DOWNLOAD_SUBDIR), { recursive: true });
+  ensureSafeResearchDownloadDirectory(app.getPath("userData"));
 }
 
 /** Wire download interception once per site session. */
@@ -77,34 +86,11 @@ function wireSession(sess: Session, siteId: string): void {
   const key = researchPartition(siteId);
   if (wiredSessions.has(key)) return;
   wiredSessions.add(key);
-  sess.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    callback(false);
-  });
-  sess.on("will-download", (_e, item, sourceWebContents) => {
-    ensureDownloadDir();
-    const sourceTab = [...tabs.values()].find((t) => t.view?.webContents === sourceWebContents);
-    const sourceTabId = sourceTab?.tabId ?? "";
-    const ownerTabId = sourceTab?.ownerTabId ?? "";
-    const scholar = resolveDownloadIdentity(sourceTab, item.getURL());
-    const stamp = Date.now();
-    const safe = item.getFilename().replace(/[^a-zA-Z0-9._-]/g, "-");
-    // Tell the renderer a download is in flight so it can show progress while
-    // the file streams + metadata is resolved (can be several seconds).
-    win?.webContents.send(EV.researchDownloadStarted, { tabId: sourceTabId, fileName: safe });
-    const fileName = `${stamp}-${safe}`;
-    const relPath = `${DOWNLOAD_SUBDIR}/${fileName}`;
-    const abs = join(app.getPath("userData"), DOWNLOAD_SUBDIR, fileName);
-    item.setSavePath(abs);
-    item.once("done", (_ev, state) => {
-      win?.webContents.send(EV.researchDownloadFinished, {
-        tabId: sourceTabId,
-        ownerTabId,
-        fileName,
-        relPath,
-        success: state === "completed",
-        scholar,
-      });
-    });
+  wireResearchDownloadSession(sess, {
+    findSourceTab: (sourceWebContents) =>
+      [...tabs.values()].find((tab) => tab.view?.webContents === sourceWebContents),
+    getWindow: () => win,
+    resolveIdentity: resolveDownloadIdentity,
   });
 }
 
@@ -230,7 +216,10 @@ function identityForUrl(url: string): ScholarIdentity | undefined {
  * Covers "click Paper → navigate to PDF → download" where the tab no longer
  * carries the abstract page's meta.
  */
-function resolveDownloadIdentity(tab: Tab | undefined, downloadUrl: string): ScholarIdentity | undefined {
+function resolveDownloadIdentity(
+  tab: Tab | undefined,
+  downloadUrl: string,
+): ScholarIdentity | undefined {
   if (tab?.scholar) return tab.scholar;
   return identityForUrl(downloadUrl);
 }
@@ -344,6 +333,7 @@ function sweep(): void {
 
 export function initResearchBrowser(window: BrowserWindow): void {
   win = window;
+  openResearchDownloads();
   ensureDownloadDir();
   setInterval(sweep, 60_000);
 }
@@ -355,13 +345,7 @@ export function hideResearchViews(): void {
 export function registerResearchHandlers(): void {
   handle(
     CH.researchOpen,
-    (
-      _e,
-      siteId: string,
-      url: string,
-      proxy: string,
-      options?: { reuseExisting?: boolean },
-    ) => {
+    (_e, siteId: string, url: string, proxy: string, options?: { reuseExisting?: boolean }) => {
       // Reuse an existing tab for the same site unless this is an isolated task.
       const existing =
         options?.reuseExisting === false
@@ -437,6 +421,11 @@ export function registerResearchHandlers(): void {
 
   handle(CH.researchList, () => snapshot());
 
+  handle(CH.researchConsumeDownload, (_e, input: unknown) => {
+    const { downloadId } = assertResearchDownloadConsumeInput(input);
+    return consumeResearchDownload(downloadId);
+  });
+
   // Capture the active tab for ingest. Many publishers render full-text inline
   // (Content-Disposition: inline, an embedded viewer, or a blob: URL) so the
   // will-download interceptor never fires. This gives the user an explicit
@@ -444,8 +433,8 @@ export function registerResearchHandlers(): void {
   //   • a direct .pdf URL → downloadURL() reuses the authed session + the
   //     existing will-download → ingest pipeline (emits download-finished);
   //   • anything else → printToPDF() renders the page as it stands (behind any
-  //     paywall the user already cleared) and we hand the bytes straight to the
-  //     renderer to ingest.
+  //     paywall the user already cleared) and exposes the result through the
+  //     same one-time opaque lease used by streamed downloads.
   handle(CH.researchCapture, async (): Promise<CaptureResult> => {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (!tab?.view) return { kind: "none", error: "no active page" };
@@ -460,24 +449,29 @@ export function registerResearchHandlers(): void {
       return { kind: "download" };
     }
 
+    let fileName: string | undefined;
+    let wroteFile = false;
     try {
       ensureDownloadDir();
       const pdf = await wc.printToPDF({ printBackground: true });
-      const stamp = Date.now();
-      const base = (wc.getTitle() || "page").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 80);
-      const fileName = `${stamp}-${base}.pdf`;
-      const relPath = `${DOWNLOAD_SUBDIR}/${fileName}`;
-      writeFileSync(join(app.getPath("userData"), DOWNLOAD_SUBDIR, fileName), pdf);
+      const base =
+        (wc.getTitle() || "page").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 80) || "page";
+      fileName = createResearchDownloadFileName(`${base}.pdf`);
+      const abs = researchDownloadPath(app.getPath("userData"), fileName);
+      writeFileSync(abs, pdf, { mode: 0o600, flag: "wx" });
+      wroteFile = true;
+      const { downloadId } = await registerResearchDownload(fileName, tab.ownerTabId);
       win?.webContents.send(EV.researchDownloadFinished, {
         tabId: tab.tabId,
         ownerTabId: tab.ownerTabId,
         fileName,
-        relPath,
+        downloadId,
         success: true,
         scholar: tab.scholar,
       });
-      return { kind: "print", relPath, fileName };
+      return { kind: "print", downloadId, fileName };
     } catch (e) {
+      if (fileName && wroteFile) void discardResearchDownload(fileName).catch(() => {});
       return { kind: "none", error: describeSafeError(e) };
     }
   });

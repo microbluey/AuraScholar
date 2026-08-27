@@ -13,20 +13,17 @@ const stagedPdf: PendingPdf = {
   fetchedVia: "research-download",
   fileName: "downloaded-paper.pdf",
   pageCount: 8,
-  relPath: "research-downloads/temporary-paper.pdf",
   sha: "b".repeat(64),
   stageId: "s".repeat(43),
 };
 
 describe("library ingest action facade", () => {
   const command = vi.fn();
-  const deleteFile = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal("window", { aura: { data: { command }, fs: { deleteFile } } });
+    vi.stubGlobal("window", { aura: { data: { command } } });
     command.mockResolvedValue({ released: true });
-    deleteFile.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -116,7 +113,6 @@ describe("library ingest action facade", () => {
       ["library.finalizeIngest", { mode: "attach", pdf: null, workId: "work-existing" }],
       ["library.releaseStagedPdf", { stageId: "s".repeat(43) }],
     ]);
-    expect(deleteFile).toHaveBeenCalledWith("research-downloads/temporary-paper.pdf");
   });
 
   it("does not mask an attachment failure when active-target revalidation also fails", async () => {
@@ -200,18 +196,12 @@ describe("library ingest action facade", () => {
     });
   });
 
-  it("releases main-owned staging plus renderer-only download cleanup on cancellation", async () => {
-    deleteFile.mockResolvedValue(undefined);
+  it("releases the main-owned staging receipt on cancellation", async () => {
     command.mockResolvedValue({ released: true });
 
     await discardStagedPdf(stagedPdf);
-    await discardStagedPdf({ ...stagedPdf, relPath: null });
+    await discardStagedPdf(null);
 
-    expect(command.mock.calls).toEqual([
-      ["library.releaseStagedPdf", { stageId: "s".repeat(43) }],
-      ["library.releaseStagedPdf", { stageId: "s".repeat(43) }],
-    ]);
-    expect(deleteFile).toHaveBeenCalledTimes(1);
-    expect(deleteFile).toHaveBeenCalledWith("research-downloads/temporary-paper.pdf");
+    expect(command.mock.calls).toEqual([["library.releaseStagedPdf", { stageId: "s".repeat(43) }]]);
   });
 });

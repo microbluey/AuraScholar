@@ -7,13 +7,7 @@ import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import { app, clipboard, Notification, safeStorage, shell } from "electron";
 import { handle } from "./ipc";
-import {
-  deleteRendererResearchDownloadFile,
-  readRendererReadableFile,
-  resolveRendererBlobPdfPath,
-  resolveRendererResearchDownloadDeletePath,
-  resolveRendererResearchDownloadPath,
-} from "./platform-fs-policy";
+import { readRendererReadableFile, resolveRendererBlobPdfPath } from "./platform-fs-policy";
 import { CH } from "../shared";
 
 const appData = () => app.getPath("userData");
@@ -118,16 +112,8 @@ function decode(stored: string): string {
 }
 
 export function registerPlatformHandlers(): void {
-  handle(CH.fsDelete, async (_e, rel: string) => {
-    await deleteRendererResearchDownloadFile(
-      resolveRendererResearchDownloadDeletePath(appData(), rel),
-    );
-  });
   handle(CH.fsReadBlobPdf, async (_e, sha256: string) => {
     return readRendererReadableFile(resolveRendererBlobPdfPath(appData(), sha256));
-  });
-  handle(CH.fsReadResearchDownload, async (_e, relPath: string) => {
-    return readRendererReadableFile(resolveRendererResearchDownloadPath(appData(), relPath));
   });
   handle(CH.notify, (_e, title: string, body?: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show();

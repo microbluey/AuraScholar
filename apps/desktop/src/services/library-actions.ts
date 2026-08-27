@@ -1,6 +1,5 @@
 import type { WorkInput } from "@aurascholar/db/repos/works";
 import type { DataCommandMap } from "../../electron/data-command-contract";
-import { auraFs } from "./aura-platform";
 import type { PendingPdf } from "./library-types";
 
 type FinalizeIngestCommand = DataCommandMap["library.finalizeIngest"];
@@ -23,8 +22,9 @@ export interface FinalizeDedupIngestResult {
 
 /**
  * Commit one reviewed ingest decision through the main-process transaction.
- * `PendingPdf.relPath` is intentionally kept out of the command input: it is
- * a renderer-only research-download cleanup capability.
+ * Research-download bytes are consumed through a one-time main-owned lease
+ * before a `PendingPdf` is created. The finalizer therefore receives only the
+ * opaque staged-PDF receipt and never a renderer filesystem capability.
  */
 export function finalizeIngest(decision: FinalizeIngestDecision): Promise<FinalizeIngestResult> {
   const pdf = toStagedPdfInput(decision.pdf);
@@ -98,13 +98,11 @@ export function stagePdf(bytes: Uint8Array): Promise<StagedPdfReceipt> {
 /**
  * Discard a PDF staged during analysis when the user cancels before commit.
  * Main releases only its short-lived receipt, never global content-addressed
- * bytes; the renderer separately clears a research-download temp file.
+ * bytes. Research-download leases have already been consumed before staging.
  */
 export async function discardStagedPdf(pdf: PendingPdf | null | undefined): Promise<void> {
   if (!pdf) return;
-  const releases: Promise<unknown>[] = [releaseStagedPdf(pdf.stageId).catch(() => {})];
-  if (pdf.relPath) releases.push(auraFs.deleteFile(pdf.relPath).catch(() => {}));
-  await Promise.all(releases);
+  await releaseStagedPdf(pdf.stageId).catch(() => {});
 }
 
 function releaseStagedPdf(stageId: string): Promise<ReleaseStagedPdfCommand["output"]> {

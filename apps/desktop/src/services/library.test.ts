@@ -150,18 +150,13 @@ describe("library resolved-work ingest", () => {
     expect(mocks.ensureOaPdfAttachment).toHaveBeenCalledWith("work-1");
   });
 
-  it("keeps the exact browser temp path when page citation metadata is unavailable", async () => {
-    const analyzed = await analyzeResearchDownloadPdf(
-      "captured.pdf",
-      pdfBytes(),
-      "research-downloads/captured.pdf",
-    );
+  it("keeps browser provenance without exposing a temporary filesystem path", async () => {
+    const analyzed = await analyzeResearchDownloadPdf("captured.pdf", pdfBytes());
 
     expect(analyzed).toMatchObject({
       source: "browser",
       pdf: {
         fetchedVia: "research-download",
-        relPath: "research-downloads/captured.pdf",
         stageId: "s".repeat(43),
       },
     });
@@ -177,11 +172,7 @@ describe("library resolved-work ingest", () => {
       },
     });
 
-    const analyzed = await analyzeResearchDownloadPdf(
-      "duplicate.pdf",
-      pdfBytes(),
-      "research-downloads/duplicate.pdf",
-    );
+    const analyzed = await analyzeResearchDownloadPdf("duplicate.pdf", pdfBytes());
 
     expect(analyzed).toMatchObject({
       dedup: {
@@ -190,7 +181,6 @@ describe("library resolved-work ingest", () => {
         workId: "existing-work",
       },
       pdf: {
-        relPath: "research-downloads/duplicate.pdf",
         sha: "pdf-sha",
         stageId: "s".repeat(43),
       },

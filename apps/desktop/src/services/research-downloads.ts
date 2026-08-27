@@ -1,12 +1,11 @@
 // Bridges the Electron research-browser download interceptor to the library
 // ingest pipeline. When the user downloads a file from inside a research tab,
-// main saves it under AppData/research-downloads and sends
-// "research://download-finished" with the relative path. We read the bytes and
+// main stores it behind an opaque one-time lease and sends
+// "research://download-finished" with that lease id. We consume the bytes and
 // route them: a PDF is *analyzed* into an IngestDraft (candidates + staged PDF,
 // nothing written) and surfaced to a confirmation card — the user picks/edits
 // before anything reaches the library; citation files (.bib etc.) are
 // authoritative and imported directly. No per-site scraping required.
-import { auraFiles, auraFs } from "./aura-platform";
 import { describeSafeError } from "./sensitive-text";
 import type { IngestDraft } from "./library-types";
 import type {
@@ -45,7 +44,7 @@ function extOf(name: string): string {
 async function ingestDownloadedFile(
   tabId: string,
   ownerTabId: string,
-  relPath: string,
+  downloadId: string,
   fileName: string,
   scholar?: ScholarIdentity,
 ): Promise<CapturedDownload> {
@@ -53,15 +52,19 @@ async function ingestDownloadedFile(
   const display = fileName.replace(/^\d+-/, "");
   const ext = extOf(display);
   try {
-    const bytes = await auraFiles.readResearchDownload(relPath);
+    // Main owns the download file and exposes only a short-lived, one-time
+    // opaque lease. Consuming it atomically reads the bytes and retires the
+    // temporary file; no renderer path or delete capability is retained.
+    const bytes = await window.aura.research.consumeDownload({ downloadId });
     if (ext === ".pdf") {
       // Analyze only — never auto-write. The page identity (citation_* meta) is
-      // preferred over guessing a DOI from the PDF body. The temp file is kept
-      // until the user confirms or cancels (handled by the caller).
+      // preferred over guessing a DOI from the PDF body. The download lease has
+      // already been consumed; the canonical staged receipt is kept until the
+      // user confirms or cancels (handled by the caller).
       const { analyzePdfWithIdentity, analyzeResearchDownloadPdf } = await import("./library");
       const draft = hasIdentity(scholar)
-        ? await analyzePdfWithIdentity(display, bytes, scholar, relPath)
-        : await analyzeResearchDownloadPdf(display, bytes, relPath);
+        ? await analyzePdfWithIdentity(display, bytes, scholar)
+        : await analyzeResearchDownloadPdf(display, bytes);
       return { tabId, ownerTabId, kind: "pdf", title: display, fileName: display, draft };
     }
     if (REFERENCE_EXTS.includes(ext)) {
@@ -69,11 +72,9 @@ async function ingestDownloadedFile(
       const { importReferences, previewReferences } = await import("./import-refs");
       // .txt / .json may not actually be references — bail quietly if nothing parses.
       if (previewReferences(text).length === 0) {
-        void auraFs.deleteFile(relPath).catch(() => {});
         return { tabId, ownerTabId, kind: "ignored", fileName: display };
       }
       const summary = await importReferences(text);
-      void auraFs.deleteFile(relPath).catch(() => {});
       return {
         tabId,
         ownerTabId,
@@ -83,10 +84,8 @@ async function ingestDownloadedFile(
         deduped: summary.deduped > 0,
       };
     }
-    void auraFs.deleteFile(relPath).catch(() => {});
     return { tabId, ownerTabId, kind: "ignored", fileName: display };
   } catch (e) {
-    void auraFs.deleteFile(relPath).catch(() => {});
     return {
       tabId,
       ownerTabId,
@@ -113,7 +112,6 @@ async function inspectFinishedDownload(
   payload: DownloadFinishedPayload,
 ): Promise<CapturedDownload> {
   if (!payload.success) {
-    void auraFs.deleteFile(payload.relPath).catch(() => {});
     return {
       tabId: payload.tabId,
       ownerTabId: payload.ownerTabId,
@@ -122,10 +120,19 @@ async function inspectFinishedDownload(
       error: "下载未完成",
     };
   }
+  if (!payload.downloadId) {
+    return {
+      tabId: payload.tabId,
+      ownerTabId: payload.ownerTabId,
+      kind: "error",
+      fileName: payload.fileName.replace(/^\d+-/, ""),
+      error: "下载凭证无效",
+    };
+  }
   return ingestDownloadedFile(
     payload.tabId,
     payload.ownerTabId,
-    payload.relPath,
+    payload.downloadId,
     payload.fileName,
     payload.scholar,
   );

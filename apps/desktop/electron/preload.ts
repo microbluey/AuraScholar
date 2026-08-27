@@ -5,6 +5,7 @@ import {
   type AppCloseRequest,
   type Bounds,
   type CaptureResult,
+  type ConsumeResearchDownloadInput,
   type DownloadFinishedPayload,
   type DownloadStartedPayload,
   type RecoverEvidenceSourceInput,
@@ -56,17 +57,9 @@ ipcRenderer.on(EV.lifecycleCloseCancelled, (_event, value: unknown) => {
 // The single, whitelisted surface the renderer may touch. No nodeIntegration;
 // everything funnels through these typed calls.
 const api = {
-  fs: {
-    deleteFile(path: string): Promise<void> {
-      return ipcRenderer.invoke(CH.fsDelete, path);
-    },
-  },
   files: {
     readBlobPdf(sha256: string): Promise<Uint8Array> {
       return ipcRenderer.invoke(CH.fsReadBlobPdf, sha256);
-    },
-    readResearchDownload(relPath: string): Promise<Uint8Array> {
-      return ipcRenderer.invoke(CH.fsReadResearchDownload, relPath);
     },
   },
   notify(title: string, body?: string): Promise<void> {
@@ -168,6 +161,9 @@ const api = {
     },
     siteData(siteIds: string[]): Promise<string[]> {
       return ipcRenderer.invoke(CH.researchSiteData, siteIds);
+    },
+    consumeDownload(input: ConsumeResearchDownloadInput): Promise<Uint8Array> {
+      return ipcRenderer.invoke(CH.researchConsumeDownload, input);
     },
     onDownloadStarted(cb: (p: DownloadStartedPayload) => void): () => void {
       const listener = (_: unknown, p: DownloadStartedPayload) => cb(p);

@@ -2,9 +2,7 @@
 // and the renderer. Channel names live here so both sides can't drift.
 
 export const CH = {
-  fsDelete: "platform:fs:delete",
   fsReadBlobPdf: "platform:fs:blob-pdf:read",
-  fsReadResearchDownload: "platform:fs:research-download:read",
   notify: "platform:notify",
   clipboardWriteText: "platform:clipboard:writeText",
   dbQuery: "db:query",
@@ -34,6 +32,7 @@ export const CH = {
   researchCapture: "research:capture",
   researchClearSiteData: "research:clearSiteData",
   researchSiteData: "research:siteData",
+  researchConsumeDownload: "research:consumeDownload",
 } as const;
 
 // Events emitted main → renderer (via webContents.send).
@@ -99,26 +98,41 @@ export interface DownloadStartedPayload {
   fileName: string;
 }
 
-export interface DownloadFinishedPayload {
+interface DownloadFinishedPayloadBase {
   /** Research tab whose session initiated the download. */
   tabId: string;
   /** Root tab that owns this tab chain; child windows inherit it. */
   ownerTabId: string;
   fileName: string;
-  relPath: string;
-  success: boolean;
   /** Page identity sniffed from the originating tab, when available. */
   scholar?: ScholarIdentity;
 }
+
+/** A completed download always has a usable lease; a failed one never does. */
+export type DownloadFinishedPayload =
+  | (DownloadFinishedPayloadBase & {
+      success: true;
+      /** Opaque main-owned lease for exactly one byte read. */
+      downloadId: string;
+    })
+  | (DownloadFinishedPayloadBase & {
+      success: false;
+      /** Failure cleanup happens in main before the event is emitted. */
+      downloadId: null;
+    });
 
 export interface CaptureResult {
   /** "download" = a real file stream was intercepted (emits download-finished);
    *  "print" = the page was rendered to PDF and ingested directly. */
   kind: "download" | "print" | "none";
-  /** Set for kind "print": the saved file, relative to userData. */
-  relPath?: string;
+  /** Set for kind "print": the opaque main-owned download lease. */
+  downloadId?: string;
   fileName?: string;
   error?: string;
+}
+
+export interface ConsumeResearchDownloadInput {
+  downloadId: string;
 }
 
 export interface RecoverEvidenceSourceInput {

@@ -71,7 +71,7 @@ describe("renderer capability audit architecture", () => {
     expect(platform).not.toContain("handle(CH.fsMkdirp");
     expect(rendererPlatform).not.toContain("window.aura.fs.writeFile");
     expect(rendererPlatform).not.toContain("window.aura.fs.mkdirp");
-    expect(auraDeclaration).toContain("_AuraApiFsOnlyDeletesResearchDownloads");
+    expect(auraDeclaration).toContain("_AuraApiExcludesRendererFilesystemMutation");
 
     expect(auraDeclaration).toContain("_AuraApiExcludesClipboardReadText");
     expect(auraDeclaration).toContain("_AuraApiExcludesDeviceId");
@@ -95,7 +95,7 @@ describe("renderer capability audit architecture", () => {
 
   it("keeps production renderer and smoke sources off the removed bridge surface", () => {
     const removedSurface =
-      /window\.aura(?:\?\.|\.)clipboard(?:\?\.|\.)readText\b|window\.aura(?:\?\.|\.)deviceId\b|window\.aura(?:\?\.|\.)citationBridgePort\b|(?:window\.)?aura(?:\?\.|\.)openExternal\b|window\.aura(?:\?\.|\.)fs(?:\?\.|\.)(?:writeFile|mkdirp)\b|auraFs\.(?:writeFile|mkdirp)\b/u;
+      /window\.aura(?:\?\.|\.)clipboard(?:\?\.|\.)readText\b|window\.aura(?:\?\.|\.)deviceId\b|window\.aura(?:\?\.|\.)citationBridgePort\b|(?:window\.)?aura(?:\?\.|\.)openExternal\b|window\.aura(?:\?\.|\.)fs\b|window\.aura(?:\?\.|\.)files(?:\?\.|\.)readResearchDownload\b|auraFs\.(?:deleteFile|writeFile|mkdirp)\b|auraFiles\.readResearchDownload\b/u;
 
     for (const path of rendererSourceFiles(resolve(process.cwd(), "src"))) {
       expect(readFileSync(path, "utf8"), path).not.toMatch(removedSurface);
