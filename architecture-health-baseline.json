@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 80438,
+        ".ts": 80450,
         ".tsx": 35776
       },
       "files": {
@@ -372,7 +372,7 @@
         "apps/desktop/src/services/preview-library.ts": 70,
         "apps/desktop/src/services/reader-session-data.ts": 90,
         "apps/desktop/src/services/research-browser.ts": 91,
-        "apps/desktop/src/services/research-downloads.ts": 233,
+        "apps/desktop/src/services/research-downloads.ts": 245,
         "apps/desktop/src/services/research-project-desktop-service.ts": 74,
         "apps/desktop/src/services/research-project-preview-service.ts": 201,
         "apps/desktop/src/services/research-project-service.ts": 57,
@@ -568,11 +568,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 135535
+      "totalLines": 135547
     },
     "tests": {
       "byExtension": {
-        ".ts": 80312,
+        ".ts": 80360,
         ".tsx": 1034
       },
       "files": {
@@ -872,7 +872,7 @@
         "apps/desktop/src/services/preview-library.test.ts": 18,
         "apps/desktop/src/services/reader-session-data.test.ts": 150,
         "apps/desktop/src/services/research-browser.test.ts": 23,
-        "apps/desktop/src/services/research-downloads.test.ts": 358,
+        "apps/desktop/src/services/research-downloads.test.ts": 406,
         "apps/desktop/src/services/research-project-backup.test.ts": 434,
         "apps/desktop/src/services/research-project-desktop-service.test.ts": 65,
         "apps/desktop/src/services/research-project-preview-service.test.ts": 49,
@@ -967,7 +967,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 81346
+      "totalLines": 81394
     }
   },
   "uiDatabaseBoundary": {}

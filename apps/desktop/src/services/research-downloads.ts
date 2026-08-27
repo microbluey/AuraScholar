@@ -34,13 +34,16 @@ export interface CapturedDownload {
   error?: string;
 }
 
+type GenerationGuard = () => boolean;
+
 async function ingestDownloadedFile(
   tabId: string,
   ownerTabId: string,
   downloadId: string,
   fileName: string,
+  isCurrentGeneration: GenerationGuard,
   scholar?: ScholarIdentity,
-): Promise<CapturedDownload> {
+): Promise<CapturedDownload | null> {
   // Strip the timestamp prefix main adds ("<ms>-<original>") for display/extension.
   const display = fileName.replace(/^\d+-/, "");
   try {
@@ -48,6 +51,7 @@ async function ingestDownloadedFile(
     // opaque lease. Consuming it atomically reads the bytes and retires the
     // temporary file; no renderer path or delete capability is retained.
     const content = await window.aura.research.consumeDownload({ downloadId });
+    if (!isCurrentGeneration()) return null;
     if (content.kind === "ignored") {
       return { tabId, ownerTabId, kind: "ignored", fileName: display };
     }
@@ -57,6 +61,7 @@ async function ingestDownloadedFile(
       // already been consumed; the canonical staged receipt is kept until the
       // user confirms or cancels (handled by the caller).
       const { analyzePdfWithIdentity, analyzeResearchDownloadPdf } = await import("./library");
+      if (!isCurrentGeneration()) return null;
       const draft = hasIdentity(scholar)
         ? await analyzePdfWithIdentity(display, content.bytes, scholar)
         : await analyzeResearchDownloadPdf(display, content.bytes);
@@ -64,10 +69,12 @@ async function ingestDownloadedFile(
     }
     const text = new TextDecoder().decode(content.bytes);
     const { importReferences, previewReferences } = await import("./import-refs");
+    if (!isCurrentGeneration()) return null;
     // .txt / .json may not actually be references — bail quietly if nothing parses.
     if (previewReferences(text).length === 0) {
       return { tabId, ownerTabId, kind: "ignored", fileName: display };
     }
+    if (!isCurrentGeneration()) return null;
     const summary = await importReferences(text);
     return {
       tabId,
@@ -78,6 +85,7 @@ async function ingestDownloadedFile(
       deduped: summary.deduped > 0,
     };
   } catch (e) {
+    if (!isCurrentGeneration()) return null;
     return {
       tabId,
       ownerTabId,
@@ -103,7 +111,9 @@ let inspectionTail: Promise<void> = Promise.resolve();
 
 async function inspectFinishedDownload(
   payload: DownloadFinishedPayload,
-): Promise<CapturedDownload> {
+  isCurrentGeneration: GenerationGuard,
+): Promise<CapturedDownload | null> {
+  if (!isCurrentGeneration()) return null;
   if (!payload.success) {
     return {
       tabId: payload.tabId,
@@ -127,6 +137,7 @@ async function inspectFinishedDownload(
     payload.ownerTabId,
     payload.downloadId,
     payload.fileName,
+    isCurrentGeneration,
     payload.scholar,
   );
 }
@@ -162,10 +173,11 @@ function publishInspectedDownload(result: CapturedDownload, generation: number):
 function queueFinishedDownload(payload: DownloadFinishedPayload, generation: number): void {
   // Keep the complete pipeline exclusive, not just the IPC call: PDF analysis
   // and reference parsing retain the consumed bytes after main has returned.
-  // A task that has not started must not survive a broker replacement: it may
-  // otherwise import old reference bytes into a different active Library.
+  // A task from an obsolete broker must not reach a durable import, even if
+  // it was already awaiting the one-time main-process consumption.
+  const isCurrentGeneration = () => generation === brokerGeneration;
   const inspection = inspectionTail.then(() =>
-    generation === brokerGeneration ? inspectFinishedDownload(payload) : null,
+    isCurrentGeneration() ? inspectFinishedDownload(payload, isCurrentGeneration) : null,
   );
   inspectionTail = inspection.then(
     () => undefined,
