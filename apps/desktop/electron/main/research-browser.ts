@@ -1,10 +1,6 @@
 // Multi-tab research browser, main-process side. Each tab is a WebContentsView
-// with a per-site persistent session partition (cookies/login isolated and
-// kept across restarts). Bounds are driven from here (the renderer only reports
-// the content-area rectangle), which is what makes the embedded view sit
-// exactly in place. Arc-style archiving reclaims memory from tabs left idle
-// past ARCHIVE_MS by destroying the view while keeping the tab entry; clicking
-// an archived tab recreates it at its stored URL.
+// with a per-site persistent session partition; archived tabs retain their URL
+// and recreate their view when activated.
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { app, BrowserWindow, session, WebContentsView, type Session } from "electron";
@@ -22,6 +18,11 @@ import {
   validateResearchSiteId,
   validateResearchTabId,
 } from "./research-browser-policy";
+import {
+  acceptResearchMainFrameUrl,
+  commitResearchMainFrameUrl,
+  guardResearchNavigation,
+} from "./research-browser-navigation-policy";
 import {
   CH,
   EV,
@@ -61,10 +62,8 @@ let bounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 let activeTabId: string | null = null;
 const tabs = new Map<string, Tab>();
 const wiredSessions = new Set<string>();
-// Maps a sniffed `citation_pdf_url` back to the page identity it came from.
-// Clicking "Paper" navigates away from the abstract page (or opens the PDF in a
-// new tab), so by download time the tab no longer holds the identity. The PDF
-// URL is the stable link between the two — see resolveDownloadIdentity.
+// Map a sniffed citation_pdf_url back to the abstract-page identity. Clicking
+// “Paper” may navigate away before the download starts.
 const identityByPdfUrl = new Map<string, ScholarIdentity>();
 
 function snapshot(): ResearchTab[] {
@@ -105,10 +104,8 @@ function detachActiveView(): void {
   const cur = activeTabId ? tabs.get(activeTabId) : null;
   if (cur?.view && win) win.contentView.removeChildView(cur.view);
 }
-
 async function applyProxy(sess: Session, proxy: string): Promise<void> {
-  // Per-session proxy: only this site's traffic is routed through `proxy`,
-  // leaving the system network (e.g. a campus VPN) untouched for other sites.
+  // Route only this site's traffic through its per-session proxy.
   if (proxy) {
     await sess.setProxy({ proxyRules: proxy });
   } else {
@@ -124,9 +121,7 @@ function normalizeScholarMeta(
   pageUrl: string,
 ): ScholarIdentity | undefined {
   const first = (key: string): string | undefined => meta[key]?.[0]?.trim() || undefined;
-
-  // DOI: citation_doi is authoritative; dc.identifier / prism.doi may carry it
-  // with a "doi:" / "info:doi/" / URL prefix, so extract the bare DOI.
+  // citation_doi is authoritative; other fields may carry a DOI prefix.
   let doi: string | undefined;
   for (const candidate of [
     ...(meta["citation_doi"] ?? []),
@@ -139,7 +134,6 @@ function normalizeScholarMeta(
       break;
     }
   }
-
   let arxivId = first("citation_arxiv_id");
   if (!arxivId) {
     const fromUrl = pageUrl.match(/arxiv\.org\/(?:abs|pdf)\/([^\s?#]+)/i);
@@ -147,7 +141,6 @@ function normalizeScholarMeta(
   }
 
   const title = first("citation_title");
-
   let pdfUrl: string | undefined;
   const rawPdf = first("citation_pdf_url");
   if (rawPdf) {
@@ -157,20 +150,16 @@ function normalizeScholarMeta(
       // ignore malformed URL
     }
   }
-
   if (!doi && !arxivId && !title && !pdfUrl) return undefined;
   return { doi, arxivId, title, pdfUrl, sourceUrl: pageUrl };
 }
 
-/**
- * Read scholarly `<meta>` tags from the tab's page. Runs a read-only DOM
- * collector in the view's isolated world and returns plain strings — it never
- * evals page-provided values. Failures (about:blank, cross-origin, CSP) resolve
- * to no-op so a download still falls back to PDF-body extraction.
- */
+/** Read scholarly meta tags in the isolated world; failures are a no-op. */
 async function sniffScholar(tab: Tab): Promise<void> {
   const wc = tab.view?.webContents;
   if (!wc) return;
+  const pageUrl = acceptResearchMainFrameUrl(wc.getURL(), true);
+  if (!pageUrl) return;
   const meta = await wc
     .executeJavaScript(
       `(() => {
@@ -188,10 +177,12 @@ async function sniffScholar(tab: Tab): Promise<void> {
     )
     .catch(() => null);
   if (!meta || typeof meta !== "object") return;
-  const identity = normalizeScholarMeta(meta as Record<string, string[]>, wc.getURL());
+  // Do not associate metadata with a document that navigated during collection.
+  const settledUrl = acceptResearchMainFrameUrl(wc.getURL(), true);
+  if (!settledUrl || settledUrl !== pageUrl) return;
+  const identity = normalizeScholarMeta(meta as Record<string, string[]>, settledUrl);
   tab.scholar = identity;
-  // Remember the identity keyed by its full-text URL so a download triggered
-  // after navigating to that URL (same tab or a new one) can recover it.
+  // Remember the identity by full-text URL for later download attribution.
   if (identity?.pdfUrl) identityByPdfUrl.set(identity.pdfUrl, identity);
 }
 
@@ -217,12 +208,7 @@ function identityForUrl(url: string): ScholarIdentity | undefined {
   return undefined;
 }
 
-/**
- * Best identity for a download: the originating tab's current identity, else a
- * match by the download URL against a previously sniffed citation_pdf_url.
- * Covers "click Paper → navigate to PDF → download" where the tab no longer
- * carries the abstract page's meta.
- */
+/** Prefer the tab identity, then match a previously sniffed PDF URL. */
 function resolveDownloadIdentity(
   tab: Tab | undefined,
   downloadUrl: string,
@@ -257,31 +243,33 @@ function createView(tab: Tab): WebContentsView {
     }
     return { action: "deny" };
   });
-  view.webContents.on("will-navigate", (event, url) => {
-    if (isAllowedResearchUrl(url)) return;
-    event.preventDefault();
-  });
+  view.webContents.on("will-frame-navigate", guardResearchNavigation);
+  view.webContents.on("will-redirect", guardResearchNavigation);
+  view.webContents.on("will-navigate", guardResearchNavigation);
   view.webContents.on("page-title-updated", (_e, title) => {
     tab.title = title;
     emitTabs();
   });
   view.webContents.on("did-finish-load", () => {
-    tab.url = view.webContents.getURL() || tab.url;
-    win?.webContents.send(EV.researchLoaded, { tabId: tab.tabId, url: tab.url });
+    const safeUrl = commitResearchMainFrameUrl(tab, view.webContents.getURL(), true);
+    if (!safeUrl) return;
+    win?.webContents.send(EV.researchLoaded, { tabId: tab.tabId, url: safeUrl });
     emitTabs();
     void sniffScholar(tab);
   });
   // Navigation within the page updates url + back/forward availability.
-  view.webContents.on("did-navigate", () => {
-    tab.url = view.webContents.getURL() || tab.url;
+  view.webContents.on("did-navigate", (_event, url) => {
+    const safeUrl = commitResearchMainFrameUrl(tab, url, true);
+    if (!safeUrl) return;
     // Clicking "Paper" navigates to the full-text URL we sniffed earlier — carry
     // that page's identity over so the download attaches to the right work.
     // Otherwise this is a new document: drop the stale identity.
-    tab.scholar = identityForUrl(tab.url);
+    tab.scholar = identityForUrl(safeUrl);
     emitTabs();
   });
   // SPA route changes can swap the head meta without a full load.
-  view.webContents.on("did-navigate-in-page", () => {
+  view.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+    if (!commitResearchMainFrameUrl(tab, url, isMainFrame)) return;
     emitTabs();
     void sniffScholar(tab);
   });
@@ -442,10 +430,14 @@ export function registerResearchHandlers(): void {
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (!tab?.view) return { kind: "none", error: "no active page" };
     const wc = tab.view.webContents;
-    const url = wc.getURL();
+    if (!acceptResearchMainFrameUrl(wc.getURL(), true)) {
+      return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
+    }
 
     // Refresh the page identity so both capture paths carry the latest meta.
     await sniffScholar(tab);
+    const url = acceptResearchMainFrameUrl(wc.getURL(), true);
+    if (!url) return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
 
     if (/\.pdf(\?|#|$)/i.test(url)) {
       wc.downloadURL(url);
@@ -455,6 +447,8 @@ export function registerResearchHandlers(): void {
     let fileName: string | undefined;
     let wroteFile = false;
     try {
+      if (!acceptResearchMainFrameUrl(wc.getURL(), true))
+        return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
       ensureDownloadDir();
       const pdf = await wc.printToPDF({ printBackground: true });
       const base =

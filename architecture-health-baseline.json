@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 79216,
+        ".ts": 79330,
         ".tsx": 35776
       },
       "files": {
@@ -93,8 +93,9 @@
         "apps/desktop/electron/main/reader-commands.ts": 412,
         "apps/desktop/electron/main/reference-import-command-input.ts": 178,
         "apps/desktop/electron/main/reference-import-commands.ts": 56,
+        "apps/desktop/electron/main/research-browser-navigation-policy.ts": 120,
         "apps/desktop/electron/main/research-browser-policy.ts": 225,
-        "apps/desktop/electron/main/research-browser.ts": 496,
+        "apps/desktop/electron/main/research-browser.ts": 490,
         "apps/desktop/electron/main/research-download-events.ts": 108,
         "apps/desktop/electron/main/research-download-file-name.ts": 39,
         "apps/desktop/electron/main/research-download-store-io.ts": 130,
@@ -556,11 +557,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 134313
+      "totalLines": 134427
     },
     "tests": {
       "byExtension": {
-        ".ts": 78398,
+        ".ts": 78515,
         ".tsx": 1034
       },
       "files": {
@@ -634,6 +635,7 @@
         "apps/desktop/electron/main/renderer-capability-audit-architecture.test.ts": 112,
         "apps/desktop/electron/main/renderer-http-capability-architecture.test.ts": 54,
         "apps/desktop/electron/main/renderer-secret-capability-architecture.test.ts": 63,
+        "apps/desktop/electron/main/research-browser-navigation-policy.test.ts": 117,
         "apps/desktop/electron/main/research-browser-policy.test.ts": 158,
         "apps/desktop/electron/main/research-download-file-name.test.ts": 28,
         "apps/desktop/electron/main/research-download-store.test.ts": 204,
@@ -946,7 +948,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 79432
+      "totalLines": 79549
     }
   },
   "uiDatabaseBoundary": {}
