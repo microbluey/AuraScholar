@@ -21,6 +21,8 @@ import type {
   ReaderListAnnotationsCommandResult,
   ReaderMarkWorkReadingStartedCommandInput,
   ReaderMarkWorkReadingStartedCommandResult,
+  ReaderReadAttachmentPdfCommandInput,
+  ReaderReadAttachmentPdfCommandResult,
   ReaderRestoreAnnotationCommandInput,
   ReaderRestoreAnnotationCommandResult,
   ReaderUpdateAnnotationContentCommandInput,
@@ -36,7 +38,8 @@ import {
 type ReaderReadCommandName =
   | "reader.getAttachment"
   | "reader.getWorkPdfCandidates"
-  | "reader.listAnnotations";
+  | "reader.listAnnotations"
+  | "reader.readAttachmentPdf";
 
 type ReaderWriteCommandName =
   | "reader.createAnnotation"
@@ -93,6 +96,10 @@ export async function executeReaderCommand(
         const libraryId = await requireActiveLocalLibraryId(database);
         return loadAnnotations(database, libraryId, input);
       });
+    }
+    case "reader.readAttachmentPdf": {
+      const input = parseReaderReadAttachmentPdfInput(request.input);
+      return readAttachmentPdf(dependencies, input);
     }
     case "reader.markWorkReadingStarted": {
       const input = parseReaderMarkWorkReadingStartedInput(request.input);
@@ -180,6 +187,17 @@ function parseReaderGetAttachmentInput(value: unknown): ReaderGetAttachmentComma
 
 function parseReaderListAnnotationsInput(value: unknown): ReaderListAnnotationsCommandInput {
   const input = requireExactReaderInput(value, "reader.listAnnotations", [
+    "workId",
+    "attachmentId",
+  ]);
+  return {
+    attachmentId: requireRecordId(input.attachmentId, "Attachment id"),
+    workId: requireRecordId(input.workId, "Work id"),
+  };
+}
+
+function parseReaderReadAttachmentPdfInput(value: unknown): ReaderReadAttachmentPdfCommandInput {
+  const input = requireExactReaderInput(value, "reader.readAttachmentPdf", [
     "workId",
     "attachmentId",
   ]);
@@ -323,6 +341,36 @@ async function loadAnnotations(
   };
 }
 
+/**
+ * Resolves the attachment under the active local Library before reading bytes.
+ * The database lease is deliberately released before the potentially large
+ * canonical blob read so a slow disk cannot block unrelated SQLite commands.
+ */
+async function readAttachmentPdf(
+  dependencies: DataCommandDependencies,
+  input: ReaderReadAttachmentPdfCommandInput,
+): Promise<ReaderReadAttachmentPdfCommandResult> {
+  if (!dependencies.inspect) {
+    throw new Error("Main-process Reader PDF lookup is unavailable");
+  }
+  if (!dependencies.readPdfBlob) {
+    throw new Error("Main-process Reader PDF read is unavailable");
+  }
+
+  const attachment = await dependencies.inspect(async (database) => {
+    const libraryId = await requireActiveLocalLibraryId(database);
+    const candidate = await findActiveAttachmentForWork(database, libraryId, input);
+    return candidate?.kind === "pdf" ? candidate : null;
+  });
+  if (!attachment) {
+    throw new Error(
+      `PDF attachment ${input.attachmentId} is missing, removed, or not active for work ${input.workId}`,
+    );
+  }
+
+  return { data: await dependencies.readPdfBlob(attachment.sha256) };
+}
+
 async function markWorkReadingStarted(
   database: Database,
   libraryId: string,
@@ -354,7 +402,10 @@ async function updateAnnotationContent(
 async function findActiveAttachmentForWork(
   database: Database,
   libraryId: string,
-  input: ReaderGetAttachmentCommandInput | ReaderListAnnotationsCommandInput,
+  input:
+    | ReaderGetAttachmentCommandInput
+    | ReaderListAnnotationsCommandInput
+    | ReaderReadAttachmentPdfCommandInput,
 ): Promise<AttachmentRow | null> {
   const attachments = await new AttachmentsRepo(database, libraryId).forWork(input.workId);
   return attachments.find((attachment) => attachment.id === input.attachmentId) ?? null;

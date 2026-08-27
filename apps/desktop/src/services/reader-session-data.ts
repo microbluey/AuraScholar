@@ -8,6 +8,7 @@ import type {
   ReaderListAnnotationsCommandResult,
   ReaderMarkWorkReadingStartedCommandInput,
   ReaderMarkWorkReadingStartedCommandResult,
+  ReaderReadAttachmentPdfCommandResult,
   ReaderRestoreAnnotationCommandInput,
   ReaderRestoreAnnotationCommandResult,
   ReaderUpdateAnnotationContentCommandInput,
@@ -27,6 +28,7 @@ export type ReaderDeletedAnnotation = ReaderDeleteAnnotationCommandResult;
 export type ReaderRestoredAnnotation = ReaderRestoreAnnotationCommandResult;
 export type ReaderUpdatedAnnotationContent = ReaderUpdateAnnotationContentCommandResult;
 export type ReaderWorkReadingStarted = ReaderMarkWorkReadingStartedCommandResult;
+export type ReaderAttachmentPdf = ReaderReadAttachmentPdfCommandResult;
 
 export function loadReaderWorkPdfCandidates(workId: string): Promise<ReaderWorkPdfCandidates> {
   return window.aura.data.command("reader.getWorkPdfCandidates", { workId });
@@ -37,6 +39,13 @@ export function loadReaderAttachment(
   attachmentId: string,
 ): Promise<ReaderAttachment> {
   return window.aura.data.command("reader.getAttachment", { attachmentId, workId });
+}
+
+export function loadReaderAttachmentPdf(
+  workId: string,
+  attachmentId: string,
+): Promise<ReaderAttachmentPdf> {
+  return window.aura.data.command("reader.readAttachmentPdf", { attachmentId, workId });
 }
 
 export function loadReaderAnnotations(

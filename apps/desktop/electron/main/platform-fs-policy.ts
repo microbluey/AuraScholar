@@ -1,32 +1,36 @@
 import { constants, promises as fs } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 
-interface RendererPath {
+interface CanonicalPdfBlobTarget {
   absolutePath: string;
   appDataRoot: string;
   segments: readonly string[];
 }
 
-/** A main-validated renderer read target; never a generic app-data path. */
-export type RendererReadablePath = RendererPath;
+/** A main-validated canonical PDF target; never a generic app-data path. */
+export type CanonicalPdfBlobPath = CanonicalPdfBlobTarget;
 
-/** Resolve the only durable file renderer code may read: a canonical PDF blob. */
-export function resolveRendererBlobPdfPath(
+/** Resolve one durable content-addressed PDF blob under the main-owned store. */
+export function resolveCanonicalPdfBlobPath(
   appDataRoot: string,
   sha256: string,
-): RendererReadablePath {
+): CanonicalPdfBlobPath {
   if (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(sha256)) {
-    throw new Error("Renderer PDF blob id is invalid");
+    throw new Error("Canonical PDF blob id is invalid");
   }
-  return resolveRendererReadablePath(appDataRoot, ["blobs", sha256.slice(0, 2), `${sha256}.pdf`]);
+  return resolveCanonicalPdfBlobPathInternal(appDataRoot, [
+    "blobs",
+    sha256.slice(0, 2),
+    `${sha256}.pdf`,
+  ]);
 }
 
-/** Read an already-existing regular file without following a symlink. */
-export async function readRendererReadableFile(target: RendererReadablePath): Promise<Uint8Array> {
+/** Read an already-existing regular canonical blob without following a symlink. */
+export async function readCanonicalPdfBlobFile(target: CanonicalPdfBlobPath): Promise<Uint8Array> {
   const parentsExist = await ensureSafeDirectories(target, target.segments.slice(0, -1));
-  if (!parentsExist) throw new Error("Renderer readable file is unavailable");
+  if (!parentsExist) throw new Error("Canonical PDF blob is unavailable");
   const before = await lstatOrMissing(target.absolutePath);
-  if (!before) throw new Error("Renderer readable file is unavailable");
+  if (!before) throw new Error("Canonical PDF blob is unavailable");
   assertSafeReadableFile(before);
 
   const handle = await fs.open(target.absolutePath, readFlags());
@@ -34,12 +38,12 @@ export async function readRendererReadableFile(target: RendererReadablePath): Pr
     const opened = await handle.stat();
     assertSafeReadableFile(opened);
     if (!sameFile(before, opened)) {
-      throw new Error("Renderer readable file changed during validation");
+      throw new Error("Canonical PDF blob changed during validation");
     }
     const current = await fs.lstat(target.absolutePath);
     assertSafeReadableFile(current);
     if (!sameFile(current, opened)) {
-      throw new Error("Renderer readable file changed during validation");
+      throw new Error("Canonical PDF blob changed during validation");
     }
     return new Uint8Array(await handle.readFile());
   } finally {
@@ -47,17 +51,17 @@ export async function readRendererReadableFile(target: RendererReadablePath): Pr
   }
 }
 
-function resolveRendererReadablePath(
+function resolveCanonicalPdfBlobPathInternal(
   appDataRoot: string,
   segments: readonly string[],
-): RendererReadablePath {
+): CanonicalPdfBlobPath {
   const absolutePath = join(appDataRoot, ...segments);
   assertContainedByAppDataRoot(appDataRoot, absolutePath);
   return { absolutePath, appDataRoot, segments };
 }
 
 async function ensureSafeDirectories(
-  target: RendererPath,
+  target: CanonicalPdfBlobPath,
   segments: readonly string[],
 ): Promise<boolean> {
   let current = target.appDataRoot;
@@ -66,7 +70,7 @@ async function ensureSafeDirectories(
     const stat = await lstatOrMissing(current);
     if (!stat) return false;
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error("Renderer path contains an unsafe directory");
+      throw new Error("Canonical PDF blob path contains an unsafe directory");
     }
   }
   return true;
@@ -75,7 +79,7 @@ async function ensureSafeDirectories(
 function assertContainedByAppDataRoot(appDataRoot: string, absolutePath: string): void {
   const rel = relative(appDataRoot, absolutePath);
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error("Renderer filesystem path escapes app data");
+    throw new Error("Canonical PDF blob path escapes app data");
   }
 }
 
@@ -86,7 +90,7 @@ function assertSafeReadableFile(stat: {
 }): void {
   const hasMultipleLinks = typeof stat.nlink === "bigint" ? stat.nlink > 1n : stat.nlink > 1;
   if (!stat.isFile() || stat.isSymbolicLink() || hasMultipleLinks) {
-    throw new Error("Renderer readable file is unsafe");
+    throw new Error("Canonical PDF blob is unsafe");
   }
 }
 

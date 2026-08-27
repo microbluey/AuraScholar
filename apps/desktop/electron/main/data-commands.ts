@@ -1,5 +1,6 @@
 import type { Database } from "@aurascholar/db";
 import { WorksRepo } from "@aurascholar/db/repos/works";
+import { app } from "electron";
 import { CH } from "../shared";
 import type {
   DataCommandName,
@@ -14,6 +15,7 @@ import { withMainDatabase, withMainDatabaseTransaction } from "./db";
 import { parseDataCommandEnvelope } from "./data-command-envelope";
 import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
+import { readCanonicalPdfBlobFile, resolveCanonicalPdfBlobPath } from "./platform-fs-policy";
 import { executeAiCommand } from "./ai-commands";
 import { executeAnnotationRecoveryCommand } from "./annotation-recovery-commands";
 import { executeCanvasPageCommand } from "./canvas-page-commands";
@@ -69,6 +71,8 @@ export type { DataCommandDependencies } from "./data-command-runtime";
 const defaultDependencies: DataCommandDependencies = {
   inspect: (operation) => withMainDatabase(operation),
   execute: (_commandName, operation) => withMainDatabase(operation),
+  readPdfBlob: (sha256) =>
+    readCanonicalPdfBlobFile(resolveCanonicalPdfBlobPath(app.getPath("userData"), sha256)),
   getDeviceId: getStableDeviceId,
   transaction: withMainDatabaseTransaction,
   claimStagedPdf: claimLibraryStagedPdf,
@@ -204,6 +208,7 @@ export async function executeDataCommand(
     case "reader.getWorkPdfCandidates":
     case "reader.listAnnotations":
     case "reader.markWorkReadingStarted":
+    case "reader.readAttachmentPdf":
     case "reader.restoreAnnotation":
     case "reader.updateAnnotationContent":
       return executeReaderCommand(envelope, dependencies);

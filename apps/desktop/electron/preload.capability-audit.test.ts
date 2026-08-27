@@ -30,10 +30,7 @@ interface ExposedAuraApi {
   http?: unknown;
   openExternal?: unknown;
   fs?: unknown;
-  files: {
-    readBlobPdf(sha256: string): Promise<Uint8Array>;
-    readResearchDownload?: unknown;
-  };
+  files?: unknown;
   research: {
     consumeDownload(input: { downloadId: string }): Promise<Uint8Array>;
   };
@@ -67,7 +64,7 @@ describe("preload unused capability audit", () => {
     expect(api).not.toHaveProperty("openExternal");
     expect(api).not.toHaveProperty("citationBridgePort");
     expect(api).not.toHaveProperty("fs");
-    expect(api.files).not.toHaveProperty("readResearchDownload");
+    expect(api).not.toHaveProperty("files");
 
     await api.clipboard.writeText("clipboard write remains available");
     expect(mocks.invoke).toHaveBeenCalledWith(

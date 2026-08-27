@@ -82,6 +82,11 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   void dependencies.execute?.("reader.getAttachment", async () => ({
     attachmentId: "attachment-id",
   }));
+  void dependencies.execute?.("reader.readAttachmentPdf", async () => ({
+    data: new Uint8Array(),
+  }));
+  // @ts-expect-error reader.readAttachmentPdf must return its byte envelope.
+  void dependencies.execute?.("reader.readAttachmentPdf", async () => ({ data: "bytes" }));
   void dependencies.execute?.("reader.listAnnotations", async () => ({ annotations: [] }));
   // @ts-expect-error reader.listAnnotations must return its annotations envelope.
   void dependencies.execute?.("reader.listAnnotations", async () => ({ annotations: null }));
@@ -233,6 +238,7 @@ describe("main-process data command architecture", () => {
       "reader.getAttachment",
       "reader.getWorkPdfCandidates",
       "reader.listAnnotations",
+      "reader.readAttachmentPdf",
     ];
     const mutationCommandNames = [
       "reader.createAnnotation",
@@ -251,7 +257,8 @@ describe("main-process data command architecture", () => {
       expect(rendererSource).not.toContain("AttachmentsRepo");
       expect(rendererSource).not.toMatch(/\b(?:db|database)\s*\.\s*query\b/);
     }
-    expect(pdfData).toContain("auraFiles.readBlobPdf");
+    expect(pdfData).toContain("loadReaderAttachmentPdf");
+    expect(pdfData).not.toContain("auraFiles");
     expect(pdfData).toContain("loadPdfFromCandidates");
     expect(readerSession).toContain("loadReaderWorkPdfCandidates");
     expect(readerSession).toContain("loadReaderAttachment");

@@ -57,11 +57,6 @@ ipcRenderer.on(EV.lifecycleCloseCancelled, (_event, value: unknown) => {
 // The single, whitelisted surface the renderer may touch. No nodeIntegration;
 // everything funnels through these typed calls.
 const api = {
-  files: {
-    readBlobPdf(sha256: string): Promise<Uint8Array> {
-      return ipcRenderer.invoke(CH.fsReadBlobPdf, sha256);
-    },
-  },
   notify(title: string, body?: string): Promise<void> {
     return ipcRenderer.invoke(CH.notify, title, body);
   },

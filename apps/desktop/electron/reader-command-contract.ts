@@ -26,6 +26,16 @@ export interface ReaderGetAttachmentCommandResult {
   attachment: AttachmentRow | null;
 }
 
+/** Reads one active PDF attachment through a main-owned canonical BlobStore path. */
+export interface ReaderReadAttachmentPdfCommandInput {
+  attachmentId: string;
+  workId: string;
+}
+
+export interface ReaderReadAttachmentPdfCommandResult {
+  data: Uint8Array;
+}
+
 /** Annotation reads are scoped to one active work and active attachment. */
 export interface ReaderListAnnotationsCommandInput {
   attachmentId: string;
@@ -112,6 +122,10 @@ export interface ReaderDataCommandMap {
   "reader.getWorkPdfCandidates": {
     input: ReaderGetWorkPdfCandidatesCommandInput;
     output: ReaderGetWorkPdfCandidatesCommandResult;
+  };
+  "reader.readAttachmentPdf": {
+    input: ReaderReadAttachmentPdfCommandInput;
+    output: ReaderReadAttachmentPdfCommandResult;
   };
   "reader.listAnnotations": {
     input: ReaderListAnnotationsCommandInput;

@@ -2,7 +2,6 @@
 // and the renderer. Channel names live here so both sides can't drift.
 
 export const CH = {
-  fsReadBlobPdf: "platform:fs:blob-pdf:read",
   notify: "platform:notify",
   clipboardWriteText: "platform:clipboard:writeText",
   dbQuery: "db:query",

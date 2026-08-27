@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readRendererReadableFile, resolveRendererBlobPdfPath } from "./platform-fs-policy";
+import { readCanonicalPdfBlobFile, resolveCanonicalPdfBlobPath } from "./platform-fs-policy";
 
 const roots: string[] = [];
 
@@ -18,24 +18,24 @@ afterEach(async () => {
   );
 });
 
-describe("renderer filesystem read policy", () => {
+describe("main canonical PDF blob read policy", () => {
   it("allows only canonical PDF blobs", async () => {
     const root = await appDataRoot();
     const sha = "a".repeat(64);
-    const blob = resolveRendererBlobPdfPath(root, sha);
+    const blob = resolveCanonicalPdfBlobPath(root, sha);
     await fs.mkdir(join(root, "blobs", "aa"), { recursive: true });
     await fs.writeFile(blob.absolutePath, "pdf bytes");
-    await expect(readRendererReadableFile(blob)).resolves.toEqual(
+    await expect(readCanonicalPdfBlobFile(blob)).resolves.toEqual(
       new TextEncoder().encode("pdf bytes"),
     );
 
-    expect(() => resolveRendererBlobPdfPath(root, "not-a-sha")).toThrow();
+    expect(() => resolveCanonicalPdfBlobPath(root, "not-a-sha")).toThrow();
   });
 
   it("does not follow a readable filename into a secrets file", async () => {
     const root = await appDataRoot();
     const sha = "b".repeat(64);
-    const target = resolveRendererBlobPdfPath(root, sha);
+    const target = resolveCanonicalPdfBlobPath(root, sha);
     const secret = join(root, "secrets.json");
     await fs.mkdir(join(root, "blobs", "bb"), { recursive: true });
     await fs.writeFile(secret, "private token");
@@ -48,7 +48,7 @@ describe("renderer filesystem read policy", () => {
       return;
     }
 
-    await expect(readRendererReadableFile(target)).rejects.toThrow("readable file is unsafe");
+    await expect(readCanonicalPdfBlobFile(target)).rejects.toThrow("Canonical PDF blob is unsafe");
   });
 });
 

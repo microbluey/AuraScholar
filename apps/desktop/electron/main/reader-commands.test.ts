@@ -2,7 +2,7 @@ import { AnnotationsRepo, AttachmentsRepo, type Database, WorksRepo } from "@aur
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DataCommandInput,
   DataCommandName,
@@ -14,6 +14,7 @@ import type { DataCommandDependencies } from "./data-command-runtime";
 
 let database: Database;
 let dependencies: DataCommandDependencies;
+let coordinator: DatabaseCoordinator;
 let libraryId: string;
 let works: WorksRepo;
 
@@ -25,9 +26,11 @@ beforeEach(async () => {
     deviceName: "Reader commands",
     platform: "test",
   }));
-  const coordinator = new DatabaseCoordinator(database);
+  coordinator = new DatabaseCoordinator(database);
   dependencies = {
     execute: (_commandName, operation) => coordinator.execute(operation),
+    inspect: (operation) => coordinator.execute(operation),
+    readPdfBlob: vi.fn(async () => new Uint8Array([1, 2, 3])),
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
   };
   works = new WorksRepo(database, libraryId);
@@ -112,6 +115,11 @@ describe("Reader data commands", () => {
       {
         input: { attachmentId: "attachment-1", libraryId: "library:foreign", workId: "work-1" },
         name: "reader.listAnnotations",
+      },
+      { input: { workId: "work-1" }, name: "reader.readAttachmentPdf" },
+      {
+        input: { attachmentId: "attachment-1", extra: true, workId: "work-1" },
+        name: "reader.readAttachmentPdf",
       },
       {
         input: { libraryId: "library:foreign", workId: "work-1" },
@@ -377,6 +385,105 @@ describe("Reader data commands", () => {
         expect.objectContaining({ page_index: 3, type: "highlight" }),
       ],
     });
+  });
+
+  it("reads only an active local PDF after scoped inspection", async () => {
+    const workId = await addWork("Reader PDF bytes");
+    const pdfSha = "1".repeat(64);
+    const pdf = await addAttachment(workId, pdfSha);
+    const supplement = await addAttachment(workId, "2".repeat(64), "supplement");
+    const otherWorkId = await addWork("Reader PDF other work");
+    const otherPdf = await addAttachment(otherWorkId, "3".repeat(64));
+    const foreignLibraryId = "library:reader-pdf-foreign";
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Foreign Reader PDF', 'personal', 1, 1)`,
+      [foreignLibraryId],
+    );
+    const foreignWork = await new WorksRepo(database, foreignLibraryId).upsert({
+      title: "Foreign Reader PDF work",
+    });
+    const foreignPdf = await new AttachmentsRepo(database, foreignLibraryId).create({
+      byteSize: 42,
+      sha256: "5".repeat(64),
+      workId: foreignWork.id,
+    });
+    const bytes = new Uint8Array([9, 8, 7]);
+    const events: string[] = [];
+    const readPdfBlob = vi.fn(async (sha256: string) => {
+      events.push(`read:${sha256}`);
+      return bytes;
+    });
+    dependencies.readPdfBlob = readPdfBlob;
+    const inspected = dependencies.inspect!;
+    dependencies.inspect = async (operation) => {
+      events.push("inspect:start");
+      const result = await inspected(operation);
+      events.push("inspect:end");
+      return result;
+    };
+
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
+    ).resolves.toEqual({ data: bytes });
+    expect(events).toEqual(["inspect:start", "inspect:end", `read:${pdfSha}`]);
+
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: supplement.id, workId }),
+    ).rejects.toThrow("missing, removed, or not active");
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId: otherWorkId }),
+    ).rejects.toThrow("missing, removed, or not active");
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: otherPdf.id, workId }),
+    ).rejects.toThrow("missing, removed, or not active");
+    await expect(
+      command("reader.readAttachmentPdf", {
+        attachmentId: foreignPdf.id,
+        workId: foreignWork.id,
+      }),
+    ).rejects.toThrow("missing, removed, or not active");
+    await database.run(`UPDATE attachments SET deleted_at = ? WHERE id = ?`, [20_000, pdf.id]);
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
+    ).rejects.toThrow("missing, removed, or not active");
+    await database.run(`UPDATE attachments SET deleted_at = NULL WHERE id = ?`, [pdf.id]);
+    await database.run(`UPDATE works SET deleted_at = ? WHERE id = ?`, [21_000, workId]);
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
+    ).rejects.toThrow("missing, removed, or not active");
+    expect(readPdfBlob).toHaveBeenCalledOnce();
+  });
+
+  it("propagates a main-owned PDF read failure after scope validation", async () => {
+    const workId = await addWork("Reader PDF read failure");
+    const pdf = await addAttachment(workId, "4".repeat(64));
+    const failure = new Error("canonical PDF read failed");
+    const readPdfBlob = vi.fn(async () => {
+      throw failure;
+    });
+    dependencies.readPdfBlob = readPdfBlob;
+
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
+    ).rejects.toBe(failure);
+    expect(readPdfBlob).toHaveBeenCalledWith("4".repeat(64));
+  });
+
+  it("fails closed when the main PDF lookup or reader dependency is unavailable", async () => {
+    const input = { attachmentId: "attachment-1", workId: "work-1" } as const;
+    await expect(
+      executeDataCommand(
+        { name: "reader.readAttachmentPdf", input },
+        { ...dependencies, inspect: undefined },
+      ),
+    ).rejects.toThrow("Main-process Reader PDF lookup is unavailable");
+    await expect(
+      executeDataCommand(
+        { name: "reader.readAttachmentPdf", input },
+        { ...dependencies, readPdfBlob: undefined },
+      ),
+    ).rejects.toThrow("Main-process Reader PDF read is unavailable");
   });
 
   it("preserves archived local work context but hides its attachments and annotations", async () => {
