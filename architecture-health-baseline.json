@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 78937,
+        ".ts": 78946,
         ".tsx": 35776
       },
       "files": {
@@ -50,7 +50,7 @@
         "apps/desktop/electron/main/evidence-commands.ts": 379,
         "apps/desktop/electron/main/evidence-inbox-commands.ts": 210,
         "apps/desktop/electron/main/evidence-source-recovery.ts": 321,
-        "apps/desktop/electron/main/ipc.ts": 28,
+        "apps/desktop/electron/main/ipc.ts": 37,
         "apps/desktop/electron/main/knowledge-command-input.ts": 111,
         "apps/desktop/electron/main/knowledge-commands.ts": 429,
         "apps/desktop/electron/main/knowledge-executor-runtime.ts": 55,
@@ -556,11 +556,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 134034
+      "totalLines": 134043
     },
     "tests": {
       "byExtension": {
-        ".ts": 77990,
+        ".ts": 78100,
         ".tsx": 1034
       },
       "files": {
@@ -586,6 +586,8 @@
         "apps/desktop/electron/main/evidence-commands.test.ts": 494,
         "apps/desktop/electron/main/evidence-inbox-commands.test.ts": 287,
         "apps/desktop/electron/main/evidence-source-recovery.test.ts": 305,
+        "apps/desktop/electron/main/frame-isolation-architecture.test.ts": 27,
+        "apps/desktop/electron/main/ipc.test.ts": 83,
         "apps/desktop/electron/main/knowledge-command-scope-architecture.test.ts": 34,
         "apps/desktop/electron/main/knowledge-commands.test.ts": 467,
         "apps/desktop/electron/main/knowledge-executor.test.ts": 381,
@@ -943,7 +945,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 79024
+      "totalLines": 79134
     }
   },
   "uiDatabaseBoundary": {}

@@ -1053,7 +1053,7 @@ export function HomepagePage() {
               </Badge>
             </div>
             <div className="homepage-preview-frame">
-              <iframe title="主页实时预览" srcDoc={previewHtml} />
+              <iframe title="主页实时预览" sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={previewHtml} />
             </div>
           </Card>
 
