@@ -13,8 +13,8 @@ built with [electron-vite](https://electron-vite.org/).
   notifications, secrets, the multi-tab research browser, and the local
   citation bridge.
 - **Platform layer** — `src/services/aura-platform.ts` adapts the restricted
-  `window.aura` preload bridge to HTTP, constrained app-data file operations,
-  and notifications. Renderer data access never receives a shared `Database`
+  `window.aura` preload bridge to HTTP, constrained canonical-PDF reads, and
+  notifications. Renderer data access never receives a shared `Database`
   handle.
 - **Renderer data boundaries** — new and migrated pages consume typed services
   instead of opening database sessions or embedding SQL. Read services own
@@ -41,9 +41,10 @@ isolated and survive restarts. Bounds are driven from main (the renderer only
 reports the content-area rectangle via `research:setBounds`), so the embedded
 view always sits flush. Tabs idle past 30 min are archived (view destroyed,
 memory reclaimed); clicking an archived tab recreates it at its stored URL.
-Downloads inside a tab are intercepted (`will-download`), saved under
-`AppData/research-downloads`, and routed to `ingestFromPdf` /
-`importReferences`.
+Downloads inside a tab are intercepted (`will-download`) and held behind a
+main-owned, short-lived opaque lease. The renderer consumes each lease once;
+the resulting bytes are routed to `ingestFromPdf` / `importReferences` without
+exposing an app-data path or filesystem delete capability.
 
 ### Network: proxy + EZproxy
 

@@ -131,7 +131,7 @@ describe("Library ingest data command", () => {
       { mode: "attach", pdf: null, workId: "work-1", libraryId: "library:foreign" },
       {
         mode: "attach",
-        pdf: { ...stagedPdf(), relPath: "research-downloads/private.pdf" },
+        pdf: { ...stagedPdf(), sourceUrl: "file:///private.pdf" },
         workId: "work-1",
       },
       { mode: "attach", pdf: { ...stagedPdf(), fetchedVia: "oa" }, workId: "work-1" },
@@ -373,7 +373,9 @@ describe("Library ingest data command", () => {
       doi: "10.4242/metadata-only-finalize",
       title: "Finalize ingest metadata-only work",
     });
-    await expect(new AttachmentsRepo(database, libraryId).forWork(result.workId)).resolves.toEqual([]);
+    await expect(new AttachmentsRepo(database, libraryId).forWork(result.workId)).resolves.toEqual(
+      [],
+    );
   });
 
   it("deduplicates create decisions against active DOI and fingerprint matches while linking PDFs idempotently", async () => {

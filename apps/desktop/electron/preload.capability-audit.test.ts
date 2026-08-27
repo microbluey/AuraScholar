@@ -29,10 +29,13 @@ interface ExposedAuraApi {
   deviceId?: unknown;
   http?: unknown;
   openExternal?: unknown;
-  fs: {
-    deleteFile(path: string): Promise<void>;
-    writeFile?: unknown;
-    mkdirp?: unknown;
+  fs?: unknown;
+  files: {
+    readBlobPdf(sha256: string): Promise<Uint8Array>;
+    readResearchDownload?: unknown;
+  };
+  research: {
+    consumeDownload(input: { downloadId: string }): Promise<Uint8Array>;
   };
 }
 
@@ -63,14 +66,18 @@ describe("preload unused capability audit", () => {
     expect(api).not.toHaveProperty("cancelHttp");
     expect(api).not.toHaveProperty("openExternal");
     expect(api).not.toHaveProperty("citationBridgePort");
-    expect(api.fs).not.toHaveProperty("writeFile");
-    expect(api.fs).not.toHaveProperty("mkdirp");
-    expect(Object.keys(api.fs)).toEqual(["deleteFile"]);
+    expect(api).not.toHaveProperty("fs");
+    expect(api.files).not.toHaveProperty("readResearchDownload");
 
     await api.clipboard.writeText("clipboard write remains available");
     expect(mocks.invoke).toHaveBeenCalledWith(
       CH.clipboardWriteText,
       "clipboard write remains available",
     );
+
+    await api.research.consumeDownload({ downloadId: "download-id" });
+    expect(mocks.invoke).toHaveBeenCalledWith(CH.researchConsumeDownload, {
+      downloadId: "download-id",
+    });
   });
 });

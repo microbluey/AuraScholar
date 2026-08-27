@@ -24,15 +24,15 @@ export interface AttachPdfResult {
 /**
  * A PDF staged by the main process. `stageId` is a short-lived, opaque
  * capability that `finalizeIngest` can consume once; hash and byte size are
- * returned only as renderer metadata. `relPath` is the research-download temp
- * file, deleted by the caller after commit/cancel; null for in-memory uploads.
+ * returned only as renderer metadata. Research downloads are consumed through
+ * a one-time main-owned lease before this receipt is created, so no filesystem
+ * path or cleanup capability crosses into the renderer.
  */
 export interface PendingPdf {
   sha: string;
   fileName: string;
   byteSize: number;
   pageCount: number;
-  relPath: string | null;
   stageId: string;
   fetchedVia: PdfFetchedVia;
   /** Original OA endpoint, retained only when the source is automatically fetched. */

@@ -7,20 +7,10 @@ export function isDesktopRuntime(): boolean {
   return "aura" in window;
 }
 
-/** Renderer cleanup only; all durable writes are owned by main-process commands. */
-export const auraFs = {
-  deleteFile(path: string): Promise<void> {
-    return window.aura.fs.deleteFile(path);
-  },
-};
-
 /** Main-validated file reads. No API accepts an arbitrary app-data path. */
 export const auraFiles = {
   readBlobPdf(sha256: string): Promise<Uint8Array> {
     return window.aura.files.readBlobPdf(sha256);
-  },
-  readResearchDownload(relPath: string): Promise<Uint8Array> {
-    return window.aura.files.readResearchDownload(relPath);
   },
 };
 

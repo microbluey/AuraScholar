@@ -130,44 +130,35 @@ export async function analyzeInput(input: string): Promise<IngestDraft | null> {
 
 /** Analyze a local PDF: stage the blob, resolve candidates from its own evidence. */
 export async function analyzePdf(fileName: string, data: Uint8Array): Promise<IngestDraft> {
-  return analyzePdfWithoutPageIdentity(fileName, data, "pdf", null);
+  return analyzePdfWithoutPageIdentity(fileName, data, "pdf");
 }
 
 /**
- * Analyze a browser download whose page exposed no citation metadata. Keeping
- * the research-download source and relPath ensures confirm/cancel can always
- * acknowledge and clean the exact temporary file that produced this draft.
+ * Analyze a browser download whose page exposed no citation metadata. The
+ * caller has already consumed the opaque main-process download lease, so the
+ * staged PDF needs no renderer filesystem cleanup capability.
  */
 export async function analyzeResearchDownloadPdf(
   fileName: string,
   data: Uint8Array,
-  relPath: string,
 ): Promise<IngestDraft> {
-  return analyzePdfWithoutPageIdentity(fileName, data, "browser", relPath);
+  return analyzePdfWithoutPageIdentity(fileName, data, "browser");
 }
 
 async function analyzePdfWithoutPageIdentity(
   fileName: string,
   data: Uint8Array,
   source: "pdf" | "browser",
-  relPath: string | null,
 ): Promise<IngestDraft> {
   const exact = await exactFileDedup(fileName, data);
   if (exact.dedup) {
     if (source === "pdf") return draftWithDedup(source, exact.dedup, fileName);
-    const pdf = await stagePdf(
-      fileName,
-      data,
-      relPath,
-      "research-download",
-      exact.pageCount || undefined,
-    );
+    const pdf = await stagePdf(fileName, data, "research-download", exact.pageCount || undefined);
     return { ...draftWithDedup(source, exact.dedup, fileName), pdf };
   }
   const pdf = await stagePdf(
     fileName,
     data,
-    relPath,
     source === "browser" ? "research-download" : "manual",
     exact.pageCount,
   );
@@ -202,7 +193,6 @@ export async function analyzePdfWithIdentity(
   fileName: string,
   data: Uint8Array,
   identity: ScholarIdentity,
-  relPath: string | null,
 ): Promise<IngestDraft> {
   const exact = await exactFileDedup(fileName, data);
   if (exact.dedup) {
@@ -210,13 +200,7 @@ export async function analyzePdfWithIdentity(
     // task may intentionally attach the same content-addressed blob to its
     // explicit target; the renderer must be able to confirm that choice rather
     // than silently redirecting to whichever work first owned the blob.
-    const pdf = await stagePdf(
-      fileName,
-      data,
-      relPath,
-      "research-download",
-      exact.pageCount || undefined,
-    );
+    const pdf = await stagePdf(fileName, data, "research-download", exact.pageCount || undefined);
     return { ...draftWithDedup("browser", exact.dedup, fileName), pdf };
   }
 
@@ -224,7 +208,7 @@ export async function analyzePdfWithIdentity(
   if (clue) {
     const dedup = await dedupForClue(clue);
     if (dedup) {
-      const pdf = await stagePdf(fileName, data, relPath, "research-download", exact.pageCount);
+      const pdf = await stagePdf(fileName, data, "research-download", exact.pageCount);
       // Already in library by DOI — but we still have a fresh PDF to offer.
       // Surface as a dedup so the caller can attach without a confirm card.
       return {
@@ -241,7 +225,7 @@ export async function analyzePdfWithIdentity(
     }
   }
 
-  const pdf = await stagePdf(fileName, data, relPath, "research-download", exact.pageCount);
+  const pdf = await stagePdf(fileName, data, "research-download", exact.pageCount);
   const pdfFields = pdfFieldsFrom(exact.metadata, exact.text, fileName, identity);
   let candidates: NormalizedWork[];
   let confidence: number;
@@ -333,7 +317,6 @@ async function exactFileDedup(fileName: string, data: Uint8Array): Promise<Exact
 async function stagePdf(
   fileName: string,
   data: Uint8Array,
-  relPath: string | null,
   fetchedVia: PendingPdf["fetchedVia"],
   pageCount?: number,
   sourceUrl?: string,
@@ -344,7 +327,6 @@ async function stagePdf(
     ...receipt,
     fileName,
     pageCount: pages,
-    relPath,
     fetchedVia,
     ...(sourceUrl === undefined ? {} : { sourceUrl }),
   };
@@ -487,7 +469,7 @@ export async function attachPdfToWork(
   fileName: string,
   data: Uint8Array,
 ): Promise<AttachPdfResult> {
-  const pdf = await stagePdf(fileName, data, null, "manual");
+  const pdf = await stagePdf(fileName, data, "manual");
   const result = await finalizeIngest({ mode: "attach", pdf, workId }).catch(async (error) => {
     await discardStagedPdf(pdf);
     throw error;

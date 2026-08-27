@@ -1115,7 +1115,6 @@ export function LibraryPage() {
           ...receipt,
           fileName: file.name,
           pageCount: 1,
-          relPath: null,
           fetchedVia: "manual",
         };
         setMessage(null);

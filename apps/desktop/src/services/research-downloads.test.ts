@@ -2,19 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DownloadFinishedPayload, DownloadStartedPayload } from "../../electron/shared";
 
 const mocks = vi.hoisted(() => ({
-  deleteFile: vi.fn(),
+  analyzePdfWithIdentity: vi.fn(),
+  analyzeResearchDownloadPdf: vi.fn(),
+  consumeDownload: vi.fn(),
   offFinished: vi.fn(),
   offStarted: vi.fn(),
-  readResearchDownload: vi.fn(),
 }));
 
-vi.mock("./aura-platform", () => ({
-  auraFs: {
-    deleteFile: mocks.deleteFile,
-  },
-  auraFiles: {
-    readResearchDownload: mocks.readResearchDownload,
-  },
+vi.mock("./library", () => ({
+  analyzePdfWithIdentity: mocks.analyzePdfWithIdentity,
+  analyzeResearchDownloadPdf: mocks.analyzeResearchDownloadPdf,
 }));
 
 import {
@@ -29,11 +26,13 @@ describe("research download source-tab propagation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.deleteFile.mockResolvedValue(undefined);
-    mocks.readResearchDownload.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    mocks.consumeDownload.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    mocks.analyzePdfWithIdentity.mockResolvedValue({ pdf: null });
+    mocks.analyzeResearchDownloadPdf.mockResolvedValue({ pdf: null });
     vi.stubGlobal("window", {
       aura: {
         research: {
+          consumeDownload: mocks.consumeDownload,
           onDownloadFinished(callback: (payload: DownloadFinishedPayload) => void) {
             emitFinished = callback;
             return mocks.offFinished;
@@ -78,14 +77,14 @@ describe("research download source-tab propagation", () => {
       tabId: "research-tab-failed",
       ownerTabId: "research-tab-failed",
       fileName: "1710000000000-paper.pdf",
-      relPath: "research-downloads/failed.pdf",
+      downloadId: null,
       success: false,
     });
     emitFinished?.({
       tabId: "research-tab-ignored",
       ownerTabId: "research-tab-root",
       fileName: "1710000000001-supplement.zip",
-      relPath: "research-downloads/supplement.zip",
+      downloadId: "download-ignored",
       success: true,
     });
 
@@ -106,13 +105,12 @@ describe("research download source-tab propagation", () => {
         }),
       ]),
     );
-    expect(mocks.deleteFile).toHaveBeenCalledWith("research-downloads/failed.pdf");
-    expect(mocks.deleteFile).toHaveBeenCalledWith("research-downloads/supplement.zip");
+    expect(mocks.consumeDownload).toHaveBeenCalledWith({ downloadId: "download-ignored" });
   });
 
   it("buffers an analysis that finishes after its page subscriber leaves", async () => {
     let resolveRead: ((bytes: Uint8Array) => void) | undefined;
-    mocks.readResearchDownload.mockReturnValueOnce(
+    mocks.consumeDownload.mockReturnValueOnce(
       new Promise<Uint8Array>((resolve) => {
         resolveRead = resolve;
       }),
@@ -123,24 +121,70 @@ describe("research download source-tab propagation", () => {
       tabId: "research-tab-child",
       ownerTabId: "research-tab-root",
       fileName: "1710000000002-supplement.zip",
-      relPath: "research-downloads/late.zip",
+      downloadId: "download-late",
       success: true,
     });
     unsubscribe();
     resolveRead?.(new Uint8Array([1, 2, 3]));
     await vi.waitFor(() =>
-      expect(mocks.deleteFile).toHaveBeenCalledWith("research-downloads/late.zip"),
+      expect(mocks.consumeDownload).toHaveBeenCalledWith({ downloadId: "download-late" }),
     );
     expect(staleResult).not.toHaveBeenCalled();
 
     const replayed = vi.fn();
     subscribeResearchDownloads(replayed);
-    expect(replayed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "ignored",
-        ownerTabId: "research-tab-root",
-        tabId: "research-tab-child",
-      }),
+    await vi.waitFor(() =>
+      expect(replayed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "ignored",
+          ownerTabId: "research-tab-root",
+          tabId: "research-tab-child",
+        }),
+      ),
     );
+  });
+
+  it("reports a successful event without an opaque lease as an error", async () => {
+    const captures: CapturedDownload[] = [];
+    subscribeResearchDownloads((result) => captures.push(result));
+
+    emitFinished?.({
+      tabId: "research-tab-missing-lease",
+      ownerTabId: "research-tab-missing-lease",
+      fileName: "1710000000003-paper.pdf",
+      downloadId: null,
+      success: true,
+    } as unknown as DownloadFinishedPayload);
+
+    await vi.waitFor(() => expect(captures).toHaveLength(1));
+    expect(captures[0]).toMatchObject({
+      kind: "error",
+      fileName: "paper.pdf",
+      error: "下载凭证无效",
+    });
+    expect(mocks.consumeDownload).not.toHaveBeenCalled();
+  });
+
+  it("consumes the opaque lease before handing PDF bytes to the analyzer", async () => {
+    const captures: CapturedDownload[] = [];
+    subscribeResearchDownloads((result) => captures.push(result));
+    const bytes = new Uint8Array([9, 8, 7]);
+    mocks.consumeDownload.mockResolvedValueOnce(bytes);
+    const scholar = { doi: "10.4242/lease", title: "Lease paper" };
+
+    emitFinished?.({
+      tabId: "research-tab-pdf",
+      ownerTabId: "research-tab-pdf",
+      fileName: "1710000000004-paper.pdf",
+      downloadId: "download-pdf",
+      success: true,
+      scholar,
+    });
+
+    await vi.waitFor(() => expect(captures).toHaveLength(1));
+    expect(mocks.consumeDownload).toHaveBeenCalledWith({ downloadId: "download-pdf" });
+    expect(mocks.analyzePdfWithIdentity).toHaveBeenCalledWith("paper.pdf", bytes, scholar);
+    expect(mocks.analyzePdfWithIdentity.mock.calls[0]).toHaveLength(3);
+    expect(captures[0]).toMatchObject({ kind: "pdf", fileName: "paper.pdf" });
   });
 });

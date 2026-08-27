@@ -9,6 +9,7 @@ import { registerDataCommandHandlers } from "./main/data-commands";
 import { registerEvidenceSourceRecoveryHandlers } from "./main/evidence-source-recovery";
 import { registerEmbeddingArtifactHandlers } from "./main/embedding-artifact-commands";
 import { clearLibraryPdfStaging, recoverLibraryPdfStaging } from "./main/library-pdf-staging";
+import { clearResearchDownloads, recoverResearchDownloads } from "./main/research-download-store";
 import { knowledgeOutboxDispatcher } from "./main/knowledge-outbox-dispatcher";
 import { initResearchBrowser, registerResearchHandlers } from "./main/research-browser";
 import { startCitationBridge } from "./main/citation-bridge";
@@ -71,6 +72,7 @@ async function createWindow(): Promise<void> {
   setTrustedSender(win.webContents);
   win.once("closed", () => {
     void clearLibraryPdfStaging().catch(() => {});
+    void clearResearchDownloads().catch(() => {});
   });
   attachCloseLifecycle(win);
 
@@ -99,6 +101,9 @@ if (!hasSingleInstanceLock) {
     // Resolve stale SHA-only staging journal entries before any typed command
     // or window can create a fresh receipt. Recovery never revives receipts.
     await recoverLibraryPdfStaging();
+    // Research-download receipts are in-memory and cannot survive a restart;
+    // clean safe leftovers before a new browser view can create a receipt.
+    await recoverResearchDownloads();
     if (SMOKE_MODE) {
       registerSmokeDbHandlers();
     }
