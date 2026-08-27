@@ -4,6 +4,10 @@ import {
   createResearchDownloadInFlightGate,
   type ResearchDownloadInFlightGate,
 } from "./research-download-inflight";
+import {
+  createResearchDownloadUserIntentGate,
+  type ResearchDownloadUserIntentGate,
+} from "./research-download-user-intent";
 
 const mocks = vi.hoisted(() => ({
   createFileName: vi.fn(),
@@ -32,6 +36,7 @@ import {
 
 const FILE_NAME = "171000000000000000000000000000001-page.pdf";
 const SOURCE = {};
+const DOWNLOAD_URL = "https://example.edu/page.pdf";
 const TARGET = {
   absolutePath:
     "/user-data/research-downloads/.stream-11111111-1111-4111-8111-111111111111/download",
@@ -52,7 +57,9 @@ interface DownloadItemFake {
   getFilename: ReturnType<typeof vi.fn>;
   getReceivedBytes: ReturnType<typeof vi.fn>;
   getTotalBytes: ReturnType<typeof vi.fn>;
+  getURLChain: ReturnType<typeof vi.fn>;
   getURL: ReturnType<typeof vi.fn>;
+  hasUserGesture: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
   once: ReturnType<typeof vi.fn>;
   setSavePath: ReturnType<typeof vi.fn>;
@@ -61,13 +68,17 @@ interface DownloadItemFake {
 type WillDownloadListener = (event: DownloadEvent, item: DownloadItemFake, source: unknown) => void;
 
 function downloadItem({
+  hasUserGesture = true,
   receivedBytes = 0,
   setSavePath = vi.fn(),
   totalBytes = 1,
+  urlChain = [DOWNLOAD_URL],
 }: {
+  hasUserGesture?: boolean;
   receivedBytes?: number;
   setSavePath?: ReturnType<typeof vi.fn>;
   totalBytes?: number;
+  urlChain?: string[];
 } = {}): DownloadItemFake {
   let done: DoneListener | undefined;
   let updated: UpdatedListener | undefined;
@@ -89,7 +100,9 @@ function downloadItem({
     getFilename: vi.fn(() => "page.pdf"),
     getReceivedBytes: vi.fn(() => received),
     getTotalBytes: vi.fn(() => totalBytes),
-    getURL: vi.fn(() => "https://example.edu/page.pdf"),
+    getURLChain: vi.fn(() => urlChain),
+    getURL: vi.fn(() => DOWNLOAD_URL),
+    hasUserGesture: vi.fn(() => hasUserGesture),
     on: vi.fn((event: string, listener: UpdatedListener) => {
       if (event === "updated") updated = listener;
       return item;
@@ -130,10 +143,12 @@ function eventContext({
     maxDownloads: 2,
   }),
   send = vi.fn(),
+  userIntentGate,
 }: {
   findSourceTab?: ReturnType<typeof vi.fn>;
   inFlightGate?: ResearchDownloadInFlightGate;
   send?: ReturnType<typeof vi.fn>;
+  userIntentGate?: ResearchDownloadUserIntentGate;
 } = {}): { context: ResearchDownloadEventContext; send: ReturnType<typeof vi.fn> } {
   return {
     context: {
@@ -141,6 +156,7 @@ function eventContext({
       getWindow: vi.fn(() => ({ webContents: { send } })),
       inFlightGate,
       resolveIdentity: vi.fn(() => undefined),
+      userIntentGate,
     } as unknown as ResearchDownloadEventContext,
     send,
   };
@@ -186,7 +202,9 @@ describe("research stream download admission", () => {
     expect(item.cancel).not.toHaveBeenCalled();
     expect(item.getFilename).not.toHaveBeenCalled();
     expect(item.getTotalBytes).not.toHaveBeenCalled();
+    expect(item.getURLChain).not.toHaveBeenCalled();
     expect(item.getURL).not.toHaveBeenCalled();
+    expect(item.hasUserGesture).not.toHaveBeenCalled();
     expect(item.on).not.toHaveBeenCalled();
     expect(item.once).not.toHaveBeenCalled();
     expect(item.setSavePath).not.toHaveBeenCalled();
@@ -195,6 +213,55 @@ describe("research stream download admission", () => {
     expect(mocks.discard).not.toHaveBeenCalled();
     expect(mocks.register).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("rejects a known non-gesture download before allocating a target", () => {
+    const { session, willDownload } = wiredSession();
+    const { context, send } = eventContext();
+    const item = downloadItem({ hasUserGesture: false });
+    wireResearchDownloadSession(session, context);
+
+    const event = dispatch(willDownload(), item);
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(item.hasUserGesture).toHaveBeenCalledTimes(1);
+    expect(item.getURLChain).toHaveBeenCalledTimes(1);
+    expect(item.getFilename).not.toHaveBeenCalled();
+    expect(item.getTotalBytes).not.toHaveBeenCalled();
+    expect(item.on).not.toHaveBeenCalled();
+    expect(item.once).not.toHaveBeenCalled();
+    expect(item.setSavePath).not.toHaveBeenCalled();
+    expect(mocks.createTarget).not.toHaveBeenCalled();
+    expect(mocks.discard).not.toHaveBeenCalled();
+    expect(mocks.register).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("allows a matching app capture permit only once", () => {
+    const intentGate = createResearchDownloadUserIntentGate();
+    intentGate.issueAppCapture(SOURCE, DOWNLOAD_URL);
+    const { session, willDownload } = wiredSession();
+    const { context } = eventContext({ userIntentGate: intentGate });
+    wireResearchDownloadSession(session, context);
+
+    const permitted = dispatch(willDownload(), downloadItem({ hasUserGesture: false }));
+    const replay = dispatch(willDownload(), downloadItem({ hasUserGesture: false }));
+
+    expect(permitted.preventDefault).not.toHaveBeenCalled();
+    expect(replay.preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume an app capture permit for a user-gesture download", () => {
+    const intentGate = createResearchDownloadUserIntentGate();
+    intentGate.issueAppCapture(SOURCE, DOWNLOAD_URL);
+    const { session, willDownload } = wiredSession();
+    const { context } = eventContext({ userIntentGate: intentGate });
+    wireResearchDownloadSession(session, context);
+
+    expect(dispatch(willDownload(), downloadItem()).preventDefault).not.toHaveBeenCalled();
+    expect(
+      dispatch(willDownload(), downloadItem({ hasUserGesture: false })).preventDefault,
+    ).not.toHaveBeenCalled();
   });
 
   it("rejects an oversized declared download before allocating a target", () => {

@@ -39,6 +39,7 @@ import {
 } from "./research-download-store";
 import { wireResearchDownloadSession } from "./research-download-events";
 import { writeResearchPrintedFile } from "./research-download-print-file";
+import { notifyResearchDownloadCaptureExpired, startResearchDownloadCapture } from "./research-download-user-intent";
 
 interface Tab {
   tabId: string;
@@ -450,7 +451,7 @@ export function registerResearchHandlers(): void {
     if (!url) return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
 
     if (/\.pdf(\?|#|$)/i.test(url)) {
-      wc.downloadURL(url);
+      startResearchDownloadCapture(wc, url, { onExpired: notifyResearchDownloadCaptureExpired.bind(null, win, tab) });
       return { kind: "download" };
     }
 
