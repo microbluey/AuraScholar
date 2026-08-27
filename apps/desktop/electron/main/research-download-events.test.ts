@@ -8,6 +8,7 @@ import {
   createResearchDownloadUserIntentGate,
   type ResearchDownloadUserIntentGate,
 } from "./research-download-user-intent";
+import { MAX_REFERENCE_IMPORT_INPUT_BYTES } from "./reference-import-limits";
 
 const mocks = vi.hoisted(() => ({
   createFileName: vi.fn(),
@@ -288,6 +289,33 @@ describe("research stream download admission", () => {
     );
   });
 
+  it("rejects an oversized declared reference download before allocating a target", () => {
+    const referenceFileName = "171000000000000000000000000000002-export.bib";
+    mocks.createFileName.mockReturnValue(referenceFileName);
+    const gate = createResearchDownloadInFlightGate({
+      maxBytes: MAX_REFERENCE_IMPORT_INPUT_BYTES + 1,
+      maxDownloadBytes: MAX_REFERENCE_IMPORT_INPUT_BYTES + 1,
+      maxDownloads: 2,
+    });
+    const { session, willDownload } = wiredSession();
+    const { context, send } = eventContext({ inFlightGate: gate });
+    const item = downloadItem({ totalBytes: MAX_REFERENCE_IMPORT_INPUT_BYTES + 1 });
+    wireResearchDownloadSession(session, context);
+
+    const event = dispatch(willDownload(), item);
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(item.on).not.toHaveBeenCalled();
+    expect(item.once).not.toHaveBeenCalled();
+    expect(item.setSavePath).not.toHaveBeenCalled();
+    expect(mocks.createTarget).not.toHaveBeenCalled();
+    expect(mocks.register).not.toHaveBeenCalled();
+    expect(send).toHaveBeenLastCalledWith(
+      "research://download-finished",
+      expect.objectContaining({ downloadId: null, fileName: referenceFileName, success: false }),
+    );
+  });
+
   it("holds a shared synchronous admission until terminal cleanup completes", async () => {
     const gate = createResearchDownloadInFlightGate({
       maxBytes: 10,
@@ -353,6 +381,31 @@ describe("research stream download admission", () => {
     expect(mocks.register).not.toHaveBeenCalled();
 
     expect(dispatch(willDownload(), downloadItem()).preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("cancels an unknown-length reference stream at the stricter reference limit", async () => {
+    const referenceFileName = "171000000000000000000000000000003-export.ris";
+    mocks.createFileName.mockReturnValue(referenceFileName);
+    const gate = createResearchDownloadInFlightGate({
+      maxBytes: MAX_REFERENCE_IMPORT_INPUT_BYTES * 2,
+      maxDownloadBytes: MAX_REFERENCE_IMPORT_INPUT_BYTES * 2,
+      maxDownloads: 1,
+    });
+    const { session, willDownload } = wiredSession();
+    const { context } = eventContext({ inFlightGate: gate });
+    const item = downloadItem({ totalBytes: 0 });
+    wireResearchDownloadSession(session, context);
+
+    dispatch(willDownload(), item);
+    item.emitUpdated(MAX_REFERENCE_IMPORT_INPUT_BYTES);
+    expect(item.cancel).not.toHaveBeenCalled();
+    item.emitUpdated(MAX_REFERENCE_IMPORT_INPUT_BYTES + 1);
+    item.emitUpdated(MAX_REFERENCE_IMPORT_INPUT_BYTES + 2);
+    expect(item.cancel).toHaveBeenCalledTimes(1);
+    item.emitDone("completed");
+
+    await vi.waitFor(() => expect(mocks.discard).toHaveBeenCalledWith(referenceFileName, TARGET));
+    expect(mocks.register).not.toHaveBeenCalled();
   });
 
   it("waits for a terminal interrupted transfer before cleaning its owned target", async () => {

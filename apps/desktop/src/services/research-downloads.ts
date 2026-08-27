@@ -34,13 +34,6 @@ export interface CapturedDownload {
   error?: string;
 }
 
-const REFERENCE_EXTS = [".bib", ".ris", ".nbib", ".enw", ".json", ".txt"];
-
-function extOf(name: string): string {
-  const i = name.lastIndexOf(".");
-  return i >= 0 ? name.slice(i).toLowerCase() : "";
-}
-
 async function ingestDownloadedFile(
   tabId: string,
   ownerTabId: string,
@@ -50,41 +43,40 @@ async function ingestDownloadedFile(
 ): Promise<CapturedDownload> {
   // Strip the timestamp prefix main adds ("<ms>-<original>") for display/extension.
   const display = fileName.replace(/^\d+-/, "");
-  const ext = extOf(display);
   try {
     // Main owns the download file and exposes only a short-lived, one-time
     // opaque lease. Consuming it atomically reads the bytes and retires the
     // temporary file; no renderer path or delete capability is retained.
-    const bytes = await window.aura.research.consumeDownload({ downloadId });
-    if (ext === ".pdf") {
+    const content = await window.aura.research.consumeDownload({ downloadId });
+    if (content.kind === "ignored") {
+      return { tabId, ownerTabId, kind: "ignored", fileName: display };
+    }
+    if (content.kind === "pdf") {
       // Analyze only — never auto-write. The page identity (citation_* meta) is
       // preferred over guessing a DOI from the PDF body. The download lease has
       // already been consumed; the canonical staged receipt is kept until the
       // user confirms or cancels (handled by the caller).
       const { analyzePdfWithIdentity, analyzeResearchDownloadPdf } = await import("./library");
       const draft = hasIdentity(scholar)
-        ? await analyzePdfWithIdentity(display, bytes, scholar)
-        : await analyzeResearchDownloadPdf(display, bytes);
+        ? await analyzePdfWithIdentity(display, content.bytes, scholar)
+        : await analyzeResearchDownloadPdf(display, content.bytes);
       return { tabId, ownerTabId, kind: "pdf", title: display, fileName: display, draft };
     }
-    if (REFERENCE_EXTS.includes(ext)) {
-      const text = new TextDecoder().decode(bytes);
-      const { importReferences, previewReferences } = await import("./import-refs");
-      // .txt / .json may not actually be references — bail quietly if nothing parses.
-      if (previewReferences(text).length === 0) {
-        return { tabId, ownerTabId, kind: "ignored", fileName: display };
-      }
-      const summary = await importReferences(text);
-      return {
-        tabId,
-        ownerTabId,
-        kind: "references",
-        fileName: display,
-        imported: summary.imported,
-        deduped: summary.deduped > 0,
-      };
+    const text = new TextDecoder().decode(content.bytes);
+    const { importReferences, previewReferences } = await import("./import-refs");
+    // .txt / .json may not actually be references — bail quietly if nothing parses.
+    if (previewReferences(text).length === 0) {
+      return { tabId, ownerTabId, kind: "ignored", fileName: display };
     }
-    return { tabId, ownerTabId, kind: "ignored", fileName: display };
+    const summary = await importReferences(text);
+    return {
+      tabId,
+      ownerTabId,
+      kind: "references",
+      fileName: display,
+      imported: summary.imported,
+      deduped: summary.deduped > 0,
+    };
   } catch (e) {
     return {
       tabId,
@@ -107,6 +99,7 @@ let brokerResearch: Window["aura"]["research"] | null = null;
 let brokerOffStarted: (() => void) | null = null;
 let brokerOffFinished: (() => void) | null = null;
 let brokerGeneration = 0;
+let inspectionTail: Promise<void> = Promise.resolve();
 
 async function inspectFinishedDownload(
   payload: DownloadFinishedPayload,
@@ -151,6 +144,41 @@ function publishResult(result: CapturedDownload): void {
   }
 }
 
+function publishInspectedDownload(result: CapturedDownload, generation: number): void {
+  if (generation !== brokerGeneration) {
+    if (result.draft?.pdf) {
+      void import("./library-actions")
+        .then(({ discardStagedPdf }) => discardStagedPdf(result.draft?.pdf))
+        .catch(() => {});
+    }
+    return;
+  }
+  if (result.kind === "references") {
+    window.dispatchEvent(new Event("aurascholar:library-updated"));
+  }
+  publishResult(result);
+}
+
+function queueFinishedDownload(payload: DownloadFinishedPayload, generation: number): void {
+  // Keep the complete pipeline exclusive, not just the IPC call: PDF analysis
+  // and reference parsing retain the consumed bytes after main has returned.
+  // A task that has not started must not survive a broker replacement: it may
+  // otherwise import old reference bytes into a different active Library.
+  const inspection = inspectionTail.then(() =>
+    generation === brokerGeneration ? inspectFinishedDownload(payload) : null,
+  );
+  inspectionTail = inspection.then(
+    () => undefined,
+    () => undefined,
+  );
+  void inspection.then(
+    (result) => {
+      if (result) publishInspectedDownload(result, generation);
+    },
+    () => {},
+  );
+}
+
 function ensureDownloadBroker(): boolean {
   if (!("aura" in window)) return false;
   const research = window.aura.research;
@@ -162,20 +190,7 @@ function ensureDownloadBroker(): boolean {
     for (const subscriber of subscribers) subscriber.onStarted?.(payload);
   });
   brokerOffFinished = research.onDownloadFinished((payload) => {
-    void inspectFinishedDownload(payload).then((result) => {
-      if (generation !== brokerGeneration) {
-        if (result.draft?.pdf) {
-          void import("./library-actions")
-            .then(({ discardStagedPdf }) => discardStagedPdf(result.draft?.pdf))
-            .catch(() => {});
-        }
-        return;
-      }
-      if (result.kind === "references") {
-        window.dispatchEvent(new Event("aurascholar:library-updated"));
-      }
-      publishResult(result);
-    });
+    queueFinishedDownload(payload, generation);
   });
   return true;
 }

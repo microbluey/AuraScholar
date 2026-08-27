@@ -1,17 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DownloadFinishedPayload, DownloadStartedPayload } from "../../electron/shared";
+import type {
+  DownloadFinishedPayload,
+  DownloadStartedPayload,
+  ResearchDownloadContent,
+} from "../../electron/shared";
 
 const mocks = vi.hoisted(() => ({
   analyzePdfWithIdentity: vi.fn(),
   analyzeResearchDownloadPdf: vi.fn(),
   consumeDownload: vi.fn(),
+  importReferences: vi.fn(),
   offFinished: vi.fn(),
   offStarted: vi.fn(),
+  previewReferences: vi.fn(),
 }));
 
 vi.mock("./library", () => ({
   analyzePdfWithIdentity: mocks.analyzePdfWithIdentity,
   analyzeResearchDownloadPdf: mocks.analyzeResearchDownloadPdf,
+}));
+vi.mock("./import-refs", () => ({
+  importReferences: mocks.importReferences,
+  previewReferences: mocks.previewReferences,
 }));
 
 import {
@@ -26,10 +36,13 @@ describe("research download source-tab propagation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.consumeDownload.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    mocks.consumeDownload.mockResolvedValue({ kind: "ignored" });
     mocks.analyzePdfWithIdentity.mockResolvedValue({ pdf: null });
     mocks.analyzeResearchDownloadPdf.mockResolvedValue({ pdf: null });
+    mocks.importReferences.mockResolvedValue({ deduped: 0, imported: 1, total: 1 });
+    mocks.previewReferences.mockReturnValue([{ id: "reference-id" }]);
     vi.stubGlobal("window", {
+      dispatchEvent: vi.fn(),
       aura: {
         research: {
           consumeDownload: mocks.consumeDownload,
@@ -109,9 +122,9 @@ describe("research download source-tab propagation", () => {
   });
 
   it("buffers an analysis that finishes after its page subscriber leaves", async () => {
-    let resolveRead: ((bytes: Uint8Array) => void) | undefined;
+    let resolveRead: ((content: ResearchDownloadContent) => void) | undefined;
     mocks.consumeDownload.mockReturnValueOnce(
-      new Promise<Uint8Array>((resolve) => {
+      new Promise<ResearchDownloadContent>((resolve) => {
         resolveRead = resolve;
       }),
     );
@@ -125,7 +138,7 @@ describe("research download source-tab propagation", () => {
       success: true,
     });
     unsubscribe();
-    resolveRead?.(new Uint8Array([1, 2, 3]));
+    resolveRead?.({ kind: "ignored" });
     await vi.waitFor(() =>
       expect(mocks.consumeDownload).toHaveBeenCalledWith({ downloadId: "download-late" }),
     );
@@ -169,7 +182,7 @@ describe("research download source-tab propagation", () => {
     const captures: CapturedDownload[] = [];
     subscribeResearchDownloads((result) => captures.push(result));
     const bytes = new Uint8Array([9, 8, 7]);
-    mocks.consumeDownload.mockResolvedValueOnce(bytes);
+    mocks.consumeDownload.mockResolvedValueOnce({ kind: "pdf", bytes });
     const scholar = { doi: "10.4242/lease", title: "Lease paper" };
 
     emitFinished?.({
@@ -186,5 +199,160 @@ describe("research download source-tab propagation", () => {
     expect(mocks.analyzePdfWithIdentity).toHaveBeenCalledWith("paper.pdf", bytes, scholar);
     expect(mocks.analyzePdfWithIdentity.mock.calls[0]).toHaveLength(3);
     expect(captures[0]).toMatchObject({ kind: "pdf", fileName: "paper.pdf" });
+  });
+
+  it("uses the main references tag to parse and import a text export", async () => {
+    const captures: CapturedDownload[] = [];
+    const bytes = new TextEncoder().encode("TY  - JOUR\nTI  - Tagged reference\nER  -");
+    mocks.consumeDownload.mockResolvedValueOnce({ kind: "references", bytes });
+    subscribeResearchDownloads((result) => captures.push(result));
+
+    emitFinished?.({
+      tabId: "research-tab-references",
+      ownerTabId: "research-tab-references",
+      fileName: "1710000000005-export.txt",
+      downloadId: "download-references",
+      success: true,
+    });
+
+    await vi.waitFor(() => expect(captures).toHaveLength(1));
+    expect(mocks.previewReferences).toHaveBeenCalledWith(
+      "TY  - JOUR\nTI  - Tagged reference\nER  -",
+    );
+    expect(mocks.importReferences).toHaveBeenCalledWith(
+      "TY  - JOUR\nTI  - Tagged reference\nER  -",
+    );
+    expect(captures[0]).toMatchObject({ imported: 1, kind: "references" });
+  });
+
+  it("does not parse a filename that main has classified as ignored", async () => {
+    const captures: CapturedDownload[] = [];
+    subscribeResearchDownloads((result) => captures.push(result));
+
+    emitFinished?.({
+      tabId: "research-tab-ignored-json",
+      ownerTabId: "research-tab-ignored-json",
+      fileName: "1710000000006-export.json",
+      downloadId: "download-ignored-json",
+      success: true,
+    });
+
+    await vi.waitFor(() => expect(captures).toHaveLength(1));
+    expect(captures[0]).toMatchObject({ kind: "ignored", fileName: "export.json" });
+    expect(mocks.previewReferences).not.toHaveBeenCalled();
+    expect(mocks.importReferences).not.toHaveBeenCalled();
+  });
+
+  it("serializes complete consumption and PDF analysis before starting the next download", async () => {
+    const captures: CapturedDownload[] = [];
+    let releaseFirstAnalysis: (() => void) | undefined;
+    mocks.consumeDownload.mockResolvedValue({ kind: "pdf", bytes: new Uint8Array([1, 2, 3]) });
+    mocks.analyzeResearchDownloadPdf.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirstAnalysis = () => resolve({ pdf: null });
+        }),
+    );
+    subscribeResearchDownloads((result) => captures.push(result));
+
+    emitFinished?.({
+      tabId: "research-tab-first",
+      ownerTabId: "research-tab-first",
+      fileName: "1710000000007-first.pdf",
+      downloadId: "download-first",
+      success: true,
+    });
+    emitFinished?.({
+      tabId: "research-tab-second",
+      ownerTabId: "research-tab-second",
+      fileName: "1710000000008-second.pdf",
+      downloadId: "download-second",
+      success: true,
+    });
+
+    await vi.waitFor(() => expect(mocks.analyzeResearchDownloadPdf).toHaveBeenCalledTimes(1));
+    expect(mocks.consumeDownload).toHaveBeenCalledTimes(1);
+    expect(mocks.consumeDownload).toHaveBeenLastCalledWith({ downloadId: "download-first" });
+    releaseFirstAnalysis?.();
+
+    await vi.waitFor(() => expect(mocks.consumeDownload).toHaveBeenCalledTimes(2));
+    expect(mocks.consumeDownload).toHaveBeenLastCalledWith({ downloadId: "download-second" });
+    await vi.waitFor(() => expect(captures).toHaveLength(2));
+  });
+
+  it("skips queued work from a disposed broker generation", async () => {
+    let releaseFirstAnalysis: (() => void) | undefined;
+    const currentResults = vi.fn();
+    mocks.consumeDownload.mockResolvedValueOnce({ kind: "pdf", bytes: new Uint8Array([1, 2, 3]) });
+    mocks.analyzeResearchDownloadPdf.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirstAnalysis = () => resolve({ pdf: null });
+        }),
+    );
+    subscribeResearchDownloads(vi.fn());
+
+    emitFinished?.({
+      tabId: "research-tab-active-old",
+      ownerTabId: "research-tab-active-old",
+      fileName: "1710000000009-active.pdf",
+      downloadId: "download-active-old",
+      success: true,
+    });
+    await vi.waitFor(() => expect(mocks.analyzeResearchDownloadPdf).toHaveBeenCalledTimes(1));
+    emitFinished?.({
+      tabId: "research-tab-stale",
+      ownerTabId: "research-tab-stale",
+      fileName: "1710000000010-stale.ris",
+      downloadId: "download-stale",
+      success: true,
+    });
+
+    disposeResearchDownloadBroker();
+    subscribeResearchDownloads(currentResults);
+    emitFinished?.({
+      tabId: "research-tab-current",
+      ownerTabId: "research-tab-current",
+      fileName: "1710000000011-current.zip",
+      downloadId: "download-current",
+      success: true,
+    });
+    releaseFirstAnalysis?.();
+
+    await vi.waitFor(() => expect(mocks.consumeDownload).toHaveBeenCalledTimes(2));
+    expect(mocks.consumeDownload).toHaveBeenCalledWith({ downloadId: "download-active-old" });
+    expect(mocks.consumeDownload).toHaveBeenCalledWith({ downloadId: "download-current" });
+    expect(mocks.consumeDownload).not.toHaveBeenCalledWith({ downloadId: "download-stale" });
+    await vi.waitFor(() =>
+      expect(currentResults).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "ignored", tabId: "research-tab-current" }),
+      ),
+    );
+  });
+
+  it("continues the queue after a failed consume", async () => {
+    const captures: CapturedDownload[] = [];
+    mocks.consumeDownload.mockRejectedValueOnce(new Error("read failed"));
+    subscribeResearchDownloads((result) => captures.push(result));
+
+    emitFinished?.({
+      tabId: "research-tab-failed-consume",
+      ownerTabId: "research-tab-failed-consume",
+      fileName: "1710000000012-first.zip",
+      downloadId: "download-failed-consume",
+      success: true,
+    });
+    emitFinished?.({
+      tabId: "research-tab-after-failure",
+      ownerTabId: "research-tab-after-failure",
+      fileName: "1710000000013-second.zip",
+      downloadId: "download-after-failure",
+      success: true,
+    });
+
+    await vi.waitFor(() => expect(mocks.consumeDownload).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(captures).toHaveLength(2));
+    expect(captures[0]).toMatchObject({ kind: "error", tabId: "research-tab-failed-consume" });
+    expect(captures[1]).toMatchObject({ kind: "ignored", tabId: "research-tab-after-failure" });
   });
 });

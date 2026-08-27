@@ -8,6 +8,7 @@ import {
   type ConsumeResearchDownloadInput,
   type DownloadFinishedPayload,
   type DownloadStartedPayload,
+  type ResearchDownloadContent,
   type RecoverEvidenceSourceInput,
   type RecoverEvidenceSourceResult,
   type ResearchTab,
@@ -157,7 +158,7 @@ const api = {
     siteData(siteIds: string[]): Promise<string[]> {
       return ipcRenderer.invoke(CH.researchSiteData, siteIds);
     },
-    consumeDownload(input: ConsumeResearchDownloadInput): Promise<Uint8Array> {
+    consumeDownload(input: ConsumeResearchDownloadInput): Promise<ResearchDownloadContent> {
       return ipcRenderer.invoke(CH.researchConsumeDownload, input);
     },
     onDownloadStarted(cb: (p: DownloadStartedPayload) => void): () => void {

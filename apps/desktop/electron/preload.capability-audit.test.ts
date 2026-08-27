@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CH } from "./shared";
+import { CH, type ResearchDownloadContent } from "./shared";
 
 const mocks = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
@@ -32,7 +32,7 @@ interface ExposedAuraApi {
   fs?: unknown;
   files?: unknown;
   research: {
-    consumeDownload(input: { downloadId: string }): Promise<Uint8Array>;
+    consumeDownload(input: { downloadId: string }): Promise<ResearchDownloadContent>;
   };
 }
 

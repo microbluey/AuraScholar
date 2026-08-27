@@ -10,6 +10,11 @@ import {
   type ResearchDownloadUserIntentGate,
 } from "./research-download-user-intent";
 import { createResearchDownloadFileName } from "./research-download-file-name";
+import {
+  describeResearchDownloadFile,
+  isResearchDownloadTransferWithinLimit,
+} from "./research-download-file-policy";
+import { MAX_RESEARCH_DOWNLOAD_BYTES } from "./research-download-limits";
 import { discardResearchDownload, registerResearchDownload } from "./research-download-store";
 import { createResearchDownloadStreamTarget } from "./research-download-stream-target";
 
@@ -60,13 +65,20 @@ export function wireResearchDownloadSession(
     const scholar = context.resolveIdentity(sourceTab, item.getURL());
     const originalFileName = item.getFilename();
     const fileName = createResearchDownloadFileName(originalFileName);
+    const filePolicy = describeResearchDownloadFile(fileName, MAX_RESEARCH_DOWNLOAD_BYTES);
     const displayName =
       originalFileName.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120) || "download";
+    const totalBytes = item.getTotalBytes();
+    if (!isResearchDownloadTransferWithinLimit(0, totalBytes, filePolicy.maxByteSize)) {
+      event.preventDefault();
+      sendDownloadFinished(context, sourceTabId, ownerTabId, fileName, null, false, scholar);
+      return;
+    }
     let admission: ResearchDownloadInFlightAdmission | null;
     try {
       admission = context.inFlightGate
-        ? context.inFlightGate.admit(item.getTotalBytes())
-        : admitResearchDownloadInFlight(item.getTotalBytes());
+        ? context.inFlightGate.admit(totalBytes)
+        : admitResearchDownloadInFlight(totalBytes);
     } catch {
       admission = null;
     }
@@ -139,7 +151,15 @@ export function wireResearchDownloadSession(
     };
     const exceedsAdmission = (): boolean => {
       try {
-        return !admission.observe(item.getReceivedBytes(), item.getTotalBytes());
+        const receivedBytes = item.getReceivedBytes();
+        const observedTotalBytes = item.getTotalBytes();
+        return (
+          !isResearchDownloadTransferWithinLimit(
+            receivedBytes,
+            observedTotalBytes,
+            filePolicy.maxByteSize,
+          ) || !admission.observe(receivedBytes, observedTotalBytes)
+        );
       } catch {
         return true;
       }

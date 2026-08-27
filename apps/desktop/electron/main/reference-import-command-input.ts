@@ -3,8 +3,9 @@ import type { CslItem, ImportFormat } from "@aurascholar/cite";
 import type { WorkInput } from "@aurascholar/db/repos/works";
 import type { LibraryImportReferencesCommandInput } from "../reference-import-command-contract";
 import { isRecord } from "./data-command-runtime";
+import { MAX_REFERENCE_IMPORT_INPUT_BYTES } from "./reference-import-limits";
 
-export const MAX_REFERENCE_IMPORT_INPUT_BYTES = 16 * 1024 * 1024;
+export { MAX_REFERENCE_IMPORT_INPUT_BYTES };
 export const MAX_REFERENCE_IMPORT_ITEMS = 10_000;
 
 const MAX_REFERENCE_IMPORT_AUTHOR_TEXT_BYTES = 16 * 1024;

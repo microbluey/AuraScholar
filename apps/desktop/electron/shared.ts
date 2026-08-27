@@ -134,6 +134,12 @@ export interface ConsumeResearchDownloadInput {
   downloadId: string;
 }
 
+/** Main-classified result for one consumed research-browser download receipt. */
+export type ResearchDownloadContent =
+  | { kind: "pdf"; bytes: Uint8Array }
+  | { kind: "references"; bytes: Uint8Array }
+  | { kind: "ignored" };
+
 export interface RecoverEvidenceSourceInput {
   bytes: Uint8Array;
   evidenceId: string;

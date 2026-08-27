@@ -15,7 +15,7 @@ describe("main-owned filesystem read boundary", () => {
     const readerCommands = source("electron/main/reader-commands.ts");
     const readerContract = source("electron/reader-command-contract.ts");
     const researchBrowser = source("electron/main/research-browser.ts");
-    const researchDownloads = source("electron/main/research-download-store.ts");
+    const researchDownloadInput = source("electron/main/research-download-id.ts");
     const rendererPlatform = source("src/services/aura-platform.ts");
 
     expect(preload).not.toContain("readBlobPdf(sha256: string)");
@@ -52,7 +52,7 @@ describe("main-owned filesystem read boundary", () => {
     expect(shared).toContain('researchConsumeDownload: "research:consumeDownload"');
     expect(researchBrowser).toContain("handle(CH.researchConsumeDownload");
     expect(researchBrowser).toContain("assertResearchDownloadConsumeInput(input)");
-    expect(researchDownloads).toContain("Object.keys(value).length !== 1");
+    expect(researchDownloadInput).toContain("Object.keys(value).length !== 1");
     expect(rendererPlatform).not.toContain("window.aura.fs.readFile");
     expect(rendererPlatform).not.toContain("window.aura.fs.exists");
     expect(rendererPlatform).not.toContain("window.aura.fs.listDir");
