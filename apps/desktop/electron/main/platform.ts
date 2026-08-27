@@ -7,7 +7,6 @@ import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import { app, clipboard, Notification, safeStorage, shell } from "electron";
 import { handle } from "./ipc";
-import { readRendererReadableFile, resolveRendererBlobPdfPath } from "./platform-fs-policy";
 import { CH } from "../shared";
 
 const appData = () => app.getPath("userData");
@@ -112,9 +111,6 @@ function decode(stored: string): string {
 }
 
 export function registerPlatformHandlers(): void {
-  handle(CH.fsReadBlobPdf, async (_e, sha256: string) => {
-    return readRendererReadableFile(resolveRendererBlobPdfPath(appData(), sha256));
-  });
   handle(CH.notify, (_e, title: string, body?: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show();
   });

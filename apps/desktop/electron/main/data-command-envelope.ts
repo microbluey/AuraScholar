@@ -108,6 +108,7 @@ const SUPPORTED_DATA_COMMAND_NAMES = new Set<DataCommandName>([
   "reader.getWorkPdfCandidates",
   "reader.listAnnotations",
   "reader.markWorkReadingStarted",
+  "reader.readAttachmentPdf",
   "reader.restoreAnnotation",
   "reader.updateAnnotationContent",
   "savedSearch.clearNew",

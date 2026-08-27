@@ -13,9 +13,10 @@ built with [electron-vite](https://electron-vite.org/).
   notifications, secrets, the multi-tab research browser, and the local
   citation bridge.
 - **Platform layer** — `src/services/aura-platform.ts` adapts the restricted
-  `window.aura` preload bridge to HTTP, constrained canonical-PDF reads, and
-  notifications. Renderer data access never receives a shared `Database`
-  handle.
+  `window.aura` preload bridge to HTTP and notifications. Reader PDF bytes are
+  served by a work/attachment-scoped typed command and read from the
+  main-owned canonical BlobStore; renderer data access never receives a shared
+  `Database` handle or a filesystem path.
 - **Renderer data boundaries** — new and migrated pages consume typed services
   instead of opening database sessions or embedding SQL. Read services own
   active-Library scoping and row aggregation; durable multi-row mutations go

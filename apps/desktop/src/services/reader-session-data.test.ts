@@ -4,12 +4,14 @@ import {
   deleteReaderAnnotation,
   loadReaderAnnotations,
   loadReaderAttachment,
+  loadReaderAttachmentPdf,
   loadReaderWorkPdfCandidates,
   markReaderWorkReadingStarted,
   restoreReaderAnnotation,
   updateReaderAnnotationContent,
   type ReaderAnnotations,
   type ReaderAttachment,
+  type ReaderAttachmentPdf,
   type ReaderCreatedAnnotation,
   type ReaderDeletedAnnotation,
   type ReaderRestoredAnnotation,
@@ -49,6 +51,17 @@ describe("reader session data facade", () => {
       workId: "work-1",
     });
     expect(command).toHaveBeenNthCalledWith(2, "reader.listAnnotations", {
+      attachmentId: "attachment-1",
+      workId: "work-1",
+    });
+  });
+
+  it("loads PDF bytes with both work and attachment identity", async () => {
+    const result = { data: new Uint8Array([1, 2, 3]) } satisfies ReaderAttachmentPdf;
+    command.mockResolvedValueOnce(result);
+
+    await expect(loadReaderAttachmentPdf("work-1", "attachment-1")).resolves.toBe(result);
+    expect(command).toHaveBeenCalledWith("reader.readAttachmentPdf", {
       attachmentId: "attachment-1",
       workId: "work-1",
     });

@@ -1,18 +1,11 @@
 // Desktop Platform implementation, backed by the Electron preload bridge
-// (window.aura): constrained app-data FS, notifications, and helpers.
+// (window.aura): notifications and small renderer-safe helpers.
 import type { NotificationOptions, Notifier } from "@aurascholar/platform";
 
 /** True when running inside the Electron shell (the preload bridge exists). */
 export function isDesktopRuntime(): boolean {
   return "aura" in window;
 }
-
-/** Main-validated file reads. No API accepts an arbitrary app-data path. */
-export const auraFiles = {
-  readBlobPdf(sha256: string): Promise<Uint8Array> {
-    return window.aura.files.readBlobPdf(sha256);
-  },
-};
 
 export const auraNotifier: Notifier = {
   async notify(options: NotificationOptions): Promise<void> {

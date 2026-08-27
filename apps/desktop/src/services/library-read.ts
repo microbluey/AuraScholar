@@ -1,25 +1,22 @@
 import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
-import { auraFiles } from "./aura-platform";
-import { loadReaderWorkPdfCandidates } from "./reader-session-data";
+import { loadReaderAttachmentPdf, loadReaderWorkPdfCandidates } from "./reader-session-data";
 import { describeSafeError } from "./sensitive-text";
 
 /**
- * Resolves Reader-owned PDF candidates through the typed command boundary,
- * then reads blob bytes through the filesystem capability.
+ * Resolves Reader-owned PDF candidates and reads each selected attachment
+ * through the scoped typed command boundary.
  */
 export async function loadPdfForWork(
   workId: string,
   preferredAttachmentId?: string,
 ): Promise<{ attachmentId: string; data: Uint8Array } | null> {
   const { pdfAttachments } = await loadReaderWorkPdfCandidates(workId);
-  return loadPdfFromCandidates(pdfAttachments, preferredAttachmentId);
+  return loadPdfFromCandidates(workId, pdfAttachments, preferredAttachmentId);
 }
 
-/**
- * File-only portion of Reader PDF loading. It keeps the historical fallback
- * behavior: try every candidate in order unless the caller chose one PDF.
- */
+/** Keeps the historical fallback behavior while revalidating each attachment in main. */
 export async function loadPdfFromCandidates(
+  workId: string,
   candidates: readonly AttachmentRow[],
   preferredAttachmentId?: string,
 ): Promise<{ attachmentId: string; data: Uint8Array } | null> {
@@ -34,7 +31,7 @@ export async function loadPdfFromCandidates(
   let lastError: unknown = null;
   for (const pdf of pdfs) {
     try {
-      const data = await auraFiles.readBlobPdf(pdf.sha256);
+      const { data } = await loadReaderAttachmentPdf(workId, pdf.id);
       return { attachmentId: pdf.id, data };
     } catch (error) {
       lastError = error;

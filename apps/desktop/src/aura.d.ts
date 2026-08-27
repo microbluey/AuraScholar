@@ -18,7 +18,7 @@ type _AuraApiExcludesGenericHttpCancel = AssertFalse<
 // These renderer capabilities had no production consumer. Keep clipboard
 // writing, but do not reintroduce clipboard reads, device identity, external
 // shell launches, local citation-service discovery, or renderer filesystem
-// mutation through preload.
+// reads/mutation through preload.
 type _AuraApiExcludesClipboardReadText = AssertFalse<
   "readText" extends keyof AuraApi["clipboard"] ? true : false
 >;
@@ -31,6 +31,9 @@ type _AuraApiExcludesCitationBridgePort = AssertFalse<
 >;
 type _AuraApiExcludesRendererFilesystemMutation = AssertFalse<
   "fs" extends keyof AuraApi ? true : false
+>;
+type _AuraApiExcludesRendererFilesystemRead = AssertFalse<
+  "files" extends keyof AuraApi ? true : false
 >;
 
 declare global {

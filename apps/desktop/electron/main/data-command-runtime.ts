@@ -19,6 +19,12 @@ export interface DataCommandDependencies {
       database: Database,
     ) => DataCommandOutput<NoInfer<K>> | Promise<DataCommandOutput<NoInfer<K>>>,
   ): Promise<DataCommandOutput<K>>;
+  /**
+   * Main-only canonical PDF reader. Reader command owners must validate the
+   * attachment/work relationship before invoking this callback; the callback
+   * itself never accepts a renderer-selected filesystem path.
+   */
+  readPdfBlob?(sha256: string): Promise<Uint8Array>;
   getDeviceId?(): Promise<string>;
   /** Main-only, one-time receipt for an already persisted canonical PDF blob. */
   claimStagedPdf?(stageId: string): Promise<StagedPdfClaim>;
