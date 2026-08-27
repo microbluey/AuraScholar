@@ -1,4 +1,14 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
@@ -38,55 +48,132 @@ describe("research print download file allocation", () => {
       .mockReturnValueOnce("first.pdf")
       .mockReturnValueOnce("second.pdf");
     const pathFor = vi.fn((_root: string, fileName: string) => `/downloads/${fileName}`);
-    const writeFile = vi.fn((path: string) => {
+    const openExclusive = vi.fn((path: string) => {
       if (path.endsWith("first.pdf")) {
         throw Object.assign(new Error("already exists"), { code: "EEXIST" });
       }
+      return 7;
     });
+    const writeFile = vi.fn();
+    const closeFile = vi.fn();
+    const removeFile = vi.fn();
 
     const result = writeResearchPrintedFile("/user-data", "page.pdf", new Uint8Array([1]), {
       createFileName,
       pathFor,
-      writeFile,
+      io: { openExclusive, writeFile, closeFile, removeFile },
     });
 
     expect(result).toBe("second.pdf");
-    expect(writeFile).toHaveBeenCalledTimes(2);
+    expect(openExclusive).toHaveBeenCalledTimes(2);
+    expect(writeFile).toHaveBeenCalledOnce();
+    expect(closeFile).toHaveBeenCalledWith(7);
+    expect(removeFile).not.toHaveBeenCalled();
     expect(pathFor).toHaveBeenNthCalledWith(1, "/user-data", "first.pdf");
     expect(pathFor).toHaveBeenNthCalledWith(2, "/user-data", "second.pdf");
   });
 
   it("does not retry errors other than an existing file", () => {
     const createFileName = vi.fn(() => "candidate.pdf");
-    const writeFile = vi.fn(() => {
+    const openExclusive = vi.fn(() => {
       throw Object.assign(new Error("permission denied"), { code: "EACCES" });
     });
+    const writeFile = vi.fn();
+    const closeFile = vi.fn();
+    const removeFile = vi.fn();
 
     expect(() =>
       writeResearchPrintedFile("/user-data", "page.pdf", new Uint8Array(), {
         createFileName,
         pathFor: (_root, fileName) => `/downloads/${fileName}`,
-        writeFile,
+        io: { openExclusive, writeFile, closeFile, removeFile },
       }),
     ).toThrow("permission denied");
     expect(createFileName).toHaveBeenCalledTimes(1);
-    expect(writeFile).toHaveBeenCalledTimes(1);
+    expect(openExclusive).toHaveBeenCalledOnce();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(closeFile).not.toHaveBeenCalled();
+    expect(removeFile).not.toHaveBeenCalled();
   });
 
   it("leaves all existing candidates untouched after bounded retries", () => {
     const createFileName = vi.fn((_: string) => "existing.pdf");
-    const writeFile = vi.fn(() => {
+    const openExclusive = vi.fn(() => {
       throw Object.assign(new Error("already exists"), { code: "EEXIST" });
     });
+    const writeFile = vi.fn();
+    const closeFile = vi.fn();
+    const removeFile = vi.fn();
 
     expect(() =>
       writeResearchPrintedFile("/user-data", "page.pdf", new Uint8Array(), {
         createFileName,
         pathFor: (_root, fileName) => `/downloads/${fileName}`,
-        writeFile,
+        io: { openExclusive, writeFile, closeFile, removeFile },
       }),
     ).toThrow("already exists");
     expect(createFileName).toHaveBeenCalledTimes(MAX_RESEARCH_PRINT_FILE_ATTEMPTS);
-    expect(writeFile).toHaveBeenCalledTimes(MAX_RESEARCH_PRINT_FILE_ATTEMPTS);
+    expect(openExclusive).toHaveBeenCalledTimes(MAX_RESEARCH_PRINT_FILE_ATTEMPTS);
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(closeFile).not.toHaveBeenCalled();
+    expect(removeFile).not.toHaveBeenCalled();
+  });
+
+  it("removes an owned partial candidate after a write failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "aurascholar-print-file-"));
+    const writeFailure = Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    try {
+      const directory = join(root, "research-downloads");
+      const candidatePath = join(directory, "partial.pdf");
+      mkdirSync(directory);
+
+      expect(() =>
+        writeResearchPrintedFile(root, "page.pdf", new Uint8Array([1, 2]), {
+          createFileName: () => "partial.pdf",
+          io: {
+            openExclusive: (path) => openSync(path, "wx", 0o600),
+            writeFile(handle, pdf) {
+              writeFileSync(handle, pdf.subarray(0, 1));
+              throw writeFailure;
+            },
+            closeFile: closeSync,
+            removeFile: unlinkSync,
+          },
+        }),
+      ).toThrow(writeFailure);
+
+      expect(existsSync(candidatePath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("closes before cleanup without masking the write failure", () => {
+    const writeFailure = Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    const calls: string[] = [];
+
+    expect(() =>
+      writeResearchPrintedFile("/user-data", "page.pdf", new Uint8Array(), {
+        createFileName: () => "partial.pdf",
+        pathFor: (_root, fileName) => `/downloads/${fileName}`,
+        io: {
+          openExclusive: () => 7,
+          writeFile() {
+            calls.push("write");
+            throw writeFailure;
+          },
+          closeFile() {
+            calls.push("close");
+            throw new Error("close failed");
+          },
+          removeFile() {
+            calls.push("remove");
+            throw new Error("remove failed");
+          },
+        },
+      }),
+    ).toThrow(writeFailure);
+
+    expect(calls).toEqual(["write", "close", "remove"]);
   });
 });
