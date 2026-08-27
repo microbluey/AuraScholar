@@ -5,6 +5,10 @@ import {
   type ResearchDownloadInFlightAdmission,
   type ResearchDownloadInFlightGate,
 } from "./research-download-inflight";
+import {
+  consumeResearchDownloadCaptureIntent,
+  type ResearchDownloadUserIntentGate,
+} from "./research-download-user-intent";
 import { createResearchDownloadFileName } from "./research-download-file-name";
 import { discardResearchDownload, registerResearchDownload } from "./research-download-store";
 import { createResearchDownloadStreamTarget } from "./research-download-stream-target";
@@ -20,6 +24,7 @@ export interface ResearchDownloadEventContext {
   findSourceTab(sourceWebContents: unknown): ResearchDownloadSourceTab | undefined;
   getWindow(): BrowserWindow | null;
   inFlightGate?: ResearchDownloadInFlightGate;
+  userIntentGate?: ResearchDownloadUserIntentGate;
   resolveIdentity(
     tab: ResearchDownloadSourceTab | undefined,
     url: string,
@@ -40,6 +45,13 @@ export function wireResearchDownloadSession(
     // to allocate a main-owned stream directory or a download receipt.
     if (!sourceTab) {
       event.preventDefault();
+      return;
+    }
+
+    if (!isResearchDownloadUserIntended(item, sourceWebContents, context.userIntentGate)) {
+      event.preventDefault();
+      // A drive-by download never started a renderer task. Reject it silently
+      // so an untrusted page cannot flood the app with failure events.
       return;
     }
 
@@ -184,5 +196,21 @@ function sendDownloadFinished(
     });
   } catch {
     // A closing BrowserWindow must not strand a completed reservation.
+  }
+}
+
+function isResearchDownloadUserIntended(
+  item: { getURLChain(): string[]; hasUserGesture(): boolean },
+  sourceWebContents: unknown,
+  gate: ResearchDownloadUserIntentGate | undefined,
+): boolean {
+  try {
+    if (item.hasUserGesture() === true) return true;
+    const urlChain = item.getURLChain();
+    return gate
+      ? gate.consumeAppCapture(sourceWebContents, urlChain)
+      : consumeResearchDownloadCaptureIntent(sourceWebContents, urlChain);
+  } catch {
+    return false;
   }
 }
