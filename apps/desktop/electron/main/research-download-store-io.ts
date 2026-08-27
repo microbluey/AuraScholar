@@ -80,6 +80,36 @@ export async function assertSafeParentDirectories(
   }
 }
 
+/** Validate the app-created parent directory for one stream download payload. */
+export async function assertSafeResearchDownloadStreamDirectory(
+  root: string,
+  streamDirectory: string,
+): Promise<void> {
+  const directory = join(root, "research-downloads");
+  const rel = relative(directory, streamDirectory);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || rel.includes(sep)) {
+    throw new Error("Research download stream directory is invalid");
+  }
+  const [rootStat, directoryStat, streamStat] = await Promise.all([
+    lstatOrMissing(root),
+    lstatOrMissing(directory),
+    lstatOrMissing(streamDirectory),
+  ]);
+  if (
+    !rootStat ||
+    !rootStat.isDirectory() ||
+    rootStat.isSymbolicLink() ||
+    !directoryStat ||
+    !directoryStat.isDirectory() ||
+    directoryStat.isSymbolicLink() ||
+    !streamStat ||
+    !streamStat.isDirectory() ||
+    streamStat.isSymbolicLink()
+  ) {
+    throw new Error("Research download stream directory is unsafe");
+  }
+}
+
 export function assertSafeRegularFile(stat: {
   isFile(): boolean;
   isSymbolicLink(): boolean;
