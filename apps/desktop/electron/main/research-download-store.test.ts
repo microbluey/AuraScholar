@@ -9,6 +9,7 @@ import {
   MAX_PENDING_RESEARCH_DOWNLOAD_BYTES,
   RESEARCH_DOWNLOAD_TTL_MS,
 } from "./research-download-store";
+import { createResearchDownloadStreamTarget } from "./research-download-stream-target";
 
 const roots: string[] = [];
 const BYTES = new TextEncoder().encode("main-owned research download");
@@ -169,6 +170,87 @@ describe("main-owned research download leases", () => {
     await expect(store.register(fileName, "owner-tab")).resolves.toMatchObject({
       downloadId: "reopen-id",
     });
+  });
+
+  it("consumes and recovers stream downloads from their owned directories", async () => {
+    const userDataRoot = await root();
+    const store = createResearchDownloadStore(userDataRoot, { id: () => "stream-id" });
+    const target = createResearchDownloadStreamTarget(userDataRoot, {
+      id: () => "33333333-3333-4333-8333-333333333333",
+    });
+    await fs.writeFile(target.absolutePath, BYTES);
+
+    const lease = await store.register("stream.pdf", "owner-tab", target);
+    await expect(store.consume(lease.downloadId)).resolves.toEqual(BYTES);
+    await expect(fs.access(target.directory)).rejects.toThrow();
+
+    const abandoned = createResearchDownloadStreamTarget(userDataRoot, {
+      id: () => "44444444-4444-4444-8444-444444444444",
+    });
+    await fs.writeFile(abandoned.absolutePath, BYTES);
+    await store.recover();
+    await expect(fs.access(abandoned.directory)).rejects.toThrow();
+  });
+
+  it("cleans oversized owned stream payloads after rejection and recovery", async () => {
+    const userDataRoot = await root();
+    const store = createResearchDownloadStore(userDataRoot, {
+      id: () => "oversized-stream-id",
+      maxDownloadBytes: 1,
+    });
+    const rejected = createResearchDownloadStreamTarget(userDataRoot, {
+      id: () => "55555555-5555-4555-8555-555555555555",
+    });
+    await fs.writeFile(rejected.absolutePath, new Uint8Array([1, 2]));
+
+    await expect(store.register("stream.pdf", "owner-tab", rejected)).rejects.toThrow("too large");
+    await expect(fs.access(rejected.directory)).rejects.toThrow();
+
+    const abandoned = createResearchDownloadStreamTarget(userDataRoot, {
+      id: () => "66666666-6666-4666-8666-666666666666",
+    });
+    await fs.writeFile(abandoned.absolutePath, new Uint8Array([1, 2]));
+    const flatPath = join(userDataRoot, "research-downloads", "oversized-flat.pdf");
+    await fs.writeFile(flatPath, new Uint8Array([1, 2]));
+    await store.recover();
+
+    await expect(fs.access(abandoned.directory)).rejects.toThrow();
+    await expect(fs.readFile(flatPath)).resolves.toEqual(Buffer.from([1, 2]));
+  });
+
+  it("retains a matching stream directory that lacks an ownership marker", async () => {
+    const userDataRoot = await root();
+    const store = createResearchDownloadStore(userDataRoot);
+    const directory = join(
+      userDataRoot,
+      "research-downloads",
+      ".stream-77777777-7777-4777-8777-777777777777",
+    );
+    const payload = join(directory, "download");
+    await fs.mkdir(directory);
+    await fs.writeFile(payload, new Uint8Array([7]));
+
+    await store.recover();
+
+    await expect(fs.readFile(payload)).resolves.toEqual(Buffer.from([7]));
+  });
+
+  it("retains a matching stream directory with an invalid ownership marker", async () => {
+    const userDataRoot = await root();
+    const store = createResearchDownloadStore(userDataRoot);
+    const directory = join(
+      userDataRoot,
+      "research-downloads",
+      ".stream-88888888-8888-4888-8888-888888888888",
+    );
+    const payload = join(directory, "download");
+    await fs.mkdir(directory);
+    await fs.writeFile(join(directory, ".aurascholar-owner"), "not an AuraScholar owner\n");
+    await fs.writeFile(payload, new Uint8Array([8]));
+
+    await store.recover();
+
+    await expect(fs.readFile(payload)).resolves.toEqual(Buffer.from([8]));
   });
 });
 

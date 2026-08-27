@@ -1,12 +1,8 @@
 import { app, type BrowserWindow, type Session, type WebContentsView } from "electron";
 import { EV, type ScholarIdentity } from "../shared";
-import {
-  discardResearchDownload,
-  ensureSafeResearchDownloadDirectory,
-  registerResearchDownload,
-  researchDownloadPath,
-} from "./research-download-store";
+import { discardResearchDownload, registerResearchDownload } from "./research-download-store";
 import { createResearchDownloadFileName } from "./research-download-file-name";
+import { createResearchDownloadStreamTarget } from "./research-download-stream-target";
 
 export interface ResearchDownloadSourceTab {
   tabId: string;
@@ -49,14 +45,13 @@ export function wireResearchDownloadSession(
       fileName: displayName,
     });
 
-    let absolutePath: string;
+    let target: ReturnType<typeof createResearchDownloadStreamTarget> | null = null;
     try {
-      const userDataRoot = app.getPath("userData");
-      ensureSafeResearchDownloadDirectory(userDataRoot);
-      absolutePath = researchDownloadPath(userDataRoot, fileName);
-      item.setSavePath(absolutePath);
+      target = createResearchDownloadStreamTarget(app.getPath("userData"));
+      item.setSavePath(target.absolutePath);
     } catch {
       item.cancel();
+      if (target) void discardResearchDownload(fileName, target).catch(() => {});
       window?.webContents.send(EV.researchDownloadFinished, {
         tabId: sourceTabId,
         ownerTabId,
@@ -70,7 +65,7 @@ export function wireResearchDownloadSession(
 
     item.once("done", (_doneEvent, state) => {
       if (state !== "completed") {
-        void discardResearchDownload(fileName).catch(() => {});
+        void discardResearchDownload(fileName, target).catch(() => {});
         context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
           tabId: sourceTabId,
           ownerTabId,
@@ -81,7 +76,7 @@ export function wireResearchDownloadSession(
         });
         return;
       }
-      void registerResearchDownload(fileName, ownerTabId)
+      void registerResearchDownload(fileName, ownerTabId, target)
         .then(({ downloadId }) => {
           context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
             tabId: sourceTabId,
@@ -93,7 +88,7 @@ export function wireResearchDownloadSession(
           });
         })
         .catch(() => {
-          void discardResearchDownload(fileName).catch(() => {});
+          void discardResearchDownload(fileName, target).catch(() => {});
           context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
             tabId: sourceTabId,
             ownerTabId,
