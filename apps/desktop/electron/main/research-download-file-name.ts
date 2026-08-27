@@ -1,14 +1,15 @@
 import { randomBytes } from "node:crypto";
 
 export const MAX_RESEARCH_DOWNLOAD_FILE_NAME_LENGTH = 255;
+const RESEARCH_DOWNLOAD_NONCE_DIGITS = 20;
 
 const WINDOWS_DEVICE_NAME =
   /^(?:aux|clock\$|com[1-9¹²³]|con|conin\$|conout\$|lpt[1-9¹²³]|nul|prn)$/iu;
 
 /**
  * Produce a main-owned temporary filename that is portable across supported
- * filesystems. The numeric nonce is concatenated with the timestamp so legacy
- * UI display cleanup can still remove the entire generated prefix at once.
+ * filesystems. The full 64-bit numeric nonce is concatenated with the timestamp
+ * so legacy UI display cleanup can still remove the entire generated prefix at once.
  */
 export function createResearchDownloadFileName(
   originalFileName: string,
@@ -16,7 +17,10 @@ export function createResearchDownloadFileName(
   nonce = randomNumericNonce(),
 ): string {
   const timestamp = Number.isSafeInteger(now) && now >= 0 ? String(now) : String(Date.now());
-  const numericNonce = String(nonce).replace(/\D/g, "").slice(-10).padStart(10, "0");
+  const numericNonce = String(nonce)
+    .replace(/\D/g, "")
+    .slice(-RESEARCH_DOWNLOAD_NONCE_DIGITS)
+    .padStart(RESEARCH_DOWNLOAD_NONCE_DIGITS, "0");
   const prefix = `${timestamp}${numericNonce}-`;
   const safe = normalizeOriginalName(originalFileName);
   const extensionMatch = safe.match(/\.[A-Za-z0-9]{1,16}$/u);
