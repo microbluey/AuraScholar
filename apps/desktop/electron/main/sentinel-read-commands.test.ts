@@ -137,6 +137,12 @@ describe("Sentinel read data commands", () => {
       { name: "sentinel.getPageSnapshot", input: { libraryId } },
       { name: "sentinel.getDuePollSnapshot", input: { now: 0 } },
       { name: "sentinel.getDuePollSnapshot", input: { taskId: "sentinel-task" } },
+      { name: "sentinel.getEventEvidence", input: {} },
+      { name: "sentinel.getEventEvidence", input: { eventId: " " } },
+      {
+        name: "sentinel.getEventEvidence",
+        input: { eventId: "event:sentinel", libraryId },
+      },
       { name: "sentinel.getTaskPollSnapshot", input: {} },
       { name: "sentinel.getTaskPollSnapshot", input: { taskId: " " } },
       {
@@ -170,7 +176,10 @@ describe("Sentinel read data commands", () => {
       libraryId: foreignLibraryId,
     });
     await insertEvent("event:page-old", "sentinel:page-old", { detectedAt: 10 });
-    await insertEvent("event:page-new", "sentinel:page-new", { detectedAt: 20 });
+    await insertEvent("event:page-new", "sentinel:page-new", {
+      detectedAt: 20,
+      evidenceJson: '{"source":"new"}',
+    });
     await insertEvent("event:page-deleted", "sentinel:page-deleted", { detectedAt: 30 });
     await insertEvent("event:page-foreign", "sentinel:page-foreign", { detectedAt: 40 });
 
@@ -186,9 +195,85 @@ describe("Sentinel read data commands", () => {
       expect.objectContaining({ id: "sentinel:page-old", last_error: null, updated_at: 101 }),
     ]);
     expect(snapshot.events).toEqual([
-      expect.objectContaining({ id: "event:page-new", task_id: "sentinel:page-new" }),
-      expect.objectContaining({ id: "event:page-old", task_id: "sentinel:page-old" }),
+      {
+        detected_at: 20,
+        evidenceStatus: "available",
+        from_state: "accepted",
+        id: "event:page-new",
+        task_id: "sentinel:page-new",
+        to_state: "online",
+      },
+      {
+        detected_at: 10,
+        evidenceStatus: "none",
+        from_state: "accepted",
+        id: "event:page-old",
+        task_id: "sentinel:page-old",
+        to_state: "online",
+      },
     ]);
+  });
+
+  it("keeps raw evidence out of page snapshots and reads only scoped, bounded evidence on demand", async () => {
+    const foreignLibraryId = await insertForeignLibrary();
+    const evidenceJson = '{"source":"same-library"}';
+    const oversizedEvidence = "x".repeat(8 * 1024 * 1024);
+    await insertTask("sentinel:evidence-local");
+    await insertTask("sentinel:evidence-empty");
+    await insertTask("sentinel:evidence-oversized");
+    await insertTask("sentinel:evidence-deleted", { deletedAt: 2 });
+    await insertTask("sentinel:evidence-foreign", { libraryId: foreignLibraryId });
+    await insertEvent("event:evidence-local", "sentinel:evidence-local", { evidenceJson });
+    await insertEvent("event:evidence-empty", "sentinel:evidence-empty", { evidenceJson: "" });
+    await insertEvent("event:evidence-oversized", "sentinel:evidence-oversized", {
+      evidenceJson: oversizedEvidence,
+    });
+    await insertEvent("event:evidence-deleted", "sentinel:evidence-deleted", { evidenceJson });
+    await insertEvent("event:evidence-foreign", "sentinel:evidence-foreign", { evidenceJson });
+
+    const snapshot = await command("sentinel.getPageSnapshot", {});
+    expect(snapshot.events).toEqual([
+      {
+        detected_at: 1,
+        evidenceStatus: "none",
+        from_state: "accepted",
+        id: "event:evidence-empty",
+        task_id: "sentinel:evidence-empty",
+        to_state: "online",
+      },
+      {
+        detected_at: 1,
+        evidenceStatus: "available",
+        from_state: "accepted",
+        id: "event:evidence-local",
+        task_id: "sentinel:evidence-local",
+        to_state: "online",
+      },
+      {
+        detected_at: 1,
+        evidenceStatus: "too_large",
+        from_state: "accepted",
+        id: "event:evidence-oversized",
+        task_id: "sentinel:evidence-oversized",
+        to_state: "online",
+      },
+    ]);
+
+    await expect(
+      command("sentinel.getEventEvidence", { eventId: "event:evidence-local" }),
+    ).resolves.toEqual({ evidenceJson, status: "available" });
+    for (const eventId of [
+      "event:evidence-empty",
+      "event:evidence-oversized",
+      "event:evidence-deleted",
+      "event:evidence-foreign",
+      "event:evidence-missing",
+    ]) {
+      await expect(command("sentinel.getEventEvidence", { eventId })).resolves.toEqual({
+        evidenceJson: null,
+        status: eventId === "event:evidence-oversized" ? "too_large" : "none",
+      });
+    }
   });
 
   it("derives due polling tasks from main-process time and returns canonical reached states", async () => {

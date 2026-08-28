@@ -130,6 +130,42 @@ describe("Sentinel data commands", () => {
     expect(transactionCalls).toBe(0);
   });
 
+  it("enforces the evidence limit in UTF-8 bytes before acquiring a transaction", async () => {
+    let transactionCalls = 0;
+    const rejectingDependencies: DataCommandDependencies = {
+      async transaction() {
+        transactionCalls += 1;
+        throw new Error("must not run");
+      },
+    };
+
+    await expect(
+      executeDataCommand(
+        {
+          name: "sentinel.recordCheck",
+          input: {
+            libraryId,
+            taskId: "sentinel-task",
+            update: {
+              errored: false,
+              events: [
+                {
+                  evidence: { text: "界".repeat(90_000) },
+                  fromState: "accepted",
+                  toState: "online",
+                },
+              ],
+              expectedUpdatedAt: 1,
+              nextPollS: 60,
+            },
+          },
+        },
+        rejectingDependencies,
+      ),
+    ).rejects.toThrow("Sentinel event evidence at index 0 is too large");
+    expect(transactionCalls).toBe(0);
+  });
+
   it("creates, deduplicates, and restores a monitor through typed commands", async () => {
     const first = await executeDataCommand(
       {

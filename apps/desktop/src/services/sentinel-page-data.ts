@@ -1,24 +1,28 @@
 import {
   type SentinelCreateInput,
   type SentinelCreateResult,
-  type SentinelEventRow,
   type SentinelTaskRow,
 } from "@aurascholar/db/repos/sentinel";
-import type { SentinelGetPageSnapshotCommandResult } from "../../electron/data-command-contract";
+import type {
+  SentinelGetEventEvidenceCommandResult,
+  SentinelGetPageSnapshotCommandResult,
+  SentinelPageEvent,
+} from "../../electron/data-command-contract";
 import { getActiveLibraryCommandScope } from "./library-command-scope";
 import { describeSafeError } from "./sensitive-text";
 
 export type {
   SentinelCreateInput,
   SentinelCreateResult,
-  SentinelEventRow,
   SentinelTaskRow,
 } from "@aurascholar/db/repos/sentinel";
+export type { SentinelPageEvent } from "../../electron/data-command-contract";
 
 export type SentinelTaskStatus = "active" | "paused" | "done";
+export type SentinelEventEvidenceResult = SentinelGetEventEvidenceCommandResult;
 
 export interface SentinelPageSnapshot {
-  eventsByTask: Map<string, SentinelEventRow[]>;
+  eventsByTask: Map<string, SentinelPageEvent[]>;
   tasks: SentinelTaskRow[];
 }
 
@@ -29,8 +33,9 @@ export interface SentinelPageSnapshot {
  */
 export interface SentinelPageRepository {
   createOrRestore: (input: SentinelCreateInput) => Promise<SentinelCreateResult>;
-  events: (taskId: string) => Promise<SentinelEventRow[]>;
+  events: (taskId: string) => Promise<SentinelPageEvent[]>;
   list: () => Promise<SentinelTaskRow[]>;
+  readEvidence: (eventId: string) => Promise<SentinelEventEvidenceResult>;
   restore: (taskId: string) => Promise<void>;
   setStatus: (taskId: string, status: SentinelTaskStatus) => Promise<void>;
   softDelete: (taskId: string) => Promise<void>;
@@ -58,6 +63,8 @@ const defaultDataSource: SentinelPageDataSource = {
       events: async (taskId) =>
         (await getPageSnapshot()).events.filter((event) => event.task_id === taskId),
       list: async () => (await getPageSnapshot()).tasks,
+      readEvidence: async (eventId) =>
+        window.aura.data.command("sentinel.getEventEvidence", { eventId }),
       restore: async (taskId) => {
         const libraryId = await getLibraryId();
         await window.aura.data.command("sentinel.restore", { libraryId, taskId });
@@ -103,6 +110,17 @@ export async function loadSentinelPageSnapshot(
   );
   throwIfAborted(signal);
   return { eventsByTask: new Map(eventPairs), tasks };
+}
+
+export async function loadSentinelEventEvidence(
+  eventId: string,
+  signal?: AbortSignal,
+  dataSource: SentinelPageDataSource = defaultDataSource,
+): Promise<SentinelEventEvidenceResult> {
+  const repository = await openRepository(signal, dataSource);
+  const evidence = await repository.readEvidence(eventId);
+  throwIfAborted(signal);
+  return evidence;
 }
 
 export async function createOrRestoreSentinelTask(

@@ -1,9 +1,9 @@
 import { Buffer } from "node:buffer";
 import type { SentinelPollSummary } from "../sentinel-run-command-contract";
 
-const MAX_EVENT_EVIDENCE_BYTES = 256 * 1024;
 const MAX_SENTINEL_SUMMARY_OUTPUT_BYTES = 64 * 1024;
 
+export const MAX_SENTINEL_EVENT_EVIDENCE_BYTES = 256 * 1024;
 export const MAX_SENTINEL_FAILURE_TITLE_BYTES = 384;
 export const MAX_SENTINEL_SUMMARY_FAILURES = 32;
 
@@ -27,7 +27,7 @@ export function normalizeEventEvidence(value: unknown): unknown {
   }
   if (
     serialized === undefined ||
-    Buffer.byteLength(serialized, "utf8") > MAX_EVENT_EVIDENCE_BYTES
+    Buffer.byteLength(serialized, "utf8") > MAX_SENTINEL_EVENT_EVIDENCE_BYTES
   ) {
     throw new Error("Sentinel event evidence is too large");
   }

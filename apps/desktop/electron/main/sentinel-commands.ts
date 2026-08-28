@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { SENTINEL_STATES } from "@aurascholar/core";
 import {
   SentinelRepo,
@@ -20,9 +21,9 @@ import {
   requireRecordId,
   type DataCommandDependencies,
 } from "./data-command-runtime";
+import { MAX_SENTINEL_EVENT_EVIDENCE_BYTES } from "./sentinel-runner-serialization";
 
 const MAX_DOI_LENGTH = 2_048;
-const MAX_EVENT_EVIDENCE_JSON_LENGTH = 256 * 1_024;
 const MAX_HINT_LENGTH = 512;
 const MAX_PERSISTED_ERROR_LENGTH = 16_384;
 const MAX_POLL_INTERVAL_SECONDS = 366 * 86_400;
@@ -234,7 +235,7 @@ function normalizeEventEvidence(value: unknown, index: number): unknown {
   if (serialized === undefined) {
     throw new Error(`Sentinel event evidence at index ${index} is not valid JSON`);
   }
-  if (serialized.length > MAX_EVENT_EVIDENCE_JSON_LENGTH) {
+  if (Buffer.byteLength(serialized, "utf8") > MAX_SENTINEL_EVENT_EVIDENCE_BYTES) {
     throw new Error(`Sentinel event evidence at index ${index} is too large`);
   }
   return JSON.parse(serialized) as unknown;

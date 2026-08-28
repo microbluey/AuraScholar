@@ -7,6 +7,12 @@ function assertCompileTimeSentinelReadOutputContract(dependencies: DataCommandDe
   void dependencies.execute?.("sentinel.getPageSnapshot", async () => ({ events: [], tasks: [] }));
   // @ts-expect-error sentinel.getPageSnapshot must return its complete page snapshot.
   void dependencies.execute?.("sentinel.getPageSnapshot", async () => ({ tasks: [] }));
+  void dependencies.execute?.("sentinel.getEventEvidence", async () => ({
+    evidenceJson: null,
+    status: "none",
+  }));
+  // @ts-expect-error sentinel.getEventEvidence must return its evidence status.
+  void dependencies.execute?.("sentinel.getEventEvidence", async () => ({ evidenceJson: null }));
   void dependencies.execute?.("sentinel.getDuePollSnapshot", async () => ({
     libraryId: "library-id",
     tasks: [],
@@ -56,6 +62,7 @@ describe("Sentinel read command architecture", () => {
       expect(pollingService).toContain(`data.command("${commandName}"`);
     }
     expect(gateway).toContain('data.command("sentinel.getPageSnapshot"');
+    expect(gateway).toContain('data.command("sentinel.getEventEvidence"');
     expect(sentinelPage).not.toContain("data.command(");
     expect(sentinelPage).not.toContain("getLibraryDb");
     expect(sentinelPage).not.toContain("SentinelRepo");
@@ -76,6 +83,8 @@ describe("Sentinel read command architecture", () => {
     expect(readCommands).toContain("requireLocalLibraryId");
     expect(readCommands).toContain("assertActiveLocalLibrary");
     expect(readCommands).toContain("describeSafeError");
+    expect(readCommands).toContain("MAX_SENTINEL_EVENT_EVIDENCE_BYTES");
     expect(readCommands).toContain("MAX_SENTINEL_PAGE_EVENTS + 1");
+    expect(readCommands).not.toContain("SELECT e.*");
   });
 });

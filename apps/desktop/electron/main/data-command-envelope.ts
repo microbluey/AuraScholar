@@ -126,6 +126,7 @@ const SUPPORTED_DATA_COMMAND_NAMES = new Set<DataCommandName>([
   "sentinel.createOrRestore",
   "sentinel.delete",
   "sentinel.getDuePollSnapshot",
+  "sentinel.getEventEvidence",
   "sentinel.getPageSnapshot",
   "sentinel.getTaskPollSnapshot",
   "sentinel.linkWork",

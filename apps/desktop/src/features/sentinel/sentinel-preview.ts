@@ -1,10 +1,15 @@
 import { type SentinelState } from "@aurascholar/core";
 import { newId, normalizeDoi } from "@aurascholar/db/ids";
-import type { SentinelEventRow, SentinelTaskRow } from "../../services/sentinel-page-data";
+import type {
+  SentinelEventEvidenceResult,
+  SentinelPageEvent,
+  SentinelTaskRow,
+} from "../../services/sentinel-page-data";
 
 const PREVIEW_NOW = Date.now();
 const DAY = 24 * 60 * 60 * 1000;
 const LIBRARY_ID = "library:preview-sentinel";
+const PREVIEW_EVIDENCE = new Map<string, string>();
 
 export const PREVIEW_SENTINEL_SCOPE_MESSAGE =
   "浏览器预览使用可重置的哨兵样例；新增、检查、暂停、删除和撤销会在本页模拟生效，真实检查和证据快照会在桌面应用中保存。";
@@ -50,13 +55,11 @@ function previewEvent(
   toState: SentinelState,
   offsetDays: number,
   source: string,
-): SentinelEventRow {
-  return {
-    id: `${taskId}-${toState}`,
-    task_id: taskId,
-    from_state: fromState,
-    to_state: toState,
-    evidence_json: JSON.stringify(
+): SentinelPageEvent {
+  const id = `${taskId}-${toState}`;
+  PREVIEW_EVIDENCE.set(
+    id,
+    JSON.stringify(
       {
         preview: true,
         source,
@@ -66,8 +69,14 @@ function previewEvent(
       null,
       2,
     ),
+  );
+  return {
+    id,
+    task_id: taskId,
+    from_state: fromState,
+    to_state: toState,
     detected_at: PREVIEW_NOW - DAY * offsetDays,
-    notified_at: PREVIEW_NOW - DAY * offsetDays,
+    evidenceStatus: "available",
   };
 }
 
@@ -103,7 +112,7 @@ const TASKS: SentinelTaskRow[] = [
   }),
 ];
 
-const EVENTS = new Map<string, SentinelEventRow[]>([
+const EVENTS = new Map<string, SentinelPageEvent[]>([
   [
     "preview-sentinel-attention",
     [
@@ -129,10 +138,15 @@ export function previewSentinelTasks(): SentinelTaskRow[] {
   return TASKS.map((task) => ({ ...task }));
 }
 
-export function previewSentinelEvents(): Map<string, SentinelEventRow[]> {
+export function previewSentinelEvents(): Map<string, SentinelPageEvent[]> {
   return new Map(
     Array.from(EVENTS, ([taskId, events]) => [taskId, events.map((event) => ({ ...event }))]),
   );
+}
+
+export function getPreviewSentinelEventEvidence(eventId: string): SentinelEventEvidenceResult {
+  const evidenceJson = PREVIEW_EVIDENCE.get(eventId) ?? null;
+  return { evidenceJson, status: evidenceJson === null ? "none" : "available" };
 }
 
 export function createPreviewSentinelTask(input: {
@@ -179,13 +193,11 @@ function previewCheckEvent(
   fromState: SentinelState,
   toState: SentinelState,
   detectedAt: number,
-): SentinelEventRow {
-  return {
-    id: `${taskId}-preview-check-${detectedAt}`,
-    task_id: taskId,
-    from_state: fromState,
-    to_state: toState,
-    evidence_json: JSON.stringify(
+): SentinelPageEvent {
+  const id = `${taskId}-preview-check-${detectedAt}`;
+  PREVIEW_EVIDENCE.set(
+    id,
+    JSON.stringify(
       {
         preview: true,
         source: "Preview check",
@@ -195,19 +207,25 @@ function previewCheckEvent(
       null,
       2,
     ),
+  );
+  return {
+    id,
+    task_id: taskId,
+    from_state: fromState,
+    to_state: toState,
     detected_at: detectedAt,
-    notified_at: detectedAt,
+    evidenceStatus: "available",
   };
 }
 
 export function simulatePreviewPoll(
   tasks: SentinelTaskRow[],
-  eventsByTask: Map<string, SentinelEventRow[]>,
+  eventsByTask: Map<string, SentinelPageEvent[]>,
   taskIds: string[],
 ): {
   changes: number;
   checked: number;
-  eventsByTask: Map<string, SentinelEventRow[]>;
+  eventsByTask: Map<string, SentinelPageEvent[]>;
   tasks: SentinelTaskRow[];
 } {
   const ids = new Set(taskIds);

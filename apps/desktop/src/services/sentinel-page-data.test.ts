@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOrRestoreSentinelTask,
   deleteSentinelTask,
+  loadSentinelEventEvidence,
   loadSentinelPageSnapshot,
   restoreSentinelTask,
   setSentinelTaskStatus,
   type SentinelPageDataSource,
+  type SentinelPageEvent,
   type SentinelPageRepository,
   type SentinelTaskRow,
 } from "./sentinel-page-data";
@@ -34,6 +36,21 @@ function task(id: string): SentinelTaskRow {
   };
 }
 
+function pageEvent(
+  taskId: string,
+  id = `event-${taskId}`,
+  evidenceStatus: SentinelPageEvent["evidenceStatus"] = "none",
+): SentinelPageEvent {
+  return {
+    detected_at: 2,
+    evidenceStatus,
+    from_state: "accepted",
+    id,
+    task_id: taskId,
+    to_state: "registered",
+  };
+}
+
 function repository(overrides: Partial<SentinelPageRepository> = {}): SentinelPageRepository {
   return {
     createOrRestore: vi.fn(async (input) => {
@@ -46,6 +63,7 @@ function repository(overrides: Partial<SentinelPageRepository> = {}): SentinelPa
     }),
     events: vi.fn(async () => []),
     list: vi.fn(async () => []),
+    readEvidence: vi.fn(async () => ({ evidenceJson: null, status: "none" as const })),
     restore: vi.fn(async () => undefined),
     setStatus: vi.fn(async () => undefined),
     softDelete: vi.fn(async () => undefined),
@@ -73,17 +91,7 @@ describe("sentinel page data gateway", () => {
     const second = { ...task("second"), last_error: "Authorization: Bearer secret-token" };
     const repo = repository({
       list: vi.fn(async () => [first, second]),
-      events: vi.fn(async (taskId) => [
-        {
-          id: `event-${taskId}`,
-          task_id: taskId,
-          from_state: "accepted",
-          to_state: "registered",
-          evidence_json: null,
-          detected_at: 2,
-          notified_at: null,
-        },
-      ]),
+      events: vi.fn(async (taskId) => [pageEvent(taskId)]),
     });
     const source = dataSource(repo);
 
@@ -102,22 +110,11 @@ describe("sentinel page data gateway", () => {
     const second = { ...task("second"), last_error: "Authorization: Bearer secret-token" };
     command.mockResolvedValue({
       events: [
+        pageEvent(first.id, "event-first", "available"),
         {
-          detected_at: 2,
-          evidence_json: null,
-          from_state: "accepted",
-          id: "event-first",
-          notified_at: null,
-          task_id: first.id,
-          to_state: "registered",
-        },
-        {
+          ...pageEvent(second.id, "event-second", "none"),
           detected_at: 3,
-          evidence_json: null,
           from_state: "registered",
-          id: "event-second",
-          notified_at: null,
-          task_id: second.id,
           to_state: "online",
         },
       ],
@@ -132,6 +129,28 @@ describe("sentinel page data gateway", () => {
     expect(snapshot.eventsByTask.get(second.id)?.map((event) => event.id)).toEqual([
       "event-second",
     ]);
+  });
+
+  it("reads event evidence only when explicitly requested", async () => {
+    command.mockResolvedValue({ evidenceJson: '{"source":"on-demand"}', status: "available" });
+
+    await expect(loadSentinelEventEvidence("event-on-demand")).resolves.toEqual({
+      evidenceJson: '{"source":"on-demand"}',
+      status: "available",
+    });
+    expect(command.mock.calls).toEqual([
+      ["sentinel.getEventEvidence", { eventId: "event-on-demand" }],
+    ]);
+  });
+
+  it("does not read evidence when cancellation already won", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(loadSentinelEventEvidence("event-cancelled", controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(command).not.toHaveBeenCalled();
   });
 
   it("does not open the repository when already aborted", async () => {
