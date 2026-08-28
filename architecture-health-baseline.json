@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 80531,
+        ".ts": 80632,
         ".tsx": 35770
       },
       "files": {
@@ -97,7 +97,7 @@
         "apps/desktop/electron/main/research-browser-navigation-policy.ts": 120,
         "apps/desktop/electron/main/research-browser-policy.ts": 225,
         "apps/desktop/electron/main/research-browser-view-lifecycle.ts": 98,
-        "apps/desktop/electron/main/research-browser.ts": 499,
+        "apps/desktop/electron/main/research-browser.ts": 497,
         "apps/desktop/electron/main/research-download-cleanup-tracker.ts": 28,
         "apps/desktop/electron/main/research-download-consume-gate.ts": 77,
         "apps/desktop/electron/main/research-download-events.ts": 294,
@@ -111,6 +111,7 @@
         "apps/desktop/electron/main/research-download-store.ts": 500,
         "apps/desktop/electron/main/research-download-stream-target.ts": 158,
         "apps/desktop/electron/main/research-download-user-intent.ts": 163,
+        "apps/desktop/electron/main/research-print-capture.ts": 103,
         "apps/desktop/electron/main/research-project-commands.ts": 360,
         "apps/desktop/electron/main/research-project-query-data.ts": 218,
         "apps/desktop/electron/main/saved-search-commands.ts": 402,
@@ -570,11 +571,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 135622
+      "totalLines": 135723
     },
     "tests": {
       "byExtension": {
-        ".ts": 80582,
+        ".ts": 80740,
         ".tsx": 1034
       },
       "files": {
@@ -660,6 +661,7 @@
         "apps/desktop/electron/main/research-download-store.test.ts": 571,
         "apps/desktop/electron/main/research-download-stream-target.test.ts": 73,
         "apps/desktop/electron/main/research-download-user-intent.test.ts": 112,
+        "apps/desktop/electron/main/research-print-capture.test.ts": 158,
         "apps/desktop/electron/main/research-project-commands.test.ts": 378,
         "apps/desktop/electron/main/saved-search-commands.test.ts": 497,
         "apps/desktop/electron/main/scholarly-command-input.test.ts": 85,
@@ -969,7 +971,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 81616
+      "totalLines": 81774
     }
   },
   "uiDatabaseBoundary": {}

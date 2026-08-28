@@ -1,7 +1,6 @@
 // Multi-tab research browser with persistent per-site sessions and archivable views.
 import { randomUUID } from "node:crypto";
 import { app, BrowserWindow, session, WebContentsView, type Session } from "electron";
-import { describeSafeError } from "@aurascholar/platform";
 import { handle } from "./ipc";
 import {
   isAllowedResearchUrl,
@@ -32,14 +31,15 @@ import {
 import {
   assertResearchDownloadConsumeInput,
   consumeResearchDownload,
-  discardResearchDownload,
   ensureSafeResearchDownloadDirectory,
   openResearchDownloads,
-  registerResearchDownload,
 } from "./research-download-store";
 import { wireResearchDownloadSession } from "./research-download-events";
-import { writeResearchPrintedFile } from "./research-download-print-file";
-import { notifyResearchDownloadCaptureExpired, startResearchDownloadCapture } from "./research-download-user-intent";
+import { captureResearchPrint } from "./research-print-capture";
+import {
+  notifyResearchDownloadCaptureExpired,
+  startResearchDownloadCapture,
+} from "./research-download-user-intent";
 
 interface Tab {
   tabId: string;
@@ -438,48 +438,46 @@ export function registerResearchHandlers(): void {
     const view = tab?.view;
     if (!tab || !view) return { kind: "none", error: "no active page" };
     const wc = view.webContents;
-    if (wc.isDestroyed()) return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
+    const originWindow = win;
+    const originStillLive = (): boolean =>
+      !!originWindow &&
+      win === originWindow &&
+      !originWindow.isDestroyed() &&
+      tabs.get(tab.tabId) === tab &&
+      tab.view === view &&
+      !wc.isDestroyed();
+    if (!originWindow || !originStillLive()) {
+      return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
+    }
     if (!acceptResearchMainFrameUrl(wc.getURL(), true)) {
       return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
     }
 
     await sniffScholar(tab);
-    if (tab.view !== view || wc.isDestroyed()) {
+    if (!originStillLive()) {
       return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
     }
     const url = acceptResearchMainFrameUrl(wc.getURL(), true);
     if (!url) return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
 
     if (/\.pdf(\?|#|$)/i.test(url)) {
-      startResearchDownloadCapture(wc, url, { onExpired: notifyResearchDownloadCaptureExpired.bind(null, win, tab) });
+      startResearchDownloadCapture(wc, url, {
+        onExpired: notifyResearchDownloadCaptureExpired.bind(null, originWindow, tab),
+      });
       return { kind: "download" };
     }
 
-    let fileName: string | undefined;
-    let wroteFile = false;
-    try {
-      if (!acceptResearchMainFrameUrl(wc.getURL(), true))
-        return { kind: "none", error: "研究浏览器当前页面地址不受支持" };
-      ensureDownloadDir();
-      const pdf = await wc.printToPDF({ printBackground: true });
-      const base =
-        (wc.getTitle() || "page").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 80) || "page";
-      fileName = writeResearchPrintedFile(app.getPath("userData"), `${base}.pdf`, pdf);
-      wroteFile = true;
-      const { downloadId } = await registerResearchDownload(fileName, tab.ownerTabId);
-      win?.webContents.send(EV.researchDownloadFinished, {
-        tabId: tab.tabId,
-        ownerTabId: tab.ownerTabId,
-        fileName,
-        downloadId,
-        success: true,
-        scholar: tab.scholar,
-      });
-      return { kind: "print", downloadId, fileName };
-    } catch (e) {
-      if (fileName && wroteFile) void discardResearchDownload(fileName).catch(() => {});
-      return { kind: "none", error: describeSafeError(e) };
-    }
+    return captureResearchPrint({
+      ensureDownloadDirectory: ensureDownloadDir,
+      getTitle: () => wc.getTitle(),
+      isOriginLive: originStillLive,
+      originWindow,
+      ownerTabId: tab.ownerTabId,
+      printToPdf: () => wc.printToPDF({ printBackground: true }),
+      scholar: tab.scholar,
+      tabId: tab.tabId,
+      userDataRoot: () => app.getPath("userData"),
+    });
   });
 
   handle(CH.researchClearSiteData, async (_e, siteId: unknown) => {
