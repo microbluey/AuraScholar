@@ -67,6 +67,10 @@ interface DownloadItemFake {
 }
 
 type WillDownloadListener = (event: DownloadEvent, item: DownloadItemFake, source: unknown) => void;
+type BrowserWindowFake = {
+  isDestroyed: ReturnType<typeof vi.fn>;
+  webContents: { send: ReturnType<typeof vi.fn> };
+};
 
 function downloadItem({
   hasUserGesture = true,
@@ -136,8 +140,16 @@ function wiredSession(): { session: Session; willDownload(): WillDownloadListene
   };
 }
 
+function researchWindow(send = vi.fn()): BrowserWindowFake {
+  return {
+    isDestroyed: vi.fn(() => false),
+    webContents: { send },
+  };
+}
+
 function eventContext({
   findSourceTab = vi.fn(() => ({ ownerTabId: "owner-tab", tabId: "source-tab", view: null })),
+  getWindow,
   inFlightGate = createResearchDownloadInFlightGate({
     maxBytes: 20,
     maxDownloadBytes: 10,
@@ -145,21 +157,29 @@ function eventContext({
   }),
   send = vi.fn(),
   userIntentGate,
+  window = researchWindow(send),
 }: {
   findSourceTab?: ReturnType<typeof vi.fn>;
+  getWindow?: ReturnType<typeof vi.fn>;
   inFlightGate?: ResearchDownloadInFlightGate;
   send?: ReturnType<typeof vi.fn>;
   userIntentGate?: ResearchDownloadUserIntentGate;
-} = {}): { context: ResearchDownloadEventContext; send: ReturnType<typeof vi.fn> } {
+  window?: BrowserWindowFake;
+} = {}): {
+  context: ResearchDownloadEventContext;
+  send: ReturnType<typeof vi.fn>;
+  window: BrowserWindowFake;
+} {
   return {
     context: {
       findSourceTab,
-      getWindow: vi.fn(() => ({ webContents: { send } })),
+      getWindow: getWindow ?? vi.fn(() => window),
       inFlightGate,
       resolveIdentity: vi.fn(() => undefined),
       userIntentGate,
     } as unknown as ResearchDownloadEventContext,
     send,
+    window,
   };
 }
 
@@ -531,5 +551,108 @@ describe("research stream download ownership", () => {
       ),
     );
     expect(dispatch(willDownload(), downloadItem()).preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("discards a completed stream when its originating window and tab close", async () => {
+    const gate = createResearchDownloadInFlightGate({
+      maxBytes: 10,
+      maxDownloadBytes: 10,
+      maxDownloads: 1,
+    });
+    const originSend = vi.fn();
+    const replacementSend = vi.fn();
+    const originWindow = researchWindow(originSend);
+    const replacementWindow = researchWindow(replacementSend);
+    let currentWindow: BrowserWindowFake = originWindow;
+    let sourceIsLive = true;
+    const { session, willDownload } = wiredSession();
+    const { context } = eventContext({
+      findSourceTab: vi.fn(() =>
+        sourceIsLive ? { ownerTabId: "owner-tab", tabId: "source-tab", view: null } : undefined,
+      ),
+      getWindow: vi.fn(() => currentWindow),
+      inFlightGate: gate,
+    });
+    const item = downloadItem();
+    wireResearchDownloadSession(session, context);
+
+    dispatch(willDownload(), item);
+    expect(originSend).toHaveBeenLastCalledWith(
+      "research://download-started",
+      expect.objectContaining({ tabId: "source-tab" }),
+    );
+    originSend.mockClear();
+    currentWindow = replacementWindow;
+    originWindow.isDestroyed.mockReturnValue(true);
+    sourceIsLive = false;
+    item.emitDone("completed");
+
+    await vi.waitFor(() => expect(mocks.discard).toHaveBeenCalledWith(FILE_NAME, TARGET));
+    expect(mocks.register).not.toHaveBeenCalled();
+    expect(originSend).not.toHaveBeenCalled();
+    expect(replacementSend).not.toHaveBeenCalled();
+
+    sourceIsLive = true;
+    await vi.waitFor(() =>
+      expect(dispatch(willDownload(), downloadItem()).preventDefault).not.toHaveBeenCalled(),
+    );
+  });
+
+  it("retires a receipt when its originating window closes during registration", async () => {
+    const gate = createResearchDownloadInFlightGate({
+      maxBytes: 10,
+      maxDownloadBytes: 10,
+      maxDownloads: 1,
+    });
+    const originSend = vi.fn();
+    const replacementSend = vi.fn();
+    const originWindow = researchWindow(originSend);
+    const replacementWindow = researchWindow(replacementSend);
+    let currentWindow: BrowserWindowFake = originWindow;
+    let sourceIsLive = true;
+    let resolveRegistration:
+      | ((value: { downloadId: string; fileName: string; ownerTabId: string }) => void)
+      | undefined;
+    mocks.register.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRegistration = resolve;
+        }),
+    );
+    const { session, willDownload } = wiredSession();
+    const { context } = eventContext({
+      findSourceTab: vi.fn(() =>
+        sourceIsLive ? { ownerTabId: "owner-tab", tabId: "source-tab", view: null } : undefined,
+      ),
+      getWindow: vi.fn(() => currentWindow),
+      inFlightGate: gate,
+    });
+    const item = downloadItem();
+    wireResearchDownloadSession(session, context);
+
+    dispatch(willDownload(), item);
+    originSend.mockClear();
+    item.emitDone("completed");
+    await vi.waitFor(() =>
+      expect(mocks.register).toHaveBeenCalledWith(FILE_NAME, "owner-tab", TARGET),
+    );
+    currentWindow = replacementWindow;
+    originWindow.isDestroyed.mockReturnValue(true);
+    sourceIsLive = false;
+    if (!resolveRegistration) throw new Error("registration did not start");
+    resolveRegistration({
+      downloadId: "download-id",
+      fileName: FILE_NAME,
+      ownerTabId: "owner-tab",
+    });
+
+    await vi.waitFor(() => expect(mocks.discard).toHaveBeenCalledWith(FILE_NAME, TARGET));
+    expect(originSend).not.toHaveBeenCalled();
+    expect(replacementSend).not.toHaveBeenCalled();
+
+    sourceIsLive = true;
+    await vi.waitFor(() =>
+      expect(dispatch(willDownload(), downloadItem()).preventDefault).not.toHaveBeenCalled(),
+    );
   });
 });

@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 80469,
+        ".ts": 80527,
         ".tsx": 35770
       },
       "files": {
@@ -100,7 +100,7 @@
         "apps/desktop/electron/main/research-browser.ts": 499,
         "apps/desktop/electron/main/research-download-cleanup-tracker.ts": 28,
         "apps/desktop/electron/main/research-download-consume-gate.ts": 77,
-        "apps/desktop/electron/main/research-download-events.ts": 236,
+        "apps/desktop/electron/main/research-download-events.ts": 294,
         "apps/desktop/electron/main/research-download-file-name.ts": 43,
         "apps/desktop/electron/main/research-download-file-policy.ts": 50,
         "apps/desktop/electron/main/research-download-id.ts": 21,
@@ -570,11 +570,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 135560
+      "totalLines": 135618
     },
     "tests": {
       "byExtension": {
-        ".ts": 80408,
+        ".ts": 80531,
         ".tsx": 1034
       },
       "files": {
@@ -652,7 +652,7 @@
         "apps/desktop/electron/main/research-browser-policy.test.ts": 158,
         "apps/desktop/electron/main/research-browser-view-lifecycle.test.ts": 116,
         "apps/desktop/electron/main/research-download-consume-gate.test.ts": 34,
-        "apps/desktop/electron/main/research-download-events.test.ts": 535,
+        "apps/desktop/electron/main/research-download-events.test.ts": 658,
         "apps/desktop/electron/main/research-download-file-name.test.ts": 34,
         "apps/desktop/electron/main/research-download-file-policy.test.ts": 62,
         "apps/desktop/electron/main/research-download-inflight.test.ts": 145,
@@ -969,7 +969,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 81442
+      "totalLines": 81565
     }
   },
   "uiDatabaseBoundary": {}
