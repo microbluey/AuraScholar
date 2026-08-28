@@ -16,8 +16,59 @@ import {
   MAX_RESEARCH_PRINT_FILE_ATTEMPTS,
   writeResearchPrintedFile,
 } from "./research-download-print-file";
+import { MAX_RESEARCH_DOWNLOAD_BYTES } from "./research-download-limits";
 
 describe("research print download file allocation", () => {
+  it("rejects an oversized print before allocating or writing a temporary file", () => {
+    const createFileName = vi.fn(() => "oversized.pdf");
+    const pathFor = vi.fn((_root: string, fileName: string) => `/downloads/${fileName}`);
+    const openExclusive = vi.fn(() => 7);
+    const writeFile = vi.fn();
+    const closeFile = vi.fn();
+    const removeFile = vi.fn();
+    const oversizedPdf = {
+      byteLength: MAX_RESEARCH_DOWNLOAD_BYTES + 1,
+    } as Uint8Array;
+
+    expect(() =>
+      writeResearchPrintedFile("/user-data", "page.pdf", oversizedPdf, {
+        createFileName,
+        pathFor,
+        io: { openExclusive, writeFile, closeFile, removeFile },
+      }),
+    ).toThrow("Research print file exceeds download size limit");
+
+    expect(createFileName).not.toHaveBeenCalled();
+    expect(pathFor).not.toHaveBeenCalled();
+    expect(openExclusive).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(closeFile).not.toHaveBeenCalled();
+    expect(removeFile).not.toHaveBeenCalled();
+  });
+
+  it("allows a print exactly at the download size limit", () => {
+    const maximumPdf = { byteLength: MAX_RESEARCH_DOWNLOAD_BYTES } as Uint8Array;
+    const createFileName = vi.fn(() => "limit.pdf");
+    const pathFor = vi.fn((_root: string, fileName: string) => `/downloads/${fileName}`);
+    const openExclusive = vi.fn(() => 7);
+    const writeFile = vi.fn();
+    const closeFile = vi.fn();
+    const removeFile = vi.fn();
+
+    expect(
+      writeResearchPrintedFile("/user-data", "page.pdf", maximumPdf, {
+        createFileName,
+        pathFor,
+        io: { openExclusive, writeFile, closeFile, removeFile },
+      }),
+    ).toBe("limit.pdf");
+
+    expect(openExclusive).toHaveBeenCalledWith("/downloads/limit.pdf");
+    expect(writeFile).toHaveBeenCalledWith(7, maximumPdf);
+    expect(closeFile).toHaveBeenCalledWith(7);
+    expect(removeFile).not.toHaveBeenCalled();
+  });
+
   it("keeps an existing file intact and writes a fresh candidate exclusively", () => {
     const root = mkdtempSync(join(tmpdir(), "aurascholar-print-file-"));
     try {
