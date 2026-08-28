@@ -19,6 +19,11 @@ import {
   commitResearchMainFrameUrl,
   guardResearchNavigation,
 } from "./research-browser-navigation-policy";
+import {
+  loadResearchBrowserViewAfterProxy,
+  openResearchTabAfterProxy,
+} from "./research-browser-proxy-bootstrap";
+import { normalizeResearchScholarMeta } from "./research-browser-scholar-meta";
 import { ResearchBrowserViewPresentation } from "./research-browser-view-presentation";
 import { ResearchBrowserViewLifecycle } from "./research-browser-view-lifecycle";
 import {
@@ -49,6 +54,8 @@ interface Tab {
   url: string;
   title: string;
   proxy: string; // "" = direct; else proxyRules for this site's session
+  proxyPrepared: boolean;
+  proxyStartup: Promise<boolean> | null;
   lastActiveAt: number;
   view: WebContentsView | null; // null when archived
   scholar?: ScholarIdentity; // most recent page identity sniffed from meta tags
@@ -112,52 +119,6 @@ const viewLifecycle = new ResearchBrowserViewLifecycle({
   tabs,
 });
 
-async function applyProxy(sess: Session, proxy: string): Promise<void> {
-  if (proxy) {
-    await sess.setProxy({ proxyRules: proxy });
-  } else {
-    await sess.setProxy({ mode: "direct" });
-  }
-}
-const DOI_RE = /10\.\d{4,9}\/[^\s"'<>]+/;
-
-function normalizeScholarMeta(
-  meta: Record<string, string[]>,
-  pageUrl: string,
-): ScholarIdentity | undefined {
-  const first = (key: string): string | undefined => meta[key]?.[0]?.trim() || undefined;
-  let doi: string | undefined;
-  for (const candidate of [
-    ...(meta["citation_doi"] ?? []),
-    ...(meta["dc.identifier"] ?? []),
-    ...(meta["prism.doi"] ?? []),
-  ]) {
-    const match = candidate.match(DOI_RE);
-    if (match) {
-      doi = match[0].replace(/[).,;]+$/, "").toLowerCase();
-      break;
-    }
-  }
-  let arxivId = first("citation_arxiv_id");
-  if (!arxivId) {
-    const fromUrl = pageUrl.match(/arxiv\.org\/(?:abs|pdf)\/([^\s?#]+)/i);
-    if (fromUrl) arxivId = fromUrl[1]!.replace(/\.pdf$/i, "");
-  }
-
-  const title = first("citation_title");
-  let pdfUrl: string | undefined;
-  const rawPdf = first("citation_pdf_url");
-  if (rawPdf) {
-    try {
-      pdfUrl = new URL(rawPdf, pageUrl).href;
-    } catch {
-      // ignore malformed URL
-    }
-  }
-  if (!doi && !arxivId && !title && !pdfUrl) return undefined;
-  return { doi, arxivId, title, pdfUrl, sourceUrl: pageUrl };
-}
-
 /** Read scholarly meta tags in the isolated world; failures are a no-op. */
 async function sniffScholar(tab: Tab): Promise<void> {
   const view = tab.view;
@@ -184,7 +145,7 @@ async function sniffScholar(tab: Tab): Promise<void> {
   if (!meta || typeof meta !== "object" || wc.isDestroyed() || tab.view !== view) return;
   const settledUrl = acceptResearchMainFrameUrl(wc.getURL(), true);
   if (!settledUrl || settledUrl !== pageUrl) return;
-  const identity = normalizeScholarMeta(meta as Record<string, string[]>, settledUrl);
+  const identity = normalizeResearchScholarMeta(meta as Record<string, string[]>, settledUrl);
   tab.scholar = identity;
   if (identity?.pdfUrl) identityByPdfUrl.set(identity.pdfUrl, identity);
 }
@@ -223,7 +184,6 @@ function resolveDownloadIdentity(
 function createView(tab: Tab): WebContentsView {
   const sess = session.fromPartition(researchPartition(tab.siteId));
   wireSession(sess, tab.siteId);
-  void applyProxy(sess, tab.proxy);
   const view = new WebContentsView({
     webPreferences: {
       session: sess,
@@ -234,6 +194,7 @@ function createView(tab: Tab): WebContentsView {
       allowRunningInsecureContent: false,
     },
   });
+  tab.view = view;
   view.webContents.setWindowOpenHandler(({ url }) => {
     // Open publisher target=_blank/PDF links in a fresh tab with the same session.
     if (isAllowedResearchUrl(url) && tabs.size < MAX_RESEARCH_TABS) {
@@ -281,7 +242,21 @@ function createView(tab: Tab): WebContentsView {
     emitTabs();
     void sniffScholar(tab);
   });
-  void view.webContents.loadURL(tab.url);
+  const proxyPrepared = tab.proxyPrepared;
+  tab.proxyPrepared = false;
+  tab.proxyStartup = loadResearchBrowserViewAfterProxy(
+    sess,
+    tab.proxy,
+    proxyPrepared,
+    () => tabs.get(tab.tabId) === tab && tab.view === view && !view.webContents.isDestroyed(),
+    () => void view.webContents.loadURL(tab.url),
+  );
+  void tab.proxyStartup.catch(() => {
+    if (tab.view !== view) return;
+    viewLifecycle.disposeTab(tab);
+    if (activeTabId === tab.tabId) activeTabId = null;
+    emitTabs();
+  });
   return view;
 }
 
@@ -292,6 +267,7 @@ function spawnTab(
   proxy: string,
   ownerTabId?: string,
   allowAttachment = true,
+  proxyPrepared = false,
 ): string {
   if (tabs.size >= MAX_RESEARCH_TABS) {
     throw new Error(`Research tabs are limited to ${MAX_RESEARCH_TABS}`);
@@ -305,6 +281,8 @@ function spawnTab(
     url: safeUrl,
     title: "",
     proxy,
+    proxyPrepared,
+    proxyStartup: null,
     lastActiveAt: Date.now(),
     view: null,
     // Opening a known full-text URL in a new tab (target=_blank "Paper" link)
@@ -344,24 +322,36 @@ export function hideResearchViews(): void {
 }
 
 export function registerResearchHandlers(): void {
-  handle(CH.researchOpen, (_e, siteId: unknown, url: unknown, proxy: unknown, options: unknown) => {
-    const input = parseResearchOpenInput(siteId, url, proxy, options);
-    // Reuse an existing tab for the same site unless this is an isolated task.
-    const existing =
-      input.options?.reuseExisting === false
-        ? undefined
-        : [...tabs.values()].find((t) => t.siteId === input.siteId);
-    if (existing) {
-      existing.proxy = input.proxy;
-      viewPresentation.select(existing.tabId);
-      return existing.tabId;
-    }
-    return spawnTab(input.siteId, input.url, input.proxy, undefined, false);
-  });
+  handle(
+    CH.researchOpen,
+    async (_e, siteId: unknown, url: unknown, proxy: unknown, options: unknown) => {
+      const input = parseResearchOpenInput(siteId, url, proxy, options);
+      const originWindow = win;
+      const sess = session.fromPartition(researchPartition(input.siteId));
+      return openResearchTabAfterProxy(sess, input.proxy, () => {
+        if (!originWindow || win !== originWindow || originWindow.isDestroyed()) {
+          throw new Error("研究浏览器已关闭");
+        }
+        // Reuse an existing tab for the same site unless this is an isolated task.
+        const existing =
+          input.options?.reuseExisting === false
+            ? undefined
+            : [...tabs.values()].find((t) => t.siteId === input.siteId);
+        if (existing) {
+          existing.proxy = input.proxy;
+          existing.proxyPrepared = existing.view === null;
+          viewPresentation.select(existing.tabId);
+          return existing.tabId;
+        }
+        return spawnTab(input.siteId, input.url, input.proxy, undefined, false, true);
+      });
+    },
+  );
 
-  handle(CH.researchActivate, (_e, tabId: unknown) => {
+  handle(CH.researchActivate, async (_e, tabId: unknown) => {
     const validTabId = validateResearchTabId(tabId);
     viewPresentation.present(validTabId);
+    await tabs.get(validTabId)?.proxyStartup;
   });
 
   handle(CH.researchGoBack, () => {
@@ -384,7 +374,7 @@ export function registerResearchHandlers(): void {
   });
 
   // null arg = read the active tab's current URL; a string = navigate to it.
-  handle(CH.researchNavigate, (_e, url: unknown) => {
+  handle(CH.researchNavigate, async (_e, url: unknown) => {
     const parsedUrl = parseResearchNavigateInput(url);
     const tab = activeTabId ? tabs.get(activeTabId) : null;
     if (!tab) return "";
@@ -392,12 +382,16 @@ export function registerResearchHandlers(): void {
       return tab.view ? tab.view.webContents.getURL() : tab.url;
     }
     const safeUrl = parsedUrl;
+    const view = tab.view;
+    if (view) await tab.proxyStartup;
     tab.url = safeUrl;
-    if (tab.view) void tab.view.webContents.loadURL(safeUrl);
+    if (view && tab.view === view && !view.webContents.isDestroyed()) {
+      void view.webContents.loadURL(safeUrl);
+    }
     return safeUrl;
   });
 
-  handle(CH.researchClose, (_e, tabId: unknown) => {
+  handle(CH.researchClose, async (_e, tabId: unknown) => {
     const validTabId = validateResearchTabId(tabId);
     const tab = tabs.get(validTabId);
     if (!tab) return;
@@ -406,7 +400,10 @@ export function registerResearchHandlers(): void {
     if (activeTabId === validTabId) {
       activeTabId = null;
       const next = [...tabs.keys()][0];
-      if (next) viewPresentation.show(next);
+      if (next) {
+        viewPresentation.show(next);
+        await tabs.get(next)?.proxyStartup;
+      }
     }
     emitTabs();
   });
