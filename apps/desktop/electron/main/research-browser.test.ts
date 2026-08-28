@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getPath: vi.fn(),
   handlers: new Map<string, RegisteredHandler>(),
   loadURL: vi.fn(),
+  reload: vi.fn(),
   setProxy: vi.fn(),
   views: [] as unknown[],
 }));
@@ -33,7 +34,7 @@ vi.mock("electron", () => {
       once: vi.fn((event: string, listener: () => void) => {
         if (event === "destroyed") mocks.destroyedViews.push(listener);
       }),
-      reload: vi.fn(),
+      reload: mocks.reload,
       setWindowOpenHandler: vi.fn(),
     };
 
@@ -114,6 +115,12 @@ function researchNavigate(): RegisteredHandler {
   return handler;
 }
 
+function researchReload(): RegisteredHandler {
+  const handler = mocks.handlers.get(CH.researchReload);
+  if (!handler) throw new Error("research reload handler is missing");
+  return handler;
+}
+
 function researchClose(): RegisteredHandler {
   const handler = mocks.handlers.get(CH.researchClose);
   if (!handler) throw new Error("research close handler is missing");
@@ -131,6 +138,7 @@ beforeEach(() => {
   mocks.handlers.clear();
   mocks.loadURL.mockReset();
   mocks.loadURL.mockResolvedValue(undefined);
+  mocks.reload.mockReset();
   mocks.setProxy.mockReset();
   mocks.setProxy.mockResolvedValue(undefined);
   mocks.views.length = 0;
@@ -292,5 +300,128 @@ describe("research browser proxy startup", () => {
     await expect(closing).resolves.toBeUndefined();
     expect(mocks.setProxy).toHaveBeenCalledWith({ proxyRules: "socks5://127.0.0.1:7890" });
     expect(mocks.loadURL).toHaveBeenCalledWith("https://example.edu/first");
+  });
+
+  it("serializes concurrent same-site opens with their first loads", async () => {
+    const firstSetup = deferred<void>();
+    const secondSetup = deferred<void>();
+    const loadedWith: Array<{ proxy: string; url: string }> = [];
+    let effectiveProxy = "";
+    mocks.setProxy
+      .mockImplementationOnce((config) =>
+        firstSetup.promise.then(() => {
+          effectiveProxy = config.proxyRules ?? "";
+        }),
+      )
+      .mockImplementationOnce((config) =>
+        secondSetup.promise.then(() => {
+          effectiveProxy = config.proxyRules ?? "";
+        }),
+      );
+    mocks.loadURL.mockImplementation((url: string) => {
+      loadedWith.push({ proxy: effectiveProxy, url });
+      return Promise.resolve();
+    });
+
+    const first = researchOpen()(
+      {},
+      "custom:site-1",
+      "https://example.edu/first",
+      "http://proxy-a.test",
+      { reuseExisting: false },
+    ) as Promise<string>;
+    const second = researchOpen()(
+      {},
+      "custom:site-1",
+      "https://example.edu/second",
+      "http://proxy-b.test",
+      { reuseExisting: false },
+    ) as Promise<string>;
+
+    expect(mocks.setProxy).toHaveBeenCalledTimes(1);
+    expect(mocks.views).toHaveLength(0);
+
+    firstSetup.resolve();
+
+    await vi.waitFor(() => expect(mocks.setProxy).toHaveBeenCalledTimes(2));
+    expect(loadedWith).toEqual([
+      { proxy: "http://proxy-a.test/", url: "https://example.edu/first" },
+    ]);
+    expect(mocks.loadURL.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.setProxy.mock.invocationCallOrder[1]!,
+    );
+    expect(mocks.views).toHaveLength(1);
+
+    secondSetup.resolve();
+
+    const [firstTabId, secondTabId] = await Promise.all([first, second]);
+    expect(loadedWith).toEqual([
+      { proxy: "http://proxy-a.test/", url: "https://example.edu/first" },
+      { proxy: "http://proxy-b.test/", url: "https://example.edu/second" },
+    ]);
+    expect(researchList()({})).toEqual(
+      expect.arrayContaining([expect.objectContaining({ active: true, tabId: secondTabId })]),
+    );
+    expect(firstTabId).not.toBe(secondTabId);
+  });
+
+  it("does not let navigation bypass a queued same-site proxy change", async () => {
+    await researchOpen()({}, "custom:site-1", "https://example.edu/first", "http://proxy-a.test", {
+      reuseExisting: false,
+    });
+    mocks.loadURL.mockClear();
+    mocks.setProxy.mockClear();
+
+    const setup = deferred<void>();
+    mocks.setProxy.mockReturnValueOnce(setup.promise);
+    const opening = researchOpen()(
+      {},
+      "custom:site-1",
+      "https://example.edu/second",
+      "http://proxy-b.test",
+      { reuseExisting: false },
+    ) as Promise<string>;
+    const navigation = researchNavigate()({}, "https://example.edu/next") as Promise<string>;
+
+    expect(mocks.setProxy).toHaveBeenCalledWith({ proxyRules: "http://proxy-b.test/" });
+    expect(mocks.loadURL).not.toHaveBeenCalled();
+
+    setup.resolve();
+
+    await expect(opening).resolves.toEqual(expect.any(String));
+    await expect(navigation).resolves.toBe("https://example.edu/next");
+    expect(mocks.loadURL).toHaveBeenNthCalledWith(1, "https://example.edu/second");
+    expect(mocks.loadURL).toHaveBeenNthCalledWith(2, "https://example.edu/next");
+  });
+
+  it("does not let reload bypass a queued same-site proxy change", async () => {
+    await researchOpen()({}, "custom:site-1", "https://example.edu/first", "http://proxy-a.test", {
+      reuseExisting: false,
+    });
+    mocks.loadURL.mockClear();
+    mocks.reload.mockClear();
+    mocks.setProxy.mockClear();
+
+    const setup = deferred<void>();
+    mocks.setProxy.mockReturnValueOnce(setup.promise);
+    const opening = researchOpen()(
+      {},
+      "custom:site-1",
+      "https://example.edu/second",
+      "http://proxy-b.test",
+      { reuseExisting: false },
+    ) as Promise<string>;
+    researchReload()({});
+
+    expect(mocks.reload).not.toHaveBeenCalled();
+
+    setup.resolve();
+
+    await expect(opening).resolves.toEqual(expect.any(String));
+    await vi.waitFor(() => expect(mocks.reload).toHaveBeenCalledOnce());
+    expect(mocks.loadURL).toHaveBeenCalledWith("https://example.edu/second");
+    expect(mocks.loadURL.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.reload.mock.invocationCallOrder[0]!,
+    );
   });
 });
