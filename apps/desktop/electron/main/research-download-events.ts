@@ -36,6 +36,13 @@ export interface ResearchDownloadEventContext {
   ): ScholarIdentity | undefined;
 }
 
+interface ResearchDownloadOrigin {
+  ownerTabId: string;
+  sourceTabId: string;
+  sourceWebContents: unknown;
+  window: BrowserWindow;
+}
+
 /** Wire one research session's downloads to opaque, single-use main leases. */
 export function wireResearchDownloadSession(
   sess: Session,
@@ -53,6 +60,22 @@ export function wireResearchDownloadSession(
       return;
     }
 
+    const originWindow = context.getWindow();
+    if (!originWindow) {
+      event.preventDefault();
+      return;
+    }
+    const origin: ResearchDownloadOrigin = {
+      ownerTabId: sourceTab.ownerTabId,
+      sourceTabId: sourceTab.tabId,
+      sourceWebContents,
+      window: originWindow,
+    };
+    if (!isResearchDownloadOriginLive(context, origin)) {
+      event.preventDefault();
+      return;
+    }
+
     if (!isResearchDownloadUserIntended(item, sourceWebContents, context.userIntentGate)) {
       event.preventDefault();
       // A drive-by download never started a renderer task. Reject it silently
@@ -60,8 +83,6 @@ export function wireResearchDownloadSession(
       return;
     }
 
-    const sourceTabId = sourceTab.tabId;
-    const ownerTabId = sourceTab.ownerTabId;
     const scholar = context.resolveIdentity(sourceTab, item.getURL());
     const originalFileName = item.getFilename();
     const fileName = createResearchDownloadFileName(originalFileName);
@@ -69,9 +90,21 @@ export function wireResearchDownloadSession(
     const displayName =
       originalFileName.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120) || "download";
     const totalBytes = item.getTotalBytes();
+    const sendFinished = (downloadId: string | null, success: boolean): boolean => {
+      if (!isResearchDownloadOriginLive(context, origin)) return false;
+      return sendDownloadFinished(
+        origin.window,
+        origin.sourceTabId,
+        origin.ownerTabId,
+        fileName,
+        downloadId,
+        success,
+        scholar,
+      );
+    };
     if (!isResearchDownloadTransferWithinLimit(0, totalBytes, filePolicy.maxByteSize)) {
       event.preventDefault();
-      sendDownloadFinished(context, sourceTabId, ownerTabId, fileName, null, false, scholar);
+      sendFinished(null, false);
       return;
     }
     let admission: ResearchDownloadInFlightAdmission | null;
@@ -86,7 +119,7 @@ export function wireResearchDownloadSession(
     // the item afterwards: Electron invalidates it on the next tick.
     if (!admission) {
       event.preventDefault();
-      sendDownloadFinished(context, sourceTabId, ownerTabId, fileName, null, false, scholar);
+      sendFinished(null, false);
       return;
     }
 
@@ -96,23 +129,12 @@ export function wireResearchDownloadSession(
     } catch {
       event.preventDefault();
       admission.release();
-      sendDownloadFinished(context, sourceTabId, ownerTabId, fileName, null, false, scholar);
+      sendFinished(null, false);
       return;
     }
 
     let settling = false;
     let cancelRequested = false;
-    const sendFinished = (downloadId: string | null, success: boolean): void => {
-      sendDownloadFinished(
-        context,
-        sourceTabId,
-        ownerTabId,
-        fileName,
-        downloadId,
-        success,
-        scholar,
-      );
-    };
     const finishFailure = (): void => {
       if (settling) return;
       settling = true;
@@ -125,11 +147,19 @@ export function wireResearchDownloadSession(
     };
     const finishSuccess = (): void => {
       if (settling) return;
+      if (!isResearchDownloadOriginLive(context, origin)) {
+        finishFailure();
+        return;
+      }
       settling = true;
-      void registerResearchDownload(fileName, ownerTabId, target)
+      void registerResearchDownload(fileName, origin.ownerTabId, target)
         .then(({ downloadId }) => {
+          if (!isResearchDownloadOriginLive(context, origin) || !sendFinished(downloadId, true)) {
+            return discardResearchDownload(fileName, target)
+              .catch(() => {})
+              .then(() => admission.release());
+          }
           admission.release();
-          sendFinished(downloadId, true);
         })
         .catch(() =>
           discardResearchDownload(fileName, target)
@@ -168,7 +198,7 @@ export function wireResearchDownloadSession(
     // Register terminal listeners before setting the target. This keeps a
     // rapid cancellation from leaking an admission reservation.
     item.on("updated", (_updatedEvent, _state) => {
-      if (exceedsAdmission()) cancelOnce();
+      if (!isResearchDownloadOriginLive(context, origin) || exceedsAdmission()) cancelOnce();
     });
     item.once("done", (_doneEvent, state) => {
       if (exceedsAdmission()) cancelOnce();
@@ -188,25 +218,52 @@ export function wireResearchDownloadSession(
     }
 
     if (settling) return;
-    context.getWindow()?.webContents.send(EV.researchDownloadStarted, {
-      tabId: sourceTabId,
-      fileName: displayName,
-    });
+    if (
+      !isResearchDownloadOriginLive(context, origin) ||
+      !sendDownloadStarted(origin.window, origin.sourceTabId, displayName)
+    ) {
+      cancelOnce();
+      return;
+    }
     if (exceedsAdmission()) cancelOnce();
   });
 }
 
-function sendDownloadFinished(
+function isResearchDownloadOriginLive(
   context: ResearchDownloadEventContext,
+  origin: ResearchDownloadOrigin,
+): boolean {
+  try {
+    if (origin.window.isDestroyed() || context.getWindow() !== origin.window) return false;
+    const sourceTab = context.findSourceTab(origin.sourceWebContents);
+    return sourceTab?.tabId === origin.sourceTabId && sourceTab.ownerTabId === origin.ownerTabId;
+  } catch {
+    return false;
+  }
+}
+
+function sendDownloadStarted(window: BrowserWindow, tabId: string, fileName: string): boolean {
+  try {
+    if (window.isDestroyed()) return false;
+    window.webContents.send(EV.researchDownloadStarted, { tabId, fileName });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendDownloadFinished(
+  window: BrowserWindow,
   tabId: string,
   ownerTabId: string,
   fileName: string,
   downloadId: string | null,
   success: boolean,
   scholar: ScholarIdentity | undefined,
-): void {
+): boolean {
   try {
-    context.getWindow()?.webContents.send(EV.researchDownloadFinished, {
+    if (window.isDestroyed()) return false;
+    window.webContents.send(EV.researchDownloadFinished, {
       tabId,
       ownerTabId,
       fileName,
@@ -214,8 +271,9 @@ function sendDownloadFinished(
       success,
       scholar,
     });
+    return true;
   } catch {
-    // A closing BrowserWindow must not strand a completed reservation.
+    return false;
   }
 }
 
