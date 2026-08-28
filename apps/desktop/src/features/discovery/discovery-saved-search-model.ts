@@ -1,6 +1,7 @@
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import type { ConfirmFunction } from "../../components/ConfirmDialog";
 import type { CreateSavedSearchResult, SavedSearchView } from "../../services/saved-searches";
+import { savedSearchCriteriaKey } from "../../shared/saved-search-criteria";
 
 export type DiscoverySavedSearchRowAction = "checking" | "deleting" | "opening";
 export type DiscoverySavedSearchFailureKind = "delete" | "restore" | "save";
@@ -20,7 +21,7 @@ export interface DiscoverySavedSearchSnapshot {
 
 export interface DiscoverySavedSearchDataSource {
   clearBadge(id: string): Promise<void>;
-  create(query: string, sources: DiscoverySource[]): Promise<CreateSavedSearchResult>;
+  create(criteria: DiscoveryQuery, sources: DiscoverySource[]): Promise<CreateSavedSearchResult>;
   delete(id: string): Promise<void>;
   list(): Promise<SavedSearchView[]>;
   restore(id: string): Promise<void>;
@@ -41,7 +42,7 @@ export interface DiscoverySavedSearchControllerDependencies {
 }
 
 export interface ActivateSavedSearchInput {
-  query: string;
+  criteria: DiscoveryQuery;
   sources: DiscoverySource[];
 }
 
@@ -63,12 +64,12 @@ export function upsertSavedSearch(
 
 export function matchesSavedSearch(
   saved: SavedSearchView,
-  query: string,
+  criteria: DiscoveryQuery,
   sources: readonly DiscoverySource[],
   defaultSources: readonly DiscoverySource[],
 ): boolean {
   return (
-    normalizeQuery(saved.query) === normalizeQuery(query) &&
+    savedSearchCriteriaKey(saved.criteria) === savedSearchCriteriaKey(criteria) &&
     sourceKey(saved.sources ?? defaultSources) === sourceKey(sources)
   );
 }
@@ -78,10 +79,6 @@ export function toDiscoverySavedSearchError(
   describeError: (error: unknown) => string,
 ): Error {
   return error instanceof Error ? error : new Error(describeError(error));
-}
-
-function normalizeQuery(query: string): string {
-  return query.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
 function sourceKey(sources: readonly DiscoverySource[]): string {

@@ -1,10 +1,8 @@
-import type { DiscoverySource } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import { SavedSearchesRepo, type SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
 import { Buffer } from "node:buffer";
 import type {
-  CreateSavedSearchCommandInput,
   DataCommandOutput,
   DataCommandRequest,
   RecordSavedSearchErrorCommandInput,
@@ -21,12 +19,11 @@ import {
   requireRecordId,
   type DataCommandDependencies,
 } from "./data-command-runtime";
+import { matchesSavedSearchInput, parseCreateSavedSearchInput } from "./saved-search-create-input";
 
-const ALL_DISCOVERY_SOURCES: readonly DiscoverySource[] = ["arxiv", "crossref", "openalex", "s2"];
 const MAX_OBSERVED_ID_LENGTH = 4_096;
 const MAX_OBSERVED_IDS = 2_000;
 const MAX_PERSISTED_ERROR_LENGTH = 16_384;
-const MAX_QUERY_LENGTH = 4_096;
 const MAX_SAVED_SEARCH_ROWS = 1_000;
 const MAX_SAVED_SEARCH_OUTPUT_BYTES = 8 * 1024 * 1024;
 
@@ -87,9 +84,15 @@ export async function executeSavedSearchCommand(
       return dependencies.transaction(request.name, async (database) => {
         await assertActiveLocalLibrary(database, input.libraryId);
         const repository = new SavedSearchesRepo(database, input.libraryId);
-        const existing = (await repository.list()).find((row) => matchesInput(row, input));
+        const existing = (await repository.list()).find((row) =>
+          matchesSavedSearchInput(row, input),
+        );
         if (existing) return { created: false, id: existing.id };
-        const id = await repository.create({ query: input.query, sources: input.sources });
+        const id = await repository.create({
+          query: input.query,
+          criteriaJson: JSON.stringify(input.criteria),
+          sources: input.sources,
+        });
         return { created: true, id };
       });
     }
@@ -198,7 +201,7 @@ async function listSavedSearches(
   libraryId: string,
 ): Promise<SavedSearchListCommandResult> {
   const savedSearches = await database.query<SavedSearchRow>(
-    `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+    `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
             last_error, created_at, updated_at, deleted_at
      FROM saved_searches
      WHERE library_id = ? AND deleted_at IS NULL
@@ -217,7 +220,7 @@ async function getSavedSearch(
   input: SavedSearchGetCommandInput,
 ): Promise<SavedSearchGetCommandResult> {
   const rows = await database.query<SavedSearchRow>(
-    `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+    `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
             last_error, created_at, updated_at, deleted_at
      FROM saved_searches
      WHERE id = ? AND library_id = ?
@@ -232,7 +235,7 @@ async function listDueSavedSearches(
   libraryId: string,
 ): Promise<SavedSearchListCommandResult> {
   const savedSearches = await database.query<SavedSearchRow>(
-    `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+    `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
             last_error, created_at, updated_at, deleted_at
      FROM saved_searches
      WHERE library_id = ?
@@ -265,15 +268,6 @@ function requireBoundedSavedSearchOutput<T>(output: T): T {
     throw new Error(`Saved search output is limited to ${MAX_SAVED_SEARCH_OUTPUT_BYTES} bytes`);
   }
   return output;
-}
-
-function parseCreateSavedSearchInput(value: unknown): CreateSavedSearchCommandInput {
-  if (!isRecord(value)) throw new Error("Invalid savedSearch.create input");
-  return {
-    libraryId: requireRecordId(value.libraryId, "Library id"),
-    query: normalizeStoredQuery(value.query),
-    sources: parseSources(value.sources),
-  };
 }
 
 function parseSavedSearchInput(
@@ -322,63 +316,6 @@ function parseObservedIds(value: unknown): string[] {
   return ids;
 }
 
-function parseSources(value: unknown): DiscoverySource[] | null {
-  if (value === null) return null;
-  if (!Array.isArray(value) || value.length === 0 || value.length > ALL_DISCOVERY_SOURCES.length) {
-    throw new Error("Saved search sources are invalid");
-  }
-  const sources = value.map((source) => {
-    if (!isDiscoverySource(source)) throw new Error("Saved search source is invalid");
-    return source;
-  });
-  if (new Set(sources).size !== sources.length) {
-    throw new Error("Saved search sources must be unique");
-  }
-  if (
-    sources.length === ALL_DISCOVERY_SOURCES.length &&
-    ALL_DISCOVERY_SOURCES.every((source) => sources.includes(source))
-  ) {
-    return null;
-  }
-  return [...sources].sort(
-    (left, right) => ALL_DISCOVERY_SOURCES.indexOf(left) - ALL_DISCOVERY_SOURCES.indexOf(right),
-  );
-}
-
-function matchesInput(row: SavedSearchRow, input: CreateSavedSearchCommandInput): boolean {
-  return (
-    normalizeComparableQuery(row.query) === normalizeComparableQuery(input.query) &&
-    sourceKey(parsePersistedSources(row.sources_json)) === sourceKey(input.sources)
-  );
-}
-
-function parsePersistedSources(value: string | null): DiscoverySource[] | null {
-  if (!value) return null;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) return null;
-    const sources = parsed.filter(isDiscoverySource);
-    if (sources.length === 0) return null;
-    return [...new Set(sources)].sort(
-      (left, right) => ALL_DISCOVERY_SOURCES.indexOf(left) - ALL_DISCOVERY_SOURCES.indexOf(right),
-    );
-  } catch {
-    return null;
-  }
-}
-
-function sourceKey(value: DiscoverySource[] | null): string {
-  return JSON.stringify(value ?? ALL_DISCOVERY_SOURCES);
-}
-
-function normalizeStoredQuery(value: unknown): string {
-  return boundedText(value, "Saved search query", MAX_QUERY_LENGTH).replace(/\s+/g, " ");
-}
-
-function normalizeComparableQuery(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-}
-
 function requireRevision(value: unknown): number {
   return requireTimestamp(value, "Expected saved search revision");
 }
@@ -395,8 +332,4 @@ function boundedText(value: unknown, label: string, maxLength: number): string {
   const text = value.trim();
   if (text.length > maxLength) throw new Error(`${label} is too long`);
   return text;
-}
-
-function isDiscoverySource(value: unknown): value is DiscoverySource {
-  return (ALL_DISCOVERY_SOURCES as readonly unknown[]).includes(value);
 }

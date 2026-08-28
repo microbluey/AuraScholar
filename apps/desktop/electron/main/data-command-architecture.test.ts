@@ -441,7 +441,7 @@ describe("main-process data command architecture", () => {
 
   it("keeps Saved Search reads and writes behind typed, network-free main-process commands", () => {
     const discoveryPage = source("src/pages/DiscoveryPage.tsx");
-    const gateway = source("src/services/saved-searches.ts");
+    const gateway = source("src/services/saved-search-runtime.ts");
     const model = source("src/services/saved-search-model.ts");
     const serviceContract = source("src/services/saved-search-service-contract.ts");
     const contract = source("electron/saved-search-command-contract.ts");

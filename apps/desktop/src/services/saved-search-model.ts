@@ -1,12 +1,14 @@
 import type { NormalizedWork } from "@aurascholar/connectors";
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import { workFingerprint } from "@aurascholar/db/ids";
 import type { SavedSearchRow } from "../../electron/data-command-contract";
+import { parseSavedSearchCriteria } from "../shared/saved-search-criteria";
 import { describeSafeError } from "./sensitive-text";
 
 export interface SavedSearchView {
   id: string;
   query: string;
+  criteria: DiscoveryQuery;
   sources: DiscoverySource[] | null;
   newCount: number;
   lastRunAt: number | null;
@@ -14,20 +16,12 @@ export interface SavedSearchView {
 }
 
 const ALL_DISCOVERY_SOURCES: DiscoverySource[] = ["arxiv", "crossref", "openalex", "s2"];
-const SOURCE_FAILURE_STATUSES = new Set(["timeout", "error", "rate_limited", "aborted"]);
-
-type DiscoverySearchSourceReport = {
-  source: DiscoverySource;
-  status: string;
-  error?: string;
-};
-
-type DiscoverySearchReportSources = Partial<Record<DiscoverySource, DiscoverySearchSourceReport>>;
 
 export function toSavedSearchView(row: SavedSearchRow): SavedSearchView {
   return {
     id: row.id,
     query: row.query,
+    criteria: parseSavedSearchCriteria(row.criteria_json, row.query),
     sources: parseSavedSearchSources(row.sources_json),
     newCount: row.new_count,
     lastRunAt: row.last_run_at,
@@ -65,25 +59,6 @@ export function savedSearchResultId(work: NormalizedWork): string {
   return `fp:${workFingerprint(work.title, work.year ?? null, firstAuthor ?? null)}`;
 }
 
-export function isSavedSearchReportUnavailable(report: {
-  sources: DiscoverySearchReportSources;
-}): boolean {
-  const sources = sourceReports(report.sources);
-  return (
-    sources.length > 0 && sources.every((source) => SOURCE_FAILURE_STATUSES.has(source.status))
-  );
-}
-
-export function savedSearchReportErrorMessage(report: {
-  sources: DiscoverySearchReportSources;
-}): string {
-  const details = sourceReports(report.sources)
-    .filter((source) => SOURCE_FAILURE_STATUSES.has(source.status))
-    .map((source) => `${sourceLabel(source.source)} ${sourceStatusLabel(source.status)}`)
-    .join("; ");
-  return details ? `检索源暂时不可用:${details}` : "检索源暂时不可用";
-}
-
 function parseJsonValue(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -94,30 +69,4 @@ function parseJsonValue(value: string): unknown {
 
 function isDiscoverySource(value: unknown): value is DiscoverySource {
   return value === "arxiv" || value === "crossref" || value === "openalex" || value === "s2";
-}
-
-function sourceReports(sources: DiscoverySearchReportSources): DiscoverySearchSourceReport[] {
-  return Object.values(sources).filter((source): source is DiscoverySearchSourceReport =>
-    Boolean(source),
-  );
-}
-
-function sourceLabel(source: DiscoverySource): string {
-  switch (source) {
-    case "crossref":
-      return "Crossref";
-    case "openalex":
-      return "OpenAlex";
-    case "s2":
-      return "Semantic Scholar";
-    case "arxiv":
-      return "arXiv";
-  }
-}
-
-function sourceStatusLabel(status: string): string {
-  if (status === "timeout") return "超时";
-  if (status === "rate_limited") return "限流";
-  if (status === "aborted") return "已停止";
-  return "失败";
 }

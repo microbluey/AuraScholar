@@ -1,7 +1,4 @@
-// Hand-rolled migration runner: ordered SQL scripts applied transactionally and tracked in _migrations.
-// It works on native SQLite (desktop) and sqlite-wasm (web) because it only needs `exec`.
-// FTS5 tables and triggers live here rather than in the Drizzle schema — virtual tables must not be ORM-managed.
-
+// Hand-rolled migration runner for desktop and sqlite-wasm; virtual FTS tables stay outside the ORM.
 export interface SqlExecutor {
   exec(sql: string): void | Promise<void>;
   queryScalar(sql: string): unknown | Promise<unknown>;
@@ -23,6 +20,8 @@ import { createLibraryBoundaryTriggers } from "./migration-library-boundary-trig
 import { applyDocumentEvidenceV19 } from "./migration-document-evidence.js";
 import { knowledgeMigrations } from "./migration-knowledge-registry.js";
 import { applyResearchProjectsV18 } from "./migration-research-projects.js";
+
+const SAVED_SEARCH_CRITERIA_SQL = "ALTER TABLE saved_searches ADD COLUMN criteria_json TEXT;";
 
 export const MIGRATIONS: Migration[] = [
   {
@@ -403,6 +402,7 @@ export const MIGRATIONS: Migration[] = [
   },
   { version: 19, name: "document_evidence", sql: "", apply: applyDocumentEvidenceV19 },
   ...knowledgeMigrations,
+  { version: 24, name: "saved_search_criteria", sql: SAVED_SEARCH_CRITERIA_SQL },
 ];
 
 async function applyLibraryOwnershipV17(db: SqlExecutor): Promise<void> {

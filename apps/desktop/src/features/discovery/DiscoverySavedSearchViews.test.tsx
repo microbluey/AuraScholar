@@ -20,6 +20,7 @@ function savedSearch(id: string, overrides: Partial<SavedSearchView> = {}): Save
     query: `Query ${id}`,
     sources: ["openalex"],
     ...overrides,
+    criteria: overrides.criteria ?? { text: overrides.query ?? `Query ${id}` },
   };
 }
 

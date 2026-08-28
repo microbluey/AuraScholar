@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 81292,
+        ".ts": 81541,
         ".tsx": 35865
       },
       "files": {
@@ -117,7 +117,8 @@
         "apps/desktop/electron/main/research-print-capture.ts": 103,
         "apps/desktop/electron/main/research-project-commands.ts": 360,
         "apps/desktop/electron/main/research-project-query-data.ts": 218,
-        "apps/desktop/electron/main/saved-search-commands.ts": 402,
+        "apps/desktop/electron/main/saved-search-commands.ts": 335,
+        "apps/desktop/electron/main/saved-search-create-input.ts": 84,
         "apps/desktop/electron/main/scholarly-command-input.ts": 358,
         "apps/desktop/electron/main/scholarly-command-output.ts": 455,
         "apps/desktop/electron/main/scholarly-commands.ts": 196,
@@ -151,7 +152,7 @@
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/reader-command-contract.ts": 146,
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
-        "apps/desktop/electron/saved-search-command-contract.ts": 117,
+        "apps/desktop/electron/saved-search-command-contract.ts": 119,
         "apps/desktop/electron/scholarly-command-contract.ts": 100,
         "apps/desktop/electron/sentinel-read-command-contract.ts": 71,
         "apps/desktop/electron/sentinel-run-command-contract.ts": 66,
@@ -228,8 +229,8 @@
         "apps/desktop/src/features/discovery/discovery-import-controller.ts": 177,
         "apps/desktop/src/features/discovery/discovery-initial-state.ts": 67,
         "apps/desktop/src/features/discovery/discovery-result-model.ts": 210,
-        "apps/desktop/src/features/discovery/discovery-saved-search-controller.ts": 470,
-        "apps/desktop/src/features/discovery/discovery-saved-search-model.ts": 89,
+        "apps/desktop/src/features/discovery/discovery-saved-search-controller.ts": 476,
+        "apps/desktop/src/features/discovery/discovery-saved-search-model.ts": 86,
         "apps/desktop/src/features/discovery/discovery-search-controller-model.ts": 182,
         "apps/desktop/src/features/discovery/discovery-search-controller.ts": 424,
         "apps/desktop/src/features/discovery/discovery-search-executor.ts": 398,
@@ -241,6 +242,7 @@
         "apps/desktop/src/features/discovery/useBrowserDownloadImport.ts": 70,
         "apps/desktop/src/features/discovery/useBrowserPresentationActivation.ts": 65,
         "apps/desktop/src/features/discovery/useDiscoveryResultImportController.ts": 155,
+        "apps/desktop/src/features/discovery/useDiscoverySavedSearchActivation.ts": 90,
         "apps/desktop/src/features/discovery/useDiscoverySavedSearchController.ts": 151,
         "apps/desktop/src/features/discovery/useDiscoverySearchController.ts": 210,
         "apps/desktop/src/features/discovery/useFulltextImportCompletion.ts": 155,
@@ -390,10 +392,12 @@
         "apps/desktop/src/services/research-project-preview-service.ts": 201,
         "apps/desktop/src/services/research-project-service.ts": 57,
         "apps/desktop/src/services/research-projects.ts": 204,
-        "apps/desktop/src/services/saved-search-model.ts": 123,
+        "apps/desktop/src/services/saved-search-model.ts": 72,
         "apps/desktop/src/services/saved-search-polling.ts": 29,
-        "apps/desktop/src/services/saved-search-service-contract.ts": 70,
-        "apps/desktop/src/services/saved-searches.ts": 452,
+        "apps/desktop/src/services/saved-search-report.ts": 56,
+        "apps/desktop/src/services/saved-search-runtime.ts": 66,
+        "apps/desktop/src/services/saved-search-service-contract.ts": 71,
+        "apps/desktop/src/services/saved-searches.ts": 402,
         "apps/desktop/src/services/scholar.ts": 15,
         "apps/desktop/src/services/scholarly-data.ts": 96,
         "apps/desktop/src/services/sensitive-text.ts": 7,
@@ -409,6 +413,7 @@
         "apps/desktop/src/shared/library-backup-sanitizer.ts": 95,
         "apps/desktop/src/shared/library-backup.ts": 915,
         "apps/desktop/src/shared/reference-import.ts": 115,
+        "apps/desktop/src/shared/saved-search-criteria.ts": 111,
         "apps/desktop/src/shared/sqlite-sync-storage.ts": 777,
         "apps/desktop/src/shared/sqlite-sync-values.ts": 85,
         "apps/desktop/src/shortcut-labels.ts": 29,
@@ -497,7 +502,7 @@
         "packages/db/src/repos/knowledge.ts": 9,
         "packages/db/src/repos/project-work-lifecycle.ts": 85,
         "packages/db/src/repos/research-projects.ts": 419,
-        "packages/db/src/repos/saved-searches.ts": 302,
+        "packages/db/src/repos/saved-searches.ts": 306,
         "packages/db/src/repos/sentinel-create.ts": 66,
         "packages/db/src/repos/sentinel.ts": 496,
         "packages/db/src/repos/snippets.ts": 155,
@@ -581,12 +586,12 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 136478
+      "totalLines": 136727
     },
     "tests": {
       "byExtension": {
-        ".ts": 81604,
-        ".tsx": 1034
+        ".ts": 82145,
+        ".tsx": 1035
       },
       "files": {
         "apps/desktop/electron/main/ai-commands-architecture.test.ts": 92,
@@ -678,6 +683,7 @@
         "apps/desktop/electron/main/research-print-capture.test.ts": 158,
         "apps/desktop/electron/main/research-project-commands.test.ts": 378,
         "apps/desktop/electron/main/saved-search-commands.test.ts": 497,
+        "apps/desktop/electron/main/saved-search-structured-query.test.ts": 164,
         "apps/desktop/electron/main/scholarly-command-input.test.ts": 85,
         "apps/desktop/electron/main/scholarly-commands-architecture.test.ts": 65,
         "apps/desktop/electron/main/scholarly-commands.test.ts": 166,
@@ -808,18 +814,19 @@
         "apps/desktop/src/features/canvas/synthesis.test.ts": 318,
         "apps/desktop/src/features/canvas/workspace-controls.test.ts": 116,
         "apps/desktop/src/features/canvas/workspace-load.test.ts": 290,
-        "apps/desktop/src/features/discovery/DiscoverySavedSearchViews.test.tsx": 213,
+        "apps/desktop/src/features/discovery/DiscoverySavedSearchViews.test.tsx": 214,
         "apps/desktop/src/features/discovery/discovery-import-controller-model.test.ts": 60,
         "apps/desktop/src/features/discovery/discovery-import-controller.test.ts": 268,
         "apps/desktop/src/features/discovery/discovery-initial-state.test.ts": 74,
         "apps/desktop/src/features/discovery/discovery-result-model.test.ts": 305,
-        "apps/desktop/src/features/discovery/discovery-saved-search-controller.test.ts": 509,
+        "apps/desktop/src/features/discovery/discovery-saved-search-controller.test.ts": 510,
         "apps/desktop/src/features/discovery/discovery-search-controller.test.ts": 712,
         "apps/desktop/src/features/discovery/discovery-search-model.test.ts": 289,
         "apps/desktop/src/features/discovery/fulltext-download-plan.test.ts": 80,
         "apps/desktop/src/features/discovery/fulltext-task-completion.test.ts": 132,
         "apps/desktop/src/features/discovery/research-view-suspension-lease.test.ts": 72,
         "apps/desktop/src/features/discovery/useDiscoveryResultImportController.test.ts": 329,
+        "apps/desktop/src/features/discovery/useDiscoverySavedSearchActivation.test.ts": 64,
         "apps/desktop/src/features/discovery/useDiscoverySearchController.test.ts": 44,
         "apps/desktop/src/features/discovery/useIngestDraftQueue.test.ts": 37,
         "apps/desktop/src/features/evidence/EvidenceInboxViews.test.tsx": 160,
@@ -898,7 +905,9 @@
         "apps/desktop/src/services/research-project-desktop-service.test.ts": 65,
         "apps/desktop/src/services/research-project-preview-service.test.ts": 49,
         "apps/desktop/src/services/research-projects.test.ts": 236,
-        "apps/desktop/src/services/saved-searches.test.ts": 595,
+        "apps/desktop/src/services/saved-search-backup-criteria.test.ts": 64,
+        "apps/desktop/src/services/saved-search-structured-query.test.ts": 122,
+        "apps/desktop/src/services/saved-searches.test.ts": 597,
         "apps/desktop/src/services/scholar.test.ts": 28,
         "apps/desktop/src/services/scholarly-data.test.ts": 92,
         "apps/desktop/src/services/sentinel-page-data.test.ts": 269,
@@ -910,6 +919,7 @@
         "apps/desktop/src/services/translate.test.ts": 272,
         "apps/desktop/src/shared/document-revision-sync-repair.test.ts": 223,
         "apps/desktop/src/shared/reference-import.test.ts": 52,
+        "apps/desktop/src/shared/saved-search-criteria.test.ts": 69,
         "packages/ai/src/anthropic.test.ts": 107,
         "packages/ai/src/canvas-synthesis.test.ts": 71,
         "packages/ai/src/openai-compatible.test.ts": 74,
@@ -938,7 +948,7 @@
         "packages/db/src/library-ownership-migration.test.ts": 605,
         "packages/db/src/library-scope-architecture.test.ts": 116,
         "packages/db/src/local-first.test.ts": 64,
-        "packages/db/src/migrations.test.ts": 173,
+        "packages/db/src/migrations.test.ts": 228,
         "packages/db/src/repos/canvas.test.ts": 678,
         "packages/db/src/repos/child-library-scope.test.ts": 82,
         "packages/db/src/repos/collections-integrity.test.ts": 329,
@@ -988,7 +998,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 82638
+      "totalLines": 83180
     }
   },
   "uiDatabaseBoundary": {}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import type { ConfirmFunction } from "../../components/ConfirmDialog";
 import {
   clearSavedSearchBadge,
@@ -31,7 +31,7 @@ export interface UseDiscoverySavedSearchControllerOptions {
   enabled: boolean;
   onMessage: (message: string) => void;
   onOpenSearch: (input: ActivateSavedSearchInput) => Promise<boolean>;
-  query: string;
+  criteria: DiscoveryQuery;
   selectedSources: ReadonlySet<DiscoverySource>;
 }
 
@@ -41,7 +41,7 @@ export function useDiscoverySavedSearchController({
   enabled,
   onMessage,
   onOpenSearch,
-  query,
+  criteria,
   selectedSources,
 }: UseDiscoverySavedSearchControllerOptions) {
   const controllerRef = useRef<ReturnType<typeof createDiscoverySavedSearchController> | null>(
@@ -81,8 +81,8 @@ export function useDiscoverySavedSearchController({
   }, [controller]);
 
   const saveCurrent = useCallback(
-    () => controller.save(query, [...selectedSources], { reportMessage: onMessage }),
-    [controller, onMessage, query, selectedSources],
+    () => controller.save(criteria, [...selectedSources], { reportMessage: onMessage }),
+    [controller, criteria, onMessage, selectedSources],
   );
   const open = useCallback(
     (saved: SavedSearchView) =>
