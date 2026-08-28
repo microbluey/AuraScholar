@@ -1,4 +1,13 @@
-import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, Button, Card, Input } from "@aurascholar/ui";
 import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
@@ -40,8 +49,8 @@ import { openExternalUrl, isDesktopRuntime } from "../services/aura-platform";
 import { initialFulltextTask } from "../services/fulltext";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
+import { ReferenceImportPreviewDialog } from "../components/ReferenceImportPreviewDialog";
 import { useConfirmDialog } from "../components/ConfirmDialog";
-import { useModalFocusTrap } from "../components/useModalFocusTrap";
 import {
   DiscoverySavedSearchRecentStrip,
   DiscoverySavedSearchRouteSummary,
@@ -72,6 +81,10 @@ import { planFulltextDownload } from "../features/discovery/fulltext-download-pl
 import { useFulltextTaskController } from "../features/discovery/useFulltextTaskController";
 import { useFulltextImportCompletion } from "../features/discovery/useFulltextImportCompletion";
 import { useBrowserDownloadImport } from "../features/discovery/useBrowserDownloadImport";
+import { useBrowserConfirmationRestoration } from "../features/discovery/useBrowserConfirmationRestoration";
+import { useBrowserPresentationActivation } from "../features/discovery/useBrowserPresentationActivation";
+import { useResearchViewLease } from "../features/discovery/useResearchViewLease";
+import { useResearchViewSuspensions } from "../features/discovery/useResearchViewSuspensions";
 import {
   createDiscoveryInitialState,
   previewDiscoverySourceStatus,
@@ -251,9 +264,21 @@ export function DiscoveryPage() {
   );
   const [mode, setMode] = useState<Mode>(initialState.mode);
   const modeRef = useRef(mode);
+  const browserPresentationActiveRef = useRef(false);
+  const mountedRef = useRef(true);
   const [query, setQuery] = useState(initialState.query);
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useLayoutEffect(() => {
     modeRef.current = mode;
+    browserPresentationActiveRef.current = mode === "browser";
+    return () => {
+      browserPresentationActiveRef.current = false;
+    };
   }, [mode]);
 
   // Sites
@@ -318,7 +343,6 @@ export function DiscoveryPage() {
     dismiss: dismissConfirmDraft,
     enqueue: enqueueConfirmDraft,
     pendingCount: pendingConfirmDraftCount,
-    remove: removeConfirmDraft,
     snapshot: confirmDraftQueueSnapshot,
   } = useIngestDraftQueue();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -327,6 +351,25 @@ export function DiscoveryPage() {
   const boundsErrorReportedRef = useRef(false);
 
   const desktopRuntime = isDesktopRuntime();
+  const { acquire: acquireResearchViewSuspension, release: releaseResearchViewSuspension } =
+    useResearchViewSuspensions(setMessage);
+  const downloadViewLease = useResearchViewLease({
+    acquire: acquireResearchViewSuspension,
+    release: releaseResearchViewSuspension,
+  });
+  const referenceImportViewLease = useResearchViewLease({
+    acquire: acquireResearchViewSuspension,
+    release: releaseResearchViewSuspension,
+  });
+  const requestBrowserPresentation = useBrowserPresentationActivation({
+    browserActiveRef: browserPresentationActiveRef,
+    downloadLease: downloadViewLease,
+    hasDownloadConfirmation: Boolean(confirmDraft),
+    hasReferenceConfirmation: Boolean(referenceImportPreview),
+    mode,
+    onMessage: setMessage,
+    referenceLease: referenceImportViewLease,
+  });
   const buildQuery = useCallback(
     (text = query): DiscoveryQuery => ({
       text: text.trim(),
@@ -427,23 +470,28 @@ export function DiscoveryPage() {
       setOpeningBrowserTab(true);
       void openResearchTab(siteId, url, tabProxy, { reuseExisting: options.reuseExisting })
         .then((tabId) => {
+          if (!mountedRef.current) return;
           if (!tabId) {
             setMessage("内置浏览器仅在桌面应用中可用");
             if (!options.keepBrowserOnFailure) setMode("home");
             return;
           }
+          requestBrowserPresentation(tabId);
           options.onOpened?.(tabId);
-          return listResearchTabs().then(setTabs);
+          return listResearchTabs().then((nextTabs) => {
+            if (mountedRef.current) setTabs(nextTabs);
+          });
         })
         .catch((error) => {
+          if (!mountedRef.current) return;
           setMessage(`打开站点失败:${describeUnknownError(error)}`);
           if (!options.keepBrowserOnFailure) setMode("home");
         })
         .finally(() => {
-          setOpeningBrowserTab(false);
+          if (mountedRef.current) setOpeningBrowserTab(false);
         });
     },
-    [],
+    [requestBrowserPresentation],
   );
 
   const refreshSites = useCallback(async () => {
@@ -712,10 +760,32 @@ export function DiscoveryPage() {
     [results, updateDiscoveryResultByIdentity],
   );
 
+  const showActiveBrowserTab = useCallback(() => {
+    if (!browserPresentationActiveRef.current) return;
+    runBrowserAction("恢复浏览器标签", async () => {
+      const active = (await listResearchTabs()).find((tab) => tab.active);
+      if (active && browserPresentationActiveRef.current) await activateResearchTab(active.tabId);
+    });
+  }, [runBrowserAction]);
+  const isBrowserMode = useCallback(() => browserPresentationActiveRef.current, []);
+  const suspendBrowserDownloadViews = useCallback(async (): Promise<boolean> => {
+    const suspended = await downloadViewLease.acquire();
+    if (!suspended || browserPresentationActiveRef.current) return suspended;
+    await downloadViewLease.dispose();
+    return false;
+  }, [downloadViewLease]);
+  const requestBrowserRestore = useBrowserConfirmationRestoration({
+    downloadLease: downloadViewLease,
+    hasDownloadConfirmation: Boolean(confirmDraft),
+    hasReferenceConfirmation: Boolean(referenceImportPreview),
+    isBrowserMode,
+    mode,
+    referenceLease: referenceImportViewLease,
+    showActiveBrowserTab,
+  });
   const restoreActiveBrowserTab = useCallback(() => {
-    const active = tabs.find((tab) => tab.active);
-    if (active) runBrowserAction("恢复浏览器标签", () => activateResearchTab(active.tabId));
-  }, [runBrowserAction, tabs]);
+    requestBrowserRestore("download");
+  }, [requestBrowserRestore]);
   const {
     deferBrowserFallback,
     finish: finishBrowserImport,
@@ -740,11 +810,10 @@ export function DiscoveryPage() {
     useBrowserDownloadImport({
       enqueueDraft: enqueueConfirmDraft,
       finish: finishBrowserImport,
-      hideBrowserViews: hideBrowserViewsWithFeedback,
       modeRef,
       onMessage: setMessage,
-      removeDraft: removeConfirmDraft,
       resumeIfQueueEmpty,
+      suspendBrowserViews: suspendBrowserDownloadViews,
     });
 
   // Subscribe to intercepted downloads while the browser view is active.
@@ -972,29 +1041,40 @@ export function DiscoveryPage() {
     [desktopRuntime, navigate],
   );
 
-  const importReferenceText = useCallback(async (text: string, fileName?: string) => {
-    if (!text.trim()) return;
-    setWebImporting(true);
-    try {
-      const { previewReferences } = await import("../services/import-refs");
-      const preview = previewReferences(text);
-      if (preview.length === 0) {
-        setMessage("没有解析出文献。请选择 BibTeX、RIS、NBIB、ENW 或 CSL-JSON 文件。");
-        return;
+  const importReferenceText = useCallback(
+    async (text: string, fileName?: string) => {
+      if (!text.trim() || webImporting || referenceImportPreview) return;
+      setWebImporting(true);
+      try {
+        const { previewReferences } = await import("../services/import-refs");
+        const preview = previewReferences(text);
+        if (preview.length === 0) {
+          setMessage("没有解析出文献。请选择 BibTeX、RIS、NBIB、ENW 或 CSL-JSON 文件。");
+          return;
+        }
+        if (browserPresentationActiveRef.current) {
+          if (!(await referenceImportViewLease.acquire())) return;
+          if (!browserPresentationActiveRef.current) {
+            await referenceImportViewLease.dispose();
+            return;
+          }
+        }
+        const previewOnly = !desktopRuntime;
+        setReferenceImportPreview({ count: preview.length, fileName, previewOnly, text });
+        setMessage(
+          previewOnly
+            ? `已解析出 ${preview.length} 条文献；确认后会在本页模拟导入，不写入真实文献库。`
+            : `已解析出 ${preview.length} 条文献，请确认后入库`,
+        );
+      } catch (e) {
+        void referenceImportViewLease.release();
+        setMessage(`解析失败:${describeUnknownError(e)}`);
+      } finally {
+        setWebImporting(false);
       }
-      const previewOnly = !isDesktopRuntime();
-      setReferenceImportPreview({ count: preview.length, fileName, previewOnly, text });
-      setMessage(
-        previewOnly
-          ? `已解析出 ${preview.length} 条文献；确认后会在本页模拟导入，不写入真实文献库。`
-          : `已解析出 ${preview.length} 条文献，请确认后入库`,
-      );
-    } catch (e) {
-      setMessage(`解析失败:${describeUnknownError(e)}`);
-    } finally {
-      setWebImporting(false);
-    }
-  }, []);
+    },
+    [desktopRuntime, referenceImportPreview, referenceImportViewLease, webImporting],
+  );
 
   const confirmReferenceImport = useCallback(async () => {
     if (!referenceImportPreview) return;
@@ -1004,6 +1084,7 @@ export function DiscoveryPage() {
       if (referenceImportPreview.previewOnly) {
         await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS);
         setReferenceImportPreview(null);
+        requestBrowserRestore("reference");
         setMessage(
           `预览已模拟导入 ${referenceImportPreview.count} 条引用；真实写入、去重和附件关联会在桌面应用中完成。`,
         );
@@ -1016,6 +1097,7 @@ export function DiscoveryPage() {
         `引用文件导入完成:新增 ${summary.imported} 篇,已存在 ${summary.deduped} 篇(共 ${summary.total} 条)`,
       );
       setReferenceImportPreview(null);
+      requestBrowserRestore("reference");
       window.dispatchEvent(new Event("aurascholar:library-updated"));
     } catch (e) {
       await waitForMinimumElapsed(startedAt, MIN_REFERENCE_IMPORT_CONFIRM_BUSY_MS);
@@ -1023,13 +1105,14 @@ export function DiscoveryPage() {
     } finally {
       setWebImporting(false);
     }
-  }, [referenceImportPreview]);
+  }, [referenceImportPreview, requestBrowserRestore]);
 
   const cancelReferenceImport = useCallback(() => {
     if (webImporting) return;
     setReferenceImportPreview(null);
+    requestBrowserRestore("reference");
     setMessage("已取消导入引用文件");
-  }, [webImporting]);
+  }, [requestBrowserRestore, webImporting]);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -1230,6 +1313,17 @@ export function DiscoveryPage() {
     [confirm, refreshSites],
   );
 
+  const referenceImportDialog = referenceImportPreview ? (
+    <ReferenceImportPreviewDialog
+      count={referenceImportPreview.count}
+      fileName={referenceImportPreview.fileName}
+      importing={webImporting}
+      previewOnly={referenceImportPreview.previewOnly}
+      onClose={cancelReferenceImport}
+      onConfirm={() => void confirmReferenceImport()}
+    />
+  ) : null;
+
   // ---- Browser view: tab bar + content host ----
   if (mode === "browser") {
     return (
@@ -1303,8 +1397,12 @@ export function DiscoveryPage() {
             >
               {webImporting ? "处理中..." : "抓取本页入库"}
             </Button>
-            <Button variant="secondary" onClick={() => void fileInputRef.current?.click()}>
-              {webImporting ? "导入中..." : "导入引用文件"}
+            <Button
+              variant="secondary"
+              disabled={webImporting || Boolean(referenceImportPreview)}
+              onClick={() => void fileInputRef.current?.click()}
+            >
+              {webImporting ? "导入中..." : referenceImportPreview ? "等待确认..." : "导入引用文件"}
             </Button>
           </div>
           <input
@@ -1336,27 +1434,28 @@ export function DiscoveryPage() {
           )}
         </div>
         <InlineNotice key={browserToastKey} className="research-browser-status" message={message} />
-        {confirmDraft && (
-          <Suspense
-            fallback={
-              <div className="route-loading" role="status" aria-live="polite" aria-busy="true">
-                正在打开入库确认...
-              </div>
-            }
-          >
-            <ImportConfirmDialog
-              key={confirmDraftKey}
-              draft={confirmDraft}
-              onCommit={handleBrowserCommit}
-              onCancel={handleBrowserCancel}
-            />
-            {pendingConfirmDraftCount > 0 && (
-              <span className="sr-only" role="status">
-                另有 {pendingConfirmDraftCount} 个下载等待核对
-              </span>
-            )}
-          </Suspense>
-        )}
+        {referenceImportDialog ??
+          (confirmDraft && (
+            <Suspense
+              fallback={
+                <div className="route-loading" role="status" aria-live="polite" aria-busy="true">
+                  正在打开入库确认...
+                </div>
+              }
+            >
+              <ImportConfirmDialog
+                key={confirmDraftKey}
+                draft={confirmDraft}
+                onCommit={handleBrowserCommit}
+                onCancel={handleBrowserCancel}
+              />
+              {pendingConfirmDraftCount > 0 && (
+                <span className="sr-only" role="status">
+                  另有 {pendingConfirmDraftCount} 个下载等待核对
+                </span>
+              )}
+            </Suspense>
+          ))}
         {confirmDialog}
       </div>
     );
@@ -2117,22 +2216,13 @@ export function DiscoveryPage() {
           <Button
             variant="secondary"
             onClick={() => fileInputRef.current?.click()}
-            disabled={webImporting}
+            disabled={webImporting || Boolean(referenceImportPreview)}
           >
-            {webImporting ? "解析中..." : "选择文件导入"}
+            {webImporting ? "解析中..." : referenceImportPreview ? "等待确认..." : "选择文件导入"}
           </Button>
         </div>
       </Card>
-      {referenceImportPreview && (
-        <ReferenceImportPreviewDialog
-          count={referenceImportPreview.count}
-          fileName={referenceImportPreview.fileName}
-          importing={webImporting}
-          previewOnly={referenceImportPreview.previewOnly}
-          onClose={cancelReferenceImport}
-          onConfirm={() => void confirmReferenceImport()}
-        />
-      )}
+      {referenceImportDialog}
       {confirmDialog}
     </div>
   );
@@ -2150,98 +2240,6 @@ function SiteIcon({ site }: { site: DiscoverySite }) {
       alt=""
       onError={() => setFailed(true)}
     />
-  );
-}
-
-function ReferenceImportPreviewDialog({
-  count,
-  fileName,
-  importing,
-  previewOnly,
-  onClose,
-  onConfirm,
-}: {
-  count: number;
-  fileName?: string;
-  importing: boolean;
-  previewOnly: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  const dialogRef = useRef<HTMLElement | null>(null);
-  const titleId = useId();
-  const descriptionId = useId();
-  const requestClose = useCallback(() => {
-    if (!importing) onClose();
-  }, [importing, onClose]);
-
-  useModalFocusTrap(dialogRef, {
-    initialFocusSelector: "[data-autofocus]",
-    onEscape: requestClose,
-  });
-
-  return (
-    <div className="library-modal-overlay" role="presentation" onMouseDown={requestClose}>
-      <section
-        ref={dialogRef}
-        aria-describedby={descriptionId}
-        aria-labelledby={titleId}
-        aria-modal="true"
-        aria-busy={importing || undefined}
-        className="library-modal reference-import-preview"
-        data-modal-root="true"
-        onMouseDown={(event) => event.stopPropagation()}
-        role="dialog"
-        tabIndex={-1}
-      >
-        <div className="library-modal__head">
-          <div>
-            <Badge variant="accent">待确认</Badge>
-            <h2 id={titleId}>确认导入引用文件</h2>
-          </div>
-          <button
-            type="button"
-            className="library-modal__close"
-            onClick={requestClose}
-            aria-label="关闭确认导入引用文件"
-            title="关闭确认导入引用文件"
-            disabled={importing}
-          >
-            ×
-          </button>
-        </div>
-        <p className="au-text-muted" id={descriptionId} style={{ fontSize: 13 }}>
-          已解析出 <strong>{count}</strong> 条文献。
-          {previewOnly
-            ? "当前是浏览器预览，确认后只会模拟导入结果，不写入真实文献库。"
-            : "确认后才会写入文献库，导入时会按 DOI 与标题自动去重。"}
-        </p>
-        {fileName && (
-          <div className="reference-import-preview__file">
-            <span>文件</span>
-            <strong>{fileName}</strong>
-          </div>
-        )}
-        {importing && (
-          <p className="reference-import-preview__status" role="status" aria-live="polite">
-            正在导入引用文件...
-          </p>
-        )}
-        <div className="library-modal-actions reference-import-preview__actions">
-          <Button
-            data-autofocus="true"
-            onClick={onConfirm}
-            disabled={importing}
-            aria-busy={importing || undefined}
-          >
-            {importing ? "导入中..." : previewOnly ? `模拟导入 ${count} 条` : `导入 ${count} 条`}
-          </Button>
-          <Button variant="secondary" onClick={requestClose} disabled={importing}>
-            取消
-          </Button>
-        </div>
-      </section>
-    </div>
   );
 }
 

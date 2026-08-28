@@ -5,10 +5,9 @@ import { describeSafeError } from "../../services/sensitive-text";
 interface BrowserDownloadImportOptions {
   enqueueDraft(draft: IngestDraft): boolean;
   finish(draft: IngestDraft, completedWorkId?: string): void;
-  hideBrowserViews(): Promise<boolean>;
+  suspendBrowserViews(): Promise<boolean>;
   modeRef: MutableRefObject<"home" | "opensource" | "browser">;
   onMessage(message: string): void;
-  removeDraft(draft: IngestDraft): void;
   resumeIfQueueEmpty(): void;
 }
 
@@ -22,10 +21,9 @@ function discardDraft(draft: IngestDraft): void {
 export function useBrowserDownloadImport({
   enqueueDraft,
   finish,
-  hideBrowserViews,
+  suspendBrowserViews,
   modeRef,
   onMessage,
-  removeDraft,
   resumeIfQueueEmpty,
 }: BrowserDownloadImportOptions) {
   const queueConfirmation = useCallback(
@@ -34,15 +32,13 @@ export function useBrowserDownloadImport({
         discardDraft(draft);
         return;
       }
-      if (!enqueueDraft(draft)) return;
-      void hideBrowserViews().then((hidden) => {
-        if (hidden) return;
-        removeDraft(draft);
+      void suspendBrowserViews().then((suspended) => {
+        if (suspended && enqueueDraft(draft)) return;
         discardDraft(draft);
         resumeIfQueueEmpty();
       });
     },
-    [enqueueDraft, hideBrowserViews, modeRef, removeDraft, resumeIfQueueEmpty],
+    [enqueueDraft, modeRef, resumeIfQueueEmpty, suspendBrowserViews],
   );
 
   const handleDedup = useCallback(

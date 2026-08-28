@@ -5,8 +5,8 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 80632,
-        ".tsx": 35770
+        ".ts": 81136,
+        ".tsx": 35865
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
@@ -97,6 +97,7 @@
         "apps/desktop/electron/main/research-browser-navigation-policy.ts": 120,
         "apps/desktop/electron/main/research-browser-policy.ts": 225,
         "apps/desktop/electron/main/research-browser-view-lifecycle.ts": 98,
+        "apps/desktop/electron/main/research-browser-view-presentation.ts": 116,
         "apps/desktop/electron/main/research-browser.ts": 497,
         "apps/desktop/electron/main/research-download-cleanup-tracker.ts": 28,
         "apps/desktop/electron/main/research-download-consume-gate.ts": 77,
@@ -144,7 +145,7 @@
         "apps/desktop/electron/main/translation-provider-http.ts": 106,
         "apps/desktop/electron/main/translation-provider-settings-store.ts": 450,
         "apps/desktop/electron/main/work-metadata-commands.ts": 369,
-        "apps/desktop/electron/preload.ts": 225,
+        "apps/desktop/electron/preload.ts": 231,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/reader-command-contract.ts": 146,
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
@@ -152,7 +153,7 @@
         "apps/desktop/electron/scholarly-command-contract.ts": 100,
         "apps/desktop/electron/sentinel-read-command-contract.ts": 71,
         "apps/desktop/electron/sentinel-run-command-contract.ts": 66,
-        "apps/desktop/electron/shared.ts": 157,
+        "apps/desktop/electron/shared.ts": 159,
         "apps/desktop/electron/smoke-mode.ts": 15,
         "apps/desktop/electron/snippet-command-contract.ts": 63,
         "apps/desktop/electron/sync-command-contract.ts": 68,
@@ -169,6 +170,7 @@
         "apps/desktop/src/components/ImportTargetConflictNotice.tsx": 18,
         "apps/desktop/src/components/InlineNotice.tsx": 47,
         "apps/desktop/src/components/MetadataEditor.tsx": 680,
+        "apps/desktop/src/components/ReferenceImportPreviewDialog.tsx": 97,
         "apps/desktop/src/components/inline-notice-model.ts": 16,
         "apps/desktop/src/components/useModalFocusTrap.ts": 146,
         "apps/desktop/src/download.ts": 69,
@@ -231,13 +233,18 @@
         "apps/desktop/src/features/discovery/discovery-search-executor.ts": 398,
         "apps/desktop/src/features/discovery/discovery-search-model.ts": 115,
         "apps/desktop/src/features/discovery/fulltext-download-plan.ts": 37,
-        "apps/desktop/src/features/discovery/useBrowserDownloadImport.ts": 74,
+        "apps/desktop/src/features/discovery/research-view-suspension-lease.ts": 84,
+        "apps/desktop/src/features/discovery/useBrowserConfirmationRestoration.ts": 143,
+        "apps/desktop/src/features/discovery/useBrowserDownloadImport.ts": 70,
+        "apps/desktop/src/features/discovery/useBrowserPresentationActivation.ts": 65,
         "apps/desktop/src/features/discovery/useDiscoveryResultImportController.ts": 155,
         "apps/desktop/src/features/discovery/useDiscoverySavedSearchController.ts": 151,
         "apps/desktop/src/features/discovery/useDiscoverySearchController.ts": 210,
         "apps/desktop/src/features/discovery/useFulltextImportCompletion.ts": 155,
         "apps/desktop/src/features/discovery/useFulltextTaskController.ts": 150,
         "apps/desktop/src/features/discovery/useIngestDraftQueue.ts": 80,
+        "apps/desktop/src/features/discovery/useResearchViewLease.ts": 19,
+        "apps/desktop/src/features/discovery/useResearchViewSuspensions.ts": 61,
         "apps/desktop/src/features/evidence/EvidenceCard.tsx": 79,
         "apps/desktop/src/features/evidence/EvidenceInboxStates.tsx": 77,
         "apps/desktop/src/features/evidence/EvidenceInboxToolbar.tsx": 138,
@@ -323,7 +330,7 @@
         "apps/desktop/src/features/shell/app-navigation.tsx": 164,
         "apps/desktop/src/keyboard.ts": 7,
         "apps/desktop/src/main.tsx": 126,
-        "apps/desktop/src/pages/DiscoveryPage.tsx": 2469,
+        "apps/desktop/src/pages/DiscoveryPage.tsx": 2467,
         "apps/desktop/src/pages/EvidenceInboxPage.tsx": 267,
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1113,
@@ -374,7 +381,7 @@
         "apps/desktop/src/services/minimum-busy.ts": 8,
         "apps/desktop/src/services/preview-library.ts": 70,
         "apps/desktop/src/services/reader-session-data.ts": 90,
-        "apps/desktop/src/services/research-browser.ts": 91,
+        "apps/desktop/src/services/research-browser.ts": 103,
         "apps/desktop/src/services/research-downloads.ts": 247,
         "apps/desktop/src/services/research-project-desktop-service.ts": 74,
         "apps/desktop/src/services/research-project-preview-service.ts": 201,
@@ -571,11 +578,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 135723
+      "totalLines": 136322
     },
     "tests": {
       "byExtension": {
-        ".ts": 80740,
+        ".ts": 81052,
         ".tsx": 1034
       },
       "files": {
@@ -652,6 +659,7 @@
         "apps/desktop/electron/main/research-browser-navigation-policy.test.ts": 117,
         "apps/desktop/electron/main/research-browser-policy.test.ts": 158,
         "apps/desktop/electron/main/research-browser-view-lifecycle.test.ts": 116,
+        "apps/desktop/electron/main/research-browser-view-presentation.test.ts": 138,
         "apps/desktop/electron/main/research-download-consume-gate.test.ts": 34,
         "apps/desktop/electron/main/research-download-events.test.ts": 658,
         "apps/desktop/electron/main/research-download-file-name.test.ts": 34,
@@ -694,6 +702,7 @@
         "apps/desktop/electron/main/smoke/checks/summarize.ts": 4,
         "apps/desktop/electron/main/smoke/contracts.ts": 653,
         "apps/desktop/electron/main/smoke/fragments/canvas.ts": 765,
+        "apps/desktop/electron/main/smoke/fragments/discovery-browser-reference-import.ts": 84,
         "apps/desktop/electron/main/smoke/fragments/discovery-import.ts": 390,
         "apps/desktop/electron/main/smoke/fragments/discovery-results.ts": 354,
         "apps/desktop/electron/main/smoke/fragments/discovery-saved-searches.ts": 339,
@@ -739,7 +748,7 @@
         "apps/desktop/electron/main/smoke/input-driver.test.ts": 383,
         "apps/desktop/electron/main/smoke/input-driver.ts": 289,
         "apps/desktop/electron/main/smoke/library-typed-ingest.test.ts": 38,
-        "apps/desktop/electron/main/smoke/renderer-script.ts": 107,
+        "apps/desktop/electron/main/smoke/renderer-script.ts": 109,
         "apps/desktop/electron/main/smoke/window-layout.test.ts": 26,
         "apps/desktop/electron/main/smoke/window-layout.ts": 13,
         "apps/desktop/electron/main/snippet-commands-architecture.test.ts": 57,
@@ -760,7 +769,7 @@
         "apps/desktop/electron/main/translation-provider-settings-store.test.ts": 254,
         "apps/desktop/electron/main/work-metadata-commands-architecture.test.ts": 46,
         "apps/desktop/electron/main/work-metadata-commands.test.ts": 307,
-        "apps/desktop/electron/preload.capability-audit.test.ts": 80,
+        "apps/desktop/electron/preload.capability-audit.test.ts": 89,
         "apps/desktop/electron/preload.smoke-db-bridge.test.ts": 75,
         "apps/desktop/electron/preload/close-lifecycle.test.ts": 110,
         "apps/desktop/electron/smoke-mode.test.ts": 19,
@@ -802,6 +811,7 @@
         "apps/desktop/src/features/discovery/discovery-search-controller.test.ts": 712,
         "apps/desktop/src/features/discovery/discovery-search-model.test.ts": 289,
         "apps/desktop/src/features/discovery/fulltext-download-plan.test.ts": 80,
+        "apps/desktop/src/features/discovery/research-view-suspension-lease.test.ts": 72,
         "apps/desktop/src/features/discovery/useDiscoveryResultImportController.test.ts": 329,
         "apps/desktop/src/features/discovery/useDiscoverySearchController.test.ts": 44,
         "apps/desktop/src/features/discovery/useIngestDraftQueue.test.ts": 37,
@@ -875,7 +885,7 @@
         "apps/desktop/src/services/metadata.test.ts": 57,
         "apps/desktop/src/services/preview-library.test.ts": 18,
         "apps/desktop/src/services/reader-session-data.test.ts": 150,
-        "apps/desktop/src/services/research-browser.test.ts": 23,
+        "apps/desktop/src/services/research-browser.test.ts": 30,
         "apps/desktop/src/services/research-downloads.test.ts": 415,
         "apps/desktop/src/services/research-project-backup.test.ts": 434,
         "apps/desktop/src/services/research-project-desktop-service.test.ts": 65,
@@ -971,7 +981,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 81774
+      "totalLines": 82086
     }
   },
   "uiDatabaseBoundary": {}

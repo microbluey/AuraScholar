@@ -142,6 +142,12 @@ const api = {
     hide(): Promise<void> {
       return ipcRenderer.invoke(CH.researchHide);
     },
+    suspend(): Promise<string> {
+      return ipcRenderer.invoke(CH.researchSuspend);
+    },
+    resume(suspensionId: string): Promise<boolean> {
+      return ipcRenderer.invoke(CH.researchResume, suspensionId);
+    },
     setBounds(b: Bounds): Promise<void> {
       return ipcRenderer.invoke(CH.researchSetBounds, b);
     },

@@ -33,6 +33,8 @@ interface ExposedAuraApi {
   files?: unknown;
   research: {
     consumeDownload(input: { downloadId: string }): Promise<ResearchDownloadContent>;
+    resume(suspensionId: string): Promise<boolean>;
+    suspend(): Promise<string>;
   };
 }
 
@@ -76,5 +78,12 @@ describe("preload unused capability audit", () => {
     expect(mocks.invoke).toHaveBeenCalledWith(CH.researchConsumeDownload, {
       downloadId: "download-id",
     });
+
+    mocks.invoke.mockResolvedValueOnce("research-modal-lease");
+    await expect(api.research.suspend()).resolves.toBe("research-modal-lease");
+    mocks.invoke.mockResolvedValueOnce(true);
+    await expect(api.research.resume("research-modal-lease")).resolves.toBe(true);
+    expect(mocks.invoke).toHaveBeenCalledWith(CH.researchSuspend);
+    expect(mocks.invoke).toHaveBeenCalledWith(CH.researchResume, "research-modal-lease");
   });
 });

@@ -26,6 +26,8 @@ export const CH = {
   researchReload: "research:reload",
   researchClose: "research:close",
   researchHide: "research:hide",
+  researchSuspend: "research:suspend",
+  researchResume: "research:resume",
   researchSetBounds: "research:setBounds",
   researchList: "research:list",
   researchCapture: "research:capture",

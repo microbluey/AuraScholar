@@ -25,6 +25,7 @@ import { smokeReaderAnnotations } from "./fragments/reader-annotations";
 import { smokeReaderTranslation } from "./fragments/reader-translation";
 import { smokeReaderRecovery } from "./fragments/reader-recovery";
 import { smokeDiscoveryImport } from "./fragments/discovery-import";
+import { smokeDiscoveryBrowserReferenceImport } from "./fragments/discovery-browser-reference-import";
 import { smokeDiscoverySites } from "./fragments/discovery-sites";
 import { smokeDiscoverySavedSearches } from "./fragments/discovery-saved-searches";
 import { smokeDiscoveryResults } from "./fragments/discovery-results";
@@ -79,6 +80,7 @@ const rendererSmokeFragments = [
   smokeReaderRecovery,
   String.raw`smokeProgress("discovery");`,
   smokeDiscoveryImport,
+  smokeDiscoveryBrowserReferenceImport,
   smokeDiscoverySites,
   smokeDiscoverySavedSearches,
   smokeDiscoveryResults,
