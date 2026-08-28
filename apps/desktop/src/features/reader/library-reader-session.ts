@@ -2,7 +2,12 @@ import { PdfDocument, parseAnnotationAnchorJson, type ReaderAnnotation } from "@
 import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
 import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
 import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
-import { loadPdfForWork } from "../../services/library-read";
+import { MAX_READER_PDF_IPC_MIB } from "../../../electron/reader-pdf-ipc-limit";
+import {
+  loadPdfForWork,
+  ReaderPdfBusyError,
+  ReaderPdfTooLargeError,
+} from "../../services/library-read";
 import {
   createReaderAnnotation,
   deleteReaderAnnotation,
@@ -49,6 +54,8 @@ export class LibraryReaderSessionError extends Error {
   constructor(
     readonly code:
       | "attachment-missing"
+      | "attachment-opening"
+      | "attachment-too-large"
       | "attachment-unavailable"
       | "pdf-invalid"
       | "work-archived"
@@ -144,11 +151,25 @@ export async function loadLibraryReaderSession(
   let pdf: Awaited<ReturnType<LibraryReaderSessionDataSource["loadPdf"]>>;
   try {
     pdf = await dataSource.loadPdf(workId, attachmentId);
-  } catch {
+  } catch (error) {
     throwIfAborted(signal);
+    if (error instanceof ReaderPdfBusyError) {
+      throw new LibraryReaderSessionError(
+        "attachment-opening",
+        "另一份 PDF 正在打开，请稍后重试。",
+        work,
+      );
+    }
+    if (error instanceof ReaderPdfTooLargeError) {
+      throw new LibraryReaderSessionError(
+        "attachment-too-large",
+        `此 PDF 超过当前阅读器单次打开上限（${MAX_READER_PDF_IPC_MIB} MiB），文件已保留。请选择较小的 PDF。`,
+        work,
+      );
+    }
     throw new LibraryReaderSessionError(
       "attachment-unavailable",
-      "PDF 附件记录存在，但本地文件无法读取。",
+      "已找到 PDF 附件记录，但本地文件无法读取。可以重新选择 PDF 修复这篇文献。",
       work,
     );
   }

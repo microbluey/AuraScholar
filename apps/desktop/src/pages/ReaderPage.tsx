@@ -286,12 +286,12 @@ function libraryReaderLoadFailure(
         missingWork: null,
       };
     case "attachment-unavailable":
+    case "attachment-too-large":
+    case "attachment-opening":
       return {
-        archivedWork: null,
-        archivedWorkId: null,
-        allowRetry: true,
-        error: "已找到 PDF 附件记录，但本地文件无法读取。可以重新选择 PDF 修复这篇文献。",
-        missingWork: work,
+        archivedWork: null, archivedWorkId: null,
+        allowRetry: error.code !== "attachment-too-large",
+        error: error.message, missingWork: error.code === "attachment-opening" ? null : work,
       };
     case "attachment-missing":
       return {

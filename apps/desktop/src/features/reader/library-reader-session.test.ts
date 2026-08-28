@@ -13,6 +13,7 @@ import {
   type LibraryReaderSessionDataSource,
   updateLibraryReaderAnnotationContent,
 } from "./library-reader-session";
+import { ReaderPdfBusyError, ReaderPdfTooLargeError } from "../../services/library-read";
 
 function work(overrides: Partial<WorkWithAuthors> = {}): WorkWithAuthors {
   return {
@@ -413,6 +414,44 @@ describe("library reader session", () => {
         work: loadedWork,
       }),
     );
+  });
+
+  it("keeps an oversized PDF file but exposes a specific Reader session failure", async () => {
+    const loadedWork = work();
+    const source = dataSource({
+      loadPdf: vi.fn(async () => {
+        throw new ReaderPdfTooLargeError();
+      }),
+      loadWork: vi.fn(async () => loadedWork),
+    });
+
+    await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
+      expect.objectContaining<Partial<LibraryReaderSessionError>>({
+        code: "attachment-too-large",
+        message: "此 PDF 超过当前阅读器单次打开上限（512 MiB），文件已保留。请选择较小的 PDF。",
+        work: loadedWork,
+      }),
+    );
+    expect(source.loadDocument).not.toHaveBeenCalled();
+  });
+
+  it("keeps a transient Reader PDF admission failure retryable", async () => {
+    const loadedWork = work();
+    const source = dataSource({
+      loadPdf: vi.fn(async () => {
+        throw new ReaderPdfBusyError();
+      }),
+      loadWork: vi.fn(async () => loadedWork),
+    });
+
+    await expect(loadLibraryReaderSession("work-1", {}, source)).rejects.toEqual(
+      expect.objectContaining<Partial<LibraryReaderSessionError>>({
+        code: "attachment-opening",
+        message: "另一份 PDF 正在打开，请稍后重试。",
+        work: loadedWork,
+      }),
+    );
+    expect(source.loadDocument).not.toHaveBeenCalled();
   });
 
   it("revalidates the chosen PDF attachment under its work before parsing", async () => {

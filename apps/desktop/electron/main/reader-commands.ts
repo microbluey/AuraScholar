@@ -29,11 +29,17 @@ import type {
   ReaderUpdateAnnotationContentCommandResult,
 } from "../data-command-contract";
 import {
+  createReaderPdfIpcBusyError,
+  createReaderPdfIpcLimitError,
+  MAX_READER_PDF_IPC_BYTES,
+} from "../reader-pdf-ipc-limit";
+import {
   assertActiveLocalLibrary,
   isRecord,
   requireRecordId,
   type DataCommandDependencies,
 } from "./data-command-runtime";
+import { CanonicalPdfBlobReadLimitError } from "./platform-fs-policy";
 
 type ReaderReadCommandName =
   | "reader.getAttachment"
@@ -356,6 +362,9 @@ async function readAttachmentPdf(
   if (!dependencies.readPdfBlob) {
     throw new Error("Main-process Reader PDF read is unavailable");
   }
+  if (!dependencies.readerPdfReadGate) {
+    throw new Error("Main-process Reader PDF admission is unavailable");
+  }
 
   const attachment = await dependencies.inspect(async (database) => {
     const libraryId = await requireActiveLocalLibraryId(database);
@@ -367,8 +376,35 @@ async function readAttachmentPdf(
       `PDF attachment ${input.attachmentId} is missing, removed, or not active for work ${input.workId}`,
     );
   }
+  assertReaderPdfIpcByteSize(attachment);
 
-  return { data: await dependencies.readPdfBlob(attachment.sha256) };
+  const admission = dependencies.readerPdfReadGate.admit();
+  if (!admission) throw createReaderPdfIpcBusyError();
+  try {
+    try {
+      return {
+        data: await dependencies.readPdfBlob(attachment.sha256, {
+          expectedByteSize: attachment.byte_size,
+          maxBytes: MAX_READER_PDF_IPC_BYTES,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof CanonicalPdfBlobReadLimitError) {
+        throw createReaderPdfIpcLimitError();
+      }
+      throw error;
+    }
+  } finally {
+    admission.release();
+  }
+}
+
+function assertReaderPdfIpcByteSize(attachment: AttachmentRow): void {
+  const byteSize = attachment.byte_size;
+  if (!Number.isSafeInteger(byteSize) || byteSize < 0) {
+    throw new Error(`PDF attachment ${attachment.id} has an invalid byte size`);
+  }
+  if (byteSize > MAX_READER_PDF_IPC_BYTES) throw createReaderPdfIpcLimitError();
 }
 
 async function markWorkReadingStarted(

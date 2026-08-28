@@ -1,5 +1,9 @@
 import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createReaderPdfIpcBusyError,
+  createReaderPdfIpcLimitError,
+} from "../../electron/reader-pdf-ipc-limit";
 
 const mocks = vi.hoisted(() => ({
   loadAttachmentPdf: vi.fn(),
@@ -11,7 +15,12 @@ vi.mock("./reader-session-data", () => ({
   loadReaderWorkPdfCandidates: mocks.loadCandidates,
 }));
 
-import { loadPdfForWork, loadPdfFromCandidates } from "./library-read";
+import {
+  loadPdfForWork,
+  loadPdfFromCandidates,
+  ReaderPdfBusyError,
+  ReaderPdfTooLargeError,
+} from "./library-read";
 
 function attachment(overrides: Partial<AttachmentRow> = {}): AttachmentRow {
   return {
@@ -66,6 +75,43 @@ describe("library PDF reads", () => {
 
     await expect(loadPdfFromCandidates("work-1", [first, second], "removed-pdf")).rejects.toThrow(
       "指定的 PDF 附件不存在或已被移除",
+    );
+  });
+
+  it("falls back from an oversized automatic candidate but preserves its semantic failure when selected", async () => {
+    const oversized = attachment({ id: "pdf-oversized", sha256: "oversized" });
+    const readable = attachment({ id: "pdf-readable", sha256: "readable" });
+    mocks.loadAttachmentPdf
+      .mockRejectedValueOnce(createReaderPdfIpcLimitError())
+      .mockResolvedValueOnce({ data: new Uint8Array([4, 5, 6]) });
+
+    await expect(loadPdfFromCandidates("work-1", [oversized, readable])).resolves.toEqual({
+      attachmentId: "pdf-readable",
+      data: new Uint8Array([4, 5, 6]),
+    });
+
+    mocks.loadAttachmentPdf.mockRejectedValueOnce(createReaderPdfIpcLimitError());
+    await expect(
+      loadPdfFromCandidates("work-1", [oversized, readable], oversized.id),
+    ).rejects.toBeInstanceOf(ReaderPdfTooLargeError);
+
+    mocks.loadAttachmentPdf.mockRejectedValueOnce(
+      new Error(`Error invoking remote method: ${createReaderPdfIpcLimitError().message}`),
+    );
+    await expect(loadPdfFromCandidates("work-1", [oversized], oversized.id)).rejects.toBeInstanceOf(
+      ReaderPdfTooLargeError,
+    );
+
+    mocks.loadAttachmentPdf.mockRejectedValueOnce({
+      message: createReaderPdfIpcLimitError().message,
+    });
+    await expect(loadPdfFromCandidates("work-1", [oversized], oversized.id)).rejects.toBeInstanceOf(
+      ReaderPdfTooLargeError,
+    );
+
+    mocks.loadAttachmentPdf.mockRejectedValueOnce(createReaderPdfIpcBusyError());
+    await expect(loadPdfFromCandidates("work-1", [oversized], oversized.id)).rejects.toBeInstanceOf(
+      ReaderPdfBusyError,
     );
   });
 
