@@ -19,6 +19,7 @@ import {
   commitResearchMainFrameUrl,
   guardResearchNavigation,
 } from "./research-browser-navigation-policy";
+import { ResearchBrowserViewPresentation } from "./research-browser-view-presentation";
 import { ResearchBrowserViewLifecycle } from "./research-browser-view-lifecycle";
 import {
   CH,
@@ -94,19 +95,19 @@ function wireSession(sess: Session, siteId: string): void {
   });
 }
 
-function detachActiveView(): void {
-  const cur = activeTabId ? tabs.get(activeTabId) : null;
-  if (cur?.view) detachView(cur.view);
-}
-
-function detachView(view: WebContentsView): void {
-  if (win && !win.isDestroyed()) win.contentView.removeChildView(view);
-}
-
+const viewPresentation = new ResearchBrowserViewPresentation<WebContentsView, Tab>({
+  createView: (tab) => createView(tab),
+  emitTabs,
+  getActiveTabId: () => activeTabId,
+  getBounds: () => bounds,
+  getTab: (tabId) => tabs.get(tabId),
+  getWindow: () => win,
+  setActiveTabId: (tabId) => (activeTabId = tabId),
+});
 const viewLifecycle = new ResearchBrowserViewLifecycle({
   acceptUrl: (url) => acceptResearchMainFrameUrl(url, true),
   activeTabId: () => activeTabId,
-  detachView,
+  detachView: (view) => viewPresentation.detach(view),
   emitTabs,
   tabs,
 });
@@ -118,7 +119,6 @@ async function applyProxy(sess: Session, proxy: string): Promise<void> {
     await sess.setProxy({ mode: "direct" });
   }
 }
-
 const DOI_RE = /10\.\d{4,9}\/[^\s"'<>]+/;
 
 function normalizeScholarMeta(
@@ -286,7 +286,13 @@ function createView(tab: Tab): WebContentsView {
 }
 
 /** Create and activate a tab for IPC opens and in-page target=_blank links. */
-function spawnTab(siteId: string, url: string, proxy: string, ownerTabId?: string): string {
+function spawnTab(
+  siteId: string,
+  url: string,
+  proxy: string,
+  ownerTabId?: string,
+  allowAttachment = true,
+): string {
   if (tabs.size >= MAX_RESEARCH_TABS) {
     throw new Error(`Research tabs are limited to ${MAX_RESEARCH_TABS}`);
   }
@@ -305,20 +311,9 @@ function spawnTab(siteId: string, url: string, proxy: string, ownerTabId?: strin
     // inherits the abstract page's identity so its download attaches correctly.
     scholar: identityForUrl(safeUrl),
   });
-  showTab(tabId);
+  if (allowAttachment) viewPresentation.show(tabId);
+  else viewPresentation.select(tabId);
   return tabId;
-}
-
-function showTab(tabId: string): void {
-  const tab = tabs.get(tabId);
-  if (!tab || !win || win.isDestroyed()) return;
-  detachActiveView();
-  if (!tab.view) tab.view = createView(tab); // un-archive
-  win.contentView.addChildView(tab.view);
-  tab.view.setBounds(bounds);
-  tab.lastActiveAt = Date.now();
-  activeTabId = tabId;
-  emitTabs();
 }
 
 function disposeResearchBrowser(): void {
@@ -327,6 +322,7 @@ function disposeResearchBrowser(): void {
   // reserved until the download event's terminal cleanup releases it.
   tabs.clear();
   identityByPdfUrl.clear();
+  viewPresentation.clear();
   activeTabId = null;
   win = null;
 }
@@ -344,7 +340,7 @@ export function initResearchBrowser(window: BrowserWindow): void {
 }
 
 export function hideResearchViews(): void {
-  detachActiveView();
+  viewPresentation.hide();
 }
 
 export function registerResearchHandlers(): void {
@@ -357,15 +353,15 @@ export function registerResearchHandlers(): void {
         : [...tabs.values()].find((t) => t.siteId === input.siteId);
     if (existing) {
       existing.proxy = input.proxy;
-      showTab(existing.tabId);
+      viewPresentation.select(existing.tabId);
       return existing.tabId;
     }
-    return spawnTab(input.siteId, input.url, input.proxy);
+    return spawnTab(input.siteId, input.url, input.proxy, undefined, false);
   });
 
   handle(CH.researchActivate, (_e, tabId: unknown) => {
     const validTabId = validateResearchTabId(tabId);
-    showTab(validTabId);
+    viewPresentation.present(validTabId);
   });
 
   handle(CH.researchGoBack, () => {
@@ -410,14 +406,18 @@ export function registerResearchHandlers(): void {
     if (activeTabId === validTabId) {
       activeTabId = null;
       const next = [...tabs.keys()][0];
-      if (next) showTab(next);
+      if (next) viewPresentation.show(next);
     }
     emitTabs();
   });
 
   handle(CH.researchHide, () => {
-    detachActiveView();
+    viewPresentation.hide();
   });
+
+  handle(CH.researchSuspend, () => viewPresentation.suspend());
+
+  handle(CH.researchResume, (_e, suspensionId: unknown) => viewPresentation.resume(suspensionId));
 
   handle(CH.researchSetBounds, (_e, b: unknown) => {
     bounds = parseResearchBounds(b);

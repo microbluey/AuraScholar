@@ -69,6 +69,18 @@ export async function hideResearchViews(): Promise<void> {
   await window.aura.research.hide();
 }
 
+/** Detach native views and acquire a modal lease that blocks later reattachment. */
+export async function suspendResearchViews(): Promise<string | null> {
+  if (!ready()) return null;
+  return window.aura.research.suspend();
+}
+
+/** Release a modal lease. A caller must explicitly activate a tab to show it again. */
+export async function resumeResearchViews(suspensionId: string): Promise<boolean> {
+  if (!ready()) return false;
+  return window.aura.research.resume(suspensionId);
+}
+
 export async function setResearchBounds(b: Bounds): Promise<void> {
   if (!ready()) return;
   await window.aura.research.setBounds(b);

@@ -24,7 +24,7 @@ export interface ResearchBrowserViewLifecycleOptions<T extends ResearchBrowserVi
   acceptUrl(rawUrl: unknown): string | null;
   activeTabId(): string | null;
   clearInterval?(timer: SweepTimer): void;
-  detachView(view: ResearchBrowserViewLifecycleView): void;
+  detachView(view: NonNullable<T["view"]>): void;
   emitTabs(): void;
   now?(): number;
   setInterval?(callback: () => void, delayMs: number): SweepTimer;
