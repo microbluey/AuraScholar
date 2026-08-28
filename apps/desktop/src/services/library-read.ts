@@ -1,6 +1,26 @@
 import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
+import {
+  isReaderPdfIpcBusyError,
+  isReaderPdfIpcLimitError,
+} from "../../electron/reader-pdf-ipc-limit";
 import { loadReaderAttachmentPdf, loadReaderWorkPdfCandidates } from "./reader-session-data";
 import { describeSafeError } from "./sensitive-text";
+
+/** A safe semantic error for Reader UI, not a raw main-process filesystem error. */
+export class ReaderPdfTooLargeError extends Error {
+  constructor() {
+    super("Reader PDF exceeds the one-shot IPC limit");
+    this.name = "ReaderPdfTooLargeError";
+  }
+}
+
+/** A short-lived admission failure that the Reader UI may safely retry. */
+export class ReaderPdfBusyError extends Error {
+  constructor() {
+    super("Another Reader PDF is already being opened");
+    this.name = "ReaderPdfBusyError";
+  }
+}
 
 /**
  * Resolves Reader-owned PDF candidates and reads each selected attachment
@@ -34,10 +54,17 @@ export async function loadPdfFromCandidates(
       const { data } = await loadReaderAttachmentPdf(workId, pdf.id);
       return { attachmentId: pdf.id, data };
     } catch (error) {
-      lastError = error;
+      lastError = isReaderPdfIpcLimitError(error)
+        ? new ReaderPdfTooLargeError()
+        : isReaderPdfIpcBusyError(error)
+          ? new ReaderPdfBusyError()
+          : error;
     }
   }
 
+  if (lastError instanceof ReaderPdfTooLargeError || lastError instanceof ReaderPdfBusyError) {
+    throw lastError;
+  }
   const detail = describeSafeError(lastError);
   throw new Error(`PDF 附件文件无法读取:${detail}`);
 }

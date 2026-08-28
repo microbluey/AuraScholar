@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 81974,
+        ".ts": 82206,
         ".tsx": 35913
       },
       "files": {
@@ -38,8 +38,8 @@
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
         "apps/desktop/electron/main/data-command-envelope.ts": 166,
-        "apps/desktop/electron/main/data-command-runtime.ts": 106,
-        "apps/desktop/electron/main/data-commands.ts": 488,
+        "apps/desktop/electron/main/data-command-runtime.ts": 110,
+        "apps/desktop/electron/main/data-commands.ts": 490,
         "apps/desktop/electron/main/database-coordinator.ts": 78,
         "apps/desktop/electron/main/db.ts": 78,
         "apps/desktop/electron/main/discovery-library-status-commands.ts": 317,
@@ -88,9 +88,10 @@
         "apps/desktop/electron/main/main-ai-http.ts": 106,
         "apps/desktop/electron/main/main-sync-storage.ts": 107,
         "apps/desktop/electron/main/oa-pdf-http.ts": 390,
-        "apps/desktop/electron/main/platform-fs-policy.ts": 121,
+        "apps/desktop/electron/main/platform-fs-policy.ts": 188,
         "apps/desktop/electron/main/platform.ts": 152,
-        "apps/desktop/electron/main/reader-commands.ts": 412,
+        "apps/desktop/electron/main/reader-commands.ts": 448,
+        "apps/desktop/electron/main/reader-pdf-read-gate.ts": 42,
         "apps/desktop/electron/main/reference-import-command-input.ts": 179,
         "apps/desktop/electron/main/reference-import-commands.ts": 56,
         "apps/desktop/electron/main/reference-import-limits.ts": 2,
@@ -152,6 +153,7 @@
         "apps/desktop/electron/preload.ts": 231,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/reader-command-contract.ts": 146,
+        "apps/desktop/electron/reader-pdf-ipc-limit.ts": 33,
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
         "apps/desktop/electron/saved-search-command-contract.ts": 132,
         "apps/desktop/electron/scholarly-command-contract.ts": 100,
@@ -321,7 +323,7 @@
         "apps/desktop/src/features/reader/ReaderPageChrome.tsx": 314,
         "apps/desktop/src/features/reader/SelectionTranslationPopover.tsx": 154,
         "apps/desktop/src/features/reader/evidence-deep-link.ts": 95,
-        "apps/desktop/src/features/reader/library-reader-session.ts": 258,
+        "apps/desktop/src/features/reader/library-reader-session.ts": 279,
         "apps/desktop/src/features/reader/reader-evidence-recovery.ts": 43,
         "apps/desktop/src/features/reader/reader-session-coordinator.ts": 107,
         "apps/desktop/src/features/reader/reader-session-state.ts": 45,
@@ -379,7 +381,7 @@
         "apps/desktop/src/services/library-oa.ts": 9,
         "apps/desktop/src/services/library-organization.ts": 126,
         "apps/desktop/src/services/library-page-data.ts": 44,
-        "apps/desktop/src/services/library-read.ts": 43,
+        "apps/desktop/src/services/library-read.ts": 70,
         "apps/desktop/src/services/library-types.ts": 101,
         "apps/desktop/src/services/library-work-actions.ts": 50,
         "apps/desktop/src/services/library.ts": 502,
@@ -589,11 +591,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 137208
+      "totalLines": 137440
     },
     "tests": {
       "byExtension": {
-        ".ts": 82899,
+        ".ts": 83180,
         ".tsx": 1035
       },
       "files": {
@@ -658,10 +660,11 @@
         "apps/desktop/electron/main/main-ai-http.test.ts": 48,
         "apps/desktop/electron/main/oa-pdf-http.test.ts": 171,
         "apps/desktop/electron/main/platform-external-url.test.ts": 48,
-        "apps/desktop/electron/main/platform-fs-policy.test.ts": 57,
-        "apps/desktop/electron/main/platform-fs-read-architecture.test.ts": 80,
+        "apps/desktop/electron/main/platform-fs-policy.test.ts": 103,
+        "apps/desktop/electron/main/platform-fs-read-architecture.test.ts": 85,
         "apps/desktop/electron/main/raw-db-bridge-architecture.test.ts": 59,
-        "apps/desktop/electron/main/reader-commands.test.ts": 611,
+        "apps/desktop/electron/main/reader-commands.test.ts": 720,
+        "apps/desktop/electron/main/reader-pdf-read-gate.test.ts": 36,
         "apps/desktop/electron/main/reference-import-commands-architecture.test.ts": 70,
         "apps/desktop/electron/main/reference-import-commands.test.ts": 192,
         "apps/desktop/electron/main/renderer-capability-audit-architecture.test.ts": 112,
@@ -860,7 +863,7 @@
         "apps/desktop/src/features/projects/routes.test.ts": 41,
         "apps/desktop/src/features/reader/SelectionTranslationPopover.test.ts": 22,
         "apps/desktop/src/features/reader/evidence-deep-link.test.ts": 135,
-        "apps/desktop/src/features/reader/library-reader-session.test.ts": 468,
+        "apps/desktop/src/features/reader/library-reader-session.test.ts": 507,
         "apps/desktop/src/features/reader/reader-evidence-recovery.test.ts": 90,
         "apps/desktop/src/features/reader/reader-session-coordinator.test.ts": 113,
         "apps/desktop/src/features/reader/reader-session-stale-completion.test.ts": 127,
@@ -896,7 +899,7 @@
         "apps/desktop/src/services/library-list.test.ts": 71,
         "apps/desktop/src/services/library-organization.test.ts": 135,
         "apps/desktop/src/services/library-page-data.test.ts": 85,
-        "apps/desktop/src/services/library-read.test.ts": 86,
+        "apps/desktop/src/services/library-read.test.ts": 132,
         "apps/desktop/src/services/library-work-actions.test.ts": 76,
         "apps/desktop/src/services/library.test.ts": 292,
         "apps/desktop/src/services/local-embedding-artifact.test.ts": 65,
@@ -1002,7 +1005,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 83934
+      "totalLines": 84215
     }
   },
   "uiDatabaseBoundary": {}

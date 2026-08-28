@@ -3,6 +3,8 @@ import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import type { DataCommandName, DataCommandOutput } from "../data-command-contract";
 import type { LibraryStagePdfCommandResult } from "../library-ingest-command-contract";
 import type { StagedPdfClaim } from "./library-pdf-staging";
+import type { CanonicalPdfBlobReadOptions } from "./platform-fs-policy";
+import type { ReaderPdfReadGate } from "./reader-pdf-read-gate";
 
 const MAX_RECORD_ID_LENGTH = 512;
 export const MAX_LIBRARY_ORGANIZATION_UNDO_WORK_IDS = 20_000;
@@ -21,10 +23,12 @@ export interface DataCommandDependencies {
   ): Promise<DataCommandOutput<K>>;
   /**
    * Main-only canonical PDF reader. Reader command owners must validate the
-   * attachment/work relationship before invoking this callback; the callback
-   * itself never accepts a renderer-selected filesystem path.
+   * attachment/work relationship and pass their trusted byte expectations
+   * before invoking this callback; it never accepts a renderer-selected path.
    */
-  readPdfBlob?(sha256: string): Promise<Uint8Array>;
+  readPdfBlob?(sha256: string, options: CanonicalPdfBlobReadOptions): Promise<Uint8Array>;
+  /** Main-only admission control for bounded Reader PDF materialization. */
+  readerPdfReadGate?: ReaderPdfReadGate;
   getDeviceId?(): Promise<string>;
   /** Main-only, one-time receipt for an already persisted canonical PDF blob. */
   claimStagedPdf?(stageId: string): Promise<StagedPdfClaim>;

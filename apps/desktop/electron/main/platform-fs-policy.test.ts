@@ -2,7 +2,12 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readCanonicalPdfBlobFile, resolveCanonicalPdfBlobPath } from "./platform-fs-policy";
+import {
+  CanonicalPdfBlobReadLimitError,
+  readCanonicalPdfBlobFile,
+  resolveCanonicalPdfBlobPath,
+} from "./platform-fs-policy";
+import { MAX_READER_PDF_IPC_BYTES } from "../reader-pdf-ipc-limit";
 
 const roots: string[] = [];
 
@@ -49,6 +54,47 @@ describe("main canonical PDF blob read policy", () => {
     }
 
     await expect(readCanonicalPdfBlobFile(target)).rejects.toThrow("Canonical PDF blob is unsafe");
+  });
+
+  it("uses trusted size expectations to bound a canonical PDF read", async () => {
+    const root = await appDataRoot();
+    const sha = "c".repeat(64);
+    const target = resolveCanonicalPdfBlobPath(root, sha);
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    await fs.mkdir(join(root, "blobs", "cc"), { recursive: true });
+    await fs.writeFile(target.absolutePath, bytes);
+
+    await expect(
+      readCanonicalPdfBlobFile(target, {
+        expectedByteSize: bytes.byteLength,
+        maxBytes: bytes.byteLength,
+      }),
+    ).resolves.toEqual(bytes);
+    await expect(
+      readCanonicalPdfBlobFile(target, { expectedByteSize: bytes.byteLength, maxBytes: 3 }),
+    ).rejects.toBeInstanceOf(CanonicalPdfBlobReadLimitError);
+    await expect(
+      readCanonicalPdfBlobFile(target, { expectedByteSize: 3, maxBytes: bytes.byteLength }),
+    ).rejects.toThrow("Canonical PDF blob size does not match its attachment record");
+    await expect(fs.readFile(target.absolutePath)).resolves.toEqual(Buffer.from(bytes));
+  });
+
+  it("rejects a sparse oversized PDF before allocating its contents", async () => {
+    const root = await appDataRoot();
+    const sha = "d".repeat(64);
+    const target = resolveCanonicalPdfBlobPath(root, sha);
+    const byteSize = MAX_READER_PDF_IPC_BYTES + 1;
+    await fs.mkdir(join(root, "blobs", "dd"), { recursive: true });
+    await fs.writeFile(target.absolutePath, new Uint8Array());
+    await fs.truncate(target.absolutePath, byteSize);
+
+    await expect(
+      readCanonicalPdfBlobFile(target, {
+        expectedByteSize: byteSize,
+        maxBytes: MAX_READER_PDF_IPC_BYTES,
+      }),
+    ).rejects.toBeInstanceOf(CanonicalPdfBlobReadLimitError);
+    await expect(fs.stat(target.absolutePath)).resolves.toMatchObject({ size: byteSize });
   });
 });
 

@@ -11,6 +11,9 @@ import type {
 import { DatabaseCoordinator } from "./database-coordinator";
 import { executeDataCommand } from "./data-commands";
 import type { DataCommandDependencies } from "./data-command-runtime";
+import { CanonicalPdfBlobReadLimitError } from "./platform-fs-policy";
+import { createReaderPdfReadGate } from "./reader-pdf-read-gate";
+import { MAX_READER_PDF_IPC_BYTES } from "../reader-pdf-ipc-limit";
 
 let database: Database;
 let dependencies: DataCommandDependencies;
@@ -31,6 +34,7 @@ beforeEach(async () => {
     execute: (_commandName, operation) => coordinator.execute(operation),
     inspect: (operation) => coordinator.execute(operation),
     readPdfBlob: vi.fn(async () => new Uint8Array([1, 2, 3])),
+    readerPdfReadGate: createReaderPdfReadGate(),
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
   };
   works = new WorksRepo(database, libraryId);
@@ -51,14 +55,23 @@ async function addAttachment(
   workId: string,
   sha256: string,
   kind = "pdf",
+  byteSize = 42,
 ): Promise<{ id: string }> {
   return new AttachmentsRepo(database, libraryId).create({
-    byteSize: 42,
+    byteSize,
     kind,
     originalFilename: `${kind}.fixture`,
     sha256,
     workId,
   });
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 describe("Reader data commands", () => {
@@ -404,7 +417,7 @@ describe("Reader data commands", () => {
       title: "Foreign Reader PDF work",
     });
     const foreignPdf = await new AttachmentsRepo(database, foreignLibraryId).create({
-      byteSize: 42,
+      byteSize: MAX_READER_PDF_IPC_BYTES + 1,
       sha256: "5".repeat(64),
       workId: foreignWork.id,
     });
@@ -427,6 +440,10 @@ describe("Reader data commands", () => {
       command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
     ).resolves.toEqual({ data: bytes });
     expect(events).toEqual(["inspect:start", "inspect:end", `read:${pdfSha}`]);
+    expect(readPdfBlob).toHaveBeenCalledWith(pdfSha, {
+      expectedByteSize: 42,
+      maxBytes: MAX_READER_PDF_IPC_BYTES,
+    });
 
     await expect(
       command("reader.readAttachmentPdf", { attachmentId: supplement.id, workId }),
@@ -455,6 +472,89 @@ describe("Reader data commands", () => {
     expect(readPdfBlob).toHaveBeenCalledOnce();
   });
 
+  it("rejects oversized Reader PDF metadata before the canonical blob is materialized", async () => {
+    const workId = await addWork("Reader PDF size limit");
+    const oversized = await addAttachment(
+      workId,
+      "6".repeat(64),
+      "pdf",
+      MAX_READER_PDF_IPC_BYTES + 1,
+    );
+    const atLimit = await addAttachment(workId, "7".repeat(64), "pdf", MAX_READER_PDF_IPC_BYTES);
+    const readPdfBlob = vi.fn(async () => new Uint8Array([7, 8, 9]));
+    dependencies.readPdfBlob = readPdfBlob;
+
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: oversized.id, workId }),
+    ).rejects.toThrow("reader-pdf-ipc-limit");
+    expect(readPdfBlob).not.toHaveBeenCalled();
+    await expect(new AttachmentsRepo(database, libraryId).forWork(workId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          byte_size: MAX_READER_PDF_IPC_BYTES + 1,
+          id: oversized.id,
+        }),
+      ]),
+    );
+
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: atLimit.id, workId }),
+    ).resolves.toEqual({ data: new Uint8Array([7, 8, 9]) });
+    expect(readPdfBlob).toHaveBeenCalledWith("7".repeat(64), {
+      expectedByteSize: MAX_READER_PDF_IPC_BYTES,
+      maxBytes: MAX_READER_PDF_IPC_BYTES,
+    });
+  });
+
+  it("maps a bounded canonical blob rejection and releases its Reader admission", async () => {
+    const workId = await addWork("Reader actual PDF size limit");
+    const pdf = await addAttachment(workId, "8".repeat(64));
+    const readPdfBlob = vi
+      .fn()
+      .mockRejectedValueOnce(new CanonicalPdfBlobReadLimitError(MAX_READER_PDF_IPC_BYTES))
+      .mockResolvedValueOnce(new Uint8Array([8]));
+    dependencies.readPdfBlob = readPdfBlob;
+
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
+    ).rejects.toThrow("reader-pdf-ipc-limit");
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
+    ).resolves.toEqual({ data: new Uint8Array([8]) });
+    expect(readPdfBlob).toHaveBeenCalledTimes(2);
+    expect(readPdfBlob).toHaveBeenLastCalledWith("8".repeat(64), {
+      expectedByteSize: 42,
+      maxBytes: MAX_READER_PDF_IPC_BYTES,
+    });
+  });
+
+  it("admits only one bounded Reader PDF read at a time", async () => {
+    const firstWorkId = await addWork("First concurrent Reader PDF");
+    const firstPdf = await addAttachment(firstWorkId, "9".repeat(64));
+    const secondWorkId = await addWork("Second concurrent Reader PDF");
+    const secondPdf = await addAttachment(secondWorkId, "a".repeat(64));
+    const pendingBytes = deferred<Uint8Array>();
+    const readPdfBlob = vi.fn(async () => pendingBytes.promise);
+    dependencies.readPdfBlob = readPdfBlob;
+
+    const first = command("reader.readAttachmentPdf", {
+      attachmentId: firstPdf.id,
+      workId: firstWorkId,
+    });
+    await vi.waitFor(() => expect(readPdfBlob).toHaveBeenCalledOnce());
+
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: secondPdf.id, workId: secondWorkId }),
+    ).rejects.toThrow("reader-pdf-ipc-busy");
+    expect(readPdfBlob).toHaveBeenCalledOnce();
+
+    pendingBytes.resolve(new Uint8Array([9]));
+    await expect(first).resolves.toEqual({ data: new Uint8Array([9]) });
+    await expect(
+      command("reader.readAttachmentPdf", { attachmentId: secondPdf.id, workId: secondWorkId }),
+    ).resolves.toEqual({ data: new Uint8Array([9]) });
+  });
+
   it("propagates a main-owned PDF read failure after scope validation", async () => {
     const workId = await addWork("Reader PDF read failure");
     const pdf = await addAttachment(workId, "4".repeat(64));
@@ -467,7 +567,10 @@ describe("Reader data commands", () => {
     await expect(
       command("reader.readAttachmentPdf", { attachmentId: pdf.id, workId }),
     ).rejects.toBe(failure);
-    expect(readPdfBlob).toHaveBeenCalledWith("4".repeat(64));
+    expect(readPdfBlob).toHaveBeenCalledWith("4".repeat(64), {
+      expectedByteSize: 42,
+      maxBytes: MAX_READER_PDF_IPC_BYTES,
+    });
   });
 
   it("fails closed when the main PDF lookup or reader dependency is unavailable", async () => {
@@ -484,6 +587,12 @@ describe("Reader data commands", () => {
         { ...dependencies, readPdfBlob: undefined },
       ),
     ).rejects.toThrow("Main-process Reader PDF read is unavailable");
+    await expect(
+      executeDataCommand(
+        { name: "reader.readAttachmentPdf", input },
+        { ...dependencies, readerPdfReadGate: undefined },
+      ),
+    ).rejects.toThrow("Main-process Reader PDF admission is unavailable");
   });
 
   it("preserves archived local work context but hides its attachments and annotations", async () => {

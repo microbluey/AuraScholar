@@ -12,6 +12,7 @@ describe("main-owned filesystem read boundary", () => {
     const shared = source("electron/shared.ts");
     const platform = source("electron/main/platform.ts");
     const dataCommands = source("electron/main/data-commands.ts");
+    const platformPolicy = source("electron/main/platform-fs-policy.ts");
     const readerCommands = source("electron/main/reader-commands.ts");
     const readerContract = source("electron/reader-command-contract.ts");
     const researchBrowser = source("electron/main/research-browser.ts");
@@ -44,9 +45,13 @@ describe("main-owned filesystem read boundary", () => {
     expect(platform).not.toContain("handle(CH.fsReadResearchDownload,");
     expect(platform).not.toContain("handle(CH.fsReadBlobPdf,");
     expect(dataCommands).toContain("readCanonicalPdfBlobFile");
+    expect(dataCommands).toContain("readerPdfReadGate: defaultReaderPdfReadGate");
     expect(readerCommands).toContain('"reader.readAttachmentPdf"');
     expect(readerCommands).toContain("dependencies.inspect");
     expect(readerCommands).toContain("dependencies.readPdfBlob");
+    expect(readerCommands).toContain("MAX_READER_PDF_IPC_BYTES");
+    expect(readerCommands).toContain("maxBytes: MAX_READER_PDF_IPC_BYTES");
+    expect(platformPolicy).not.toContain("handle.readFile()");
     expect(readerContract).toContain("ReaderReadAttachmentPdfCommandInput");
     expect(readerContract).toContain('"reader.readAttachmentPdf"');
     expect(shared).toContain('researchConsumeDownload: "research:consumeDownload"');

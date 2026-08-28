@@ -16,6 +16,7 @@ import { parseDataCommandEnvelope } from "./data-command-envelope";
 import { handle } from "./ipc";
 import { getStableDeviceId } from "./platform";
 import { readCanonicalPdfBlobFile, resolveCanonicalPdfBlobPath } from "./platform-fs-policy";
+import { defaultReaderPdfReadGate } from "./reader-pdf-read-gate";
 import { executeAiCommand } from "./ai-commands";
 import { executeAnnotationRecoveryCommand } from "./annotation-recovery-commands";
 import { executeCanvasPageCommand } from "./canvas-page-commands";
@@ -71,8 +72,9 @@ export type { DataCommandDependencies } from "./data-command-runtime";
 const defaultDependencies: DataCommandDependencies = {
   inspect: (operation) => withMainDatabase(operation),
   execute: (_commandName, operation) => withMainDatabase(operation),
-  readPdfBlob: (sha256) =>
-    readCanonicalPdfBlobFile(resolveCanonicalPdfBlobPath(app.getPath("userData"), sha256)),
+  readPdfBlob: (sha256, options) =>
+    readCanonicalPdfBlobFile(resolveCanonicalPdfBlobPath(app.getPath("userData"), sha256), options),
+  readerPdfReadGate: defaultReaderPdfReadGate,
   getDeviceId: getStableDeviceId,
   transaction: withMainDatabaseTransaction,
   claimStagedPdf: claimLibraryStagedPdf,
