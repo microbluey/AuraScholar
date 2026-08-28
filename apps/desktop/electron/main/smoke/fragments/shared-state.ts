@@ -253,6 +253,7 @@ export const smokeSharedState = String.raw`        let initialWorkCount = null;
         let libraryLoadRetryAttempts = 0;
         let libraryLoadRetryRecoveryDetail = "";
         let libraryLoadRetryRecoveryVisible = false;
+        let libraryReferenceImportRefreshVisible = false;
         let libraryRefreshRacePreserved = false;
         let librarySidebarHealthHidden = false;
         let librarySidebarMetaVisible = false;

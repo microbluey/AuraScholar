@@ -249,6 +249,7 @@ export interface SmokeRendererResult {
   libraryLoadRetryAttempts: number;
   libraryLoadRetryRecoveryDetail: string;
   libraryLoadRetryRecoveryVisible: boolean;
+  libraryReferenceImportRefreshVisible: boolean;
   libraryRefreshRacePreserved: boolean;
   librarySidebarHealthHidden: boolean;
   librarySidebarMetaVisible: boolean;

@@ -5,8 +5,8 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 80450,
-        ".tsx": 35776
+        ".ts": 80469,
+        ".tsx": 35770
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
@@ -280,6 +280,7 @@
         "apps/desktop/src/features/library/preview-library-page.ts": 142,
         "apps/desktop/src/features/library/useLibraryBrowseState.ts": 116,
         "apps/desktop/src/features/library/useLibraryCollectionController.ts": 454,
+        "apps/desktop/src/features/library/useLibraryExternalRefresh.ts": 15,
         "apps/desktop/src/features/library/useLibraryNoticeLifecycle.ts": 42,
         "apps/desktop/src/features/library/useLibraryRefreshController.ts": 34,
         "apps/desktop/src/features/library/useSelectedWorkRuntimeMeta.ts": 153,
@@ -325,7 +326,7 @@
         "apps/desktop/src/pages/EvidenceInboxPage.tsx": 267,
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1113,
-        "apps/desktop/src/pages/LibraryPage.tsx": 3958,
+        "apps/desktop/src/pages/LibraryPage.tsx": 3952,
         "apps/desktop/src/pages/ReaderPage.tsx": 2060,
         "apps/desktop/src/pages/ResearchProjectPage.tsx": 262,
         "apps/desktop/src/pages/SentinelPage.tsx": 1237,
@@ -357,6 +358,7 @@
         "apps/desktop/src/services/library-annotation-recovery.ts": 20,
         "apps/desktop/src/services/library-backup-evidence.ts": 128,
         "apps/desktop/src/services/library-command-scope.ts": 7,
+        "apps/desktop/src/services/library-events.ts": 2,
         "apps/desktop/src/services/library-ingest-lifecycle.ts": 16,
         "apps/desktop/src/services/library-list.ts": 32,
         "apps/desktop/src/services/library-oa.ts": 9,
@@ -372,7 +374,7 @@
         "apps/desktop/src/services/preview-library.ts": 70,
         "apps/desktop/src/services/reader-session-data.ts": 90,
         "apps/desktop/src/services/research-browser.ts": 91,
-        "apps/desktop/src/services/research-downloads.ts": 245,
+        "apps/desktop/src/services/research-downloads.ts": 247,
         "apps/desktop/src/services/research-project-desktop-service.ts": 74,
         "apps/desktop/src/services/research-project-preview-service.ts": 201,
         "apps/desktop/src/services/research-project-service.ts": 57,
@@ -568,11 +570,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 135547
+      "totalLines": 135560
     },
     "tests": {
       "byExtension": {
-        ".ts": 80360,
+        ".ts": 80408,
         ".tsx": 1034
       },
       "files": {
@@ -680,7 +682,7 @@
         "apps/desktop/electron/main/smoke/checks/discovery.ts": 221,
         "apps/desktop/electron/main/smoke/checks/graph.ts": 29,
         "apps/desktop/electron/main/smoke/checks/homepage.ts": 84,
-        "apps/desktop/electron/main/smoke/checks/library-core.ts": 356,
+        "apps/desktop/electron/main/smoke/checks/library-core.ts": 360,
         "apps/desktop/electron/main/smoke/checks/library-navigation.ts": 39,
         "apps/desktop/electron/main/smoke/checks/library-utility.ts": 56,
         "apps/desktop/electron/main/smoke/checks/reader.ts": 250,
@@ -688,7 +690,7 @@
         "apps/desktop/electron/main/smoke/checks/settings.ts": 177,
         "apps/desktop/electron/main/smoke/checks/snippets.ts": 91,
         "apps/desktop/electron/main/smoke/checks/summarize.ts": 4,
-        "apps/desktop/electron/main/smoke/contracts.ts": 652,
+        "apps/desktop/electron/main/smoke/contracts.ts": 653,
         "apps/desktop/electron/main/smoke/fragments/canvas.ts": 765,
         "apps/desktop/electron/main/smoke/fragments/discovery-import.ts": 390,
         "apps/desktop/electron/main/smoke/fragments/discovery-results.ts": 354,
@@ -698,7 +700,7 @@
         "apps/desktop/electron/main/smoke/fragments/graph.ts": 206,
         "apps/desktop/electron/main/smoke/fragments/helpers.ts": 197,
         "apps/desktop/electron/main/smoke/fragments/homepage.ts": 467,
-        "apps/desktop/electron/main/smoke/fragments/library-base.ts": 273,
+        "apps/desktop/electron/main/smoke/fragments/library-base.ts": 305,
         "apps/desktop/electron/main/smoke/fragments/library-bulk-operations.ts": 505,
         "apps/desktop/electron/main/smoke/fragments/library-bulk-trash.ts": 732,
         "apps/desktop/electron/main/smoke/fragments/library-collections.ts": 486,
@@ -718,7 +720,7 @@
         "apps/desktop/electron/main/smoke/fragments/reader-annotations.ts": 563,
         "apps/desktop/electron/main/smoke/fragments/reader-recovery.ts": 407,
         "apps/desktop/electron/main/smoke/fragments/reader-translation.ts": 365,
-        "apps/desktop/electron/main/smoke/fragments/result.ts": 657,
+        "apps/desktop/electron/main/smoke/fragments/result.ts": 658,
         "apps/desktop/electron/main/smoke/fragments/sentinel.ts": 382,
         "apps/desktop/electron/main/smoke/fragments/settings-ai-translate.ts": 295,
         "apps/desktop/electron/main/smoke/fragments/settings-ai.ts": 242,
@@ -729,7 +731,7 @@
         "apps/desktop/electron/main/smoke/fragments/settings-backup-validation.ts": 132,
         "apps/desktop/electron/main/smoke/fragments/settings-cache.ts": 63,
         "apps/desktop/electron/main/smoke/fragments/settings-sync.ts": 281,
-        "apps/desktop/electron/main/smoke/fragments/shared-state.ts": 643,
+        "apps/desktop/electron/main/smoke/fragments/shared-state.ts": 644,
         "apps/desktop/electron/main/smoke/fragments/shell-bootstrap.ts": 73,
         "apps/desktop/electron/main/smoke/fragments/snippets.ts": 531,
         "apps/desktop/electron/main/smoke/input-driver.test.ts": 383,
@@ -872,7 +874,7 @@
         "apps/desktop/src/services/preview-library.test.ts": 18,
         "apps/desktop/src/services/reader-session-data.test.ts": 150,
         "apps/desktop/src/services/research-browser.test.ts": 23,
-        "apps/desktop/src/services/research-downloads.test.ts": 406,
+        "apps/desktop/src/services/research-downloads.test.ts": 415,
         "apps/desktop/src/services/research-project-backup.test.ts": 434,
         "apps/desktop/src/services/research-project-desktop-service.test.ts": 65,
         "apps/desktop/src/services/research-project-preview-service.test.ts": 49,
@@ -967,7 +969,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 81394
+      "totalLines": 81442
     }
   },
   "uiDatabaseBoundary": {}
