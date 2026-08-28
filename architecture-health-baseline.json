@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 81709,
+        ".ts": 81811,
         ".tsx": 35865
       },
       "files": {
@@ -116,8 +116,8 @@
         "apps/desktop/electron/main/research-download-stream-target.ts": 158,
         "apps/desktop/electron/main/research-download-user-intent.ts": 163,
         "apps/desktop/electron/main/research-print-capture.ts": 103,
-        "apps/desktop/electron/main/research-project-commands.ts": 360,
-        "apps/desktop/electron/main/research-project-query-data.ts": 218,
+        "apps/desktop/electron/main/research-project-commands.ts": 367,
+        "apps/desktop/electron/main/research-project-query-data.ts": 219,
         "apps/desktop/electron/main/saved-search-commands.ts": 342,
         "apps/desktop/electron/main/saved-search-create-input.ts": 84,
         "apps/desktop/electron/main/scholarly-command-input.ts": 358,
@@ -477,9 +477,10 @@
         "packages/db/src/migration-knowledge-registry.ts": 17,
         "packages/db/src/migration-knowledge.ts": 115,
         "packages/db/src/migration-library-boundary-triggers.ts": 288,
+        "packages/db/src/migration-library-maintenance.ts": 16,
         "packages/db/src/migration-research-projects.ts": 275,
         "packages/db/src/migration-work-page-indexes.ts": 22,
-        "packages/db/src/migrations.ts": 980,
+        "packages/db/src/migrations.ts": 979,
         "packages/db/src/repos/annotations.ts": 260,
         "packages/db/src/repos/attachments.ts": 313,
         "packages/db/src/repos/canvas.ts": 784,
@@ -502,7 +503,7 @@
         "packages/db/src/repos/knowledge-utils.ts": 129,
         "packages/db/src/repos/knowledge.ts": 9,
         "packages/db/src/repos/project-work-lifecycle.ts": 85,
-        "packages/db/src/repos/research-projects.ts": 419,
+        "packages/db/src/repos/research-projects.ts": 492,
         "packages/db/src/repos/saved-searches.ts": 349,
         "packages/db/src/repos/sentinel-create.ts": 66,
         "packages/db/src/repos/sentinel.ts": 496,
@@ -512,7 +513,7 @@
         "packages/db/src/repos/works.ts": 1493,
         "packages/db/src/repos/write-lock.ts": 28,
         "packages/db/src/research-project-defaults.ts": 7,
-        "packages/db/src/research-project-schema.ts": 58,
+        "packages/db/src/research-project-schema.ts": 64,
         "packages/db/src/savepoint.ts": 24,
         "packages/db/src/schema-knowledge.ts": 227,
         "packages/db/src/schema.ts": 602,
@@ -587,11 +588,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 136895
+      "totalLines": 136997
     },
     "tests": {
       "byExtension": {
-        ".ts": 82646,
+        ".ts": 82735,
         ".tsx": 1035
       },
       "files": {
@@ -683,7 +684,7 @@
         "apps/desktop/electron/main/research-download-stream-target.test.ts": 73,
         "apps/desktop/electron/main/research-download-user-intent.test.ts": 112,
         "apps/desktop/electron/main/research-print-capture.test.ts": 158,
-        "apps/desktop/electron/main/research-project-commands.test.ts": 378,
+        "apps/desktop/electron/main/research-project-commands.test.ts": 412,
         "apps/desktop/electron/main/saved-search-commands.test.ts": 540,
         "apps/desktop/electron/main/saved-search-structured-query.test.ts": 164,
         "apps/desktop/electron/main/scholarly-command-input.test.ts": 85,
@@ -950,7 +951,7 @@
         "packages/db/src/library-ownership-migration.test.ts": 605,
         "packages/db/src/library-scope-architecture.test.ts": 116,
         "packages/db/src/local-first.test.ts": 64,
-        "packages/db/src/migrations.test.ts": 228,
+        "packages/db/src/migrations.test.ts": 232,
         "packages/db/src/repos/canvas.test.ts": 678,
         "packages/db/src/repos/child-library-scope.test.ts": 82,
         "packages/db/src/repos/collections-integrity.test.ts": 329,
@@ -961,9 +962,9 @@
         "packages/db/src/repos/knowledge-indexes.test.ts": 314,
         "packages/db/src/repos/knowledge-search.test.ts": 337,
         "packages/db/src/repos/knowledge.test.ts": 385,
-        "packages/db/src/repos/project-work-lifecycle.test.ts": 107,
+        "packages/db/src/repos/project-work-lifecycle.test.ts": 113,
         "packages/db/src/repos/repos.test.ts": 1185,
-        "packages/db/src/repos/research-projects.test.ts": 305,
+        "packages/db/src/repos/research-projects.test.ts": 350,
         "packages/db/src/repos/root-library-scope.test.ts": 170,
         "packages/db/src/repos/saved-searches.test.ts": 517,
         "packages/db/src/repos/sentinel.test.ts": 578,
@@ -1000,7 +1001,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 83681
+      "totalLines": 83770
     }
   },
   "uiDatabaseBoundary": {}

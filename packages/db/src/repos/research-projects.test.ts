@@ -124,7 +124,10 @@ describe("ResearchProjectsRepo", () => {
     const second = await works.upsert({ title: "Project source two" });
 
     await expect(projects.addWorks(project.id, [first.id, second.id, first.id])).resolves.toBe(2);
-    expect(await projects.listWorkIds(project.id)).toEqual([first.id, second.id]);
+    expect(await projects.listActiveWorkIdsPage(project.id, { limit: 100, offset: 0 })).toEqual([
+      first.id,
+      second.id,
+    ]);
 
     const initialRows = await db.query<{
       id: string;
@@ -163,7 +166,9 @@ describe("ResearchProjectsRepo", () => {
     );
 
     await expect(projects.removeWorks(project.id, [first.id, first.id])).resolves.toBe(1);
-    expect(await projects.listWorkIds(project.id)).toEqual([second.id]);
+    expect(await projects.listActiveWorkIdsPage(project.id, { limit: 100, offset: 0 })).toEqual([
+      second.id,
+    ]);
     const removed = await db.query<{ id: string; updated_at: number; deleted_at: number | null }>(
       `SELECT id, updated_at, deleted_at
        FROM project_works
@@ -192,7 +197,7 @@ describe("ResearchProjectsRepo", () => {
     await projects.addWorks(project.id, [work.id]);
 
     await works.softDelete(work.id);
-    expect(await projects.listWorkIds(project.id)).toEqual([]);
+    expect(await projects.listActiveWorkIdsPage(project.id, { limit: 100, offset: 0 })).toEqual([]);
     const membership = await db.query<{ deleted_at: number | null }>(
       `SELECT deleted_at FROM project_works WHERE project_id = ? AND work_id = ?`,
       [project.id, work.id],
@@ -200,7 +205,47 @@ describe("ResearchProjectsRepo", () => {
     expect(membership).toEqual([{ deleted_at: null }]);
 
     await works.restore(work.id);
-    expect(await projects.listWorkIds(project.id)).toEqual([work.id]);
+    expect(await projects.listActiveWorkIdsPage(project.id, { limit: 100, offset: 0 })).toEqual([
+      work.id,
+    ]);
+  });
+
+  it("counts, pages, and intersects only active Project memberships", async () => {
+    const project = await projects.ensureDefault();
+    const first = await works.upsert({ title: "First paged source" });
+    const second = await works.upsert({ title: "Second paged source" });
+    const third = await works.upsert({ title: "Third paged source" });
+    const trashed = await works.upsert({ title: "Trashed paged source" });
+    await projects.addWorks(project.id, [first.id, second.id, third.id, trashed.id]);
+    await db.run(
+      `UPDATE project_works
+       SET created_at = CASE work_id
+         WHEN ? THEN 30
+         WHEN ? THEN 10
+         WHEN ? THEN 20
+         ELSE 40
+       END
+       WHERE project_id = ?`,
+      [first.id, second.id, third.id, project.id],
+    );
+    await projects.removeWorks(project.id, [first.id]);
+    await works.softDelete(trashed.id);
+
+    await expect(projects.countActiveWorkIds(project.id)).resolves.toBe(2);
+    await expect(
+      projects.listActiveWorkIdsPage(project.id, { limit: 1, offset: 0 }),
+    ).resolves.toEqual([second.id]);
+    await expect(
+      projects.listActiveWorkIdsPage(project.id, { limit: 1, offset: 1 }),
+    ).resolves.toEqual([third.id]);
+    await expect(
+      projects.listActiveMembershipWorkIds(project.id, [
+        first.id,
+        second.id,
+        trashed.id,
+        "missing",
+      ]),
+    ).resolves.toEqual([second.id]);
   });
 
   it("rejects foreign Projects and Works without partially adding local memberships", async () => {
@@ -223,13 +268,13 @@ describe("ResearchProjectsRepo", () => {
     await expect(projects.rename(foreignProject.id, "Cross-scope rename")).rejects.toThrow(
       ResearchProjectScopeError,
     );
-    await expect(projects.listWorkIds(foreignProject.id)).rejects.toThrow(
-      ResearchProjectScopeError,
-    );
+    await expect(
+      projects.listActiveWorkIdsPage(foreignProject.id, { limit: 100, offset: 0 }),
+    ).rejects.toThrow(ResearchProjectScopeError);
     await expect(projects.addWorks(project.id, [localWork.id, foreignWork.id])).rejects.toThrow(
       `Work ${foreignWork.id} is outside library ${libraryId}`,
     );
-    expect(await projects.listWorkIds(project.id)).toEqual([]);
+    expect(await projects.listActiveWorkIdsPage(project.id, { limit: 100, offset: 0 })).toEqual([]);
     await expect(projects.removeWorks(project.id, [foreignWork.id])).rejects.toThrow(
       `Work ${foreignWork.id} is outside library ${libraryId}`,
     );

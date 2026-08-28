@@ -141,13 +141,14 @@ export async function searchLibraryWorkSummaries(
   libraryId: string,
   query: string,
   limit: number,
-  membership: ReadonlySet<string>,
+  resolveMembership: (candidateWorkIds: string[]) => Promise<ReadonlySet<string>>,
 ): Promise<ResearchProjectWorkSummary[]> {
   const works = await searchWorksByMetadata(database, libraryId, query, limit);
-  const counts = await workCounts(
-    database,
-    works.map((work) => work.id),
-  );
+  const workIds = works.map((work) => work.id);
+  const [counts, membership] = await Promise.all([
+    workCounts(database, workIds),
+    resolveMembership(workIds),
+  ]);
   return works.map((work) => toWorkSummary(work, counts.get(work.id), membership.has(work.id)));
 }
 

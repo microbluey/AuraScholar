@@ -38,8 +38,12 @@ describe("Project Work lifecycle", () => {
 
     await works.mergeInto(primary.id, [duplicate.id]);
 
-    expect(await projects.listWorkIds(firstProject.id)).toEqual([primary.id]);
-    expect(await projects.listWorkIds(secondProject.id)).toEqual([primary.id]);
+    expect(
+      await projects.listActiveWorkIdsPage(firstProject.id, { limit: 100, offset: 0 }),
+    ).toEqual([primary.id]);
+    expect(
+      await projects.listActiveWorkIdsPage(secondProject.id, { limit: 100, offset: 0 }),
+    ).toEqual([primary.id]);
 
     const rows = await db.query<{
       id: string;
@@ -92,7 +96,9 @@ describe("Project Work lifecycle", () => {
       status: "active",
       deleted_at: null,
     });
-    expect(await projects.listWorkIds(project.id)).toEqual([survivor.id]);
+    expect(await projects.listActiveWorkIdsPage(project.id, { limit: 100, offset: 0 })).toEqual([
+      survivor.id,
+    ]);
     expect(await db.query(`SELECT id FROM project_works WHERE work_id = ?`, [purged.id])).toEqual(
       [],
     );

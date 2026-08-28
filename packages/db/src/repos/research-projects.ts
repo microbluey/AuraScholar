@@ -7,6 +7,9 @@ import {
 } from "../research-project-defaults.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
 
+const MAX_ACTIVE_MEMBERSHIP_CANDIDATES = 100;
+const MAX_ACTIVE_WORK_PAGE_SIZE = 200;
+
 export type ResearchProjectStatus = "active" | "archived";
 
 export interface ResearchProjectRow {
@@ -234,24 +237,64 @@ export class ResearchProjectsRepo {
     });
   }
 
-  /** Active memberships whose Library Works are currently available. */
-  async listWorkIds(projectId: string): Promise<string[]> {
+  /** Counts active memberships whose Library Works are currently available. */
+  async countActiveWorkIds(projectId: string): Promise<number> {
+    await this.requireActive(projectId);
+    const rows = await this.db.query<{ count: number }>(
+      `SELECT COUNT(*) AS count ${ACTIVE_PROJECT_WORKS_SQL}`,
+      [this.libraryId, projectId],
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  /**
+   * Returns one ordered page of active memberships. Keeping pagination at the
+   * SQL boundary prevents project source views from materializing every member
+   * id before slicing the requested page in the main process.
+   */
+  async listActiveWorkIdsPage(
+    projectId: string,
+    options: { limit: number; offset: number },
+  ): Promise<string[]> {
+    assertSafeIntegerInRange(
+      options.limit,
+      "Research project work page limit",
+      1,
+      MAX_ACTIVE_WORK_PAGE_SIZE,
+    );
+    assertNonNegativeSafeInteger(options.offset, "Research project work page offset");
     await this.requireActive(projectId);
     const rows = await this.db.query<{ work_id: string }>(
-      `SELECT pw.work_id
-       FROM project_works pw
-       JOIN research_projects p
-         ON p.id = pw.project_id
-        AND p.library_id = ?
-        AND p.status = 'active'
-        AND p.deleted_at IS NULL
-       JOIN works w
-         ON w.id = pw.work_id
-        AND w.library_id = p.library_id
-        AND w.deleted_at IS NULL
-       WHERE pw.project_id = ? AND pw.deleted_at IS NULL
-       ORDER BY pw.created_at ASC, pw.work_id ASC`,
-      [this.libraryId, projectId],
+      `SELECT pw.work_id ${ACTIVE_PROJECT_WORKS_SQL}
+       ORDER BY pw.created_at ASC, pw.work_id ASC
+       LIMIT ? OFFSET ?`,
+      [this.libraryId, projectId, options.limit, options.offset],
+    );
+    return rows.map((row) => row.work_id);
+  }
+
+  /**
+   * Intersects a bounded candidate set with active Project membership. Search
+   * callers pass only their result page, so this cannot grow with Project size.
+   */
+  async listActiveMembershipWorkIds(
+    projectId: string,
+    candidateWorkIds: string[],
+  ): Promise<string[]> {
+    const ids = normalizeIds(candidateWorkIds, "Work id");
+    if (ids.length > MAX_ACTIVE_MEMBERSHIP_CANDIDATES) {
+      throw new Error(
+        `Research project membership candidates are limited to ${MAX_ACTIVE_MEMBERSHIP_CANDIDATES}`,
+      );
+    }
+    await this.requireActive(projectId);
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = await this.db.query<{ work_id: string }>(
+      `SELECT pw.work_id ${ACTIVE_PROJECT_WORKS_SQL}
+         AND pw.work_id IN (${placeholders})
+       ORDER BY pw.work_id ASC`,
+      [this.libraryId, projectId, ...ids],
     );
     return rows.map((row) => row.work_id);
   }
@@ -379,6 +422,19 @@ const PROJECT_SELECT = `SELECT id, library_id, name, description, status,
                                created_at, updated_at, deleted_at
                         FROM research_projects`;
 
+const ACTIVE_PROJECT_WORKS_SQL = `
+  FROM project_works pw
+  JOIN research_projects p
+    ON p.id = pw.project_id
+   AND p.library_id = ?
+   AND p.status = 'active'
+   AND p.deleted_at IS NULL
+  JOIN works w
+    ON w.id = pw.work_id
+   AND w.library_id = p.library_id
+   AND w.deleted_at IS NULL
+  WHERE pw.project_id = ? AND pw.deleted_at IS NULL`;
+
 function normalizeName(name: string): string {
   if (typeof name !== "string" || !name.trim()) {
     throw new Error("Research project name must be a non-empty string");
@@ -407,6 +463,23 @@ function normalizeIds(values: string[], label: string): string[] {
 function assertRecordId(value: string, label: string): void {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${label} must be a non-empty string`);
+  }
+}
+
+function assertSafeIntegerInRange(
+  value: number,
+  label: string,
+  minimum: number,
+  maximum: number,
+): void {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${label} must be between ${minimum} and ${maximum}`);
+  }
+}
+
+function assertNonNegativeSafeInteger(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`);
   }
 }
 
