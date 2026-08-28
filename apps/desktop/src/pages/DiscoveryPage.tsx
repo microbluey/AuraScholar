@@ -533,7 +533,9 @@ export function DiscoveryPage() {
     clearSearch: clearDiscoverySearch,
     desktopRuntime,
     ezproxy,
+    hideBrowserViews: hideBrowserViewsWithFeedback,
     initialTask: initialState.pendingTask,
+    navigate,
     onMessage: setMessage,
     onMode: setMode,
     onQuery: setQuery,
@@ -1115,9 +1117,7 @@ export function DiscoveryPage() {
   }, [requestBrowserRestore, webImporting]);
 
   const handleFile = useCallback(
-    async (file: File) => {
-      await importReferenceText(await file.text(), file.name);
-    },
+    async (file: File) => importReferenceText(await file.text(), file.name),
     [importReferenceText],
   );
 

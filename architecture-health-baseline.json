@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 81136,
+        ".ts": 81218,
         ".tsx": 35865
       },
       "files": {
@@ -233,6 +233,7 @@
         "apps/desktop/src/features/discovery/discovery-search-executor.ts": 398,
         "apps/desktop/src/features/discovery/discovery-search-model.ts": 115,
         "apps/desktop/src/features/discovery/fulltext-download-plan.ts": 37,
+        "apps/desktop/src/features/discovery/fulltext-task-completion.ts": 59,
         "apps/desktop/src/features/discovery/research-view-suspension-lease.ts": 84,
         "apps/desktop/src/features/discovery/useBrowserConfirmationRestoration.ts": 143,
         "apps/desktop/src/features/discovery/useBrowserDownloadImport.ts": 70,
@@ -241,7 +242,7 @@
         "apps/desktop/src/features/discovery/useDiscoverySavedSearchController.ts": 151,
         "apps/desktop/src/features/discovery/useDiscoverySearchController.ts": 210,
         "apps/desktop/src/features/discovery/useFulltextImportCompletion.ts": 155,
-        "apps/desktop/src/features/discovery/useFulltextTaskController.ts": 150,
+        "apps/desktop/src/features/discovery/useFulltextTaskController.ts": 173,
         "apps/desktop/src/features/discovery/useIngestDraftQueue.ts": 80,
         "apps/desktop/src/features/discovery/useResearchViewLease.ts": 19,
         "apps/desktop/src/features/discovery/useResearchViewSuspensions.ts": 61,
@@ -578,11 +579,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 136322
+      "totalLines": 136404
     },
     "tests": {
       "byExtension": {
-        ".ts": 81052,
+        ".ts": 81184,
         ".tsx": 1034
       },
       "files": {
@@ -811,6 +812,7 @@
         "apps/desktop/src/features/discovery/discovery-search-controller.test.ts": 712,
         "apps/desktop/src/features/discovery/discovery-search-model.test.ts": 289,
         "apps/desktop/src/features/discovery/fulltext-download-plan.test.ts": 80,
+        "apps/desktop/src/features/discovery/fulltext-task-completion.test.ts": 132,
         "apps/desktop/src/features/discovery/research-view-suspension-lease.test.ts": 72,
         "apps/desktop/src/features/discovery/useDiscoveryResultImportController.test.ts": 329,
         "apps/desktop/src/features/discovery/useDiscoverySearchController.test.ts": 44,
@@ -981,7 +983,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 82086
+      "totalLines": 82218
     }
   },
   "uiDatabaseBoundary": {}

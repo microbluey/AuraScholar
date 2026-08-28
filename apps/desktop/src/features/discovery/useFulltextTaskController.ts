@@ -8,6 +8,7 @@ import {
   type FulltextTask,
 } from "../../services/fulltext";
 import { describeSafeError } from "../../services/sensitive-text";
+import { completeAttachedOaFulltextTask } from "./fulltext-task-completion";
 
 type FulltextMode = "browser" | "opensource";
 
@@ -21,7 +22,9 @@ export interface UseFulltextTaskControllerOptions {
   clearSearch(): void;
   desktopRuntime: boolean;
   ezproxy: string;
+  hideBrowserViews(): Promise<boolean>;
   initialTask: FulltextTask | null;
+  navigate(path: string): void;
   onMessage(message: string): void;
   onMode(mode: FulltextMode): void;
   onQuery(query: string): void;
@@ -52,7 +55,9 @@ export function useFulltextTaskController({
   clearSearch,
   desktopRuntime,
   ezproxy,
+  hideBrowserViews,
   initialTask,
+  navigate,
   onMessage,
   onMode,
   onQuery,
@@ -80,7 +85,7 @@ export function useFulltextTaskController({
 
   const openBrowser = useCallback(
     (current: FulltextTask, prefix?: string) => {
-      if (taskRef.current?.handoffId !== current.handoffId) return;
+      if (taskRef.current !== current) return;
       onMessage(
         prefix
           ? `${prefix}，正在打开《${current.title}》的全文来源...`
@@ -93,9 +98,9 @@ export function useFulltextTaskController({
         keepBrowserOnFailure: true,
         reuseExisting: false,
         onOpened: (tabId) => {
-          if (taskRef.current?.handoffId !== current.handoffId) return;
+          if (taskRef.current !== current) return;
           setTask((active) => {
-            if (!active || active.handoffId !== current.handoffId) return active;
+            if (active !== current) return active;
             const bound = bindFulltextTaskToTab(active, tabId);
             taskRef.current = bound;
             return bound;
@@ -123,20 +128,38 @@ export function useFulltextTaskController({
       void import("../../services/library-oa")
         .then(({ ensureOaPdfAttachment }) => ensureOaPdfAttachment(current.id))
         .then((attached) => {
-          if (taskRef.current?.handoffId !== current.handoffId) return;
+          if (taskRef.current !== current) return;
           if (!attached) {
             openBrowser(current);
             return;
           }
-          onMessage("已找到并挂载开放获取 PDF");
-          window.dispatchEvent(new Event("aurascholar:library-updated"));
-          replace(null);
+          const exits = completeAttachedOaFulltextTask(current, {
+            hideBrowserViews,
+            isCurrent: () => taskRef.current === current,
+            navigate,
+            notifyLibraryUpdated: () =>
+              window.dispatchEvent(new Event("aurascholar:library-updated")),
+            onExit: () => replace(null),
+            onMessage,
+            onMode,
+          });
+          if (!exits) replace(null);
         })
         .catch((error) => {
           openBrowser(current, `开放全文检查失败:${describeSafeError(error)}`);
         });
     },
-    [clearSearch, desktopRuntime, onMessage, onMode, onQuery, openBrowser, replace],
+    [
+      clearSearch,
+      desktopRuntime,
+      hideBrowserViews,
+      navigate,
+      onMessage,
+      onMode,
+      onQuery,
+      openBrowser,
+      replace,
+    ],
   );
 
   const openTarget = useCallback(
