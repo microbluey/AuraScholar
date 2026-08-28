@@ -333,7 +333,7 @@ describe("Document/Evidence Library backup", () => {
     const backup = JSON.parse(text) as { tables: BackupTables; version: number };
     const tableNames = Object.keys(backup.tables);
 
-    expect(backup.version).toBe(4);
+    expect(backup.version).toBe(5);
     for (let index = 1; index < KNOWLEDGE_TABLES.length; index += 1) {
       expect(tableNames.indexOf(KNOWLEDGE_TABLES[index - 1]!)).toBeLessThan(
         tableNames.indexOf(KNOWLEDGE_TABLES[index]!),

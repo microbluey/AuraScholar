@@ -1,4 +1,4 @@
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import type { SavedSearchRow } from "../../electron/data-command-contract";
 import type { DiscoverySearchReportWithLibrary } from "./discovery";
 
@@ -21,6 +21,7 @@ export interface SavedSearchScope {
 export interface SavedSearchWriteGateway {
   clearNew(input: { libraryId: string; savedSearchId: string }): Promise<{ updated: number }>;
   create(input: {
+    criteria: DiscoveryQuery;
     libraryId: string;
     query: string;
     sources: DiscoverySource[] | null;
@@ -62,7 +63,7 @@ export interface SavedSearchServiceDependencies {
   openScope(): Promise<SavedSearchScope>;
   schedule(callback: () => void, delayMs: number): SavedSearchTimer;
   search(
-    query: string,
+    query: DiscoveryQuery,
     sources: DiscoverySource[] | undefined,
     signal: AbortSignal,
   ): Promise<DiscoverySearchReportWithLibrary>;

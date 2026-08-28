@@ -10,6 +10,7 @@ export interface SavedSearchRow {
   id: string;
   library_id: string;
   query: string;
+  criteria_json: string | null;
   sources_json: string | null;
   seen_ids_json: string;
   new_count: number;
@@ -23,6 +24,8 @@ export interface SavedSearchRow {
 
 export interface SavedSearchInput {
   query: string;
+  /** Canonical structured discovery query; null preserves legacy text-only behavior. */
+  criteriaJson?: string | null;
   /** Discovery source ids to query; null = all sources. */
   sources?: string[] | null;
 }
@@ -79,12 +82,13 @@ export class SavedSearchesRepo {
       const now = Date.now();
       await this.db.run(
         `INSERT INTO saved_searches
-           (id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, '[]', 0, NULL, ?, ?, ?)`,
+           (id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, '[]', 0, NULL, ?, ?, ?)`,
         [
           id,
           this.libraryId,
           input.query,
+          input.criteriaJson ?? null,
           input.sources ? JSON.stringify(input.sources) : null,
           now,
           now,
@@ -97,7 +101,7 @@ export class SavedSearchesRepo {
 
   async get(id: string): Promise<SavedSearchRow | null> {
     const rows = await this.db.query<SavedSearchRow>(
-      `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
+      `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
               last_error, created_at, updated_at, deleted_at
        FROM saved_searches
        WHERE id = ? AND library_id = ?
@@ -109,7 +113,7 @@ export class SavedSearchesRepo {
 
   async list(): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
-      `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
+      `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
               created_at, updated_at, deleted_at
        FROM saved_searches
        WHERE library_id = ? AND deleted_at IS NULL
@@ -121,7 +125,7 @@ export class SavedSearchesRepo {
   /** Searches whose next_run_at has come due (or was never scheduled). */
   async due(now = Date.now()): Promise<SavedSearchRow[]> {
     return this.db.query<SavedSearchRow>(
-      `SELECT id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
+      `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at, last_error,
               created_at, updated_at, deleted_at
        FROM saved_searches
        WHERE library_id = ?

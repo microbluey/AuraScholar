@@ -1,35 +1,34 @@
 // Saved-search runner: re-runs stored open-source queries on a schedule and
 // surfaces newly-published matches. Network work stays in the renderer, while
 // every durable mutation crosses the typed main-process command boundary.
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import type { SavedSearchRow } from "../../electron/data-command-contract";
-import { auraNotifier } from "./aura-platform";
+import {
+  normalizeSavedSearchCriteria,
+  parseSavedSearchCriteria,
+} from "../shared/saved-search-criteria";
 import type { DiscoveryResultWithLibrary } from "./discovery";
 import {
   canonicalSavedSearchSources,
-  isSavedSearchReportUnavailable,
   parseSavedSearchSources,
-  savedSearchReportErrorMessage,
   savedSearchResultId,
   toSavedSearchView,
   type SavedSearchView,
 } from "./saved-search-model";
 import { savedSearchPollKey, waitForSavedSearchPoll } from "./saved-search-polling";
+import {
+  isSavedSearchReportUnavailable,
+  savedSearchReportErrorMessage,
+} from "./saved-search-report";
+import { createDefaultSavedSearchServiceDependencies } from "./saved-search-runtime";
 import type {
   CreateSavedSearchResult,
   SavedSearchNotification,
-  SavedSearchReadRepository,
   SavedSearchScope,
   SavedSearchServiceDependencies,
   SavedSearchTimer,
-  SavedSearchWriteGateway,
 } from "./saved-search-service-contract";
 import { describeSafeError } from "./sensitive-text";
-
-// New publications appear over days, not minutes. The scheduler wakes hourly
-// to catch overdue rows, while each successful row is deferred for 12 hours.
-const POLL_INTERVAL_MS = 12 * 60 * 60 * 1000;
-const LOOP_INTERVAL_MS = 60 * 60 * 1000;
 
 export type { SavedSearchView } from "./saved-search-model";
 export type {
@@ -58,61 +57,6 @@ interface LoopState {
   timer: SavedSearchTimer | null;
 }
 
-const defaultWrites: SavedSearchWriteGateway = {
-  async clearNew(input) {
-    return window.aura.data.command("savedSearch.clearNew", input);
-  },
-  async create(input) {
-    return window.aura.data.command("savedSearch.create", input);
-  },
-  async delete(input) {
-    return window.aura.data.command("savedSearch.delete", input);
-  },
-  async recordError(input) {
-    return window.aura.data.command("savedSearch.recordError", input);
-  },
-  async recordRun(input) {
-    return window.aura.data.command("savedSearch.recordRun", input);
-  },
-  async restore(input) {
-    return window.aura.data.command("savedSearch.restore", input);
-  },
-};
-
-const defaultReads: SavedSearchReadRepository = {
-  async due() {
-    return (await window.aura.data.command("savedSearch.listDue", {})).savedSearches;
-  },
-  async get(savedSearchId) {
-    return (await window.aura.data.command("savedSearch.get", { savedSearchId })).savedSearch;
-  },
-  async list() {
-    return (await window.aura.data.command("savedSearch.list", {})).savedSearches;
-  },
-};
-
-const defaultDependencies: SavedSearchServiceDependencies = {
-  clearTimer: (timer) => globalThis.clearTimeout(timer),
-  dispatchUpdated: () => {
-    window.dispatchEvent(new CustomEvent("aurascholar:saved-searches-updated"));
-  },
-  loopIntervalMs: LOOP_INTERVAL_MS,
-  nextRunDelayMs: POLL_INTERVAL_MS,
-  notify: (notification) => auraNotifier.notify(notification),
-  now: () => Date.now(),
-  onLoopError: () => undefined,
-  async openScope() {
-    const { libraryId } = await window.aura.data.command("savedSearch.getScope", {});
-    return { libraryId, repository: defaultReads };
-  },
-  schedule: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
-  async search(query, sources, signal) {
-    const { searchDiscoveryDetailed } = await import("./discovery");
-    return searchDiscoveryDetailed(query, sources, signal);
-  },
-  writes: defaultWrites,
-};
-
 export class SavedSearchService {
   private readonly generations = new Map<string, number>();
   private readonly inFlight = new Map<string, PollEntry>();
@@ -125,11 +69,16 @@ export class SavedSearchService {
     return (await scope.repository.list()).map(toSavedSearchView);
   }
 
-  async create(query: string, sources?: DiscoverySource[]): Promise<CreateSavedSearchResult> {
+  async create(
+    criteria: DiscoveryQuery,
+    sources?: DiscoverySource[],
+  ): Promise<CreateSavedSearchResult> {
     const scope = await this.dependencies.openScope();
+    const normalizedCriteria = normalizeSavedSearchCriteria(criteria);
     const result = await this.dependencies.writes.create({
       libraryId: scope.libraryId,
-      query: query.trim().replace(/\s+/g, " "),
+      query: normalizedCriteria.text,
+      criteria: normalizedCriteria,
       sources: canonicalSavedSearchSources(sources),
     });
     if (result.created) {
@@ -303,12 +252,13 @@ export class SavedSearchService {
     row: SavedSearchRow,
     entry: PollEntry,
   ): Promise<PollOutcome> {
+    const criteria = parseSavedSearchCriteria(row.criteria_json, row.query);
     const sources = parseSavedSearchSources(row.sources_json) ?? undefined;
     let results: DiscoveryResultWithLibrary[];
     try {
       // This network request deliberately happens before the main-process
       // command. The command opens only the short CAS transaction.
-      const report = await this.dependencies.search(row.query, sources, entry.controller.signal);
+      const report = await this.dependencies.search(criteria, sources, entry.controller.signal);
       if (entry.controller.signal.aborted) return cancelledOutcome();
       if (isSavedSearchReportUnavailable(report)) {
         throw new Error(savedSearchReportErrorMessage(report));
@@ -396,17 +346,17 @@ export function createSavedSearchService(
   return new SavedSearchService(dependencies);
 }
 
-const savedSearchService = new SavedSearchService(defaultDependencies);
+const savedSearchService = new SavedSearchService(createDefaultSavedSearchServiceDependencies());
 
 export async function listSavedSearches(): Promise<SavedSearchView[]> {
   return savedSearchService.list();
 }
 
 export async function createSavedSearch(
-  query: string,
+  criteria: DiscoveryQuery,
   sources?: DiscoverySource[],
 ): Promise<CreateSavedSearchResult> {
-  return savedSearchService.create(query, sources);
+  return savedSearchService.create(criteria, sources);
 }
 
 export async function deleteSavedSearch(id: string): Promise<void> {

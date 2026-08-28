@@ -384,7 +384,7 @@ describe("Library-scoped sync storage", () => {
 });
 
 describe("Library backup ownership", () => {
-  it("exports v4 with only the selected Library graph and explicit app-global rows", async () => {
+  it("exports v5 with only the selected Library graph and explicit app-global rows", async () => {
     const db = await createNodeDatabase(":memory:");
     await runMigrations(db);
     await addLibrary(db, "library-a");
@@ -438,7 +438,7 @@ describe("Library backup ownership", () => {
       version: number;
     };
 
-    expect(backup.version).toBe(4);
+    expect(backup.version).toBe(5);
     expect(backup.sourceLibraryId).toBe("library-a");
     expect(backup.tables.libraries?.map((row) => row.id)).toEqual(["library-a"]);
     expect(backup.tables.works?.map((row) => row.id)).toEqual(["work-a"]);

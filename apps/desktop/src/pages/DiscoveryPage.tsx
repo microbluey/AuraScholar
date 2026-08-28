@@ -75,6 +75,7 @@ import {
 } from "../features/discovery/useDiscoverySearchController";
 import { useDiscoveryResultImportController } from "../features/discovery/useDiscoveryResultImportController";
 import { useDiscoverySavedSearchController } from "../features/discovery/useDiscoverySavedSearchController";
+import { useDiscoverySavedSearchActivation } from "../features/discovery/useDiscoverySavedSearchActivation";
 import { useIngestDraftQueue } from "../features/discovery/useIngestDraftQueue";
 import { PendingFulltextTarget } from "../features/discovery/PendingFulltextTarget";
 import { planFulltextDownload } from "../features/discovery/fulltext-download-plan";
@@ -305,19 +306,17 @@ export function DiscoveryPage() {
   const [savingEzproxy, setSavingEzproxy] = useState(false);
   const savingEzproxyRef = useRef(false);
 
-  // Open-source search
+  // Open-source search controls; advanced filters are sent to the API.
   const [selectedSources, setSelectedSources] = useState<Set<DiscoverySource>>(
     () => new Set(SOURCES.map((s) => s.id)),
   );
-  // Advanced query fields (sent to the API, not just client filtering).
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [author, setAuthor] = useState("");
   const [yearFrom, setYearFrom] = useState("");
   const [yearTo, setYearTo] = useState("");
   const [venue, setVenue] = useState("");
-  // API-level sort: changing it re-runs the search so the API re-ranks.
+  // Sort re-runs the API; OA-only is a client filter and pagination stays in the controller.
   const [sortBy, setSortBy] = useState<SortKey>("relevance");
-  // Pagination belongs to the search controller; this is the client-only OA filter.
   const [oaOnly, setOaOnly] = useState(false);
   const [siteRemoveUndo, setSiteRemoveUndo] = useState<SiteRemoveUndoState | null>(null);
   const [siteRemoveUndoBusy, setSiteRemoveUndoBusy] = useState(false);
@@ -642,9 +641,7 @@ export function DiscoveryPage() {
     }
   }, [mode, sites]);
 
-  // Year/venue/author now filter at the API; only the OA toggle stays client-side.
-  // The engine already sorts the merged set by the chosen key; we keep a final
-  // client sort as a stable tiebreak across sources.
+  // API filters year/venue/author; OA is client-side, with client sorting as a tiebreak.
   const displayedResults = useMemo(() => {
     const filtered = results.filter((r) => !oaOnly || !!r.work.oaPdfUrl);
     if (sortBy === "year") {
@@ -678,8 +675,7 @@ export function DiscoveryPage() {
     return window.aura.research.onTabsChanged(setTabs);
   }, []);
 
-  // Closing the last tab returns to the site grid rather than stranding the
-  // user on an empty "opening..." spinner.
+  // Closing the last tab returns to the site grid instead of an empty "opening..." spinner.
   useEffect(() => {
     if (mode === "browser" && tabs.length === 0 && !openingBrowserTab && !pendingFulltextTask) {
       const closeId = window.setTimeout(() => {
@@ -885,8 +881,11 @@ export function DiscoveryPage() {
   }, [hideBrowserViewsWithFeedback, markFulltextImportLeaving, replacePendingFulltextTask]);
 
   const runSearch = useCallback(
-    async (options: { query?: string; sources?: DiscoverySource[] } = {}): Promise<boolean> => {
-      const searchText = (options.query ?? query).trim();
+    async (
+      options: { query?: DiscoveryQuery; sources?: DiscoverySource[] } = {},
+    ): Promise<boolean> => {
+      const requestedQuery = options.query ?? buildQuery();
+      const searchText = requestedQuery.text.trim();
       if (!searchText) return false;
       const requestedSources = options.sources ?? Array.from(selectedSources);
       const sources = requestedSources.length > 0 ? requestedSources : DEFAULT_DISCOVERY_SOURCES;
@@ -896,17 +895,16 @@ export function DiscoveryPage() {
       }
       if (!desktopRuntime || options.query !== undefined) setQuery(searchText);
       const outcome = await executeDiscoverySearch({
-        query: buildQuery(searchText),
+        query: { ...requestedQuery, text: searchText },
         sort: sortBy,
         sources,
       });
       return discoverySearchApplied(outcome);
     },
-    [buildQuery, desktopRuntime, executeDiscoverySearch, query, searching, selectedSources, sortBy],
+    [buildQuery, desktopRuntime, executeDiscoverySearch, searching, selectedSources, sortBy],
   );
 
-  // Re-run the search when the sort key changes (API re-ranks server-side).
-  // Skip the initial render and when there's nothing searched yet.
+  // Re-run on sort changes after an initial non-empty search.
   const sortInitRef = useRef(true);
   useEffect(() => {
     if (sortInitRef.current) {
@@ -953,22 +951,24 @@ export function DiscoveryPage() {
     if (query.trim()) void runSearch();
   }, [query, runSearch]);
 
-  const openSavedSearchQuery = useCallback(
-    async ({ query: savedQuery, sources }: { query: string; sources: DiscoverySource[] }) => {
-      setMode("opensource");
-      setQuery(savedQuery);
-      setSelectedSources(new Set(sources));
-      return runSearch({ query: savedQuery, sources });
-    },
-    [runSearch],
-  );
+  const openSavedSearchQuery = useDiscoverySavedSearchActivation({
+    runSearch,
+    setAdvancedOpen,
+    setAuthor,
+    setMode,
+    setQuery,
+    setSelectedSources,
+    setVenue,
+    setYearFrom,
+    setYearTo,
+  });
   const savedSearchController = useDiscoverySavedSearchController({
     confirm,
     defaultSources: DEFAULT_DISCOVERY_SOURCES,
     enabled: desktopRuntime,
     onMessage: setMessage,
     onOpenSearch: openSavedSearchQuery,
-    query,
+    criteria: buildQuery(),
     selectedSources,
   });
   const {
@@ -991,7 +991,7 @@ export function DiscoveryPage() {
       setMode("opensource");
       setQuery(text);
       setSelectedSources(new Set(nextSources));
-      return runSearch({ query: text, sources: nextSources });
+      return runSearch({ query: { text }, sources: nextSources });
     };
     const runSmokeLoadMore = async (): Promise<boolean> =>
       discoverySearchApplied(await loadMoreDiscoveryResults());

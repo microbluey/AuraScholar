@@ -40,6 +40,7 @@ function savedSearch(overrides: Partial<SavedSearchRow> = {}): SavedSearchRow {
     updated_at: 71,
     deleted_at: null,
     ...overrides,
+    criteria_json: overrides.criteria_json ?? null,
   };
 }
 
@@ -379,7 +380,7 @@ describe("saved-search polling service", () => {
     const service = createSavedSearchService(dependencies({ writes }));
 
     await expect(
-      service.create("  Retrieval   Augmented Generation  ", [
+      service.create({ text: "  Retrieval   Augmented Generation  " }, [
         "openalex",
         "crossref",
         "s2",
@@ -394,6 +395,7 @@ describe("saved-search polling service", () => {
     expect(writes.create).toHaveBeenCalledWith({
       libraryId: "library-1",
       query: "Retrieval Augmented Generation",
+      criteria: { text: "Retrieval Augmented Generation" },
       sources: null,
     });
   });
@@ -494,7 +496,7 @@ describe("saved-search polling service", () => {
     const deps = dependencies({
       overrides: {
         search: vi.fn((query) =>
-          query === first.query ? activeSearch.promise : Promise.resolve(discoveryReport()),
+          query.text === first.query ? activeSearch.promise : Promise.resolve(discoveryReport()),
         ),
       },
       repository,

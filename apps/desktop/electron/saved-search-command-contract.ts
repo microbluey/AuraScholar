@@ -1,4 +1,4 @@
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
 
 export type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
@@ -29,6 +29,8 @@ export interface SavedSearchGetCommandResult {
 export interface CreateSavedSearchCommandInput {
   libraryId: string;
   query: string;
+  /** Optional only so an older renderer can still create a text-only subscription. */
+  criteria?: DiscoveryQuery;
   sources: DiscoverySource[] | null;
 }
 

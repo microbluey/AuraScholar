@@ -30,6 +30,38 @@ async function indexExists(name: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+async function migrateThrough(version: number): Promise<Database> {
+  const legacy = await createNodeDatabase(":memory:");
+  await legacy.exec(
+    `CREATE TABLE _migrations (
+       version INTEGER PRIMARY KEY,
+       name TEXT NOT NULL,
+       applied_at INTEGER NOT NULL
+     )`,
+  );
+  for (const migration of MIGRATIONS) {
+    if (migration.version > version) break;
+    if (migration.disableForeignKeys) await legacy.exec("PRAGMA foreign_keys = OFF");
+    await legacy.exec("BEGIN");
+    try {
+      if (migration.apply) await migration.apply(legacy);
+      else await legacy.exec(migration.sql);
+      await legacy.run(`INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)`, [
+        migration.version,
+        migration.name,
+        Date.now(),
+      ]);
+      await legacy.exec("COMMIT");
+    } catch (error) {
+      await legacy.exec("ROLLBACK");
+      throw error;
+    } finally {
+      if (migration.disableForeignKeys) await legacy.exec("PRAGMA foreign_keys = ON");
+    }
+  }
+  return legacy;
+}
+
 describe("migrations", () => {
   it("records the latest version", async () => {
     const max = await db.queryScalar(`SELECT MAX(version) FROM _migrations`);
@@ -93,6 +125,29 @@ describe("migrations", () => {
     expect(await columnExists("saved_searches", "new_count")).toBe(true);
     expect(await columnExists("saved_searches", "next_run_at")).toBe(true);
     expect(await columnExists("saved_searches", "last_error")).toBe(true);
+    expect(await columnExists("saved_searches", "criteria_json")).toBe(true);
+  });
+
+  it("upgrades v23 saved searches without losing their legacy text query", async () => {
+    const legacy = await migrateThrough(23);
+    const [library] = await legacy.query<{ id: string }>(
+      `SELECT id FROM libraries WHERE deleted_at IS NULL LIMIT 1`,
+    );
+    expect(library?.id).toBeTruthy();
+    await legacy.run(
+      `INSERT INTO saved_searches (
+         id, library_id, query, seen_ids_json, new_count, created_at, updated_at
+       ) VALUES ('legacy-saved-search', ?, 'legacy graph retrieval', '[]', 0, 1, 1)`,
+      [library!.id],
+    );
+
+    await runMigrations(legacy);
+
+    await expect(
+      legacy.query<{ criteria_json: string | null; query: string }>(
+        `SELECT query, criteria_json FROM saved_searches WHERE id = 'legacy-saved-search'`,
+      ),
+    ).resolves.toEqual([{ query: "legacy graph retrieval", criteria_json: null }]);
   });
 
   it("tracks the latest sentinel polling error", async () => {

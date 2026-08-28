@@ -201,9 +201,8 @@ export const snippets = sqliteTable(
   (t) => [index("snippets_work_idx").on(t.workId, t.createdAt)],
 );
 
-// Saved searches ("检索订阅"): a stored open-source aggregate query re-run on a
-// schedule to surface newly-published matches. seenIdsJson is the baseline set
-// of stable ids observed last run; anything new on the next run bumps newCount.
+// Saved searches ("检索订阅") re-run an open-source aggregate query on a schedule.
+// seenIdsJson is the baseline set of stable ids observed last run; new hits bump newCount.
 export const savedSearches = sqliteTable(
   "saved_searches",
   {
@@ -212,6 +211,7 @@ export const savedSearches = sqliteTable(
       .notNull()
       .references(() => libraries.id),
     query: text("query").notNull(),
+    criteriaJson: text("criteria_json"),
     sourcesJson: text("sources_json"),
     seenIdsJson: text("seen_ids_json").notNull().default("[]"),
     newCount: integer("new_count").notNull().default(0),

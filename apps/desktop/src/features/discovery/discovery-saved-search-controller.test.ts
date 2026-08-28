@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import type { SavedSearchView } from "../../services/saved-searches";
 import { createDiscoverySavedSearchController } from "./discovery-saved-search-controller";
 import type {
@@ -32,13 +32,14 @@ function savedSearch(overrides: Partial<SavedSearchView> = {}): SavedSearchView 
     lastRunAt: 100,
     lastError: null,
     ...overrides,
+    criteria: overrides.criteria ?? { text: overrides.query ?? "retrieval augmented generation" },
   };
 }
 
 function dataSource() {
   return {
     clearBadge: vi.fn(async (_id: string): Promise<void> => undefined),
-    create: vi.fn(async (_query: string, _sources: DiscoverySource[]) => ({
+    create: vi.fn(async (_criteria: DiscoveryQuery, _sources: DiscoverySource[]) => ({
       created: true,
       id: "saved-1",
     })),
@@ -217,7 +218,7 @@ describe("DiscoverySavedSearchController", () => {
 
     await instance.open(item, ports);
     expect(activateSearch).toHaveBeenLastCalledWith({
-      query: item.query,
+      criteria: item.criteria,
       sources: ["openalex", "crossref", "s2", "arxiv"],
     });
     expect(data.clearBadge).not.toHaveBeenCalled();

@@ -25,7 +25,6 @@ import {
 import {
   assertKnowledgeTablesMatchVersion,
   buildProjectWorkMembershipIdMap,
-  DOCUMENT_EVIDENCE_BACKUP_VERSION,
   finalizeKnowledgeImportIdMaps,
   knowledgeIdMaps,
   remapKnowledgeBackupRow,
@@ -66,7 +65,8 @@ export interface LibraryBackupImportSummary {
   totalRows: number;
 }
 
-export const LIBRARY_BACKUP_VERSION = DOCUMENT_EVIDENCE_BACKUP_VERSION;
+// v5 adds structured saved-search criteria; v4 knowledge backups remain importable.
+export const LIBRARY_BACKUP_VERSION = 5;
 const EMPTY_BACKUP_ID_MAP = new Map<string, string>();
 
 // Keep the executable import loop honest when new backup tables are added.

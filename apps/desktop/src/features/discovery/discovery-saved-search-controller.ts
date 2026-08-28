@@ -1,4 +1,4 @@
-import type { DiscoverySource } from "@aurascholar/core";
+import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import type { SavedSearchView } from "../../services/saved-searches";
 import { describeSafeError } from "../../services/sensitive-text";
 import {
@@ -99,11 +99,12 @@ export class DiscoverySavedSearchController {
   }
 
   async save(
-    query: string,
+    criteria: DiscoveryQuery | string,
     sources: readonly DiscoverySource[],
     ports: Pick<DiscoverySavedSearchActionPorts, "reportMessage">,
   ): Promise<void> {
-    const normalizedQuery = query.trim();
+    const normalizedCriteria = typeof criteria === "string" ? { text: criteria } : criteria;
+    const normalizedQuery = normalizedCriteria.text.trim();
     if (
       !this.active ||
       !this.dependencies.desktopRuntime ||
@@ -126,12 +127,17 @@ export class DiscoverySavedSearchController {
       const deletedItem = this.snapshot.undo?.item ?? null;
       const restoreDeletedItem =
         deletedItem &&
-        matchesSavedSearch(deletedItem, normalizedQuery, sources, this.dependencies.defaultSources)
+        matchesSavedSearch(
+          deletedItem,
+          normalizedCriteria,
+          sources,
+          this.dependencies.defaultSources,
+        )
           ? deletedItem
           : null;
       const result = restoreDeletedItem
         ? null
-        : await this.dependencies.data.create(normalizedQuery, [...sources]);
+        : await this.dependencies.data.create(normalizedCriteria, [...sources]);
       if (restoreDeletedItem) await this.dependencies.data.restore(restoreDeletedItem.id);
       await this.wait(startedAt, "save");
       if (!this.isCurrentLifecycle(lifecycle)) return;
@@ -177,7 +183,7 @@ export class DiscoverySavedSearchController {
     try {
       let opened: boolean;
       try {
-        opened = await ports.activateSearch({ query: saved.query, sources });
+        opened = await ports.activateSearch({ criteria: saved.criteria, sources });
         await this.wait(startedAt, "opening");
       } catch (error) {
         await this.wait(startedAt, "opening");
