@@ -22,7 +22,9 @@ import {
 import {
   loadResearchBrowserViewAfterProxy,
   openResearchTabAfterProxy,
+  runResearchBrowserAfterProxy,
 } from "./research-browser-proxy-bootstrap";
+import { ResearchBrowserIdentityIndex } from "./research-browser-identity-index";
 import { normalizeResearchScholarMeta } from "./research-browser-scholar-meta";
 import { ResearchBrowserViewPresentation } from "./research-browser-view-presentation";
 import { ResearchBrowserViewLifecycle } from "./research-browser-view-lifecycle";
@@ -66,8 +68,7 @@ let bounds: Bounds = { x: 0, y: 0, width: 0, height: 0 };
 let activeTabId: string | null = null;
 const tabs = new Map<string, Tab>();
 const wiredSessions = new Set<string>();
-// Map citation_pdf_url values back to abstract-page identity for downloads.
-const identityByPdfUrl = new Map<string, ScholarIdentity>();
+const identityIndex = new ResearchBrowserIdentityIndex();
 
 function snapshot(): ResearchTab[] {
   return [...tabs.values()].map((t) => ({
@@ -98,8 +99,36 @@ function wireSession(sess: Session, siteId: string): void {
     findSourceTab: (sourceWebContents) =>
       [...tabs.values()].find((tab) => tab.view?.webContents === sourceWebContents),
     getWindow: () => win,
-    resolveIdentity: resolveDownloadIdentity,
+    resolveIdentity: (tab, downloadUrl) => identityIndex.resolve(tab?.scholar, downloadUrl),
   });
+}
+
+/** A shared site partition has one last-successful proxy for all of its tabs. */
+function updateResearchSiteProxy(siteId: string, proxy: string): void {
+  for (const tab of tabs.values()) if (tab.siteId === siteId) tab.proxy = proxy;
+}
+
+function queueResearchHistoryAction(action: "back" | "forward" | "reload"): void {
+  const tab = activeTabId ? tabs.get(activeTabId) : null;
+  const view = tab?.view;
+  if (!tab || !view) return;
+  const history = view.webContents.navigationHistory;
+  if (
+    (action === "back" && !history.canGoBack()) ||
+    (action === "forward" && !history.canGoForward())
+  ) {
+    return;
+  }
+  void runResearchBrowserAfterProxy(
+    session.fromPartition(researchPartition(tab.siteId)),
+    () => tab.proxy,
+    () => tabs.get(tab.tabId) === tab && tab.view === view && !view.webContents.isDestroyed(),
+    () => {
+      if (action === "reload") view.webContents.reload();
+      else if (action === "back") history.goBack();
+      else history.goForward();
+    },
+  ).catch(() => undefined);
 }
 
 const viewPresentation = new ResearchBrowserViewPresentation<WebContentsView, Tab>({
@@ -147,38 +176,7 @@ async function sniffScholar(tab: Tab): Promise<void> {
   if (!settledUrl || settledUrl !== pageUrl) return;
   const identity = normalizeResearchScholarMeta(meta as Record<string, string[]>, settledUrl);
   tab.scholar = identity;
-  if (identity?.pdfUrl) identityByPdfUrl.set(identity.pdfUrl, identity);
-}
-
-/** Normalize a URL for matching: drop hash, trailing slash, force https host. */
-function urlKey(url: string): string {
-  try {
-    const u = new URL(url);
-    u.hash = "";
-    return `${u.host}${u.pathname.replace(/\/$/, "")}${u.search}`.toLowerCase();
-  } catch {
-    return url.toLowerCase();
-  }
-}
-
-/** Look up a sniffed identity by full-text URL, tolerant of minor URL drift. */
-function identityForUrl(url: string): ScholarIdentity | undefined {
-  const direct = identityByPdfUrl.get(url);
-  if (direct) return direct;
-  const key = urlKey(url);
-  for (const [pdfUrl, identity] of identityByPdfUrl) {
-    if (urlKey(pdfUrl) === key) return identity;
-  }
-  return undefined;
-}
-
-/** Prefer the tab identity, then match a previously sniffed PDF URL. */
-function resolveDownloadIdentity(
-  tab: Tab | undefined,
-  downloadUrl: string,
-): ScholarIdentity | undefined {
-  if (tab?.scholar) return tab.scholar;
-  return identityForUrl(downloadUrl);
+  if (identity) identityIndex.remember(identity);
 }
 
 function createView(tab: Tab): WebContentsView {
@@ -233,7 +231,7 @@ function createView(tab: Tab): WebContentsView {
     // Clicking "Paper" navigates to the full-text URL we sniffed earlier — carry
     // that page's identity over so the download attaches to the right work.
     // Otherwise this is a new document: drop the stale identity.
-    tab.scholar = identityForUrl(safeUrl);
+    tab.scholar = identityIndex.lookup(safeUrl);
     emitTabs();
   });
   // SPA route changes can swap the head meta without a full load.
@@ -242,14 +240,15 @@ function createView(tab: Tab): WebContentsView {
     emitTabs();
     void sniffScholar(tab);
   });
+  const startupUrl = tab.url;
   const proxyPrepared = tab.proxyPrepared;
   tab.proxyPrepared = false;
   tab.proxyStartup = loadResearchBrowserViewAfterProxy(
     sess,
-    tab.proxy,
+    () => tab.proxy,
     proxyPrepared,
     () => tabs.get(tab.tabId) === tab && tab.view === view && !view.webContents.isDestroyed(),
-    () => void view.webContents.loadURL(tab.url),
+    () => void view.webContents.loadURL(startupUrl),
   );
   void tab.proxyStartup.catch(() => {
     if (tab.view !== view) return;
@@ -287,7 +286,7 @@ function spawnTab(
     view: null,
     // Opening a known full-text URL in a new tab (target=_blank "Paper" link)
     // inherits the abstract page's identity so its download attaches correctly.
-    scholar: identityForUrl(safeUrl),
+    scholar: identityIndex.lookup(safeUrl),
   });
   if (allowAttachment) viewPresentation.show(tabId);
   else viewPresentation.select(tabId);
@@ -299,7 +298,7 @@ function disposeResearchBrowser(): void {
   // DownloadItem completion can outlive a closed view. Its admission remains
   // reserved until the download event's terminal cleanup releases it.
   tabs.clear();
-  identityByPdfUrl.clear();
+  identityIndex.clear();
   viewPresentation.clear();
   activeTabId = null;
   win = null;
@@ -332,7 +331,7 @@ export function registerResearchHandlers(): void {
         if (!originWindow || win !== originWindow || originWindow.isDestroyed()) {
           throw new Error("研究浏览器已关闭");
         }
-        // Reuse an existing tab for the same site unless this is an isolated task.
+        updateResearchSiteProxy(input.siteId, input.proxy);
         const existing =
           input.options?.reuseExisting === false
             ? undefined
@@ -355,22 +354,15 @@ export function registerResearchHandlers(): void {
   });
 
   handle(CH.researchGoBack, () => {
-    const tab = activeTabId ? tabs.get(activeTabId) : null;
-    if (tab?.view?.webContents.navigationHistory.canGoBack()) {
-      tab.view.webContents.navigationHistory.goBack();
-    }
+    queueResearchHistoryAction("back");
   });
 
   handle(CH.researchGoForward, () => {
-    const tab = activeTabId ? tabs.get(activeTabId) : null;
-    if (tab?.view?.webContents.navigationHistory.canGoForward()) {
-      tab.view.webContents.navigationHistory.goForward();
-    }
+    queueResearchHistoryAction("forward");
   });
 
   handle(CH.researchReload, () => {
-    const tab = activeTabId ? tabs.get(activeTabId) : null;
-    tab?.view?.webContents.reload();
+    queueResearchHistoryAction("reload");
   });
 
   // null arg = read the active tab's current URL; a string = navigate to it.
@@ -381,14 +373,21 @@ export function registerResearchHandlers(): void {
     if (parsedUrl === null) {
       return tab.view ? tab.view.webContents.getURL() : tab.url;
     }
-    const safeUrl = parsedUrl;
     const view = tab.view;
-    if (view) await tab.proxyStartup;
-    tab.url = safeUrl;
-    if (view && tab.view === view && !view.webContents.isDestroyed()) {
-      void view.webContents.loadURL(safeUrl);
+    tab.url = parsedUrl;
+    if (view) {
+      await runResearchBrowserAfterProxy(
+        session.fromPartition(researchPartition(tab.siteId)),
+        () => tab.proxy,
+        () =>
+          tabs.get(tab.tabId) === tab &&
+          tab.view === view &&
+          !view.webContents.isDestroyed() &&
+          tab.url === parsedUrl,
+        () => void view.webContents.loadURL(parsedUrl),
+      );
     }
-    return safeUrl;
+    return parsedUrl;
   });
 
   handle(CH.researchClose, async (_e, tabId: unknown) => {
