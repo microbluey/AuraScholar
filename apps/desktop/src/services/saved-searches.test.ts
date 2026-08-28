@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscoverySource } from "@aurascholar/core";
-import type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
+import type { SavedSearchReadRow } from "../../electron/data-command-contract";
 import type { DiscoverySearchReportWithLibrary } from "./discovery";
 import {
   createSavedSearchService,
@@ -25,18 +25,14 @@ function deferred<T>(): Deferred<T> {
   return { promise, reject, resolve };
 }
 
-function savedSearch(overrides: Partial<SavedSearchRow> = {}): SavedSearchRow {
+function savedSearch(overrides: Partial<SavedSearchReadRow> = {}): SavedSearchReadRow {
   return {
     id: "saved-1",
-    library_id: "library-1",
     query: "retrieval augmented generation",
     sources_json: JSON.stringify(["openalex"]),
-    seen_ids_json: JSON.stringify(["doi:10.1000/old"]),
     new_count: 0,
     last_run_at: 50,
-    next_run_at: 100,
     last_error: null,
-    created_at: 10,
     updated_at: 71,
     deleted_at: null,
     ...overrides,
@@ -94,8 +90,8 @@ function writeGateway(overrides: Partial<SavedSearchWriteGateway> = {}): SavedSe
 
 function dependencies(
   options: {
-    due?: SavedSearchRow[];
-    list?: SavedSearchRow[];
+    due?: SavedSearchReadRow[];
+    list?: SavedSearchReadRow[];
     overrides?: Partial<SavedSearchServiceDependencies>;
     repository?: SavedSearchReadRepository;
     writes?: SavedSearchWriteGateway;
@@ -191,7 +187,7 @@ describe("saved-search polling service", () => {
 
   it("lets a coalesced caller cancel its own wait without aborting the shared poll", async () => {
     const pendingSearch = deferred<DiscoverySearchReportWithLibrary>();
-    const joiningList = deferred<SavedSearchRow[]>();
+    const joiningList = deferred<SavedSearchReadRow[]>();
     const row = savedSearch();
     let listCalls = 0;
     const observation: { signal?: AbortSignal } = {};
@@ -239,7 +235,7 @@ describe("saved-search polling service", () => {
 
   it("does not let a stopped loop cancel a manual poll that it joined", async () => {
     const pendingSearch = deferred<DiscoverySearchReportWithLibrary>();
-    const joiningRow = deferred<SavedSearchRow | null>();
+    const joiningRow = deferred<SavedSearchReadRow | null>();
     const row = savedSearch();
     const observation: { signal?: AbortSignal } = {};
     const repository: SavedSearchReadRepository = {
@@ -461,7 +457,6 @@ describe("saved-search polling service", () => {
       updated_at: 71,
     });
     const queued = savedSearch({
-      created_at: 20,
       id: "saved-queued",
       query: "invalidated queued search",
       updated_at: 81,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
+import type { SavedSearchReadRow } from "../../electron/data-command-contract";
 import type { DiscoverySearchReportWithLibrary } from "./discovery";
 import {
   createSavedSearchService,
@@ -7,19 +7,15 @@ import {
   type SavedSearchWriteGateway,
 } from "./saved-searches";
 
-function row(criteria_json: string | null): SavedSearchRow {
+function row(criteria_json: string | null): SavedSearchReadRow {
   return {
     id: "saved-criteria",
-    library_id: "library-criteria",
     query: "graph retrieval",
     criteria_json,
     sources_json: '["openalex"]',
-    seen_ids_json: "[]",
     new_count: 0,
     last_run_at: null,
-    next_run_at: null,
     last_error: null,
-    created_at: 1,
     updated_at: 1,
     deleted_at: null,
   };
@@ -35,7 +31,10 @@ function report(): DiscoverySearchReportWithLibrary {
   } as unknown as DiscoverySearchReportWithLibrary;
 }
 
-function dependencies(current: SavedSearchRow, search: SavedSearchServiceDependencies["search"]) {
+function dependencies(
+  current: SavedSearchReadRow,
+  search: SavedSearchServiceDependencies["search"],
+) {
   const writes: SavedSearchWriteGateway = {
     clearNew: vi.fn(async () => ({ updated: 1 })),
     create: vi.fn(async () => ({ created: true, id: current.id })),
@@ -53,7 +52,7 @@ function dependencies(current: SavedSearchRow, search: SavedSearchServiceDepende
     now: vi.fn(() => 1_000),
     onLoopError: vi.fn(),
     openScope: vi.fn(async () => ({
-      libraryId: current.library_id,
+      libraryId: "library-criteria",
       repository: {
         due: vi.fn(async () => [current]),
         get: vi.fn(async () => current),

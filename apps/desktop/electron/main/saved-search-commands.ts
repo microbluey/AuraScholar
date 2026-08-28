@@ -1,7 +1,10 @@
 import type { Database } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
-import { SavedSearchesRepo, type SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
-import { Buffer } from "node:buffer";
+import {
+  MAX_SAVED_SEARCH_SEEN_IDS,
+  MAX_SAVED_SEARCH_SEEN_IDS_BYTES,
+  SavedSearchesRepo,
+} from "@aurascholar/db/repos/saved-searches";
 import type {
   DataCommandOutput,
   DataCommandRequest,
@@ -11,6 +14,7 @@ import type {
   SavedSearchGetCommandInput,
   SavedSearchGetCommandResult,
   SavedSearchListCommandResult,
+  SavedSearchReadRow,
   SavedSearchScopeCommandInput,
 } from "../data-command-contract";
 import {
@@ -22,10 +26,11 @@ import {
 import { matchesSavedSearchInput, parseCreateSavedSearchInput } from "./saved-search-create-input";
 
 const MAX_OBSERVED_ID_LENGTH = 4_096;
-const MAX_OBSERVED_IDS = 2_000;
 const MAX_PERSISTED_ERROR_LENGTH = 16_384;
 const MAX_SAVED_SEARCH_ROWS = 1_000;
 const MAX_SAVED_SEARCH_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+const utf8Encoder = new TextEncoder();
 
 type SavedSearchCommandName =
   | "savedSearch.clearNew"
@@ -200,9 +205,8 @@ async function listSavedSearches(
   database: Database,
   libraryId: string,
 ): Promise<SavedSearchListCommandResult> {
-  const savedSearches = await database.query<SavedSearchRow>(
-    `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
-            last_error, created_at, updated_at, deleted_at
+  const savedSearches = await database.query<SavedSearchReadRow>(
+    `SELECT id, query, criteria_json, sources_json, new_count, last_run_at, last_error, updated_at, deleted_at
      FROM saved_searches
      WHERE library_id = ? AND deleted_at IS NULL
      ORDER BY created_at DESC
@@ -219,9 +223,8 @@ async function getSavedSearch(
   libraryId: string,
   input: SavedSearchGetCommandInput,
 ): Promise<SavedSearchGetCommandResult> {
-  const rows = await database.query<SavedSearchRow>(
-    `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
-            last_error, created_at, updated_at, deleted_at
+  const rows = await database.query<SavedSearchReadRow>(
+    `SELECT id, query, criteria_json, sources_json, new_count, last_run_at, last_error, updated_at, deleted_at
      FROM saved_searches
      WHERE id = ? AND library_id = ?
      LIMIT 1`,
@@ -234,9 +237,8 @@ async function listDueSavedSearches(
   database: Database,
   libraryId: string,
 ): Promise<SavedSearchListCommandResult> {
-  const savedSearches = await database.query<SavedSearchRow>(
-    `SELECT id, library_id, query, criteria_json, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
-            last_error, created_at, updated_at, deleted_at
+  const savedSearches = await database.query<SavedSearchReadRow>(
+    `SELECT id, query, criteria_json, sources_json, new_count, last_run_at, last_error, updated_at, deleted_at
      FROM saved_searches
      WHERE library_id = ?
        AND deleted_at IS NULL
@@ -250,7 +252,7 @@ async function listDueSavedSearches(
   });
 }
 
-function requireBoundedSavedSearchRows(rows: SavedSearchRow[]): SavedSearchRow[] {
+function requireBoundedSavedSearchRows(rows: SavedSearchReadRow[]): SavedSearchReadRow[] {
   if (rows.length > MAX_SAVED_SEARCH_ROWS) {
     throw new Error(`Saved search rows are limited to ${MAX_SAVED_SEARCH_ROWS}`);
   }
@@ -264,7 +266,7 @@ function requireBoundedSavedSearchOutput<T>(output: T): T {
   } catch {
     throw new Error("Saved search output cannot be serialized");
   }
-  if (Buffer.byteLength(serialized, "utf8") > MAX_SAVED_SEARCH_OUTPUT_BYTES) {
+  if (utf8Encoder.encode(serialized).byteLength > MAX_SAVED_SEARCH_OUTPUT_BYTES) {
     throw new Error(`Saved search output is limited to ${MAX_SAVED_SEARCH_OUTPUT_BYTES} bytes`);
   }
   return output;
@@ -304,14 +306,19 @@ function parseRecordErrorInput(value: unknown): RecordSavedSearchErrorCommandInp
 }
 
 function parseObservedIds(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length > MAX_OBSERVED_IDS) {
-    throw new Error(`Observed result ids are limited to ${MAX_OBSERVED_IDS} per run`);
+  if (!Array.isArray(value) || value.length > MAX_SAVED_SEARCH_SEEN_IDS) {
+    throw new Error(`Observed result ids are limited to ${MAX_SAVED_SEARCH_SEEN_IDS} per run`);
   }
   const ids = value.map((candidate, index) =>
     boundedText(candidate, `Observed result id at index ${index}`, MAX_OBSERVED_ID_LENGTH),
   );
   if (new Set(ids).size !== ids.length) {
     throw new Error("Observed result ids must be unique");
+  }
+  if (utf8Encoder.encode(JSON.stringify(ids)).byteLength > MAX_SAVED_SEARCH_SEEN_IDS_BYTES) {
+    throw new Error(
+      `Observed result ids are limited to ${MAX_SAVED_SEARCH_SEEN_IDS_BYTES} bytes per run`,
+    );
   }
   return ids;
 }
