@@ -7,6 +7,7 @@
 // before anything reaches the library; citation files (.bib etc.) are
 // authoritative and imported directly. No per-site scraping required.
 import { describeSafeError } from "./sensitive-text";
+import { LIBRARY_REFERENCES_IMPORTED_EVENT } from "./library-events";
 import type { IngestDraft } from "./library-types";
 import type {
   DownloadFinishedPayload,
@@ -166,6 +167,7 @@ function publishInspectedDownload(result: CapturedDownload, generation: number):
   }
   if (result.kind === "references") {
     window.dispatchEvent(new Event("aurascholar:library-updated"));
+    window.dispatchEvent(new Event(LIBRARY_REFERENCES_IMPORTED_EVENT));
   }
   publishResult(result);
 }

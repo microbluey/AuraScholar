@@ -29,6 +29,7 @@ import {
   subscribeResearchDownloads,
   type CapturedDownload,
 } from "./research-downloads";
+import { LIBRARY_REFERENCES_IMPORTED_EVENT } from "./library-events";
 
 describe("research download source-tab propagation", () => {
   let emitFinished: ((payload: DownloadFinishedPayload) => void) | undefined;
@@ -223,6 +224,14 @@ describe("research download source-tab propagation", () => {
       "TY  - JOUR\nTI  - Tagged reference\nER  -",
     );
     expect(captures[0]).toMatchObject({ imported: 1, kind: "references" });
+    await vi.waitFor(() =>
+      expect(window.dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "aurascholar:library-updated" }),
+      ),
+    );
+    expect(window.dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: LIBRARY_REFERENCES_IMPORTED_EVENT }),
+    );
   });
 
   it("does not parse a filename that main has classified as ignored", async () => {

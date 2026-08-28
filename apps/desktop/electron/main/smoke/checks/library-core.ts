@@ -48,6 +48,10 @@ export function buildLibraryCoreSmokeChecks(renderer: SmokeRendererResult): Smok
       pass: renderer.libraryRefreshRacePreserved,
     },
     {
+      name: "library-reference-import-refreshes-list",
+      pass: renderer.libraryReferenceImportRefreshVisible,
+    },
+    {
       name: "library-sidebar-meta-isolated",
       pass:
         renderer.librarySidebarMetaVisible &&

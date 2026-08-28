@@ -262,6 +262,7 @@ export const smokeResult = String.raw`        return {
           libraryLoadRetryAttempts,
           libraryLoadRetryRecoveryDetail,
           libraryLoadRetryRecoveryVisible,
+          libraryReferenceImportRefreshVisible,
           libraryRefreshRacePreserved,
           librarySidebarHealthHidden,
           librarySidebarMetaVisible,

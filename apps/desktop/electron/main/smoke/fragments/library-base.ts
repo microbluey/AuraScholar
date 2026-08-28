@@ -104,6 +104,38 @@ export const smokeLibraryBase = String.raw`          window.dispatchEvent(new Ev
           delete window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__;
           delete window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__;
 
+          const importedReferencesTitle = "Smoke Library Imported References Refresh";
+          await window.aura.db.run("DELETE FROM works WHERE id = ? AND library_id = ?", [
+            "smoke-library-imported-references", libraryId
+          ]);
+          window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__ = 1;
+          window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__ = 0;
+          const importedReferencesNow = Date.now();
+          await window.aura.db.run(
+            "INSERT INTO works (id, library_id, doi, title, abstract, year, venue_name, type, reading_status, starred, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+              "smoke-library-imported-references", libraryId,
+              "10.4242/aurascholar.imported-references-refresh",
+              importedReferencesTitle,
+              "A deterministic smoke-test reference import for validating Library refresh events.",
+              2027,
+              "Journal of Library UX",
+              "article",
+              "unread",
+              0,
+              importedReferencesNow,
+              importedReferencesNow
+            ]
+          );
+          window.dispatchEvent(new Event("aurascholar:library-references-imported"));
+          await waitFor(() => rowText().includes(importedReferencesTitle), 2_000);
+          await wait(150);
+          libraryReferenceImportRefreshVisible =
+            rowText().includes(importedReferencesTitle) &&
+            Number(window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__ ?? 0) === 1;
+          delete window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__;
+          delete window.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__;
+
           const positiveSearchRows = await window.aura.db.query(
             "SELECT w.id FROM works w JOIN works_fts f ON f.rowid = w.rowid WHERE works_fts MATCH ? AND w.deleted_at IS NULL AND w.library_id = ?",
             ['"Extreme"* "Consumer"*', libraryId]

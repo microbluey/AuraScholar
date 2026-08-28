@@ -81,6 +81,7 @@ import {
 import { loadPreviewLibraryPage } from "../features/library/preview-library-page";
 import { useLibraryBrowseState } from "../features/library/useLibraryBrowseState";
 import { useLibraryNoticeLifecycle } from "../features/library/useLibraryNoticeLifecycle";
+import { useLibraryExternalRefresh } from "../features/library/useLibraryExternalRefresh";
 import { reduceLibraryNoticeState } from "../features/library/library-notice-lifecycle";
 import { useLibraryRefreshController } from "../features/library/useLibraryRefreshController";
 import { useSelectedWorkRuntimeMeta } from "../features/library/useSelectedWorkRuntimeMeta";
@@ -935,6 +936,7 @@ export function LibraryPage() {
     const result = await coordinatedRefresh();
     return result.status === "failed" ? result.error : undefined;
   }, [coordinatedRefresh]);
+  useLibraryExternalRefresh(refresh);
 
   useEffect(() => {
     const disposition = libraryRouteRefreshDisposition(currentRouteKey, appliedRouteKeyRef.current);
@@ -965,14 +967,6 @@ export function LibraryPage() {
     search,
     sortMode,
   ]);
-
-  useEffect(() => {
-    const onDerivedDataUpdated = () => void refresh();
-    window.addEventListener("aurascholar:sentinel-updated", onDerivedDataUpdated);
-    return () => {
-      window.removeEventListener("aurascholar:sentinel-updated", onDerivedDataUpdated);
-    };
-  }, [refresh]);
 
   useEffect(() => {
     const onFindShortcut = (event: globalThis.KeyboardEvent) => {
