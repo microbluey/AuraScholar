@@ -191,6 +191,10 @@ describe("migrations", () => {
     expect(await indexExists("works_pmid_idx")).toBe(true);
   });
 
+  it("indexes active Project memberships in source page order", async () => {
+    expect(await indexExists("project_works_project_active_created_work_idx")).toBe(true);
+  });
+
   it("backfills FTS for works that existed before the search migration", async () => {
     const legacyDb = await createNodeDatabase(":memory:");
     const now = Date.now();

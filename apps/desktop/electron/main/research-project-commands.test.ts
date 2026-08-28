@@ -294,6 +294,40 @@ describe("Research Project data commands", () => {
     expect(listed.projects.find((item) => item.id === project.id)?.sourceCount).toBe(1);
   });
 
+  it("returns the requested Project source page with an independent total", async () => {
+    const project = await createProject("Paged sources");
+    const first = await works.upsert({ title: "First paged source" });
+    const second = await works.upsert({ title: "Second paged source" });
+    const third = await works.upsert({ title: "Third paged source" });
+    await command("project.addWorks", {
+      libraryId,
+      projectId: project.id,
+      workIds: [first.id, second.id, third.id],
+    });
+    await database.run(
+      `UPDATE project_works
+       SET created_at = CASE work_id
+         WHEN ? THEN 10
+         WHEN ? THEN 20
+         ELSE 30
+       END
+       WHERE project_id = ?`,
+      [first.id, second.id, project.id],
+    );
+
+    await expect(
+      command("project.listSources", {
+        libraryId,
+        limit: 1,
+        offset: 1,
+        projectId: project.id,
+      }),
+    ).resolves.toEqual({
+      sources: [expect.objectContaining({ id: second.id, inProject: true })],
+      total: 3,
+    });
+  });
+
   it("reports only newly added or restored Project memberships", async () => {
     const project = await createProject();
     const first = await works.upsert({ title: "First source" });

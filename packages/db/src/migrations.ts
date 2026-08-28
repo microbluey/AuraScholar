@@ -19,9 +19,8 @@ import { ensureLocalLibraryIdentity } from "./local-first.js";
 import { createLibraryBoundaryTriggers } from "./migration-library-boundary-triggers.js";
 import { applyDocumentEvidenceV19 } from "./migration-document-evidence.js";
 import { knowledgeMigrations } from "./migration-knowledge-registry.js";
+import { libraryMaintenanceMigrations } from "./migration-library-maintenance.js";
 import { applyResearchProjectsV18 } from "./migration-research-projects.js";
-
-const SAVED_SEARCH_CRITERIA_SQL = "ALTER TABLE saved_searches ADD COLUMN criteria_json TEXT;";
 
 export const MIGRATIONS: Migration[] = [
   {
@@ -402,7 +401,7 @@ export const MIGRATIONS: Migration[] = [
   },
   { version: 19, name: "document_evidence", sql: "", apply: applyDocumentEvidenceV19 },
   ...knowledgeMigrations,
-  { version: 24, name: "saved_search_criteria", sql: SAVED_SEARCH_CRITERIA_SQL },
+  ...libraryMaintenanceMigrations,
 ];
 
 async function applyLibraryOwnershipV17(db: SqlExecutor): Promise<void> {

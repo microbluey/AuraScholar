@@ -52,6 +52,12 @@ export const projectWorks = sqliteTable(
   (table) => [
     uniqueIndex("project_works_project_work_uq").on(table.projectId, table.workId),
     index("project_works_project_active_idx").on(table.projectId, table.deletedAt, table.updatedAt),
+    index("project_works_project_active_created_work_idx").on(
+      table.projectId,
+      table.deletedAt,
+      table.createdAt,
+      table.workId,
+    ),
     index("project_works_work_active_idx").on(table.workId, table.deletedAt),
     check("project_works_role_check", sql`length(trim(${table.role})) > 0`),
   ],

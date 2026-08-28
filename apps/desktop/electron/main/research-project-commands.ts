@@ -154,13 +154,18 @@ export async function executeResearchProjectCommand(
         await assertActiveLocalLibrary(database, input.libraryId);
         const repository = new ResearchProjectsRepo(database, input.libraryId);
         await requireActiveProject(repository, input.projectId);
-        const workIds = await repository.listWorkIds(input.projectId);
-        const pageIds = workIds.slice(input.offset, input.offset + input.limit);
+        const [pageIds, total] = await Promise.all([
+          repository.listActiveWorkIdsPage(input.projectId, {
+            limit: input.limit,
+            offset: input.offset,
+          }),
+          repository.countActiveWorkIds(input.projectId),
+        ]);
         return {
           sources: await loadWorkSummaries(database, input.libraryId, pageIds, {
             inProject: true,
           }),
-          total: workIds.length,
+          total,
         };
       });
     }
@@ -170,13 +175,15 @@ export async function executeResearchProjectCommand(
         await assertActiveLocalLibrary(database, input.libraryId);
         const repository = new ResearchProjectsRepo(database, input.libraryId);
         await requireActiveProject(repository, input.projectId);
-        const membership = new Set(await repository.listWorkIds(input.projectId));
         const works = await searchLibraryWorkSummaries(
           database,
           input.libraryId,
           input.query,
           input.limit,
-          membership,
+          async (candidateWorkIds) =>
+            new Set(
+              await repository.listActiveMembershipWorkIds(input.projectId, candidateWorkIds),
+            ),
         );
         return { works };
       });
