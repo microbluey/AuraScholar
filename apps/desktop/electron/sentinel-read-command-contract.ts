@@ -1,18 +1,39 @@
 import type { SentinelState } from "@aurascholar/core";
-import type { SentinelEventRow, SentinelTaskRow } from "@aurascholar/db/repos/sentinel";
+import type { SentinelTaskRow } from "@aurascholar/db/repos/sentinel";
 
-export type { SentinelEventRow, SentinelTaskRow } from "@aurascholar/db/repos/sentinel";
+export type { SentinelTaskRow } from "@aurascholar/db/repos/sentinel";
 
 /** Sentinel page and polling reads always resolve the active local Library in main. */
 export type SentinelReadScopeCommandInput = Record<string, never>;
 
 /**
  * Page data is returned in flat form so the renderer can build its own
- * presentation index without issuing one query per task.
+ * presentation index without issuing one query per task. Evidence stays
+ * main-only until the user explicitly requests one event's download.
  */
+export type SentinelEventEvidenceStatus = "available" | "none" | "too_large";
+
+export interface SentinelPageEvent {
+  detected_at: number;
+  evidenceStatus: SentinelEventEvidenceStatus;
+  from_state: string;
+  id: string;
+  task_id: string;
+  to_state: string;
+}
+
 export interface SentinelGetPageSnapshotCommandResult {
-  events: SentinelEventRow[];
+  events: SentinelPageEvent[];
   tasks: SentinelTaskRow[];
+}
+
+export interface SentinelGetEventEvidenceCommandInput {
+  eventId: string;
+}
+
+export interface SentinelGetEventEvidenceCommandResult {
+  evidenceJson: string | null;
+  status: SentinelEventEvidenceStatus;
 }
 
 /** The poller only needs the durable fields required to make its next CAS write. */
@@ -59,6 +80,10 @@ export interface SentinelReadDataCommandMap {
   "sentinel.getDuePollSnapshot": {
     input: SentinelGetDuePollSnapshotCommandInput;
     output: SentinelGetDuePollSnapshotCommandResult;
+  };
+  "sentinel.getEventEvidence": {
+    input: SentinelGetEventEvidenceCommandInput;
+    output: SentinelGetEventEvidenceCommandResult;
   };
   "sentinel.getPageSnapshot": {
     input: SentinelReadScopeCommandInput;

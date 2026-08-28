@@ -5,8 +5,8 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 81811,
-        ".tsx": 35865
+        ".ts": 81974,
+        ".tsx": 35913
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
@@ -37,9 +37,9 @@
         "apps/desktop/electron/main/citation-graph-commands.ts": 413,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
-        "apps/desktop/electron/main/data-command-envelope.ts": 165,
+        "apps/desktop/electron/main/data-command-envelope.ts": 166,
         "apps/desktop/electron/main/data-command-runtime.ts": 106,
-        "apps/desktop/electron/main/data-commands.ts": 487,
+        "apps/desktop/electron/main/data-commands.ts": 488,
         "apps/desktop/electron/main/database-coordinator.ts": 78,
         "apps/desktop/electron/main/db.ts": 78,
         "apps/desktop/electron/main/discovery-library-status-commands.ts": 317,
@@ -126,8 +126,8 @@
         "apps/desktop/electron/main/scholarly-http.ts": 378,
         "apps/desktop/electron/main/scholarly-run-registry.ts": 35,
         "apps/desktop/electron/main/scholarly-work-input.ts": 42,
-        "apps/desktop/electron/main/sentinel-commands.ts": 299,
-        "apps/desktop/electron/main/sentinel-read-commands.ts": 295,
+        "apps/desktop/electron/main/sentinel-commands.ts": 300,
+        "apps/desktop/electron/main/sentinel-read-commands.ts": 394,
         "apps/desktop/electron/main/sentinel-run-commands.ts": 90,
         "apps/desktop/electron/main/sentinel-runner-helpers.ts": 65,
         "apps/desktop/electron/main/sentinel-runner-input.ts": 93,
@@ -155,7 +155,7 @@
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
         "apps/desktop/electron/saved-search-command-contract.ts": 132,
         "apps/desktop/electron/scholarly-command-contract.ts": 100,
-        "apps/desktop/electron/sentinel-read-command-contract.ts": 71,
+        "apps/desktop/electron/sentinel-read-command-contract.ts": 96,
         "apps/desktop/electron/sentinel-run-command-contract.ts": 66,
         "apps/desktop/electron/shared.ts": 159,
         "apps/desktop/electron/smoke-mode.ts": 15,
@@ -327,7 +327,8 @@
         "apps/desktop/src/features/reader/reader-session-state.ts": 45,
         "apps/desktop/src/features/reader/reader-smoke-failures.ts": 48,
         "apps/desktop/src/features/reader/useReaderEvidenceDeepLink.ts": 52,
-        "apps/desktop/src/features/sentinel/sentinel-preview.ts": 246,
+        "apps/desktop/src/features/sentinel/SentinelEvidenceRow.tsx": 83,
+        "apps/desktop/src/features/sentinel/sentinel-preview.ts": 264,
         "apps/desktop/src/features/settings/LocalEmbeddingModelCard.tsx": 344,
         "apps/desktop/src/features/settings/backup-safety.ts": 31,
         "apps/desktop/src/features/settings/provider-settings.ts": 137,
@@ -343,7 +344,7 @@
         "apps/desktop/src/pages/LibraryPage.tsx": 3952,
         "apps/desktop/src/pages/ReaderPage.tsx": 2060,
         "apps/desktop/src/pages/ResearchProjectPage.tsx": 262,
-        "apps/desktop/src/pages/SentinelPage.tsx": 1237,
+        "apps/desktop/src/pages/SentinelPage.tsx": 1202,
         "apps/desktop/src/pages/SettingsPage.tsx": 1970,
         "apps/desktop/src/pages/SnippetsPage.tsx": 1130,
         "apps/desktop/src/pages/SpatialCanvasPage.tsx": 1158,
@@ -402,7 +403,7 @@
         "apps/desktop/src/services/scholar.ts": 15,
         "apps/desktop/src/services/scholarly-data.ts": 96,
         "apps/desktop/src/services/sensitive-text.ts": 7,
-        "apps/desktop/src/services/sentinel-page-data.ts": 143,
+        "apps/desktop/src/services/sentinel-page-data.ts": 161,
         "apps/desktop/src/services/sentinel.ts": 126,
         "apps/desktop/src/services/snippets.ts": 34,
         "apps/desktop/src/services/sync.ts": 103,
@@ -588,11 +589,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 136997
+      "totalLines": 137208
     },
     "tests": {
       "byExtension": {
-        ".ts": 82735,
+        ".ts": 82899,
         ".tsx": 1035
       },
       "files": {
@@ -605,8 +606,8 @@
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 257,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 738,
-        "apps/desktop/electron/main/data-command-core-architecture.test.ts": 109,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 744,
+        "apps/desktop/electron/main/data-command-core-architecture.test.ts": 110,
         "apps/desktop/electron/main/data-command-lockstep.test.ts": 82,
         "apps/desktop/electron/main/data-commands.test.ts": 1025,
         "apps/desktop/electron/main/database-coordinator.test.ts": 233,
@@ -691,9 +692,9 @@
         "apps/desktop/electron/main/scholarly-commands-architecture.test.ts": 65,
         "apps/desktop/electron/main/scholarly-commands.test.ts": 166,
         "apps/desktop/electron/main/scholarly-http.test.ts": 228,
-        "apps/desktop/electron/main/sentinel-commands.test.ts": 510,
-        "apps/desktop/electron/main/sentinel-read-architecture.test.ts": 81,
-        "apps/desktop/electron/main/sentinel-read-commands.test.ts": 320,
+        "apps/desktop/electron/main/sentinel-commands.test.ts": 546,
+        "apps/desktop/electron/main/sentinel-read-architecture.test.ts": 90,
+        "apps/desktop/electron/main/sentinel-read-commands.test.ts": 405,
         "apps/desktop/electron/main/sentinel-run-architecture.test.ts": 101,
         "apps/desktop/electron/main/sentinel-run-commands.test.ts": 72,
         "apps/desktop/electron/main/sentinel-runner.test.ts": 353,
@@ -864,7 +865,7 @@
         "apps/desktop/src/features/reader/reader-session-coordinator.test.ts": 113,
         "apps/desktop/src/features/reader/reader-session-stale-completion.test.ts": 127,
         "apps/desktop/src/features/reader/reader-session-state.test.ts": 63,
-        "apps/desktop/src/features/sentinel/sentinel-preview.test.ts": 87,
+        "apps/desktop/src/features/sentinel/sentinel-preview.test.ts": 95,
         "apps/desktop/src/features/settings/LocalEmbeddingModelCard.test.tsx": 20,
         "apps/desktop/src/services/ai-data.test.ts": 95,
         "apps/desktop/src/services/ai.test.ts": 110,
@@ -913,7 +914,7 @@
         "apps/desktop/src/services/saved-searches.test.ts": 592,
         "apps/desktop/src/services/scholar.test.ts": 28,
         "apps/desktop/src/services/scholarly-data.test.ts": 92,
-        "apps/desktop/src/services/sentinel-page-data.test.ts": 269,
+        "apps/desktop/src/services/sentinel-page-data.test.ts": 288,
         "apps/desktop/src/services/sentinel.test.ts": 101,
         "apps/desktop/src/services/snippets.test.ts": 98,
         "apps/desktop/src/services/sync-backup.test.ts": 1206,
@@ -1001,7 +1002,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 83770
+      "totalLines": 83934
     }
   },
   "uiDatabaseBoundary": {}

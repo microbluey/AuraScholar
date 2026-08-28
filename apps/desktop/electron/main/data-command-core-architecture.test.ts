@@ -32,6 +32,7 @@ describe("main-process data command core architecture", () => {
     expect(savedSearchContract).toContain('"savedSearch.listDue"');
     expect(sentinelReadContract).toContain('"sentinel.getPageSnapshot"');
     expect(sentinelReadContract).toContain('"sentinel.getDuePollSnapshot"');
+    expect(sentinelReadContract).toContain('"sentinel.getEventEvidence"');
     expect(sentinelReadContract).toContain('"sentinel.getTaskPollSnapshot"');
     expect(syncContract).toContain('"sync.adoptLegacySettings"');
     expect(syncContract).toContain('"sync.getSettings"');

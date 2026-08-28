@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createPreviewSentinelTask,
+  getPreviewSentinelEventEvidence,
   previewSentinelEvents,
   previewSentinelTasks,
   simulatePreviewPoll,
@@ -15,6 +16,13 @@ describe("Sentinel browser preview", () => {
 
     expect(previewSentinelTasks()[0]?.title).toBe("Attention Is All You Need");
     expect(previewSentinelEvents().get("preview-sentinel-attention")).toHaveLength(4);
+    const event = previewSentinelEvents().get("preview-sentinel-attention")?.[0];
+    expect(event).toMatchObject({ evidenceStatus: "available" });
+    expect(event).not.toHaveProperty("evidence_json");
+    expect(getPreviewSentinelEventEvidence(event!.id)).toMatchObject({
+      evidenceJson: expect.stringContaining('"preview": true'),
+      status: "available",
+    });
   });
 
   it("normalizes DOI tasks and preserves title-monitor hints", () => {

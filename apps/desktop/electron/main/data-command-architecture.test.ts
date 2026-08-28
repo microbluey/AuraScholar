@@ -149,6 +149,12 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   void dependencies.execute?.("sentinel.getPageSnapshot", async () => ({ events: [], tasks: [] }));
   // @ts-expect-error sentinel.getPageSnapshot must return its complete page snapshot.
   void dependencies.execute?.("sentinel.getPageSnapshot", async () => ({ tasks: [] }));
+  void dependencies.execute?.("sentinel.getEventEvidence", async () => ({
+    evidenceJson: null,
+    status: "none",
+  }));
+  // @ts-expect-error sentinel.getEventEvidence must return its evidence status.
+  void dependencies.execute?.("sentinel.getEventEvidence", async () => ({ evidenceJson: null }));
   void dependencies.execute?.("sentinel.getDuePollSnapshot", async () => ({
     libraryId: "library-id",
     tasks: [],

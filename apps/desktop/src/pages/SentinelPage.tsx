@@ -10,8 +10,8 @@ import {
 } from "../services/sentinel";
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
-import { downloadBlob } from "../download";
 import { isImeComposing } from "../keyboard";
+import { SentinelEvidenceRow } from "../features/sentinel/SentinelEvidenceRow";
 import {
   createPreviewSentinelTask,
   PREVIEW_SENTINEL_SCOPE_MESSAGE,
@@ -27,7 +27,7 @@ import {
   loadSentinelPageSnapshot,
   restoreSentinelTask,
   setSentinelTaskStatus,
-  type SentinelEventRow,
+  type SentinelPageEvent,
   type SentinelTaskRow,
 } from "../services/sentinel-page-data";
 
@@ -45,7 +45,7 @@ interface SentinelUndoState {
   id: string;
   message: string;
   task?: SentinelTaskRow;
-  events?: SentinelEventRow[];
+  events?: SentinelPageEvent[];
 }
 
 interface SentinelSmokeWindow extends Window {
@@ -105,7 +105,7 @@ export function SentinelPage() {
   const [hintVenue, setHintVenue] = useState("");
   const [hintAuthor, setHintAuthor] = useState("");
   const [tasks, setTasks] = useState<SentinelTaskRow[]>([]);
-  const [eventsByTask, setEventsByTask] = useState<Map<string, SentinelEventRow[]>>(new Map());
+  const [eventsByTask, setEventsByTask] = useState<Map<string, SentinelPageEvent[]>>(new Map());
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -915,7 +915,7 @@ function SentinelTaskCard({
   onOpenWork,
 }: {
   task: SentinelTaskRow;
-  events: SentinelEventRow[];
+  events: SentinelPageEvent[];
   now: number;
   expanded: boolean;
   action: TaskActionType | null;
@@ -1035,37 +1035,11 @@ function SentinelTaskCard({
           {events.length === 0 ? (
             <p>还没有状态变化证据。</p>
           ) : (
-            events.map((event) => <EvidenceRow event={event} key={event.id} />)
+            events.map((event) => <SentinelEvidenceRow event={event} key={event.id} />)
           )}
         </div>
       )}
     </Card>
-  );
-}
-
-function EvidenceRow({ event }: { event: SentinelEventRow }) {
-  return (
-    <div className="sentinel-evidence-row">
-      <time>{formatDate(event.detected_at)}</time>
-      <span>
-        {STATE_LABEL[event.from_state as SentinelState] ?? event.from_state} →{" "}
-        {STATE_LABEL[event.to_state as SentinelState] ?? event.to_state}
-      </span>
-      {event.evidence_json && (
-        <button
-          type="button"
-          onClick={() => {
-            const blob = new Blob([event.evidence_json!], { type: "application/json" });
-            downloadBlob(
-              blob,
-              `证据-${event.to_state}-${new Date(event.detected_at).toISOString().slice(0, 10)}.json`,
-            );
-          }}
-        >
-          下载证据
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -1212,15 +1186,6 @@ function shortStateLabel(state: SentinelState) {
 
 function isTaskDue(task: SentinelTaskRow, now = Date.now()) {
   return task.status === "active" && task.next_poll_at <= now;
-}
-
-function formatDate(value: number) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
 }
 
 function formatRelative(value: number) {

@@ -248,6 +248,7 @@ export async function executeDataCommand(
     case "sentinel.setStatus":
       return executeSentinelCommand(envelope, dependencies);
     case "sentinel.getDuePollSnapshot":
+    case "sentinel.getEventEvidence":
     case "sentinel.getPageSnapshot":
     case "sentinel.getTaskPollSnapshot":
       return executeSentinelReadCommand(envelope, dependencies);
