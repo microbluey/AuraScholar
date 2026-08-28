@@ -1,5 +1,6 @@
 import { closeSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { createResearchDownloadFileName } from "./research-download-file-name";
+import { MAX_RESEARCH_DOWNLOAD_BYTES } from "./research-download-limits";
 import { researchDownloadPath } from "./research-download-store";
 import { isNodeError } from "./research-download-store-io";
 
@@ -29,6 +30,9 @@ export function writeResearchPrintedFile(
   pdf: Uint8Array,
   dependencies: Partial<ResearchPrintFileDependencies> = {},
 ): string {
+  if (pdf.byteLength > MAX_RESEARCH_DOWNLOAD_BYTES) {
+    throw new Error("Research print file exceeds download size limit");
+  }
   const createFileName = dependencies.createFileName ?? createResearchDownloadFileName;
   const pathFor = dependencies.pathFor ?? researchDownloadPath;
   const io = dependencies.io ?? researchPrintFileIo;
