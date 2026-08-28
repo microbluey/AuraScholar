@@ -6,6 +6,12 @@ import { summarizePersistedError } from "../error-summary.js";
 import { newId } from "../ids.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
 
+/** Keep a complete legal polling batch while bounding durable deduplication state. */
+export const MAX_SAVED_SEARCH_SEEN_IDS = 2_000;
+export const MAX_SAVED_SEARCH_SEEN_IDS_BYTES = 256 * 1024;
+
+const utf8Encoder = new TextEncoder();
+
 export interface SavedSearchRow {
   id: string;
   library_id: string;
@@ -137,8 +143,8 @@ export class SavedSearchesRepo {
   }
 
   /**
-   * Record the outcome of a run: the full set of seen ids becomes the new
-   * baseline, new_count accumulates unseen hits, and the next run is scheduled.
+   * Record a run with a bounded recent-observation baseline. This legacy
+   * convenience method does not compute a delta; conditional polling does.
    */
   async recordRun(
     id: string,
@@ -153,7 +159,15 @@ export class SavedSearchesRepo {
          SET seen_ids_json = ?, new_count = new_count + ?, last_run_at = ?, next_run_at = ?,
              last_error = NULL, updated_at = MAX(updated_at + 1, ?)
          WHERE id = ? AND library_id = ? AND deleted_at IS NULL`,
-        [JSON.stringify(seenIds), newCount, now, nextRunAt, now, id, this.libraryId],
+        [
+          JSON.stringify(retainRecentSeenIds([], seenIds)),
+          newCount,
+          now,
+          nextRunAt,
+          now,
+          id,
+          this.libraryId,
+        ],
       );
       this.assertChanged(changed, new SavedSearchInactiveError(id));
     });
@@ -190,7 +204,7 @@ export class SavedSearchesRepo {
       const freshCount = firstRun
         ? 0
         : observedIds.reduce((count, observedId) => count + (seen.has(observedId) ? 0 : 1), 0);
-      const nextSeenIds = [...new Set([...seen, ...observedIds])];
+      const nextSeenIds = retainRecentSeenIds(baseline.ids, observedIds);
       const now = Date.now();
       const updatedAt = Math.max(current.updated_at + 1, now);
       const changed = await this.db.run(
@@ -303,4 +317,33 @@ function parseSeenIds(value: string): { ids: string[]; recovered: boolean } {
   } catch {
     return { ids: [], recovered: true };
   }
+}
+
+/**
+ * Preserve the most recently observed unique IDs in old-to-new order. Entries
+ * observed in this run move to the tail before capacity trimming, so stable
+ * results cannot age out merely because they first appeared long ago.
+ */
+function retainRecentSeenIds(previousIds: string[], observedIds: string[]): string[] {
+  const recent = new Set<string>();
+  for (const id of [...previousIds, ...observedIds]) {
+    recent.delete(id);
+    recent.add(id);
+  }
+  const retained: string[] = [];
+  let serializedBytes = 2; // []
+  const ids = [...recent];
+  for (let index = ids.length - 1; index >= 0; index -= 1) {
+    if (retained.length >= MAX_SAVED_SEARCH_SEEN_IDS) break;
+    const id = ids[index]!;
+    const entryBytes = utf8Encoder.encode(JSON.stringify(id)).byteLength;
+    const nextBytes = serializedBytes + entryBytes + (retained.length === 0 ? 0 : 1);
+    if (nextBytes > MAX_SAVED_SEARCH_SEEN_IDS_BYTES) {
+      if (retained.length > 0) break;
+      continue;
+    }
+    retained.push(id);
+    serializedBytes = nextBytes;
+  }
+  return retained.reverse();
 }

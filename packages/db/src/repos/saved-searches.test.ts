@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeDatabase, type Database } from "../database";
 import { runMigrations } from "../migrations";
 import { requireLocalLibraryId } from "../local-first";
-import { SavedSearchInactiveError, SavedSearchesRepo } from "./saved-searches";
+import {
+  MAX_SAVED_SEARCH_SEEN_IDS,
+  MAX_SAVED_SEARCH_SEEN_IDS_BYTES,
+  SavedSearchInactiveError,
+  SavedSearchesRepo,
+} from "./saved-searches";
 
 let db: Database;
 let libraryId: string;
@@ -16,6 +21,156 @@ beforeEach(async () => {
 });
 
 describe("SavedSearchesRepo", () => {
+  it("bounds legacy run baselines to the most recent observed ids", async () => {
+    const id = await savedSearches.create({
+      query: "bounded baseline",
+      sources: ["openalex"],
+    });
+    const observedIds = Array.from(
+      { length: MAX_SAVED_SEARCH_SEEN_IDS + 5 },
+      (_, index) => `doi:baseline:${index}`,
+    );
+
+    await savedSearches.recordRun(id, observedIds, 0, Date.now() + 1_000);
+
+    expect(JSON.parse((await savedSearches.get(id))!.seen_ids_json)).toEqual(
+      observedIds.slice(-MAX_SAVED_SEARCH_SEEN_IDS),
+    );
+  });
+
+  it("keeps an oversized first conditional run as a bounded baseline", async () => {
+    const id = await savedSearches.create({
+      query: "bounded first conditional run",
+      sources: ["openalex"],
+    });
+    const observedIds = Array.from(
+      { length: MAX_SAVED_SEARCH_SEEN_IDS + 5 },
+      (_, index) => `doi:first-run:${index}`,
+    );
+    const snapshot = (await savedSearches.get(id))!;
+
+    const commit = await savedSearches.commitRunIfCurrent(id, {
+      expectedUpdatedAt: snapshot.updated_at,
+      observedIds,
+      nextRunAt: Date.now() + 1_000,
+    });
+
+    expect(commit).toMatchObject({ committed: true, freshCount: 0 });
+    expect(JSON.parse((await savedSearches.get(id))!.seen_ids_json)).toEqual(
+      observedIds.slice(-MAX_SAVED_SEARCH_SEEN_IDS),
+    );
+  });
+
+  it("refreshes observed ids in the recent window before trimming", async () => {
+    const id = await savedSearches.create({
+      query: "recent observation refresh",
+      sources: ["openalex"],
+    });
+    const baseline = Array.from(
+      { length: MAX_SAVED_SEARCH_SEEN_IDS },
+      (_, index) => `doi:recent:${index}`,
+    );
+    await savedSearches.recordRun(id, baseline, 0, Date.now() + 1_000);
+    const snapshot = (await savedSearches.get(id))!;
+
+    const commit = await savedSearches.commitRunIfCurrent(id, {
+      expectedUpdatedAt: snapshot.updated_at,
+      observedIds: ["doi:recent:0", "doi:recent:new"],
+      nextRunAt: Date.now() + 2_000,
+    });
+
+    expect(commit).toMatchObject({ committed: true, freshCount: 1 });
+    const retained = JSON.parse((await savedSearches.get(id))!.seen_ids_json) as string[];
+    expect(retained).toHaveLength(MAX_SAVED_SEARCH_SEEN_IDS);
+    expect(retained[0]).toBe("doi:recent:2");
+    expect(retained.slice(-2)).toEqual(["doi:recent:0", "doi:recent:new"]);
+  });
+
+  it("counts against a legacy full baseline before lazily compacting it", async () => {
+    const id = await savedSearches.create({
+      query: "legacy compaction",
+      sources: ["openalex"],
+    });
+    const legacyIds = Array.from(
+      { length: MAX_SAVED_SEARCH_SEEN_IDS + 3 },
+      (_, index) => `doi:legacy:${index}`,
+    );
+    await db.run(
+      `UPDATE saved_searches
+       SET seen_ids_json = ?, last_run_at = 1, updated_at = 1
+       WHERE id = ?`,
+      [JSON.stringify(legacyIds), id],
+    );
+    const snapshot = (await savedSearches.get(id))!;
+
+    const commit = await savedSearches.commitRunIfCurrent(id, {
+      expectedUpdatedAt: snapshot.updated_at,
+      observedIds: ["doi:legacy:0", "doi:legacy:new"],
+      nextRunAt: Date.now() + 1_000,
+    });
+
+    expect(commit).toMatchObject({ committed: true, freshCount: 1 });
+    const retained = JSON.parse((await savedSearches.get(id))!.seen_ids_json) as string[];
+    expect(retained).toHaveLength(MAX_SAVED_SEARCH_SEEN_IDS);
+    expect(retained.slice(-2)).toEqual(["doi:legacy:0", "doi:legacy:new"]);
+  });
+
+  it("does not compact legacy history for a stale run or an error commit", async () => {
+    const id = await savedSearches.create({
+      query: "legacy mutation guard",
+      sources: ["openalex"],
+    });
+    const legacyIds = Array.from(
+      { length: MAX_SAVED_SEARCH_SEEN_IDS + 3 },
+      (_, index) => `doi:uncompacted:${index}`,
+    );
+    const legacyJson = JSON.stringify(legacyIds);
+    await db.run(
+      `UPDATE saved_searches
+       SET seen_ids_json = ?, last_run_at = 1, updated_at = 1
+       WHERE id = ?`,
+      [legacyJson, id],
+    );
+    const snapshot = (await savedSearches.get(id))!;
+
+    await expect(
+      savedSearches.commitRunIfCurrent(id, {
+        expectedUpdatedAt: snapshot.updated_at - 1,
+        observedIds: ["doi:uncompacted:new"],
+        nextRunAt: Date.now() + 1_000,
+      }),
+    ).resolves.toEqual({ committed: false, freshCount: 0, updatedAt: null });
+    expect((await savedSearches.get(id))!.seen_ids_json).toBe(legacyJson);
+
+    await expect(
+      savedSearches.recordErrorIfCurrent(id, {
+        error: "OpenAlex temporarily unavailable",
+        expectedUpdatedAt: snapshot.updated_at,
+        nextRunAt: Date.now() + 2_000,
+      }),
+    ).resolves.toMatchObject({ committed: true });
+    expect((await savedSearches.get(id))!.seen_ids_json).toBe(legacyJson);
+  });
+
+  it("bounds durable seen history by its UTF-8 serialized size", async () => {
+    const id = await savedSearches.create({
+      query: "byte bounded baseline",
+      sources: ["openalex"],
+    });
+    const observedIds = Array.from(
+      { length: 100 },
+      (_, index) => `doi:bytes:${index}:${"界".repeat(3_000)}`,
+    );
+
+    await savedSearches.recordRun(id, observedIds, 0, Date.now() + 1_000);
+
+    const persisted = (await savedSearches.get(id))!.seen_ids_json;
+    expect(new TextEncoder().encode(persisted).byteLength).toBeLessThanOrEqual(
+      MAX_SAVED_SEARCH_SEEN_IDS_BYTES,
+    );
+    expect(JSON.parse(persisted).at(-1)).toBe(observedIds.at(-1));
+  });
+
   it("stores the last polling error and clears it after a successful run", async () => {
     const id = await savedSearches.create({
       query: "graph neural retrieval",

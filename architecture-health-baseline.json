@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 81646,
+        ".ts": 81709,
         ".tsx": 35865
       },
       "files": {
@@ -118,7 +118,7 @@
         "apps/desktop/electron/main/research-print-capture.ts": 103,
         "apps/desktop/electron/main/research-project-commands.ts": 360,
         "apps/desktop/electron/main/research-project-query-data.ts": 218,
-        "apps/desktop/electron/main/saved-search-commands.ts": 335,
+        "apps/desktop/electron/main/saved-search-commands.ts": 342,
         "apps/desktop/electron/main/saved-search-create-input.ts": 84,
         "apps/desktop/electron/main/scholarly-command-input.ts": 358,
         "apps/desktop/electron/main/scholarly-command-output.ts": 455,
@@ -153,7 +153,7 @@
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
         "apps/desktop/electron/reader-command-contract.ts": 146,
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
-        "apps/desktop/electron/saved-search-command-contract.ts": 119,
+        "apps/desktop/electron/saved-search-command-contract.ts": 132,
         "apps/desktop/electron/scholarly-command-contract.ts": 100,
         "apps/desktop/electron/sentinel-read-command-contract.ts": 71,
         "apps/desktop/electron/sentinel-run-command-contract.ts": 66,
@@ -503,7 +503,7 @@
         "packages/db/src/repos/knowledge.ts": 9,
         "packages/db/src/repos/project-work-lifecycle.ts": 85,
         "packages/db/src/repos/research-projects.ts": 419,
-        "packages/db/src/repos/saved-searches.ts": 306,
+        "packages/db/src/repos/saved-searches.ts": 349,
         "packages/db/src/repos/sentinel-create.ts": 66,
         "packages/db/src/repos/sentinel.ts": 496,
         "packages/db/src/repos/snippets.ts": 155,
@@ -587,11 +587,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 136832
+      "totalLines": 136895
     },
     "tests": {
       "byExtension": {
-        ".ts": 82454,
+        ".ts": 82646,
         ".tsx": 1035
       },
       "files": {
@@ -684,7 +684,7 @@
         "apps/desktop/electron/main/research-download-user-intent.test.ts": 112,
         "apps/desktop/electron/main/research-print-capture.test.ts": 158,
         "apps/desktop/electron/main/research-project-commands.test.ts": 378,
-        "apps/desktop/electron/main/saved-search-commands.test.ts": 497,
+        "apps/desktop/electron/main/saved-search-commands.test.ts": 540,
         "apps/desktop/electron/main/saved-search-structured-query.test.ts": 164,
         "apps/desktop/electron/main/scholarly-command-input.test.ts": 85,
         "apps/desktop/electron/main/scholarly-commands-architecture.test.ts": 65,
@@ -908,8 +908,8 @@
         "apps/desktop/src/services/research-project-preview-service.test.ts": 49,
         "apps/desktop/src/services/research-projects.test.ts": 236,
         "apps/desktop/src/services/saved-search-backup-criteria.test.ts": 64,
-        "apps/desktop/src/services/saved-search-structured-query.test.ts": 122,
-        "apps/desktop/src/services/saved-searches.test.ts": 597,
+        "apps/desktop/src/services/saved-search-structured-query.test.ts": 121,
+        "apps/desktop/src/services/saved-searches.test.ts": 592,
         "apps/desktop/src/services/scholar.test.ts": 28,
         "apps/desktop/src/services/scholarly-data.test.ts": 92,
         "apps/desktop/src/services/sentinel-page-data.test.ts": 269,
@@ -965,7 +965,7 @@
         "packages/db/src/repos/repos.test.ts": 1185,
         "packages/db/src/repos/research-projects.test.ts": 305,
         "packages/db/src/repos/root-library-scope.test.ts": 170,
-        "packages/db/src/repos/saved-searches.test.ts": 362,
+        "packages/db/src/repos/saved-searches.test.ts": 517,
         "packages/db/src/repos/sentinel.test.ts": 578,
         "packages/db/src/repos/snippets.test.ts": 149,
         "packages/db/src/repos/tags.test.ts": 499,
@@ -1000,7 +1000,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 83489
+      "totalLines": 83681
     }
   },
   "uiDatabaseBoundary": {}

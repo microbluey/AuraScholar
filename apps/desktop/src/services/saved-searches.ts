@@ -2,7 +2,7 @@
 // surfaces newly-published matches. Network work stays in the renderer, while
 // every durable mutation crosses the typed main-process command boundary.
 import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
-import type { SavedSearchRow } from "../../electron/data-command-contract";
+import type { SavedSearchReadRow } from "../../electron/data-command-contract";
 import {
   normalizeSavedSearchCriteria,
   parseSavedSearchCriteria,
@@ -205,7 +205,7 @@ export class SavedSearchService {
 
   private async runRow(
     scope: SavedSearchScope,
-    row: SavedSearchRow,
+    row: SavedSearchReadRow,
     options: {
       signal?: AbortSignal;
       silent: boolean;
@@ -249,7 +249,7 @@ export class SavedSearchService {
 
   private async executePoll(
     scope: SavedSearchScope,
-    row: SavedSearchRow,
+    row: SavedSearchReadRow,
     entry: PollEntry,
   ): Promise<PollOutcome> {
     const criteria = parseSavedSearchCriteria(row.criteria_json, row.query);

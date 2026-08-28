@@ -1,7 +1,20 @@
 import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
-import type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
 
-export type { SavedSearchRow } from "@aurascholar/db/repos/saved-searches";
+/**
+ * Saved-search state needed by the renderer and polling coordinator. Internal
+ * de-duplication history stays in the main-process database repository.
+ */
+export interface SavedSearchReadRow {
+  criteria_json: string | null;
+  deleted_at: number | null;
+  id: string;
+  last_error: string | null;
+  last_run_at: number | null;
+  new_count: number;
+  query: string;
+  sources_json: string | null;
+  updated_at: number;
+}
 
 /** The main process resolves the durable local Library for saved-search reads. */
 export type SavedSearchScopeCommandInput = Record<string, never>;
@@ -11,7 +24,7 @@ export interface SavedSearchGetScopeCommandResult {
 }
 
 export interface SavedSearchListCommandResult {
-  savedSearches: SavedSearchRow[];
+  savedSearches: SavedSearchReadRow[];
 }
 
 /** The main process owns the current-time policy for due polling. */
@@ -23,7 +36,7 @@ export interface SavedSearchGetCommandInput {
 }
 
 export interface SavedSearchGetCommandResult {
-  savedSearch: SavedSearchRow | null;
+  savedSearch: SavedSearchReadRow | null;
 }
 
 export interface CreateSavedSearchCommandInput {

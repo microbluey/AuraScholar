@@ -34,17 +34,19 @@ async function insertSavedSearch(
     libraryId?: string;
     nextRunAt?: number | null;
     query?: string;
+    seenIdsJson?: string;
   },
 ): Promise<void> {
   await database.run(
     `INSERT INTO saved_searches (
        id, library_id, query, sources_json, seen_ids_json, new_count, last_run_at, next_run_at,
        last_error, created_at, updated_at, deleted_at
-     ) VALUES (?, ?, ?, NULL, '[]', 0, NULL, ?, NULL, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, NULL, ?, 0, NULL, ?, NULL, ?, ?, ?)`,
     [
       id,
       options.libraryId ?? libraryId,
       options.query ?? id,
+      options.seenIdsJson ?? "[]",
       options.nextRunAt ?? null,
       options.createdAt,
       options.createdAt,
@@ -104,6 +106,19 @@ describe("Saved Search data commands", () => {
           libraryId,
           nextRunAt: Date.now(),
           observedIds: ["doi:10.1/example", "doi:10.1/example"],
+          savedSearchId: "saved-search",
+        },
+      },
+      {
+        name: "savedSearch.recordRun",
+        input: {
+          expectedUpdatedAt: 1,
+          libraryId,
+          nextRunAt: Date.now(),
+          observedIds: Array.from(
+            { length: 30 },
+            (_, index) => `doi:oversized:${index}:${"界".repeat(4_000)}`,
+          ),
           savedSearchId: "saved-search",
         },
       },
@@ -248,6 +263,34 @@ describe("Saved Search data commands", () => {
     await expect(
       executeDataCommand({ name: "savedSearch.listDue", input: {} }, dependencies),
     ).rejects.toThrow("Saved search output is limited to 8388608 bytes");
+  });
+
+  it("keeps private seen history out of saved-search IPC reads", async () => {
+    await insertSavedSearch("saved:private-history", {
+      createdAt: 1,
+      nextRunAt: 0,
+      seenIdsJson: JSON.stringify(["x".repeat(8 * 1024 * 1024)]),
+    });
+
+    const list = (await executeDataCommand(
+      { name: "savedSearch.list", input: {} },
+      dependencies,
+    )) as unknown as { savedSearches: Array<Record<string, unknown>> };
+    const due = (await executeDataCommand(
+      { name: "savedSearch.listDue", input: {} },
+      dependencies,
+    )) as unknown as { savedSearches: Array<Record<string, unknown>> };
+    const get = (await executeDataCommand(
+      { name: "savedSearch.get", input: { savedSearchId: "saved:private-history" } },
+      dependencies,
+    )) as unknown as { savedSearch: Record<string, unknown> | null };
+
+    expect(list.savedSearches).toHaveLength(1);
+    expect(due.savedSearches).toHaveLength(1);
+    expect(get.savedSearch).toMatchObject({ id: "saved:private-history" });
+    for (const row of [...list.savedSearches, ...due.savedSearches, get.savedSearch!]) {
+      expect(row).not.toHaveProperty("seen_ids_json");
+    }
   });
 
   it("rejects scoped reads when the active local Library is deleted", async () => {

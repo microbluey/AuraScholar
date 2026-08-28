@@ -1,7 +1,7 @@
 import type { NormalizedWork } from "@aurascholar/connectors";
 import type { DiscoveryQuery, DiscoverySource } from "@aurascholar/core";
 import { workFingerprint } from "@aurascholar/db/ids";
-import type { SavedSearchRow } from "../../electron/data-command-contract";
+import type { SavedSearchReadRow } from "../../electron/data-command-contract";
 import { parseSavedSearchCriteria } from "../shared/saved-search-criteria";
 import { describeSafeError } from "./sensitive-text";
 
@@ -17,7 +17,7 @@ export interface SavedSearchView {
 
 const ALL_DISCOVERY_SOURCES: DiscoverySource[] = ["arxiv", "crossref", "openalex", "s2"];
 
-export function toSavedSearchView(row: SavedSearchRow): SavedSearchView {
+export function toSavedSearchView(row: SavedSearchReadRow): SavedSearchView {
   return {
     id: row.id,
     query: row.query,
