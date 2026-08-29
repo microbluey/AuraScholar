@@ -1,6 +1,8 @@
 import type {
   LibraryGetPageCommandInput,
   LibraryGetPageCommandResult,
+  LibraryGetWorkInspectorDetailCommandInput,
+  LibraryGetWorkInspectorDetailCommandResult,
   LibraryGetWorkRuntimeMetaCommandInput,
   LibraryGetWorkRuntimeMetaCommandResult,
 } from "./library-page-command-contract";
@@ -110,6 +112,10 @@ export interface LibraryReadDataCommandMap {
   "library.getPage": {
     input: LibraryGetPageCommandInput;
     output: LibraryGetPageCommandResult;
+  };
+  "library.getWorkInspectorDetail": {
+    input: LibraryGetWorkInspectorDetailCommandInput;
+    output: LibraryGetWorkInspectorDetailCommandResult;
   };
   "library.getScope": {
     input: LibraryScopeCommandInput;

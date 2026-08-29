@@ -1,6 +1,7 @@
 import type {
   LibraryGetPageCommandInput,
   LibraryGetPageCommandResult,
+  LibraryGetWorkInspectorDetailCommandResult,
   LibraryGetWorkRuntimeMetaCommandResult,
   LibraryWorkNotePreview,
   LibraryWorkTableMeta,
@@ -9,6 +10,9 @@ import type {
 export type WorkNotePreview = LibraryWorkNotePreview;
 export type WorkTableMeta = LibraryWorkTableMeta;
 export type WorkRuntimeMeta = LibraryGetWorkRuntimeMetaCommandResult;
+export type LibraryWorkInspectorDetail = NonNullable<
+  LibraryGetWorkInspectorDetailCommandResult["detail"]
+>;
 export type LibraryPageDataInput = LibraryGetPageCommandInput;
 export type LibraryPageBrowseSummary = LibraryGetPageCommandResult["browseSummary"];
 export type LibraryPageData = LibraryGetPageCommandResult;
@@ -41,4 +45,11 @@ export function loadLibraryWorkRuntimeMeta(
   annotationCount: number,
 ): Promise<WorkRuntimeMeta> {
   return window.aura.data.command("library.getWorkRuntimeMeta", { annotationCount, workId });
+}
+
+/** Loads the selected item's narrow inspector-only bibliography. */
+export async function loadLibraryWorkInspectorDetail(
+  workId: string,
+): Promise<LibraryWorkInspectorDetail | null> {
+  return (await window.aura.data.command("library.getWorkInspectorDetail", { workId })).detail;
 }

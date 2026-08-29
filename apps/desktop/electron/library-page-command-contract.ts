@@ -1,5 +1,5 @@
-import type { AttachmentRow, CollectionRow, WorkWithAuthors } from "@aurascholar/db";
-import type { WorkPageBrowseSummary } from "@aurascholar/db/work-page";
+import type { CollectionRow } from "@aurascholar/db";
+import type { WorkPageBrowseSummary, WorkPageWork } from "@aurascholar/db/work-page";
 import type { ReadingStatus } from "@aurascholar/db/repos/works";
 
 /** Renderer-facing filters for one bounded Library results page. */
@@ -53,7 +53,31 @@ export interface LibraryGetPageCommandResult {
   total: number;
   trashCount: number;
   workMeta: Record<string, LibraryWorkTableMeta>;
-  works: WorkWithAuthors[];
+  works: WorkPageWork[];
+}
+
+/** Narrow read-only bibliography shown by the Library inspector. */
+export interface LibraryWorkInspectorDetail {
+  abstract: string | null;
+  doi: string | null;
+  edition: string | null;
+  isbn: string | null;
+  issn: string | null;
+  issue: string | null;
+  language: string | null;
+  pages: string | null;
+  place_published: string | null;
+  publisher: string | null;
+  volume: string | null;
+}
+
+/** Main resolves the active local Library and returns a bounded detail DTO. */
+export interface LibraryGetWorkInspectorDetailCommandInput {
+  workId: string;
+}
+
+export interface LibraryGetWorkInspectorDetailCommandResult {
+  detail: LibraryWorkInspectorDetail | null;
 }
 
 /** Runtime details are loaded on demand for the currently selected work. */
@@ -62,11 +86,19 @@ export interface LibraryGetWorkRuntimeMetaCommandInput {
   workId: string;
 }
 
+/** Minimal PDF information rendered in the selected-work inspector. */
+export interface LibraryWorkPdfPreview {
+  byte_size: number;
+  fetched_via: string | null;
+  original_filename: string | null;
+  page_count: number | null;
+}
+
 export interface LibraryGetWorkRuntimeMetaCommandResult {
   annotationCount: number;
   notePreviews: LibraryWorkNotePreview[];
   pdfCount: number;
-  pdfPreview: AttachmentRow | null;
+  pdfPreview: LibraryWorkPdfPreview | null;
   sentinelState: string | null;
   sentinelStatus: string | null;
   sentinelTaskCount: number;

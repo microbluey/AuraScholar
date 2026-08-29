@@ -20,6 +20,99 @@ beforeEach(async () => {
 });
 
 describe("work-page database pagination", () => {
+  it("projects bounded page rows without leaking full work payloads", async () => {
+    const { id } = await works.upsert({
+      authors: Array.from({ length: 7 }, (_, position) => ({
+        displayName: `Author ${position}`,
+        position,
+      })),
+      title: "Narrow page record",
+      type: "article",
+      url: "https://example.com/paper",
+    });
+    const oversized = "x".repeat(256 * 1024);
+    await db.run(
+      `UPDATE works
+       SET abstract = ?, csl_json = ?, keywords_json = ?, notes_md = ?, fingerprint = ?
+       WHERE id = ?`,
+      [oversized, oversized, oversized, oversized, oversized, id],
+    );
+
+    const page = await queryWorkPage(db, libraryId, { limit: 30 });
+    const work = page.works[0];
+    expect(work).toMatchObject({
+      authorNames: ["Author 0", "Author 1", "Author 2", "Author 3", "Author 4"],
+      id,
+      title: "Narrow page record",
+      url: "https://example.com/paper",
+    });
+    for (const field of [
+      "abstract",
+      "csl_json",
+      "fingerprint",
+      "keywords_json",
+      "library_id",
+      "notes_md",
+    ]) {
+      expect(Object.hasOwn(work, field)).toBe(false);
+    }
+  });
+
+  it("bounds browse facets before returning them and omits values the command cannot round-trip", async () => {
+    const tags = new TagsRepo(db, libraryId);
+    const { id } = await works.upsert({
+      title: "Facet boundary record",
+      type: "article",
+      venueName: "Short source",
+    });
+    await works.upsert({
+      title: "Oversized source record",
+      type: "article",
+      venueName: "x".repeat(1_025),
+    });
+    const validUnicodeTag = `0${"\ud83e\uddea".repeat(100)}`;
+    await tags.addToWorks([id], validUnicodeTag);
+    for (let index = 0; index <= 500; index += 1) {
+      await tags.addToWorks([id], `Facet ${String(index).padStart(3, "0")}`);
+    }
+    await tags.addToWorks([id], "x".repeat(1_025));
+
+    const page = await queryWorkPage(db, libraryId, { limit: 30 });
+
+    expect(page.browseSummary).toMatchObject({
+      availableSourcesTruncated: false,
+      availableTagsTruncated: true,
+    });
+    expect(page.browseSummary.availableTags).toHaveLength(500);
+    expect(page.browseSummary.availableTags).toContain(validUnicodeTag);
+    expect(page.browseSummary.availableTags).not.toContain("Facet 500");
+    expect(page.browseSummary.availableTags).not.toContain("x".repeat(1_025));
+    expect(page.browseSummary.availableSources).toContain("Short source");
+    expect(page.browseSummary.availableSources).not.toContain("x".repeat(1_025));
+    await expect(
+      queryWorkPage(db, libraryId, {
+        limit: 30,
+        source: "Short source",
+        tag: page.browseSummary.availableTags[0],
+      }),
+    ).resolves.toMatchObject({ total: 1, works: [expect.objectContaining({ id })] });
+  });
+
+  it("omits over-bound action identifiers rather than returning unusable prefixes", async () => {
+    const oversized = "x".repeat(257);
+    const { id } = await works.upsert({
+      arxivId: oversized,
+      doi: oversized,
+      title: "Identifier boundary record",
+      type: "article",
+      url: oversized,
+    });
+
+    await expect(queryWorkPage(db, libraryId, { limit: 30 })).resolves.toMatchObject({
+      works: [expect.objectContaining({ arxiv_id: null, doi: null, id, url: null })],
+    });
+  });
+
   it("returns exact totals beyond 1,000 rows and locates the same sorted offset", async () => {
     for (let index = 0; index < 1_005; index += 1) {
       const id = `work-${String(index).padStart(4, "0")}`;
@@ -114,7 +207,14 @@ describe("work-page database pagination", () => {
       withPdfTotal: 1,
       withoutPdfTotal: 2,
       availableTags: ["Focus Tag", "No PDF Tag"],
-      availableSources: ["ACM-XProceedings", "ACM_Proceedings", "article", "arXiv", "Journal of Scope", "review"],
+      availableSources: [
+        "ACM-XProceedings",
+        "ACM_Proceedings",
+        "article",
+        "arXiv",
+        "Journal of Scope",
+        "review",
+      ],
     });
     await expect(
       queryWorkPage(db, libraryId, {
@@ -148,15 +248,21 @@ describe("work-page database pagination", () => {
     const foreignWorks = new WorksRepo(db, foreignLibraryId);
     const foreign = await foreignWorks.upsert({ title: "Scoped Active", year: 2025 });
 
-    await expect(queryWorkPage(db, libraryId, { deleted: "active", sort: "added" })).resolves.toMatchObject({
+    await expect(
+      queryWorkPage(db, libraryId, { deleted: "active", sort: "added" }),
+    ).resolves.toMatchObject({
       total: 1,
       works: [{ id: active.id }],
     });
-    await expect(queryWorkPage(db, libraryId, { deleted: "deleted", sort: "added" })).resolves.toMatchObject({
+    await expect(
+      queryWorkPage(db, libraryId, { deleted: "deleted", sort: "added" }),
+    ).resolves.toMatchObject({
       total: 1,
       works: [{ id: deleted.id }],
     });
-    await expect(locateWorkPageOffset(db, libraryId, foreign.id, { sort: "added" })).resolves.toBeNull();
+    await expect(
+      locateWorkPageOffset(db, libraryId, foreign.id, { sort: "added" }),
+    ).resolves.toBeNull();
   });
 
   it("uses deterministic tie breakers for added and publication-year sorts", async () => {

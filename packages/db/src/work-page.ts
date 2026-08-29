@@ -1,16 +1,12 @@
 import type { Database } from "./database.js";
 import { buildWorksFtsQuery } from "./fts.js";
-import type { ReadingStatus, WorkRow, WorkWithAuthors } from "./repos/works.js";
-
+import type { ReadingStatus } from "./repos/works.js";
 /** Which side of the soft-delete boundary a Library page reads. */
 export type WorkPageDeletedScope = "active" | "deleted";
-
 /** The Library's primary status facets. */
 export type WorkPageFilter = "all" | "reading" | "unread" | "noted" | "starred";
-
 export type WorkPagePdfFilter = "with-pdf" | "without-pdf";
 export type WorkPageSort = "added" | "year";
-
 /**
  * A database-backed Library page query.
  *
@@ -31,11 +27,12 @@ export interface WorkPageQuery {
   status?: ReadingStatus;
   tag?: string;
 }
-
 /** Facet data for the same base Library scope, before active facet filters. */
 export interface WorkPageBrowseSummary {
   availableSources: string[];
+  availableSourcesTruncated: boolean;
   availableTags: string[];
+  availableTagsTruncated: boolean;
   baseTotal: number;
   notedTotal: number;
   readingTotal: number;
@@ -44,17 +41,43 @@ export interface WorkPageBrowseSummary {
   withPdfTotal: number;
   withoutPdfTotal: number;
 }
-
+/**
+ * A bounded projection for the Library table and its selected-work header.
+ * Complete metadata stays behind the explicit, on-demand work-metadata read.
+ */
+export interface WorkPageWork {
+  arxiv_id: string | null;
+  authorNames: string[];
+  created_at: number;
+  deleted_at: number | null;
+  doi: string | null;
+  id: string;
+  reading_status: string;
+  starred: number;
+  title: string;
+  type: string;
+  url: string | null;
+  venue_name: string | null;
+  year: number | null;
+}
 export interface WorkPageResult {
   browseSummary: WorkPageBrowseSummary;
   limit: number;
   offset: number;
   total: number;
-  works: WorkWithAuthors[];
+  works: WorkPageWork[];
 }
 
 const DEFAULT_PAGE_LIMIT = 30;
 const MAX_PAGE_LIMIT = 200;
+const MAX_WORK_PAGE_BROWSE_FACET_VALUES = 500;
+const MAX_WORK_PAGE_BROWSE_FACET_VALUE_BYTES = 1_024;
+const MAX_WORK_PAGE_AUTHOR_NAME_LENGTH = 64;
+const MAX_WORK_PAGE_AUTHORS = 5;
+const MAX_WORK_PAGE_IDENTIFIER_BYTES = 256;
+const MAX_WORK_PAGE_SHORT_TEXT_LENGTH = 256;
+
+type WorkPageRow = Omit<WorkPageWork, "authorNames">;
 
 interface WorkQueryPlan {
   ftsQuery: string | null;
@@ -215,19 +238,33 @@ function createWorkQueryPlan(
 async function attachAuthors(
   db: Database,
   libraryId: string,
-  rows: WorkRow[],
-): Promise<WorkWithAuthors[]> {
+  rows: WorkPageRow[],
+): Promise<WorkPageWork[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);
   const placeholders = ids.map(() => "?").join(",");
   const authorRows = await db.query<{ display_name: string; work_id: string }>(
-    `SELECT wa.work_id, a.display_name
-     FROM work_authors wa
-     JOIN authors a ON a.id = wa.author_id
-     WHERE wa.work_id IN (${placeholders})
-       AND a.library_id = ?
-     ORDER BY wa.position, a.id`,
-    [...ids, libraryId],
+    `WITH ranked_authors AS (
+       SELECT
+         wa.work_id,
+         a.id AS author_id,
+         ROW_NUMBER() OVER (
+           PARTITION BY wa.work_id
+           ORDER BY wa.position, a.id
+         ) AS author_position
+       FROM work_authors wa
+       JOIN authors a ON a.id = wa.author_id
+       WHERE wa.work_id IN (${placeholders})
+         AND a.library_id = ?
+     )
+     SELECT
+       ranked_authors.work_id,
+       substr(a.display_name, 1, ?) AS display_name
+     FROM ranked_authors
+     JOIN authors a ON a.id = ranked_authors.author_id
+     WHERE ranked_authors.author_position <= ?
+     ORDER BY ranked_authors.work_id, ranked_authors.author_position`,
+    [...ids, libraryId, MAX_WORK_PAGE_AUTHOR_NAME_LENGTH, MAX_WORK_PAGE_AUTHORS],
   );
   const namesByWork = new Map<string, string[]>();
   for (const author of authorRows) {
@@ -241,7 +278,9 @@ async function attachAuthors(
 function emptyBrowseSummary(): WorkPageBrowseSummary {
   return {
     availableSources: [],
+    availableSourcesTruncated: false,
     availableTags: [],
+    availableTagsTruncated: false,
     baseTotal: 0,
     notedTotal: 0,
     readingTotal: 0,
@@ -249,6 +288,16 @@ function emptyBrowseSummary(): WorkPageBrowseSummary {
     unreadTotal: 0,
     withPdfTotal: 0,
     withoutPdfTotal: 0,
+  };
+}
+
+function boundedFacetValues(rows: readonly { value: string }[]): {
+  truncated: boolean;
+  values: string[];
+} {
+  return {
+    truncated: rows.length > MAX_WORK_PAGE_BROWSE_FACET_VALUES,
+    values: rows.slice(0, MAX_WORK_PAGE_BROWSE_FACET_VALUES).map((row) => row.value),
   };
 }
 
@@ -282,8 +331,8 @@ async function loadBrowseSummary(
        WHERE ${basePlan.whereSql}`,
       basePlan.params,
     ),
-    db.query<{ name: string }>(
-      `SELECT DISTINCT tag.name
+    db.query<{ value: string }>(
+      `SELECT DISTINCT tag.name AS value
        FROM ${basePlan.fromSql}
        JOIN work_tags wt ON wt.work_id = w.id
        JOIN tags tag
@@ -291,12 +340,32 @@ async function loadBrowseSummary(
         AND tag.library_id = w.library_id
         AND tag.deleted_at IS NULL
        WHERE ${basePlan.whereSql}
-       ORDER BY tag.name COLLATE NOCASE, tag.name`,
-      basePlan.params,
+         AND length(CAST(tag.name AS BLOB)) <= ?
+       ORDER BY tag.name COLLATE NOCASE, tag.name
+       LIMIT ?`,
+      [
+        ...basePlan.params,
+        MAX_WORK_PAGE_BROWSE_FACET_VALUE_BYTES,
+        MAX_WORK_PAGE_BROWSE_FACET_VALUES + 1,
+      ],
     ),
-    db.query<{ source: string }>(
+    db.query<{ value: string }>(
       `WITH scoped AS (
-         SELECT w.venue_name, w.type, w.arxiv_id
+         SELECT
+           CASE
+             WHEN length(CAST(w.venue_name AS BLOB)) <= ${MAX_WORK_PAGE_BROWSE_FACET_VALUE_BYTES}
+               THEN w.venue_name
+             ELSE NULL
+           END AS venue_name,
+           CASE
+             WHEN length(CAST(w.type AS BLOB)) <= ${MAX_WORK_PAGE_BROWSE_FACET_VALUE_BYTES}
+               THEN w.type
+             ELSE NULL
+           END AS type,
+           CASE
+             WHEN TRIM(COALESCE(w.arxiv_id, '')) <> '' THEN 1
+             ELSE 0
+           END AS has_arxiv
          FROM ${basePlan.fromSql}
          WHERE ${basePlan.whereSql}
        ), candidates AS (
@@ -304,21 +373,31 @@ async function loadBrowseSummary(
          UNION
          SELECT type AS source FROM scoped WHERE TRIM(COALESCE(type, '')) <> ''
          UNION
-         SELECT 'arXiv' AS source FROM scoped WHERE TRIM(COALESCE(arxiv_id, '')) <> ''
+         SELECT 'arXiv' AS source FROM scoped WHERE has_arxiv = 1
        )
-       SELECT source
+       SELECT source AS value
        FROM candidates
-       ORDER BY source COLLATE NOCASE, source`,
-      basePlan.params,
+       WHERE length(CAST(source AS BLOB)) <= ?
+       ORDER BY source COLLATE NOCASE, source
+       LIMIT ?`,
+      [
+        ...basePlan.params,
+        MAX_WORK_PAGE_BROWSE_FACET_VALUE_BYTES,
+        MAX_WORK_PAGE_BROWSE_FACET_VALUES + 1,
+      ],
     ),
   ]);
   const row = summaryRows[0];
   if (!row) return emptyBrowseSummary();
   const baseTotal = Number(row.base_total) || 0;
   const withPdfTotal = Number(row.with_pdf_total) || 0;
+  const sources = boundedFacetValues(sourceRows);
+  const tags = boundedFacetValues(tagRows);
   return {
-    availableSources: sourceRows.map((source) => source.source),
-    availableTags: tagRows.map((tag) => tag.name),
+    availableSources: sources.values,
+    availableSourcesTruncated: sources.truncated,
+    availableTags: tags.values,
+    availableTagsTruncated: tags.truncated,
     baseTotal,
     notedTotal: Number(row.noted_total) || 0,
     readingTotal: Number(row.reading_total) || 0,
@@ -349,8 +428,32 @@ export async function queryWorkPage(
        WHERE ${pagePlan.whereSql}`,
       pagePlan.params,
     ),
-    db.query<WorkRow>(
-      `SELECT w.*
+    db.query<WorkPageRow>(
+       `SELECT
+         w.id,
+         CASE
+           WHEN length(CAST(w.doi AS BLOB)) <= ${MAX_WORK_PAGE_IDENTIFIER_BYTES}
+             THEN w.doi
+           ELSE NULL
+         END AS doi,
+         substr(w.title, 1, ${MAX_WORK_PAGE_SHORT_TEXT_LENGTH}) AS title,
+         w.year,
+         substr(w.venue_name, 1, ${MAX_WORK_PAGE_SHORT_TEXT_LENGTH}) AS venue_name,
+         substr(w.type, 1, ${MAX_WORK_PAGE_SHORT_TEXT_LENGTH}) AS type,
+         CASE
+           WHEN length(CAST(w.arxiv_id AS BLOB)) <= ${MAX_WORK_PAGE_IDENTIFIER_BYTES}
+             THEN w.arxiv_id
+           ELSE NULL
+         END AS arxiv_id,
+         CASE
+           WHEN length(CAST(w.url AS BLOB)) <= ${MAX_WORK_PAGE_IDENTIFIER_BYTES}
+             THEN w.url
+           ELSE NULL
+         END AS url,
+         w.reading_status,
+         w.starred,
+         w.created_at,
+         w.deleted_at
        FROM ${pagePlan.fromSql}
        WHERE ${pagePlan.whereSql}
        ORDER BY ${pagePlan.orderBySql}

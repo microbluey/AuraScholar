@@ -1,6 +1,11 @@
 import { Badge, Button } from "@aurascholar/ui";
-import type { WorkWithAuthors } from "@aurascholar/db";
-import type { WorkRuntimeMeta, WorkTableMeta } from "../../services/library-page-data";
+import type { WorkPageWork } from "@aurascholar/db/work-page";
+import type {
+  LibraryWorkInspectorDetail,
+  WorkRuntimeMeta,
+  WorkTableMeta,
+} from "../../services/library-page-data";
+import type { SelectedWorkDetailStatus } from "./useSelectedWorkDetail";
 import type { SelectedWorkRuntimeMetaStatus } from "./useSelectedWorkRuntimeMeta";
 import {
   annotationTypeLabel,
@@ -13,6 +18,8 @@ export type LibraryWorkAction = "merge" | "purge" | "restore" | "trash";
 
 export function LibraryTrashWorkPanel({
   work,
+  detail,
+  detailStatus,
   meta,
   metaStatus,
   tableMeta,
@@ -21,7 +28,9 @@ export function LibraryTrashWorkPanel({
   onPurgeWork,
   onClose,
 }: {
-  work: WorkWithAuthors;
+  work: WorkPageWork;
+  detail: LibraryWorkInspectorDetail | null;
+  detailStatus: SelectedWorkDetailStatus;
   meta: WorkRuntimeMeta | null;
   metaStatus: SelectedWorkRuntimeMetaStatus;
   tableMeta?: WorkTableMeta;
@@ -112,8 +121,11 @@ export function LibraryTrashWorkPanel({
         <div className="library-panel-heading">
           <h3>书目信息</h3>
         </div>
-        <LibraryBibliographicLines work={work} />
-        <LibraryStatusLine label="题录来源" value={sourceText} variant="neutral" />
+        <LibraryWorkBibliography
+          detail={detail}
+          detailStatus={detailStatus}
+          sourceText={sourceText}
+        />
         <LibraryStatusLine
           label="PDF 附件"
           value={
@@ -127,8 +139,49 @@ export function LibraryTrashWorkPanel({
           }
           variant={meta?.pdfCount ? "success" : "neutral"}
         />
-        <p className="library-preview-copy">{work.abstract || "暂无摘要。"}</p>
+        <LibraryWorkAbstract detail={detail} detailStatus={detailStatus} />
       </div>
+    </>
+  );
+}
+
+export function LibraryWorkAbstract({
+  detail,
+  detailStatus,
+}: {
+  detail: LibraryWorkInspectorDetail | null;
+  detailStatus: SelectedWorkDetailStatus;
+}) {
+  return (
+    <p className="library-preview-copy">
+      {detail
+        ? detail.abstract || "暂无摘要。"
+        : detailStatus === "error"
+          ? "详细书目信息暂时无法读取。"
+          : "正在读取详细书目信息..."}
+    </p>
+  );
+}
+
+export function LibraryWorkBibliography({
+  detail,
+  detailStatus,
+  sourceText,
+}: {
+  detail: LibraryWorkInspectorDetail | null;
+  detailStatus: SelectedWorkDetailStatus;
+  sourceText: string;
+}) {
+  return (
+    <>
+      {detail ? (
+        <LibraryBibliographicLines work={detail} />
+      ) : (
+        <p className="library-bib-empty au-text-muted">
+          {detailStatus === "error" ? "详细书目信息暂时无法读取。" : "正在读取详细书目信息..."}
+        </p>
+      )}
+      <LibraryStatusLine label="题录来源" value={sourceText} variant="neutral" />
     </>
   );
 }
@@ -273,7 +326,7 @@ export function LibraryStatusLine({
 }
 
 /** Read-only list of the rich bibliographic fields that are populated. */
-export function LibraryBibliographicLines({ work }: { work: WorkWithAuthors }) {
+export function LibraryBibliographicLines({ work }: { work: LibraryWorkInspectorDetail }) {
   const vol = [
     work.volume && `卷 ${work.volume}`,
     work.issue && `期 ${work.issue}`,

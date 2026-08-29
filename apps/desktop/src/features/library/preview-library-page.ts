@@ -71,7 +71,9 @@ function browseSummary(
   const withPdfTotal = works.filter((work) => (workMeta[work.id]?.pdfs ?? 0) > 0).length;
   return {
     availableSources,
+    availableSourcesTruncated: false,
     availableTags,
+    availableTagsTruncated: false,
     baseTotal: works.length,
     notedTotal,
     readingTotal,
@@ -119,7 +121,9 @@ export function loadPreviewLibraryPage(input: PreviewLibraryPageInput): LibraryP
   const scopedSummary = isTrash
     ? {
         availableSources: [],
+        availableSourcesTruncated: false,
         availableTags: [],
+        availableTagsTruncated: false,
         baseTotal: 0,
         notedTotal: 0,
         readingTotal: 0,

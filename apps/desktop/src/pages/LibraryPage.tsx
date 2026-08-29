@@ -28,6 +28,7 @@ import type {
   WorkPatch,
   WorkWithAuthors,
 } from "@aurascholar/db";
+import type { WorkPageWork } from "@aurascholar/db/work-page";
 import type { IngestDraft, PendingPdf } from "../services/library-types";
 import type { ExportFormat } from "../services/cite";
 import type { ImportDecision } from "../components/ImportConfirmDialog";
@@ -85,6 +86,7 @@ import { useLibraryExternalRefresh } from "../features/library/useLibraryExterna
 import { reduceLibraryNoticeState } from "../features/library/library-notice-lifecycle";
 import { useLibraryRefreshController } from "../features/library/useLibraryRefreshController";
 import { useSelectedWorkRuntimeMeta } from "../features/library/useSelectedWorkRuntimeMeta";
+import { useSelectedWorkDetail } from "../features/library/useSelectedWorkDetail";
 import type {
   CollectionActivationReason,
   CollectionManagerViewTarget,
@@ -419,7 +421,6 @@ function cloneWorkMetaMap(source: Record<string, WorkTableMeta>): Record<string,
     Object.entries(source).map(([workId, meta]) => [workId, { ...meta, tags: [...meta.tags] }]),
   ) as Record<string, WorkTableMeta>;
 }
-
 function normalizePreviewLookup(value: string | null | undefined): string {
   return (value ?? "")
     .trim()
@@ -430,7 +431,6 @@ function normalizePreviewLookup(value: string | null | undefined): string {
     .replace(/\.pdf$/, "")
     .replace(/\s+/g, " ");
 }
-
 function findPreviewImportWork(value: string): WorkWithAuthors | null {
   const text = normalizePreviewLookup(value);
   if (!text) return null;
@@ -446,7 +446,6 @@ function findPreviewImportWork(value: string): WorkWithAuthors | null {
     ) ?? null
   );
 }
-
 function workToMetadataDraft(work: WorkWithAuthors): MetadataDraft {
   return {
     title: work.title ?? "",
@@ -480,7 +479,6 @@ function workToMetadataDraft(work: WorkWithAuthors): MetadataDraft {
     authors: work.authorNames.map((displayName) => ({ displayName, role: "author" })),
   };
 }
-
 function applyMetadataPatchToWork(work: WorkWithAuthors, patch: WorkPatch): WorkWithAuthors {
   return {
     ...work,
@@ -519,7 +517,6 @@ function applyMetadataPatchToWork(work: WorkWithAuthors, patch: WorkPatch): Work
     updated_at: Date.now(),
   };
 }
-
 function workToCiteWork(work: WorkWithAuthors): WorkLike {
   return {
     id: work.id,
@@ -544,23 +541,19 @@ function workToCiteWork(work: WorkWithAuthors): WorkLike {
     language: work.language,
   };
 }
-
 function previewCitationContent(works: WorkWithAuthors[], format: ExportFormat): string {
   const items = works.map(workToCiteWork).map(toCslItem);
   if (format === "bibtex") return toBibTeX(items);
   if (format === "ris") return toRIS(items);
   return toCslJson(items);
 }
-
 function previewCitationFilename(format: ExportFormat): string {
   const extension = format === "bibtex" ? "bib" : format === "ris" ? "ris" : "json";
   return `aurascholar-preview-references.${extension}`;
 }
-
 function previewBibliographyText(works: WorkWithAuthors[], styleId: string): string {
   return formatBibliography(works.map(workToCiteWork).map(toCslItem), styleId).join("\n");
 }
-
 function DialogLoading({ label }: { label: string }) {
   return (
     <div className="library-modal-overlay" role="presentation">
@@ -576,12 +569,10 @@ function DialogLoading({ label }: { label: string }) {
     </div>
   );
 }
-
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
-
 async function waitForLibrarySmokeAfterReadDelay(): Promise<void> {
   const smokeWindow = window as LibrarySmokeWindow;
   const delayMs = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_DELAY_MS__;
@@ -590,7 +581,6 @@ async function waitForLibrarySmokeAfterReadDelay(): Promise<void> {
     (smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_AFTER_READ_COUNT__ ?? 0) + 1;
   await new Promise((resolve) => window.setTimeout(resolve, delayMs));
 }
-
 function consumeLibrarySmokeReadFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READ__;
@@ -598,7 +588,6 @@ function consumeLibrarySmokeReadFailure(): Error | null {
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READ__;
   return new Error(message);
 }
-
 function consumeLibrarySmokeBulkTagAfterFirstFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TAG_AFTER_FIRST__;
@@ -606,7 +595,6 @@ function consumeLibrarySmokeBulkTagAfterFirstFailure(): Error | null {
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_BULK_TAG_AFTER_FIRST__;
   return new Error(message);
 }
-
 function consumeLibrarySmokeMoveAfterFirstFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_MOVE_AFTER_FIRST__;
@@ -614,7 +602,6 @@ function consumeLibrarySmokeMoveAfterFirstFailure(): Error | null {
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_MOVE_AFTER_FIRST__;
   return new Error(message);
 }
-
 function consumeLibrarySmokeReadingStatusFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READING_STATUS__;
@@ -622,7 +609,6 @@ function consumeLibrarySmokeReadingStatusFailure(): Error | null {
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_READING_STATUS__;
   return new Error(message);
 }
-
 function consumeLibrarySmokeStarFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_STAR__;
@@ -630,7 +616,6 @@ function consumeLibrarySmokeStarFailure(): Error | null {
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_STAR__;
   return new Error(message);
 }
-
 function consumeLibrarySmokeTrashFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH__;
@@ -638,7 +623,6 @@ function consumeLibrarySmokeTrashFailure(): Error | null {
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH__;
   return new Error(message);
 }
-
 function consumeLibrarySmokeTrashRestoreFailure(): Error | null {
   const smokeWindow = window as LibrarySmokeWindow;
   const message = smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__;
@@ -646,7 +630,6 @@ function consumeLibrarySmokeTrashRestoreFailure(): Error | null {
   delete smokeWindow.__AURASCHOLAR_SMOKE_LIBRARY_FAIL_NEXT_TRASH_RESTORE__;
   return new Error(message);
 }
-
 export function LibraryPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -686,7 +669,7 @@ export function LibraryPage() {
     urlRouteRequest,
   });
   const [input, setInput] = useState("");
-  const [items, setItems] = useState<WorkWithAuthors[]>([]);
+  const [items, setItems] = useState<Array<WorkPageWork | WorkWithAuthors>>([]);
   const [previewItems, setPreviewItems] = useState<WorkWithAuthors[]>(() => PREVIEW_LIBRARY_WORKS);
   const [previewTrashItems, setPreviewTrashItems] = useState<WorkWithAuthors[]>([]);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
@@ -695,7 +678,9 @@ export function LibraryPage() {
   const [pageTotal, setPageTotal] = useState(0);
   const [browseSummary, setBrowseSummary] = useState<LibraryPageBrowseSummary>({
     availableSources: [],
+    availableSourcesTruncated: false,
     availableTags: [],
+    availableTagsTruncated: false,
     baseTotal: 0,
     notedTotal: 0,
     readingTotal: 0,
@@ -805,12 +790,10 @@ export function LibraryPage() {
     onDismiss: dismissMessage,
     persistent: Boolean(trashUndo && message === trashUndo.message),
   });
-
   const fillExamplePaper = useCallback(() => {
     setInput("1706.03762");
     setImportDialogOpen(true);
   }, []);
-
   const coordinatedRefresh = useLibraryRefreshController<LibraryRefreshQuery, LibraryRefreshData>({
     getQuery: () => {
       const routeView = currentRouteRequest ? libraryDeepLinkView(currentRouteRequest) : null;
@@ -937,7 +920,6 @@ export function LibraryPage() {
     return result.status === "failed" ? result.error : undefined;
   }, [coordinatedRefresh]);
   useLibraryExternalRefresh(refresh);
-
   useEffect(() => {
     const disposition = libraryRouteRefreshDisposition(currentRouteKey, appliedRouteKeyRef.current);
     if (disposition === "load-route") {
@@ -967,7 +949,6 @@ export function LibraryPage() {
     search,
     sortMode,
   ]);
-
   useEffect(() => {
     const onFindShortcut = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || !isPlatformShortcut(event, "f")) return;
@@ -980,7 +961,6 @@ export function LibraryPage() {
     window.addEventListener("keydown", onFindShortcut);
     return () => window.removeEventListener("keydown", onFindShortcut);
   }, []);
-
   // Surface a dedup hit (already in library) without a confirm card.
   const surfaceDedup = useCallback(
     async (draft: IngestDraft): Promise<boolean> => {
@@ -1001,7 +981,6 @@ export function LibraryPage() {
     },
     [refresh],
   );
-
   const handleAdd = useCallback(
     async (rawInput = input) => {
       const normalizedInput = rawInput.trim();
@@ -1210,7 +1189,8 @@ export function LibraryPage() {
     itemCount: items.length,
   });
   const advancedFacetCount = [activeSource, extraFilter].filter(Boolean).length;
-  const { availableSources, availableTags } = browseSummary;
+  const { availableSources, availableSourcesTruncated, availableTags, availableTagsTruncated } =
+    browseSummary;
   const totalDisplay = browseSummary.baseTotal.toLocaleString("zh-CN");
   const tableRows = items;
   const actionableSelectedIds = useMemo(
@@ -1295,6 +1275,10 @@ export function LibraryPage() {
     setSelectedWorkId(null);
   }
   const selectedTableMeta = selectedWork ? workMeta[selectedWork.id] : undefined;
+  const previewWorksById = useMemo(
+    () => new Map([...previewItems, ...previewTrashItems].map((work) => [work.id, work])),
+    [previewItems, previewTrashItems],
+  );
   const selectedRuntimeMetaVersion = selectedTableMeta
     ? [
         librarySnapshotRevision,
@@ -1315,6 +1299,11 @@ export function LibraryPage() {
     workId: selectedWork?.id ?? null,
   });
   const selectedMeta = selectedRuntimeMeta.meta;
+  const selectedWorkDetail = useSelectedWorkDetail({
+    previewWork: isDesktopRuntime() ? null : (selectedWork as WorkWithAuthors | null),
+    runtimeVersion: librarySnapshotRevision,
+    workId: selectedWork?.id ?? null,
+  });
   const editingPreviewWork = useMemo(() => {
     if (!editingMetaId || isDesktopRuntime()) return null;
     return (
@@ -1323,11 +1312,6 @@ export function LibraryPage() {
       null
     );
   }, [editingMetaId, previewItems, previewTrashItems]);
-  const previewWorksById = useMemo(
-    () => new Map([...previewItems, ...previewTrashItems].map((work) => [work.id, work])),
-    [previewItems, previewTrashItems],
-  );
-
   const updatePreviewWork = useCallback(
     (workId: string, updater: (work: WorkWithAuthors) => WorkWithAuthors) => {
       setPreviewItems((current) =>
@@ -1336,7 +1320,9 @@ export function LibraryPage() {
       setPreviewTrashItems((current) =>
         current.map((work) => (work.id === workId ? updater(work) : work)),
       );
-      setItems((current) => current.map((work) => (work.id === workId ? updater(work) : work)));
+      setItems((current) =>
+        current.map((work) => (work.id === workId ? updater(work as WorkWithAuthors) : work)),
+      );
       setSelectedWorkId(workId);
     },
     [],
@@ -1436,7 +1422,7 @@ export function LibraryPage() {
   }, [navigate, refresh, selectedWork]);
 
   const updateWorkStarred = useCallback(
-    async (work: WorkWithAuthors, starred: boolean) => {
+    async (work: WorkPageWork, starred: boolean) => {
       if (Object.prototype.hasOwnProperty.call(starActionBusyRef.current, work.id)) return;
       const successMessage = starred
         ? `已标记重点:《${work.title}》`
@@ -1551,7 +1537,11 @@ export function LibraryPage() {
       if (!confirmed) return;
       if (!isDesktopRuntime()) {
         const deletedAt = Date.now();
-        const deletedWork = { ...selectedWork, deleted_at: deletedAt, updated_at: deletedAt };
+        const deletedWork = {
+          ...(selectedWork as WorkWithAuthors),
+          deleted_at: deletedAt,
+          updated_at: deletedAt,
+        };
         const undoMessage = `已将《${title}》移入预览回收站`;
         setPreviewItems((current) => current.filter((work) => work.id !== workId));
         setPreviewTrashItems((current) => [
@@ -1696,7 +1686,7 @@ export function LibraryPage() {
   }, [activeFilter, activeSource, activeTag, activeCollection, extraFilter, search, sortMode]);
 
   const selectWork = useCallback(
-    (work: WorkWithAuthors) => {
+    (work: WorkPageWork) => {
       cancelCurrentRouteRequest();
       setSelectedWorkId(work.id);
       if (window.matchMedia("(max-width: 760px)").matches) {
@@ -1728,7 +1718,7 @@ export function LibraryPage() {
   }, [cancelCurrentRouteRequest, safePage, selectedWorkId, setPage, setSelectedWorkId]);
 
   const openReader = useCallback(
-    (work: WorkWithAuthors) => {
+    (work: WorkPageWork) => {
       setSelectedWorkId(work.id);
       navigate(`/reader?work=${encodeURIComponent(work.id)}`);
     },
@@ -1798,7 +1788,7 @@ export function LibraryPage() {
   );
 
   const handleRowKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>, work: WorkWithAuthors, index: number) => {
+    (event: KeyboardEvent<HTMLDivElement>, work: WorkPageWork, index: number) => {
       if (event.key === "ArrowDown") {
         event.preventDefault();
         moveKeyboardSelection(index, index + 1);
@@ -2755,7 +2745,9 @@ export function LibraryPage() {
                         setSelectedIds(new Set());
                       }}
                     >
-                      <option value="">全部标签</option>
+                      <option value="">
+                        全部标签{availableTagsTruncated ? "（仅显示前 500 个）" : ""}
+                      </option>
                       {availableTags.map((tag) => (
                         <option key={tag} value={tag}>
                           {tag}
@@ -3076,6 +3068,8 @@ export function LibraryPage() {
             <LibrarySelectedWorkPanel
               key={selectedWork.id}
               work={selectedWork}
+              detail={selectedWorkDetail.work}
+              detailStatus={selectedWorkDetail.status}
               meta={selectedMeta}
               metaStatus={selectedRuntimeMeta.status}
               tableMeta={workMeta[selectedWork.id]}
@@ -3217,7 +3211,9 @@ export function LibraryPage() {
           activeSource={activeSource}
           activeTag={activeTag}
           sources={availableSources}
+          sourcesTruncated={availableSourcesTruncated}
           tags={availableTags}
+          tagsTruncated={availableTagsTruncated}
           onClose={() => setAdvancedFilterOpen(false)}
           onApply={(filter) => {
             setActiveTag(filter.tag);
@@ -3734,7 +3730,9 @@ function AdvancedFilterDialog({
   activeSource,
   activeTag,
   sources,
+  sourcesTruncated,
   tags,
+  tagsTruncated,
   onApply,
   onClose,
 }: {
@@ -3742,7 +3740,9 @@ function AdvancedFilterDialog({
   activeSource: string | null;
   activeTag: string | null;
   sources: string[];
+  sourcesTruncated: boolean;
   tags: string[];
+  tagsTruncated: boolean;
   onApply: (filter: {
     extra: ExtraFilter | null;
     source: string | null;
@@ -3802,7 +3802,7 @@ function AdvancedFilterDialog({
               value={draftTag}
               onChange={(event) => setDraftTag(event.target.value)}
             >
-              <option value="">全部标签</option>
+              <option value="">全部标签{tagsTruncated ? "（仅显示前 500 个）" : ""}</option>
               {tags.map((tag) => (
                 <option key={tag} value={tag}>
                   {tag}
@@ -3817,7 +3817,7 @@ function AdvancedFilterDialog({
               value={draftSource}
               onChange={(event) => setDraftSource(event.target.value)}
             >
-              <option value="">全部来源</option>
+              <option value="">全部来源{sourcesTruncated ? "（仅显示前 500 个）" : ""}</option>
               {sources.map((source) => (
                 <option key={source} value={source}>
                   {source}
@@ -3871,7 +3871,7 @@ function WorkTags({
   meta,
   index,
 }: {
-  work: WorkWithAuthors;
+  work: WorkPageWork;
   meta?: WorkTableMeta;
   index: number;
 }) {
@@ -3896,7 +3896,7 @@ function WorkTags({
   );
 }
 
-function fallbackWorkLabels(work: WorkWithAuthors) {
+function fallbackWorkLabels(work: WorkPageWork) {
   const labels: string[] = [];
   if (work.arxiv_id) labels.push("arXiv");
   if (work.doi) labels.push("DOI");

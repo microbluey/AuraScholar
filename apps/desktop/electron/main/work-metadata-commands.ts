@@ -325,7 +325,9 @@ async function loadWorkMetadata(
   });
 }
 
-function metadataWorkRow({ authorNames: _authorNames, ...work }: WorkWithAuthors): WorkMetadataSnapshot["work"] {
+function metadataWorkRow(
+  { authorNames: _authorNames, csl_json: _cslJson, ...work }: WorkWithAuthors & { csl_json?: unknown },
+): WorkMetadataSnapshot["work"] {
   return work;
 }
 

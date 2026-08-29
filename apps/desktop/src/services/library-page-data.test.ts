@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadLibraryPageData,
+  loadLibraryWorkInspectorDetail,
   loadLibraryWorkRuntimeMeta,
+  type LibraryWorkInspectorDetail,
   type LibraryPageData,
   type WorkRuntimeMeta,
 } from "./library-page-data";
@@ -21,7 +23,9 @@ describe("library page data facade", () => {
     const result = {
       browseSummary: {
         availableSources: ["Journal"],
+        availableSourcesTruncated: false,
         availableTags: ["causal"],
+        availableTagsTruncated: false,
         baseTotal: 1,
         notedTotal: 0,
         readingTotal: 0,
@@ -75,6 +79,26 @@ describe("library page data facade", () => {
       annotationCount: 7,
       workId: "work-1",
     });
+  });
+
+  it("loads narrow inspector details without using the full metadata command", async () => {
+    const result = {
+      abstract: "Inspector abstract",
+      doi: "10.1/example",
+      edition: null,
+      isbn: null,
+      issn: null,
+      issue: null,
+      language: null,
+      pages: null,
+      place_published: null,
+      publisher: "Aura Press",
+      volume: null,
+    } satisfies LibraryWorkInspectorDetail;
+    command.mockResolvedValueOnce({ detail: result });
+
+    await expect(loadLibraryWorkInspectorDetail("work-1")).resolves.toBe(result);
+    expect(command).toHaveBeenCalledWith("library.getWorkInspectorDetail", { workId: "work-1" });
   });
 
   it("preserves main-process command failures for the page controller", async () => {
