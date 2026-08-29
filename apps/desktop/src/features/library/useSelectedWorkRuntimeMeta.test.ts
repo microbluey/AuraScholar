@@ -35,7 +35,7 @@ function meta(pdfCount: number): WorkRuntimeMeta {
 }
 
 describe("SelectedWorkRuntimeMetaCoordinator", () => {
-  it("accepts fast B and rejects slow A after the selection changes", async () => {
+  it("accepts B after its superseded A read completes", async () => {
     const slowA = deferred<WorkRuntimeMeta>();
     const fastB = deferred<WorkRuntimeMeta>();
     const load = vi.fn<LibraryWorkRuntimeMetaLoader>((workId) =>
@@ -52,6 +52,16 @@ describe("SelectedWorkRuntimeMetaCoordinator", () => {
       load,
     );
 
+    await expect(requestA.result).resolves.toEqual({
+      key: selectedWorkRuntimeMetaKey({ runtimeVersion: "version-a", workId: "work-a" }),
+      status: "stale",
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    slowA.resolve(meta(1));
+    await Promise.resolve();
+    expect(load).toHaveBeenNthCalledWith(2, "work-b", 2);
+
     fastB.resolve(meta(2));
     await expect(requestB.result).resolves.toEqual({
       loaded: {
@@ -59,12 +69,6 @@ describe("SelectedWorkRuntimeMetaCoordinator", () => {
         value: meta(2),
       },
       status: "accepted",
-    });
-
-    slowA.resolve(meta(1));
-    await expect(requestA.result).resolves.toEqual({
-      key: selectedWorkRuntimeMetaKey({ runtimeVersion: "version-a", workId: "work-a" }),
-      status: "stale",
     });
   });
 
@@ -85,10 +89,11 @@ describe("SelectedWorkRuntimeMetaCoordinator", () => {
       load,
     );
 
+    await expect(oldRequest.result).resolves.toMatchObject({ status: "stale" });
+    oldFailure.reject(new Error("old metadata failed"));
+    await Promise.resolve();
     latest.resolve(meta(3));
     await expect(latestRequest.result).resolves.toMatchObject({ status: "accepted" });
-    oldFailure.reject(new Error("old metadata failed"));
-    await expect(oldRequest.result).resolves.toMatchObject({ status: "stale" });
   });
 
   it("publishes a current failure instead of leaving the view in a loading state", async () => {
@@ -148,17 +153,60 @@ describe("SelectedWorkRuntimeMetaCoordinator", () => {
       load,
     );
 
+    await expect(oldRequest.result).resolves.toEqual({
+      key: "same-work\u0000pdf:1",
+      status: "stale",
+    });
+    oldVersion.resolve(meta(1));
+    await Promise.resolve();
+    expect(load).toHaveBeenNthCalledWith(2, "same-work", 4);
+
     newVersion.resolve(meta(2));
     await expect(newRequest.result).resolves.toMatchObject({
       loaded: { key: "same-work\u0000pdf:2" },
       status: "accepted",
     });
-    oldVersion.resolve(meta(1));
-    await expect(oldRequest.result).resolves.toEqual({
-      key: "same-work\u0000pdf:1",
-      status: "stale",
-    });
     expect(load).toHaveBeenNthCalledWith(1, "same-work", 4);
     expect(load).toHaveBeenNthCalledWith(2, "same-work", 4);
+  });
+
+  it("starts A then only the latest C during a rapid A/B/C selection sequence", async () => {
+    const activeA = deferred<WorkRuntimeMeta>();
+    const latestC = deferred<WorkRuntimeMeta>();
+    const load = vi.fn<LibraryWorkRuntimeMetaLoader>((workId) =>
+      workId === "work-a" ? activeA.promise : latestC.promise,
+    );
+    const coordinator = new SelectedWorkRuntimeMetaCoordinator();
+
+    const requestA = coordinator.request(
+      { annotationCount: 1, runtimeVersion: "v1", workId: "work-a" },
+      load,
+    );
+    const requestB = coordinator.request(
+      { annotationCount: 2, runtimeVersion: "v1", workId: "work-b" },
+      load,
+    );
+    const requestC = coordinator.request(
+      { annotationCount: 3, runtimeVersion: "v1", workId: "work-c" },
+      load,
+    );
+
+    await expect(requestA.result).resolves.toMatchObject({ status: "stale" });
+    await expect(requestB.result).resolves.toMatchObject({ status: "stale" });
+    expect(load.mock.calls.map(([workId]) => workId)).toEqual(["work-a"]);
+
+    activeA.resolve(meta(1));
+    await Promise.resolve();
+    expect(load.mock.calls.map(([workId]) => workId)).toEqual(["work-a", "work-c"]);
+    expect(load).toHaveBeenNthCalledWith(2, "work-c", 3);
+
+    latestC.resolve(meta(3));
+    await expect(requestC.result).resolves.toEqual({
+      loaded: {
+        key: selectedWorkRuntimeMetaKey({ runtimeVersion: "v1", workId: "work-c" }),
+        value: meta(3),
+      },
+      status: "accepted",
+    });
   });
 });

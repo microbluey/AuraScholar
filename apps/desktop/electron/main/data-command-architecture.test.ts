@@ -36,7 +36,9 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   void dependencies.execute?.("library.getPage", async () => ({
     browseSummary: {
       availableSources: [],
+      availableSourcesTruncated: false,
       availableTags: [],
+      availableTagsTruncated: false,
       baseTotal: 0,
       notedTotal: 0,
       readingTotal: 0,
@@ -55,6 +57,9 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   }));
   // @ts-expect-error library.getPage must return its declared page DTO.
   void dependencies.execute?.("library.getPage", async () => ({ works: [] }));
+  void dependencies.execute?.("library.getWorkInspectorDetail", async () => ({ detail: null }));
+  // @ts-expect-error library.getWorkInspectorDetail must return its detail envelope.
+  void dependencies.execute?.("library.getWorkInspectorDetail", async () => ({ work: null }));
   void dependencies.execute?.("library.getScope", async () => ({ libraryId: "library-id" }));
   // @ts-expect-error library.getScope must return the local Library id.
   void dependencies.execute?.("library.getScope", async () => ({}));

@@ -143,6 +143,15 @@ describe("Work metadata data commands", () => {
     expect(result.metadata?.work).not.toHaveProperty("authorNames");
   });
 
+  it("does not spread undeclared CSL payloads into the editor snapshot", async () => {
+    const workId = await addWork();
+    await database.run(`UPDATE works SET csl_json = ? WHERE id = ?`, ["x".repeat(256 * 1024), workId]);
+
+    const result = await command("library.getWorkMetadata", { workId });
+
+    expect(result.metadata?.work).not.toHaveProperty("csl_json");
+  });
+
   it("preserves the editor's deleted-read behavior while its update remains rejected", async () => {
     const workId = await addWork("Deleted metadata source");
     await works.softDelete(workId);

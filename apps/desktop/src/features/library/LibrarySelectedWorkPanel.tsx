@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Badge, Button } from "@aurascholar/ui";
-import type { ReadingStatus, WorkWithAuthors } from "@aurascholar/db";
-import type { WorkRuntimeMeta, WorkTableMeta } from "../../services/library-page-data";
+import type { ReadingStatus } from "@aurascholar/db";
+import type { WorkPageWork } from "@aurascholar/db/work-page";
+import type { LibraryWorkInspectorDetail, WorkRuntimeMeta, WorkTableMeta } from "../../services/library-page-data";
+import type { SelectedWorkDetailStatus } from "./useSelectedWorkDetail";
 import type { SelectedWorkRuntimeMetaStatus } from "./useSelectedWorkRuntimeMeta";
 import {
   formatAttachmentSize,
@@ -10,18 +12,20 @@ import {
   readingStatusLabel,
 } from "./library-work-display";
 import {
-  LibraryBibliographicLines,
   LibraryCitationMiniGraph,
   LibraryStatusLine,
   LibraryTrashWorkPanel,
+  LibraryWorkAbstract,
+  LibraryWorkBibliography,
   LibraryWorkNotesPanel,
   type LibraryWorkAction,
 } from "./LibrarySelectedWorkSections";
-
 type DetailPanelTab = "overview" | "notes" | "related";
 
 export interface LibrarySelectedWorkPanelProps {
-  work: WorkWithAuthors | null;
+  work: WorkPageWork | null;
+  detail: LibraryWorkInspectorDetail | null;
+  detailStatus: SelectedWorkDetailStatus;
   meta: WorkRuntimeMeta | null;
   metaStatus: SelectedWorkRuntimeMetaStatus;
   tableMeta?: WorkTableMeta;
@@ -50,6 +54,8 @@ export interface LibrarySelectedWorkPanelProps {
 
 export function LibrarySelectedWorkPanel({
   work,
+  detail,
+  detailStatus,
   meta,
   metaStatus,
   tableMeta,
@@ -76,7 +82,6 @@ export function LibrarySelectedWorkPanel({
   projectIngressBusy = false,
 }: LibrarySelectedWorkPanelProps) {
   const [activePanelTab, setActivePanelTab] = useState<DetailPanelTab>("overview");
-
   if (!work) {
     return (
       <div className="library-detail au-panel">
@@ -87,18 +92,18 @@ export function LibrarySelectedWorkPanel({
       </div>
     );
   }
-
   const authorText =
     work.authorNames.length > 0 ? work.authorNames.slice(0, 4).join(", ") : "作者未标注";
   const sourceText = [work.venue_name, work.year].filter(Boolean).join(" · ") || "来源未标注";
   const tags = (tableMeta?.tags ?? []).slice(0, 4);
   const starActionBusy = typeof starActionBusyTarget === "boolean";
   const readingStatusBusy = Boolean(readingStatusBusyTarget);
-
   if (isTrashView) {
     return (
       <LibraryTrashWorkPanel
         work={work}
+        detail={detail}
+        detailStatus={detailStatus}
         meta={meta}
         metaStatus={metaStatus}
         tableMeta={tableMeta}
@@ -247,14 +252,17 @@ export function LibrarySelectedWorkPanel({
               <div className="library-panel-heading">
                 <h3>摘要</h3>
               </div>
-              <p className="library-preview-copy">{work.abstract || "暂无摘要。"}</p>
+              <LibraryWorkAbstract detail={detail} detailStatus={detailStatus} />
             </section>
             <section className="library-inspector__section">
               <div className="library-panel-heading">
                 <h3>书目信息</h3>
               </div>
-              <LibraryBibliographicLines work={work} />
-              <LibraryStatusLine label="题录来源" value={sourceText} variant="neutral" />
+              <LibraryWorkBibliography
+                detail={detail}
+                detailStatus={detailStatus}
+                sourceText={sourceText}
+              />
             </section>
             <section className="library-inspector__section">
               <div className="library-panel-heading">

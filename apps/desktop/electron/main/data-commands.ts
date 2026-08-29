@@ -29,6 +29,7 @@ import { executeLibraryCslCommand } from "./library-csl-commands";
 import { executeLibraryBackupCommand } from "./library-backup-commands";
 import { executeLibraryIngestDedupCommand } from "./library-ingest-dedup-commands";
 import { executeLibraryIngestCommand } from "./library-ingest-commands";
+import { executeLibraryInspectorDetailCommand } from "./library-inspector-detail-commands";
 import { executeLibraryListCommand } from "./library-list-commands";
 import { executeLibraryOaCommand } from "./library-oa-commands";
 import { executeLibraryPageCommand } from "./library-page-commands";
@@ -180,6 +181,8 @@ export async function executeDataCommand(
     case "library.getPage":
     case "library.getWorkRuntimeMeta":
       return executeLibraryPageCommand(envelope, dependencies);
+    case "library.getWorkInspectorDetail":
+      return executeLibraryInspectorDetailCommand(envelope, dependencies);
     case "library.listWorks":
     case "library.searchWorksByMetadata":
       return executeLibraryListCommand(envelope, dependencies);

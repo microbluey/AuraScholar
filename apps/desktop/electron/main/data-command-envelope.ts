@@ -68,6 +68,7 @@ const SUPPORTED_DATA_COMMAND_NAMES = new Set<DataCommandName>([
   "library.getPage",
   "library.getScope",
   "library.getShellStats",
+  "library.getWorkInspectorDetail",
   "library.getWorkMetadata",
   "library.getWorkRuntimeMeta",
   "library.importBackup",
