@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 84774,
+        ".ts": 84847,
         ".tsx": 35973
       },
       "files": {
@@ -222,7 +222,8 @@
         "apps/desktop/src/features/canvas/library-work.ts": 48,
         "apps/desktop/src/features/canvas/markdown-edit.ts": 76,
         "apps/desktop/src/features/canvas/model.ts": 353,
-        "apps/desktop/src/features/canvas/persistence.ts": 431,
+        "apps/desktop/src/features/canvas/persistence.ts": 458,
+        "apps/desktop/src/features/canvas/preview-storage-limits.ts": 46,
         "apps/desktop/src/features/canvas/routes.ts": 20,
         "apps/desktop/src/features/canvas/synthesis.ts": 280,
         "apps/desktop/src/features/canvas/useCanvasIngress.tsx": 168,
@@ -604,11 +605,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 140068
+      "totalLines": 140141
     },
     "tests": {
       "byExtension": {
-        ".ts": 85670,
+        ".ts": 85847,
         ".tsx": 1035
       },
       "files": {
@@ -621,7 +622,7 @@
         "apps/desktop/electron/main/canvas-ingress-queries.test.ts": 246,
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 417,
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 410,
-        "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 131,
+        "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 135,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
         "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
@@ -835,7 +836,7 @@
         "apps/desktop/src/features/canvas/library-work.test.ts": 60,
         "apps/desktop/src/features/canvas/markdown-edit.test.ts": 28,
         "apps/desktop/src/features/canvas/persistence.desktop.test.ts": 366,
-        "apps/desktop/src/features/canvas/persistence.test.ts": 212,
+        "apps/desktop/src/features/canvas/persistence.test.ts": 385,
         "apps/desktop/src/features/canvas/routes.test.ts": 41,
         "apps/desktop/src/features/canvas/synthesis.test.ts": 318,
         "apps/desktop/src/features/canvas/workspace-controls.test.ts": 116,
@@ -1029,7 +1030,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 86705
+      "totalLines": 86882
     }
   },
   "uiDatabaseBoundary": {}

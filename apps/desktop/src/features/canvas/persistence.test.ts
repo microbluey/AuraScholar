@@ -1,6 +1,11 @@
 import { CANVAS_SCHEMA_VERSION, type CanvasWorkspaceDocument } from "@aurascholar/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  canvasUtf8ByteLength,
+  MAX_CANVAS_JSON_TEXT_BYTES,
+  MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES,
+} from "../../shared/canvas-workspace-document-limits";
+import {
   createCanvasWorkspace,
   deleteCanvasWorkspace,
   listCanvasWorkspaces,
@@ -11,6 +16,10 @@ import {
   saveCanvasWorkspace,
 } from "./persistence";
 import { CANVAS_LAST_WORKSPACE_ID_KEY, CANVAS_STORAGE_KEY, CANVAS_STORAGE_V2_KEY } from "./model";
+import {
+  MAX_CANVAS_PREVIEW_ENVELOPE_BYTES,
+  MAX_CANVAS_PREVIEW_WORKSPACES,
+} from "./preview-storage-limits";
 
 vi.mock("../../services/aura-platform", () => ({ isDesktopRuntime: () => false }));
 
@@ -53,7 +62,9 @@ class MemoryStorage implements Storage {
 
 let memoryStorage: MemoryStorage;
 
-function legacyWorkspace(): CanvasWorkspaceDocument {
+function legacyWorkspace(
+  overrides: Partial<CanvasWorkspaceDocument> = {},
+): CanvasWorkspaceDocument {
   return {
     schemaVersion: CANVAS_SCHEMA_VERSION,
     workspaceId: "canvas:legacy",
@@ -64,6 +75,43 @@ function legacyWorkspace(): CanvasWorkspaceDocument {
     edges: [],
     createdAt: 100,
     updatedAt: 200,
+    ...overrides,
+  };
+}
+
+function previewEnvelopeRaw(
+  workspaces: Record<string, unknown>,
+  activeWorkspaceId: string,
+): string {
+  return JSON.stringify({ activeWorkspaceId, version: 2, workspaces });
+}
+
+function padPreviewRawToBytes(raw: string, bytes: number): string {
+  const padding = bytes - canvasUtf8ByteLength(raw);
+  if (padding < 0) throw new Error("Preview test fixture exceeds its target byte size");
+  return `${raw}${" ".repeat(padding)}`;
+}
+
+function largePreviewWorkspace(workspaceId: string): CanvasWorkspaceDocument {
+  const markdown = "x".repeat(MAX_CANVAS_JSON_TEXT_BYTES);
+  return {
+    schemaVersion: CANVAS_SCHEMA_VERSION,
+    workspaceId,
+    name: "Large preview workspace",
+    viewport: { x: 0, y: 0, zoom: 1 },
+    nodes: Array.from({ length: 6 }, (_, index) => ({
+      id: `${workspaceId}:note-${index}`,
+      type: "idea-note" as const,
+      position: { x: index, y: 0 },
+      dimensions: { width: 320, height: 200 },
+      tags: [],
+      createdAt: index,
+      updatedAt: index,
+      data: { contentMarkdown: markdown, hasEquations: false },
+    })),
+    edges: [],
+    createdAt: 1,
+    updatedAt: 1,
   };
 }
 
@@ -115,6 +163,131 @@ describe("browser preview canvas persistence", () => {
     await expect(listCanvasWorkspaces()).rejects.toThrow("浏览器白板数据无法读取");
     await expect(loadCanvasWorkspace("canvas:legacy")).rejects.toThrow("浏览器白板数据无法读取");
     expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBe(corruptV2);
+  });
+
+  it("accepts a valid v2 raw value at the exact preview storage byte limit", async () => {
+    const workspace = legacyWorkspace();
+    const raw = padPreviewRawToBytes(
+      previewEnvelopeRaw({ [workspace.workspaceId]: workspace }, workspace.workspaceId),
+      MAX_CANVAS_PREVIEW_ENVELOPE_BYTES,
+    );
+    expect(canvasUtf8ByteLength(raw)).toBe(MAX_CANVAS_PREVIEW_ENVELOPE_BYTES);
+    window.localStorage.setItem(CANVAS_STORAGE_V2_KEY, raw);
+
+    await expect(listCanvasWorkspaces()).resolves.toEqual([
+      expect.objectContaining({ workspaceId: workspace.workspaceId }),
+    ]);
+  });
+
+  it("rejects an oversized Unicode v2 raw value before parsing or falling back", async () => {
+    const oversized = "你".repeat(Math.floor(MAX_CANVAS_PREVIEW_ENVELOPE_BYTES / 3) + 1);
+    const legacyRaw = JSON.stringify(legacyWorkspace());
+    window.localStorage.setItem(CANVAS_STORAGE_KEY, legacyRaw);
+    window.localStorage.setItem(CANVAS_STORAGE_V2_KEY, oversized);
+    window.localStorage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, "canvas:sentinel");
+    const parse = vi.spyOn(JSON, "parse");
+
+    await expect(listCanvasWorkspaces()).rejects.toThrow("浏览器白板数据无法读取");
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
+    expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBe(oversized);
+    expect(window.localStorage.getItem(CANVAS_STORAGE_KEY)).toBe(legacyRaw);
+    expect(window.localStorage.getItem(CANVAS_LAST_WORKSPACE_ID_KEY)).toBe("canvas:sentinel");
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects too many v2 workspaces before decoding individual documents", async () => {
+    const workspaces = Object.fromEntries(
+      Array.from({ length: MAX_CANVAS_PREVIEW_WORKSPACES + 1 }, (_, index) => [
+        `canvas:workspace-${index}`,
+        {},
+      ]),
+    );
+    const raw = previewEnvelopeRaw(workspaces, "canvas:workspace-0");
+    window.localStorage.setItem(CANVAS_STORAGE_V2_KEY, raw);
+    window.localStorage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, "canvas:sentinel");
+
+    await expect(listCanvasWorkspaces()).rejects.toThrow("最多只能保存");
+    expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBe(raw);
+    expect(window.localStorage.getItem(CANVAS_LAST_WORKSPACE_ID_KEY)).toBe("canvas:sentinel");
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps create and save atomic once the preview workspace limit is reached", async () => {
+    const workspaces = Object.fromEntries(
+      Array.from({ length: MAX_CANVAS_PREVIEW_WORKSPACES }, (_, index) => {
+        const workspaceId = `canvas:workspace-${index}`;
+        return [workspaceId, legacyWorkspace({ workspaceId })];
+      }),
+    );
+    window.localStorage.setItem(
+      CANVAS_STORAGE_V2_KEY,
+      previewEnvelopeRaw(workspaces, "canvas:workspace-0"),
+    );
+    window.localStorage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, "canvas:sentinel");
+    await expect(listCanvasWorkspaces()).resolves.toHaveLength(MAX_CANVAS_PREVIEW_WORKSPACES);
+    const snapshot = window.localStorage.getItem(CANVAS_STORAGE_V2_KEY);
+    vi.mocked(window.dispatchEvent).mockClear();
+
+    await expect(createCanvasWorkspace("One too many")).rejects.toThrow("最多只能保存");
+    await expect(
+      saveCanvasWorkspace(legacyWorkspace({ workspaceId: "canvas:workspace-new" })),
+    ).rejects.toThrow("最多只能保存");
+    expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBe(snapshot);
+    expect(window.localStorage.getItem(CANVAS_LAST_WORKSPACE_ID_KEY)).toBe("canvas:sentinel");
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it("preflights the complete preview envelope before an aggregate-overflow save", async () => {
+    const first = largePreviewWorkspace("canvas:large-one");
+    const second = largePreviewWorkspace("canvas:large-two");
+    const third = largePreviewWorkspace("canvas:large-three");
+    expect(canvasUtf8ByteLength(JSON.stringify(first))).toBeLessThanOrEqual(
+      MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES,
+    );
+    window.localStorage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, "canvas:sentinel");
+
+    await saveCanvasWorkspace(first);
+    await saveCanvasWorkspace(second);
+    const snapshot = window.localStorage.getItem(CANVAS_STORAGE_V2_KEY);
+    vi.mocked(window.dispatchEvent).mockClear();
+
+    await expect(saveCanvasWorkspace(third)).rejects.toThrow("Canvas preview storage is limited");
+    expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBe(snapshot);
+    expect(window.localStorage.getItem(CANVAS_LAST_WORKSPACE_ID_KEY)).toBe("canvas:sentinel");
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+    expect(JSON.parse(snapshot ?? "{}").workspaces[third.workspaceId]).toBeUndefined();
+  });
+
+  it("fails closed for empty v2 and v1 values instead of overwriting existing storage", async () => {
+    const legacyRaw = JSON.stringify(legacyWorkspace());
+    window.localStorage.setItem(CANVAS_STORAGE_KEY, legacyRaw);
+    window.localStorage.setItem(CANVAS_STORAGE_V2_KEY, "");
+
+    await expect(listCanvasWorkspaces()).rejects.toThrow("浏览器白板数据无法读取");
+    expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBe("");
+    expect(window.localStorage.getItem(CANVAS_STORAGE_KEY)).toBe(legacyRaw);
+
+    memoryStorage.clear();
+    window.localStorage.setItem(CANVAS_STORAGE_KEY, "");
+    await expect(listCanvasWorkspaces()).rejects.toThrow("浏览器白板数据无法读取");
+    expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBeNull();
+    expect(window.localStorage.getItem(CANVAS_STORAGE_KEY)).toBe("");
+  });
+
+  it("does not migrate an oversized legacy raw value into a new default workspace", async () => {
+    const oversized = "你".repeat(Math.floor(MAX_CANVAS_PREVIEW_ENVELOPE_BYTES / 3) + 1);
+    window.localStorage.setItem(CANVAS_STORAGE_KEY, oversized);
+    window.localStorage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, "canvas:sentinel");
+    const parse = vi.spyOn(JSON, "parse");
+
+    await expect(listCanvasWorkspaces()).rejects.toThrow("浏览器白板数据无法读取");
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
+    expect(window.localStorage.getItem(CANVAS_STORAGE_KEY)).toBe(oversized);
+    expect(window.localStorage.getItem(CANVAS_STORAGE_V2_KEY)).toBeNull();
+    expect(window.localStorage.getItem(CANVAS_LAST_WORKSPACE_ID_KEY)).toBe("canvas:sentinel");
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
   });
 
   it("creates, renames, selects, saves, and deletes isolated workspaces", async () => {

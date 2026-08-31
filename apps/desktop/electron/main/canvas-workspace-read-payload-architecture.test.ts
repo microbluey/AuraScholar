@@ -23,6 +23,7 @@ describe("Canvas workspace read payload boundary", () => {
       "src/shared/canvas-workspace-command-result-codec.ts",
     );
     const workspaceSummaryCodec = source("src/shared/canvas-workspace-summary-codec.ts");
+    const previewStorageLimits = source("src/features/canvas/preview-storage-limits.ts");
     const rendererPersistence = source("src/features/canvas/persistence.ts");
 
     for (const limit of [
@@ -86,6 +87,7 @@ describe("Canvas workspace read payload boundary", () => {
       workspaceDocumentLimits,
       workspaceCommandResultCodec,
       workspaceSummaryCodec,
+      previewStorageLimits,
       rendererPersistence,
     ]) {
       expect(sourceText).not.toContain("@aurascholar/db");
@@ -96,6 +98,8 @@ describe("Canvas workspace read payload boundary", () => {
     expect(workspaceDocumentLimits).toContain("new TextEncoder()");
     expect(workspaceCommandResultCodec).toContain("decodeCanvasWorkspaceSaveResult");
     expect(workspaceSummaryCodec).toContain("decodeCanvasWorkspaceListResult");
+    expect(previewStorageLimits).toContain("MAX_CANVAS_PREVIEW_ENVELOPE_BYTES");
+    expect(previewStorageLimits).toContain("assertCanvasPreviewStorageByteLimit");
     expect(rendererPersistence).toContain("decodeCanvasWorkspaceDocument");
     expect(rendererPersistence).toContain("decodeCanvasWorkspaceDeleteResult");
     expect(rendererPersistence).toContain("decodeCanvasWorkspaceSaveResult");
