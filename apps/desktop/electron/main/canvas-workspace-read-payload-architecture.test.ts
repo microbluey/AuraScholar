@@ -19,6 +19,7 @@ describe("Canvas workspace read payload boundary", () => {
       "src/shared/canvas-workspace-document-node-data-codec.ts",
     );
     const workspaceDocumentLimits = source("src/shared/canvas-workspace-document-limits.ts");
+    const workspaceSummaryCodec = source("src/shared/canvas-workspace-summary-codec.ts");
     const rendererPersistence = source("src/features/canvas/persistence.ts");
 
     for (const limit of [
@@ -80,15 +81,18 @@ describe("Canvas workspace read payload boundary", () => {
       workspaceDocumentCodec,
       workspaceNodeDataCodec,
       workspaceDocumentLimits,
+      workspaceSummaryCodec,
       rendererPersistence,
     ]) {
       expect(sourceText).not.toContain("@aurascholar/db");
-      expect(sourceText).not.toContain("node:buffer");
+      expect(sourceText).not.toMatch(/(?:from|import\()\s*["']node:/);
     }
     expect(workspaceDocumentCodec).toContain("decodeCanvasWorkspaceDocument");
     expect(workspaceNodeDataCodec).toContain("decodeCanvasWorkspaceNodeData");
     expect(workspaceDocumentLimits).toContain("new TextEncoder()");
+    expect(workspaceSummaryCodec).toContain("decodeCanvasWorkspaceListResult");
     expect(rendererPersistence).toContain("decodeCanvasWorkspaceDocument");
+    expect(rendererPersistence).toContain("decodeCanvasWorkspaceListResult");
     expect(rendererPersistence).not.toContain("CanvasWorkspaceDocumentDto");
 
     expect(workspaceCommands).toMatch(

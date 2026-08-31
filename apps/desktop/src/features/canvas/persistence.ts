@@ -17,6 +17,7 @@ import {
   saveCanvasWorkspaceData,
 } from "../../services/canvas-workspace-data";
 import { decodeCanvasWorkspaceDocument } from "../../shared/canvas-workspace-document-codec";
+import { decodeCanvasWorkspaceListResult } from "../../shared/canvas-workspace-summary-codec";
 import {
   CANVAS_LAST_WORKSPACE_ID_KEY,
   CANVAS_STORAGE_KEY,
@@ -63,6 +64,17 @@ function narrowDocument(stored: unknown): CanvasWorkspaceDocument {
     throw new Error(`白板数据格式不兼容：${error instanceof Error ? error.message : "未知错误"}`, {
       cause: error,
     });
+  }
+}
+
+function narrowWorkspaceSummaries(stored: unknown): CanvasWorkspaceSummaryDto[] {
+  try {
+    return decodeCanvasWorkspaceListResult(stored).workspaces;
+  } catch (error) {
+    throw new Error(
+      `白板列表数据格式不兼容：${error instanceof Error ? error.message : "未知错误"}`,
+      { cause: error },
+    );
   }
 }
 
@@ -192,7 +204,7 @@ export async function listCanvasWorkspaces(): Promise<CanvasWorkspaceSummaryDto[
       .map(toWorkspaceSummary);
   }
 
-  return (await listCanvasWorkspaceData()).workspaces;
+  return narrowWorkspaceSummaries(await listCanvasWorkspaceData());
 }
 
 export async function loadCanvasWorkspace(workspaceId: string): Promise<CanvasWorkspaceDocument> {
@@ -304,7 +316,7 @@ export async function deleteCanvasWorkspace(workspaceId: string): Promise<boolea
   // synchronization step best-effort so a post-commit failure cannot make the
   // page restore autosave and resurrect the deleted row.
   try {
-    const { workspaces: remaining } = await listCanvasWorkspaceData();
+    const remaining = await listCanvasWorkspaces();
     const remembered = readLastCanvasWorkspaceId();
     if (remembered === normalizedId && remaining[0]) {
       rememberLastCanvasWorkspaceId(remaining[0].workspaceId);

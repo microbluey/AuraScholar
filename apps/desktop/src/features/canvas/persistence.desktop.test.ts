@@ -122,6 +122,16 @@ describe("desktop Canvas workspace persistence", () => {
     expect(dispatchEvent).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps malformed desktop workspace list results closed", async () => {
+    const malformed = {
+      workspaces: [{ ...summary(workspace()), projectId: "project:leak" }],
+    };
+    command.mockResolvedValueOnce(malformed);
+
+    await expect(listCanvasWorkspaces()).rejects.toThrow("白板列表数据格式不兼容");
+    expect(command).toHaveBeenCalledWith("canvas.listWorkspaces", {});
+  });
+
   it("keeps missing and malformed desktop workspace failures closed", async () => {
     command.mockResolvedValueOnce({ workspace: null });
     await expect(loadCanvasWorkspace("canvas:missing")).rejects.toThrow("白板不存在或已被删除");
@@ -191,6 +201,20 @@ describe("desktop Canvas workspace persistence", () => {
     const failure = new Error("save rejected by active-library scope");
     command.mockRejectedValueOnce(failure);
     await expect(saveCanvasWorkspace(workspace())).rejects.toBe(failure);
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a committed deletion successful when its workspace-list refresh is malformed", async () => {
+    const deletedId = "canvas:workspace-1";
+    storage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, deletedId);
+    command.mockResolvedValueOnce({ deleted: true }).mockResolvedValueOnce({
+      workspaces: [
+        { ...summary(workspace({ workspaceId: "canvas:workspace-2" })), projectId: "leak" },
+      ],
+    });
+
+    await expect(deleteCanvasWorkspace(deletedId)).resolves.toBe(true);
+    expect(readLastCanvasWorkspaceId()).toBe(deletedId);
     expect(dispatchEvent).toHaveBeenCalledTimes(1);
   });
 

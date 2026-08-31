@@ -3,6 +3,8 @@
  * DB read-side limits are asserted against these values in codec tests.
  */
 export const MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES = 8 * 1024 * 1024;
+export const MAX_CANVAS_WORKSPACE_LIST_BYTES = 8 * 1024 * 1024;
+export const MAX_CANVAS_WORKSPACE_LIST_ROWS = 1_000;
 export const MAX_CANVAS_WORKSPACE_DESCRIPTION_BYTES = 64 * 1024;
 export const MAX_CANVAS_WORKSPACE_NAME_BYTES = 512;
 /** Matches the byte preflight applied to persisted Canvas identifier columns. */
