@@ -1,10 +1,14 @@
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
+import type {
+  CanvasActiveWork as CanvasActiveWorkDto,
+  CanvasAnnotationIngressSource as CanvasAnnotationIngressSourceDto,
+  CanvasIngressAnnotation as CanvasIngressAnnotationDto,
+  CanvasIngressWork as CanvasIngressWorkDto,
+} from "../../electron/data-command-contract";
 
-export interface CanvasAnnotationIngressSource {
-  annotation: AnnotationRow;
-  work: WorkWithAuthors;
-}
+export type CanvasActiveWork = CanvasActiveWorkDto;
+export type CanvasAnnotationIngressSource = CanvasAnnotationIngressSourceDto;
+export type CanvasIngressAnnotation = CanvasIngressAnnotationDto;
+export type CanvasIngressWork = CanvasIngressWorkDto;
 
 /**
  * Testable renderer boundary for Canvas ingress reads. The production source
@@ -12,7 +16,7 @@ export interface CanvasAnnotationIngressSource {
  * callers retain cancellation and defensive-result coverage without SQL.
  */
 export interface CanvasPageDataSource {
-  getActiveWork: (workId: string) => Promise<WorkWithAuthors | null>;
+  getActiveWork: (workId: string) => Promise<CanvasActiveWork | null>;
   getAnnotationIngressSource: (
     annotationId: string,
     workId: string,
@@ -41,7 +45,7 @@ export async function loadCanvasActiveWork(
   workId: string,
   signal?: AbortSignal,
   dataSource: CanvasPageDataSource = defaultDataSource,
-): Promise<WorkWithAuthors | null> {
+): Promise<CanvasActiveWork | null> {
   throwIfAborted(signal);
   const work = await dataSource.getActiveWork(workId);
   throwIfAborted(signal);

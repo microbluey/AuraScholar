@@ -1,10 +1,8 @@
 import type { CanvasCitationRelation } from "@aurascholar/core";
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
 import type {
   CanvasWorkspaceSummary,
   StoredCanvasWorkspaceDocument,
 } from "@aurascholar/db/repos/canvas";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
 
 /** Canvas workspace snapshots are stored structurally to avoid a core <-> db cycle. */
@@ -62,8 +60,41 @@ export interface CanvasGetActiveWorkCommandInput {
   workId: string;
 }
 
+/** Narrow active-work metadata required to create a Canvas paper node. */
+export interface CanvasActiveWork {
+  abstract: string | null;
+  authorNames: string[];
+  doi: string | null;
+  id: string;
+  reading_status: string;
+  title: string;
+  venue_name: string | null;
+  year: number | null;
+}
+
+/**
+ * Scoped work context for annotation ingress. `deleted_at` lets the renderer
+ * retain its defensive source-integrity check without receiving a full row.
+ */
+export interface CanvasIngressWork extends CanvasActiveWork {
+  deleted_at: number | null;
+}
+
+/** Narrow annotation metadata needed to place an annotation-derived node. */
+export interface CanvasIngressAnnotation {
+  anchor_json: string | null;
+  attachment_id: string;
+  color: string | null;
+  content_md: string | null;
+  id: string;
+  orphaned: number;
+  page_index: number;
+  type: string;
+  work_id: string;
+}
+
 export interface CanvasGetActiveWorkCommandResult {
-  work: WorkWithAuthors | null;
+  work: CanvasActiveWork | null;
 }
 
 /**
@@ -76,8 +107,8 @@ export interface CanvasGetAnnotationIngressSourceCommandInput {
 }
 
 export interface CanvasAnnotationIngressSource {
-  annotation: AnnotationRow;
-  work: WorkWithAuthors;
+  annotation: CanvasIngressAnnotation;
+  work: CanvasIngressWork;
 }
 
 export interface CanvasGetAnnotationIngressSourceCommandResult {

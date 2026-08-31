@@ -1,22 +1,48 @@
-import type { WorkWithAuthors } from "@aurascholar/db";
-import type { LibraryListWork } from "../../services/library-list";
+import type {
+  CanvasActiveWork,
+} from "../../../electron/data-command-contract";
+import type {
+  LibraryListWork,
+  LibraryMetadataSearchWork,
+} from "../../services/library-list";
 import type { CanvasLibraryWork } from "./model";
 
-type CanvasLibraryWorkSource = LibraryListWork | (WorkWithAuthors & { tagNames?: string[] });
+type CanvasLibraryListWork = LibraryListWork | LibraryMetadataSearchWork;
+type CanvasLibraryWorkSource = CanvasLibraryListWork | CanvasActiveWork;
 
-/** Adapts both lightweight list DTOs and scoped Canvas ingress rows. */
+function isLibraryListWork(row: CanvasLibraryWorkSource): row is CanvasLibraryListWork {
+  return "createdAt" in row;
+}
+
+function listTags(row: CanvasLibraryListWork): string[] {
+  return "tagNames" in row ? row.tagNames : [];
+}
+
+/** Adapts lightweight Library lists and narrow Canvas ingress DTOs. */
 export function toCanvasLibraryWork(row: CanvasLibraryWorkSource): CanvasLibraryWork {
-  const isListDto = "createdAt" in row;
-  const tagNames = "tagNames" in row ? row.tagNames : [];
+  if (isLibraryListWork(row)) {
+    return {
+      abstract: row.abstract,
+      authorNames: row.authorNames,
+      doi: row.doi,
+      id: row.id,
+      readingStatus: row.readingStatus,
+      tags: listTags(row),
+      title: row.title,
+      venue: row.venueName,
+      year: row.year,
+    };
+  }
+
   return {
     abstract: row.abstract,
     authorNames: row.authorNames,
     doi: row.doi,
     id: row.id,
-    readingStatus: isListDto ? row.readingStatus : row.reading_status,
-    tags: tagNames ?? [],
+    readingStatus: row.reading_status,
+    tags: [],
     title: row.title,
-    venue: isListDto ? row.venueName : row.venue_name,
+    venue: row.venue_name,
     year: row.year,
   };
 }

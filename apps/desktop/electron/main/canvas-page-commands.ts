@@ -1,8 +1,6 @@
 import type { CanvasCitationRelation } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
-import { WorksRepo } from "@aurascholar/db/repos/works";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
 import type {
   CanvasGetActiveWorkCommandInput,
@@ -22,6 +20,12 @@ import {
   requireRecordId,
   type DataCommandDependencies,
 } from "./data-command-runtime";
+import {
+  loadCanvasAnnotationIngressSource,
+  loadCanvasIngressWork,
+  requireBoundedCanvasIngressOutput,
+  toCanvasActiveWork,
+} from "./canvas-ingress-queries";
 
 const MAX_CANVAS_CITATION_RELATIONS = 1_000;
 // The scoped relation query binds every id twice plus two Library parameters.
@@ -199,8 +203,8 @@ async function loadActiveWork(
   libraryId: string,
   input: CanvasGetActiveWorkCommandInput,
 ): Promise<CanvasGetActiveWorkCommandResult> {
-  const work = await new WorksRepo(database, libraryId).get(input.workId);
-  return { work: work?.deleted_at === null ? work : null };
+  const work = await loadCanvasIngressWork(database, libraryId, input.workId);
+  return requireBoundedCanvasIngressOutput({ work: work ? toCanvasActiveWork(work) : null });
 }
 
 async function loadAnnotationIngressSource(
@@ -208,12 +212,8 @@ async function loadAnnotationIngressSource(
   libraryId: string,
   input: CanvasGetAnnotationIngressSourceCommandInput,
 ): Promise<CanvasGetAnnotationIngressSourceCommandResult> {
-  const annotation = await findActiveAnnotation(database, libraryId, input);
-  if (!annotation) return { source: null };
-
-  const work = await new WorksRepo(database, libraryId).get(annotation.work_id);
-  if (!work || work.deleted_at !== null) return { source: null };
-  return { source: { annotation, work } };
+  const source = await loadCanvasAnnotationIngressSource(database, libraryId, input);
+  return requireBoundedCanvasIngressOutput({ source });
 }
 
 async function loadCitationRelations(
@@ -279,27 +279,4 @@ async function persistCitationRelations(
     );
   }
   return { persisted };
-}
-
-async function findActiveAnnotation(
-  database: Database,
-  libraryId: string,
-  input: CanvasGetAnnotationIngressSourceCommandInput,
-): Promise<AnnotationRow | null> {
-  const rows = await database.query<AnnotationRow>(
-    `SELECT an.*
-     FROM annotations an
-     JOIN works w ON w.id = an.work_id AND w.deleted_at IS NULL
-     JOIN attachments at
-       ON at.id = an.attachment_id
-      AND at.work_id = an.work_id
-      AND at.deleted_at IS NULL
-     WHERE an.id = ?
-       AND an.work_id = ?
-       AND w.library_id = ?
-       AND an.deleted_at IS NULL
-     LIMIT 1`,
-    [input.annotationId, input.workId, libraryId],
-  );
-  return rows[0] ?? null;
 }

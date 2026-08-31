@@ -5,13 +5,13 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 83410,
+        ".ts": 83667,
         ".tsx": 35973
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
         "apps/desktop/electron/annotation-recovery-command-contract.ts": 20,
-        "apps/desktop/electron/canvas-command-contract.ts": 155,
+        "apps/desktop/electron/canvas-command-contract.ts": 186,
         "apps/desktop/electron/citation-graph-command-contract.ts": 62,
         "apps/desktop/electron/data-command-contract.ts": 474,
         "apps/desktop/electron/discovery-library-status-command-contract.ts": 42,
@@ -29,7 +29,8 @@
         "apps/desktop/electron/main/ai-run-registry.ts": 34,
         "apps/desktop/electron/main/ai-settings-store.ts": 340,
         "apps/desktop/electron/main/annotation-recovery-commands.ts": 122,
-        "apps/desktop/electron/main/canvas-page-commands.ts": 305,
+        "apps/desktop/electron/main/canvas-ingress-queries.ts": 219,
+        "apps/desktop/electron/main/canvas-page-commands.ts": 282,
         "apps/desktop/electron/main/canvas-workspace-command-input.ts": 77,
         "apps/desktop/electron/main/canvas-workspace-commands.ts": 177,
         "apps/desktop/electron/main/canvas-workspace-document-input.ts": 500,
@@ -218,7 +219,7 @@
         "apps/desktop/src/features/canvas/canvas.css": 2743,
         "apps/desktop/src/features/canvas/excerpt-node.ts": 86,
         "apps/desktop/src/features/canvas/idea-note-edit.ts": 107,
-        "apps/desktop/src/features/canvas/library-work.ts": 22,
+        "apps/desktop/src/features/canvas/library-work.ts": 48,
         "apps/desktop/src/features/canvas/markdown-edit.ts": 76,
         "apps/desktop/src/features/canvas/model.ts": 353,
         "apps/desktop/src/features/canvas/persistence.ts": 449,
@@ -359,7 +360,7 @@
         "apps/desktop/src/services/app-shell-data.ts": 15,
         "apps/desktop/src/services/aura-platform.ts": 44,
         "apps/desktop/src/services/canvas-ai.ts": 38,
-        "apps/desktop/src/services/canvas-page-data.ts": 68,
+        "apps/desktop/src/services/canvas-page-data.ts": 72,
         "apps/desktop/src/services/canvas-workspace-data.ts": 56,
         "apps/desktop/src/services/citation-graph-page-data.ts": 71,
         "apps/desktop/src/services/citation-graph.ts": 212,
@@ -595,11 +596,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 138704
+      "totalLines": 138961
     },
     "tests": {
       "byExtension": {
-        ".ts": 84092,
+        ".ts": 84420,
         ".tsx": 1035
       },
       "files": {
@@ -608,6 +609,8 @@
         "apps/desktop/electron/main/ai-settings-store.test.ts": 231,
         "apps/desktop/electron/main/annotation-recovery-command-architecture.test.ts": 37,
         "apps/desktop/electron/main/annotation-recovery-commands.test.ts": 267,
+        "apps/desktop/electron/main/canvas-ingress-payload-architecture.test.ts": 74,
+        "apps/desktop/electron/main/canvas-ingress-queries.test.ts": 246,
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 417,
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 257,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
@@ -882,7 +885,7 @@
         "apps/desktop/src/services/ai.test.ts": 110,
         "apps/desktop/src/services/app-shell-data.test.ts": 44,
         "apps/desktop/src/services/aura-platform.test.ts": 41,
-        "apps/desktop/src/services/canvas-page-data.test.ts": 180,
+        "apps/desktop/src/services/canvas-page-data.test.ts": 188,
         "apps/desktop/src/services/canvas-workspace-data.test.ts": 113,
         "apps/desktop/src/services/citation-graph-page-data.test.ts": 211,
         "apps/desktop/src/services/citation-graph.test.ts": 237,
@@ -1013,7 +1016,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 85127
+      "totalLines": 85455
     }
   },
   "uiDatabaseBoundary": {}
