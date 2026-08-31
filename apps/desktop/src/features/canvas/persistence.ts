@@ -16,6 +16,13 @@ import {
   renameCanvasWorkspaceData,
   saveCanvasWorkspaceData,
 } from "../../services/canvas-workspace-data";
+import {
+  decodeCanvasWorkspaceCreateResult,
+  decodeCanvasWorkspaceDeleteResult,
+  decodeCanvasWorkspaceLoadResult,
+  decodeCanvasWorkspaceRenameResult,
+  decodeCanvasWorkspaceSaveResult,
+} from "../../shared/canvas-workspace-command-result-codec";
 import { decodeCanvasWorkspaceDocument } from "../../shared/canvas-workspace-document-codec";
 import { decodeCanvasWorkspaceListResult } from "../../shared/canvas-workspace-summary-codec";
 import {
@@ -53,17 +60,60 @@ function narrowNode(node: CanvasWorkspaceNodeDto): CanvasNode {
 
 function narrowDocument(stored: unknown): CanvasWorkspaceDocument {
   try {
-    const decoded = decodeCanvasWorkspaceDocument(stored);
-    return {
-      ...decoded,
-      schemaVersion: CANVAS_SCHEMA_VERSION,
-      nodes: decoded.nodes.map(narrowNode),
-      edges: decoded.edges,
-    };
+    return documentFromDecoded(decodeCanvasWorkspaceDocument(stored));
   } catch (error) {
     throw new Error(`白板数据格式不兼容：${error instanceof Error ? error.message : "未知错误"}`, {
       cause: error,
     });
+  }
+}
+
+function documentFromDecoded(
+  decoded: ReturnType<typeof decodeCanvasWorkspaceDocument>,
+): CanvasWorkspaceDocument {
+  return {
+    ...decoded,
+    schemaVersion: CANVAS_SCHEMA_VERSION,
+    nodes: decoded.nodes.map(narrowNode),
+    edges: decoded.edges,
+  };
+}
+
+function narrowWorkspaceCommandResult<T>(stored: unknown, decoder: (value: unknown) => T): T {
+  try {
+    return decoder(stored);
+  } catch (error) {
+    throw new Error(
+      `白板响应数据格式不兼容：${error instanceof Error ? error.message : "未知错误"}`,
+      { cause: error },
+    );
+  }
+}
+
+function requireRequestedWorkspace(
+  workspace: CanvasWorkspaceDocument,
+  requestedWorkspaceId: string,
+): CanvasWorkspaceDocument {
+  if (workspace.workspaceId !== requestedWorkspaceId) {
+    throw new Error("白板响应数据格式不兼容：返回的白板标识与请求不一致");
+  }
+  return workspace;
+}
+
+async function resolveDesktopDeleteOutcome(workspaceId: string): Promise<boolean> {
+  const response = await deleteCanvasWorkspaceData({ workspaceId });
+  try {
+    return decodeCanvasWorkspaceDeleteResult(response).deleted;
+  } catch {
+    try {
+      const workspaces = await listCanvasWorkspaces();
+      return !workspaces.some((workspace) => workspace.workspaceId === workspaceId);
+    } catch {
+      // The delete command resolved after its transaction may have committed,
+      // but its acknowledgment cannot prove the outcome. Favor retirement so
+      // callers never resume autosave and resurrect a possibly deleted row.
+      return true;
+    }
   }
 }
 
@@ -218,9 +268,12 @@ export async function loadCanvasWorkspace(workspaceId: string): Promise<CanvasWo
     return workspaces[normalizedId]!;
   }
 
-  const { workspace: stored } = await loadCanvasWorkspaceData({ workspaceId: normalizedId });
+  const { workspace: stored } = narrowWorkspaceCommandResult(
+    await loadCanvasWorkspaceData({ workspaceId: normalizedId }),
+    decodeCanvasWorkspaceLoadResult,
+  );
   if (!stored) throw new Error("白板不存在或已被删除");
-  return narrowDocument(stored);
+  return requireRequestedWorkspace(documentFromDecoded(stored), normalizedId);
 }
 
 export async function createCanvasWorkspace(name: string): Promise<CanvasWorkspaceDocument> {
@@ -236,9 +289,11 @@ export async function createCanvasWorkspace(name: string): Promise<CanvasWorkspa
     return document;
   }
 
-  const { workspace } = await createCanvasWorkspaceData({ name: normalizedName });
-  if (!workspace) throw new Error("白板创建失败");
-  const document = narrowDocument(workspace);
+  const { workspace } = narrowWorkspaceCommandResult(
+    await createCanvasWorkspaceData({ name: normalizedName }),
+    decodeCanvasWorkspaceCreateResult,
+  );
+  const document = documentFromDecoded(workspace);
   rememberLastCanvasWorkspaceId(document.workspaceId);
   dispatchCanvasUpdated();
   return document;
@@ -268,12 +323,14 @@ export async function renameCanvasWorkspace(
     return document;
   }
 
-  const { workspace } = await renameCanvasWorkspaceData({
-    name: normalizedName,
-    workspaceId: normalizedId,
-  });
-  if (!workspace) throw new Error("白板不存在或已被删除");
-  const document = narrowDocument(workspace);
+  const { workspace } = narrowWorkspaceCommandResult(
+    await renameCanvasWorkspaceData({
+      name: normalizedName,
+      workspaceId: normalizedId,
+    }),
+    decodeCanvasWorkspaceRenameResult,
+  );
+  const document = requireRequestedWorkspace(documentFromDecoded(workspace), normalizedId);
   dispatchCanvasUpdated();
   return document;
 }
@@ -310,7 +367,7 @@ export async function deleteCanvasWorkspace(workspaceId: string): Promise<boolea
     return true;
   }
 
-  const { deleted } = await deleteCanvasWorkspaceData({ workspaceId: normalizedId });
+  const deleted = await resolveDesktopDeleteOutcome(normalizedId);
   if (!deleted) return false;
   // The main-process delete command has committed at this point. Keep every following
   // synchronization step best-effort so a post-commit failure cannot make the
@@ -366,6 +423,9 @@ export async function saveCanvasWorkspace(document: CanvasWorkspaceDocument): Pr
     dispatchCanvasUpdated();
     return;
   }
-  await saveCanvasWorkspaceData({ document });
+  narrowWorkspaceCommandResult(
+    await saveCanvasWorkspaceData({ document }),
+    decodeCanvasWorkspaceSaveResult,
+  );
   dispatchCanvasUpdated();
 }

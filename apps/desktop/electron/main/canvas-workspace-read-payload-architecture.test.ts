@@ -19,6 +19,9 @@ describe("Canvas workspace read payload boundary", () => {
       "src/shared/canvas-workspace-document-node-data-codec.ts",
     );
     const workspaceDocumentLimits = source("src/shared/canvas-workspace-document-limits.ts");
+    const workspaceCommandResultCodec = source(
+      "src/shared/canvas-workspace-command-result-codec.ts",
+    );
     const workspaceSummaryCodec = source("src/shared/canvas-workspace-summary-codec.ts");
     const rendererPersistence = source("src/features/canvas/persistence.ts");
 
@@ -81,6 +84,7 @@ describe("Canvas workspace read payload boundary", () => {
       workspaceDocumentCodec,
       workspaceNodeDataCodec,
       workspaceDocumentLimits,
+      workspaceCommandResultCodec,
       workspaceSummaryCodec,
       rendererPersistence,
     ]) {
@@ -90,8 +94,11 @@ describe("Canvas workspace read payload boundary", () => {
     expect(workspaceDocumentCodec).toContain("decodeCanvasWorkspaceDocument");
     expect(workspaceNodeDataCodec).toContain("decodeCanvasWorkspaceNodeData");
     expect(workspaceDocumentLimits).toContain("new TextEncoder()");
+    expect(workspaceCommandResultCodec).toContain("decodeCanvasWorkspaceSaveResult");
     expect(workspaceSummaryCodec).toContain("decodeCanvasWorkspaceListResult");
     expect(rendererPersistence).toContain("decodeCanvasWorkspaceDocument");
+    expect(rendererPersistence).toContain("decodeCanvasWorkspaceDeleteResult");
+    expect(rendererPersistence).toContain("decodeCanvasWorkspaceSaveResult");
     expect(rendererPersistence).toContain("decodeCanvasWorkspaceListResult");
     expect(rendererPersistence).not.toContain("CanvasWorkspaceDocumentDto");
 
