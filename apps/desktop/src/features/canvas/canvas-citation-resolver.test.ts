@@ -137,6 +137,55 @@ describe("canvas citation relation resolver", () => {
     });
   });
 
+  it("rejects an out-of-scope default local relation before graph work", async () => {
+    const command = vi.fn(async () => ({
+      relations: [{ citedWorkId: "work-b", citingWorkId: "work-outside" }],
+    }));
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    const loadGraph = vi.fn(async () => null);
+
+    await expect(resolveCanvasCitationRelations(PAPERS, { loadGraph })).rejects.toThrow(
+      "outside the requested work set",
+    );
+    expect(loadGraph).not.toHaveBeenCalled();
+  });
+
+  it("accepts a zero persisted acknowledgement from the default Canvas command", async () => {
+    const command = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    command.mockResolvedValueOnce({ relations: [] }).mockResolvedValueOnce({ persisted: 0 });
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, {
+        loadGraph: vi.fn(async (doi: string) => (doi === "10.1000/a" ? GRAPH : null)),
+      }),
+    ).resolves.toMatchObject({
+      relations: [{ citingWorkId: "work-a", citedWorkId: "work-b" }],
+      source: "graph",
+    });
+  });
+
+  it("does not project a default-command resolution after an impossible persistence acknowledgement", async () => {
+    const command = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    command.mockResolvedValueOnce({ relations: [] }).mockResolvedValueOnce({ persisted: 2 });
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, {
+        loadGraph: vi.fn(async (doi: string) => (doi === "10.1000/a" ? GRAPH : null)),
+      }),
+    ).rejects.toThrow("Canvas persist citation relations result is invalid");
+  });
+
   it("persists all new graph relations in one batch", async () => {
     const papers = [
       { nodeId: "node-a", workId: "work-a", doi: "10.1000/a" },

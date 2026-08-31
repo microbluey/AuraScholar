@@ -4,6 +4,10 @@ import type {
   CanvasIngressAnnotation as CanvasIngressAnnotationDto,
   CanvasIngressWork as CanvasIngressWorkDto,
 } from "../../electron/data-command-contract";
+import {
+  decodeCanvasGetActiveWorkResult,
+  decodeCanvasGetAnnotationIngressSourceResult,
+} from "../shared/canvas-page-command-result-codec";
 
 export type CanvasActiveWork = CanvasActiveWorkDto;
 export type CanvasAnnotationIngressSource = CanvasAnnotationIngressSourceDto;
@@ -25,14 +29,19 @@ export interface CanvasPageDataSource {
 
 const defaultDataSource: CanvasPageDataSource = {
   async getActiveWork(workId) {
-    return (await window.aura.data.command("canvas.getActiveWork", { workId })).work;
+    return decodeCanvasGetActiveWorkResult(
+      await window.aura.data.command("canvas.getActiveWork", { workId }),
+      workId,
+    ).work;
   },
   async getAnnotationIngressSource(annotationId, workId) {
-    return (
+    return decodeCanvasGetAnnotationIngressSourceResult(
       await window.aura.data.command("canvas.getAnnotationIngressSource", {
         annotationId,
         workId,
-      })
+      }),
+      annotationId,
+      workId,
     ).source;
   },
 };
@@ -49,6 +58,9 @@ export async function loadCanvasActiveWork(
   throwIfAborted(signal);
   const work = await dataSource.getActiveWork(workId);
   throwIfAborted(signal);
+  if (work && work.id !== workId.trim()) {
+    throw new Error("返回的文献与请求加入的文献不一致");
+  }
   return work;
 }
 
@@ -62,10 +74,17 @@ export async function loadCanvasAnnotationIngressSource(
   const source = await dataSource.getAnnotationIngressSource(annotationId, workId);
   throwIfAborted(signal);
   if (!source) throw new Error("没有找到属于这篇文献的批注，可能已被移除");
-  if (source.annotation.work_id !== workId) {
+  if (source.annotation.id !== annotationId.trim()) {
+    throw new Error("返回的批注与请求加入的批注不一致");
+  }
+  if (source.annotation.work_id !== workId.trim()) {
     throw new Error("这条批注不属于请求加入的文献");
   }
-  if (source.work.id !== source.annotation.work_id || source.work.deleted_at !== null) {
+  if (
+    source.work.id !== workId.trim() ||
+    source.work.id !== source.annotation.work_id ||
+    source.work.deleted_at !== null
+  ) {
     throw new Error("批注的来源文献已不存在或位于回收站");
   }
   return source;
