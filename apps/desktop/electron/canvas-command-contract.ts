@@ -1,5 +1,8 @@
-import type { CanvasCitationRelation } from "@aurascholar/core";
-import type { StoredCanvasWorkspaceDocument } from "@aurascholar/db/repos/canvas";
+import type {
+  CanvasCitationRelation,
+  CanvasEdgeRelation,
+  CanvasNodeType,
+} from "@aurascholar/core";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
 
 /** Canvas workspace snapshots are stored structurally to avoid a core <-> db cycle. */
@@ -15,6 +18,62 @@ export interface CanvasWorkspaceSummaryDto {
   updatedAt: number;
 }
 
+export interface CanvasWorkspacePointDto {
+  x: number;
+  y: number;
+}
+
+export interface CanvasWorkspaceDimensionsDto {
+  width: number;
+  height: number;
+}
+
+export interface CanvasWorkspaceViewportDto extends CanvasWorkspacePointDto {
+  zoom: number;
+}
+
+/** Deliberately structural so storage and renderer validation remain separate. */
+export interface CanvasWorkspaceNodeDto {
+  id: string;
+  type: CanvasNodeType;
+  position: CanvasWorkspacePointDto;
+  dimensions: CanvasWorkspaceDimensionsDto;
+  groupId?: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+  data: unknown;
+}
+
+export interface CanvasWorkspaceEdgeStyleDto {
+  stroke?: string;
+  animated?: boolean;
+}
+
+export interface CanvasWorkspaceEdgeDto {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  relationType: CanvasEdgeRelation;
+  label?: string;
+  style?: CanvasWorkspaceEdgeStyleDto;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Full renderer-facing snapshot. The main process owns DB-model adaptation. */
+export interface CanvasWorkspaceDocumentDto {
+  schemaVersion: number;
+  workspaceId: string;
+  name: string;
+  description?: string;
+  viewport: CanvasWorkspaceViewportDto;
+  nodes: CanvasWorkspaceNodeDto[];
+  edges: CanvasWorkspaceEdgeDto[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface CanvasListWorkspacesCommandResult {
   /** Always contains at least the active Library's default workspace. */
   workspaces: CanvasWorkspaceSummaryDto[];
@@ -26,7 +85,7 @@ export interface CanvasLoadWorkspaceCommandInput {
 
 export interface CanvasLoadWorkspaceCommandResult {
   /** Null represents a missing, deleted, or foreign-library workspace. */
-  workspace: StoredCanvasWorkspaceDocument | null;
+  workspace: CanvasWorkspaceDocumentDto | null;
 }
 
 export interface CanvasCreateWorkspaceCommandInput {
@@ -34,7 +93,7 @@ export interface CanvasCreateWorkspaceCommandInput {
 }
 
 export interface CanvasCreateWorkspaceCommandResult {
-  workspace: StoredCanvasWorkspaceDocument;
+  workspace: CanvasWorkspaceDocumentDto;
 }
 
 export interface CanvasRenameWorkspaceCommandInput {
@@ -43,7 +102,7 @@ export interface CanvasRenameWorkspaceCommandInput {
 }
 
 export interface CanvasRenameWorkspaceCommandResult {
-  workspace: StoredCanvasWorkspaceDocument;
+  workspace: CanvasWorkspaceDocumentDto;
 }
 
 export interface CanvasDeleteWorkspaceCommandInput {
@@ -55,7 +114,7 @@ export interface CanvasDeleteWorkspaceCommandResult {
 }
 
 export interface CanvasSaveWorkspaceCommandInput {
-  document: StoredCanvasWorkspaceDocument;
+  document: CanvasWorkspaceDocumentDto;
 }
 
 export interface CanvasSaveWorkspaceCommandResult {

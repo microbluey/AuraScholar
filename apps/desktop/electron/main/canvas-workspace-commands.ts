@@ -4,6 +4,7 @@ import {
   MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES,
   type Database,
   type CanvasWorkspaceSummary,
+  type StoredCanvasWorkspaceDocument,
 } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import type {
@@ -12,6 +13,7 @@ import type {
   CanvasDeleteWorkspaceCommandInput,
   CanvasDeleteWorkspaceCommandResult,
   CanvasListWorkspacesCommandResult,
+  CanvasWorkspaceDocumentDto,
   CanvasWorkspaceSummaryDto,
   CanvasLoadWorkspaceCommandInput,
   CanvasLoadWorkspaceCommandResult,
@@ -194,7 +196,8 @@ async function loadCanvasWorkspace(
   libraryId: string,
   input: CanvasLoadWorkspaceCommandInput,
 ): Promise<CanvasLoadWorkspaceCommandResult> {
-  return { workspace: await new CanvasRepo(database, libraryId).load(input.workspaceId) };
+  const workspace = await new CanvasRepo(database, libraryId).load(input.workspaceId);
+  return { workspace: workspace === null ? null : toCanvasWorkspaceDocumentDto(workspace) };
 }
 
 async function createCanvasWorkspace(
@@ -202,7 +205,11 @@ async function createCanvasWorkspace(
   libraryId: string,
   input: CanvasCreateWorkspaceCommandInput,
 ): Promise<CanvasCreateWorkspaceCommandResult> {
-  return { workspace: await new CanvasRepo(database, libraryId).create(input.name) };
+  return {
+    workspace: toCanvasWorkspaceDocumentDto(
+      await new CanvasRepo(database, libraryId).create(input.name),
+    ),
+  };
 }
 
 async function renameCanvasWorkspace(
@@ -210,7 +217,57 @@ async function renameCanvasWorkspace(
   libraryId: string,
   input: CanvasRenameWorkspaceCommandInput,
 ): Promise<CanvasRenameWorkspaceCommandResult> {
-  return { workspace: await new CanvasRepo(database, libraryId).rename(input.workspaceId, input.name) };
+  return {
+    workspace: toCanvasWorkspaceDocumentDto(
+      await new CanvasRepo(database, libraryId).rename(input.workspaceId, input.name),
+    ),
+  };
+}
+
+function toCanvasWorkspaceDocumentDto(
+  workspace: StoredCanvasWorkspaceDocument,
+): CanvasWorkspaceDocumentDto {
+  return {
+    schemaVersion: workspace.schemaVersion,
+    workspaceId: workspace.workspaceId,
+    name: workspace.name,
+    ...(workspace.description === undefined ? {} : { description: workspace.description }),
+    viewport: {
+      x: workspace.viewport.x,
+      y: workspace.viewport.y,
+      zoom: workspace.viewport.zoom,
+    },
+    nodes: workspace.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: { x: node.position.x, y: node.position.y },
+      dimensions: { width: node.dimensions.width, height: node.dimensions.height },
+      ...(node.groupId === undefined ? {} : { groupId: node.groupId }),
+      tags: [...node.tags],
+      createdAt: node.createdAt,
+      updatedAt: node.updatedAt,
+      data: node.data,
+    })),
+    edges: workspace.edges.map((edge) => ({
+      id: edge.id,
+      sourceId: edge.sourceId,
+      targetId: edge.targetId,
+      relationType: edge.relationType,
+      ...(edge.label === undefined ? {} : { label: edge.label }),
+      ...(edge.style === undefined
+        ? {}
+        : {
+            style: {
+              ...(edge.style.stroke === undefined ? {} : { stroke: edge.style.stroke }),
+              ...(edge.style.animated === undefined ? {} : { animated: edge.style.animated }),
+            },
+          }),
+      createdAt: edge.createdAt,
+      updatedAt: edge.updatedAt,
+    })),
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+  };
 }
 
 async function deleteCanvasWorkspace(

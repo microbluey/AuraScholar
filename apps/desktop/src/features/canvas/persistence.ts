@@ -5,11 +5,11 @@ import {
   type CanvasWorkspaceDocument,
   type ExcerptHighlightColor,
 } from "@aurascholar/core";
-import {
-  type StoredCanvasNode,
-  type StoredCanvasWorkspaceDocument,
-} from "@aurascholar/db/repos/canvas";
-import type { CanvasWorkspaceSummaryDto } from "../../../electron/data-command-contract";
+import type {
+  CanvasWorkspaceDocumentDto,
+  CanvasWorkspaceNodeDto,
+  CanvasWorkspaceSummaryDto,
+} from "../../../electron/data-command-contract";
 import { isDesktopRuntime } from "../../services/aura-platform";
 import {
   createCanvasWorkspaceData,
@@ -133,7 +133,7 @@ function isGroupData(value: unknown): boolean {
   );
 }
 
-function narrowNode(node: StoredCanvasNode): CanvasNode {
+function narrowNode(node: CanvasWorkspaceNodeDto): CanvasNode {
   const valid =
     (node.type === "paper" && isPaperData(node.data)) ||
     (node.type === "excerpt" && isExcerptData(node.data)) ||
@@ -144,7 +144,7 @@ function narrowNode(node: StoredCanvasNode): CanvasNode {
   return node as CanvasNode;
 }
 
-function narrowDocument(stored: StoredCanvasWorkspaceDocument): CanvasWorkspaceDocument {
+function narrowDocument(stored: CanvasWorkspaceDocumentDto): CanvasWorkspaceDocument {
   if (stored.schemaVersion !== CANVAS_SCHEMA_VERSION) {
     throw new Error(`暂不支持画布数据版本 ${stored.schemaVersion}`);
   }
@@ -222,7 +222,7 @@ function readLegacyPreviewWorkspace(): CanvasWorkspaceDocument {
   try {
     const raw = window.localStorage.getItem(CANVAS_STORAGE_KEY);
     if (!raw) return createPreviewWorkspace();
-    return narrowDocument(JSON.parse(raw) as StoredCanvasWorkspaceDocument);
+    return narrowDocument(JSON.parse(raw) as CanvasWorkspaceDocumentDto);
   } catch {
     return createPreviewWorkspace();
   }
@@ -236,7 +236,7 @@ function narrowPreviewEnvelope(value: unknown): PreviewCanvasEnvelope {
   const workspaces: Record<string, CanvasWorkspaceDocument> = {};
   for (const [workspaceId, stored] of Object.entries(value.workspaces)) {
     if (!isRecord(stored)) throw new Error(`白板 ${workspaceId} 的数据格式不兼容`);
-    const document = narrowDocument(stored as unknown as StoredCanvasWorkspaceDocument);
+    const document = narrowDocument(stored as unknown as CanvasWorkspaceDocumentDto);
     if (document.workspaceId !== workspaceId) {
       throw new Error(`白板 ${workspaceId} 的存储标识不一致`);
     }

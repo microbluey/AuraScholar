@@ -5,13 +5,13 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 84257,
+        ".ts": 84373,
         ".tsx": 35973
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
         "apps/desktop/electron/annotation-recovery-command-contract.ts": 20,
-        "apps/desktop/electron/canvas-command-contract.ts": 193,
+        "apps/desktop/electron/canvas-command-contract.ts": 252,
         "apps/desktop/electron/citation-graph-command-contract.ts": 62,
         "apps/desktop/electron/data-command-contract.ts": 474,
         "apps/desktop/electron/discovery-library-status-command-contract.ts": 42,
@@ -32,7 +32,7 @@
         "apps/desktop/electron/main/canvas-ingress-queries.ts": 219,
         "apps/desktop/electron/main/canvas-page-commands.ts": 282,
         "apps/desktop/electron/main/canvas-workspace-command-input.ts": 84,
-        "apps/desktop/electron/main/canvas-workspace-commands.ts": 231,
+        "apps/desktop/electron/main/canvas-workspace-commands.ts": 288,
         "apps/desktop/electron/main/canvas-workspace-document-input.ts": 500,
         "apps/desktop/electron/main/citation-bridge.ts": 108,
         "apps/desktop/electron/main/citation-graph-commands.ts": 413,
@@ -599,11 +599,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 139551
+      "totalLines": 139667
     },
     "tests": {
       "byExtension": {
-        ".ts": 84643,
+        ".ts": 84796,
         ".tsx": 1035
       },
       "files": {
@@ -615,8 +615,8 @@
         "apps/desktop/electron/main/canvas-ingress-payload-architecture.test.ts": 74,
         "apps/desktop/electron/main/canvas-ingress-queries.test.ts": 246,
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 417,
-        "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 263,
-        "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 92,
+        "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 410,
+        "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 98,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
         "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
@@ -1021,7 +1021,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 85678
+      "totalLines": 85831
     }
   },
   "uiDatabaseBoundary": {}
