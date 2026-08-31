@@ -1,6 +1,44 @@
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
-import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
+/**
+ * Reader-owned work metadata. This is intentionally narrower than the
+ * persisted Work row: the Reader only needs enough context to render the
+ * document session and its recovery state.
+ */
+export interface ReaderWork {
+  arxiv_id: string | null;
+  authorNames: string[];
+  deleted_at: number | null;
+  doi: string | null;
+  id: string;
+  title: string;
+  year: number | null;
+}
+
+/**
+ * Reader-owned attachment metadata. Blob bytes are read through their own
+ * bounded command and no storage- or ingestion-specific fields cross IPC.
+ */
+export interface ReaderAttachment {
+  byte_size: number;
+  id: string;
+  kind: string;
+  original_filename: string | null;
+  sha256: string;
+  work_id: string;
+}
+
+/**
+ * Reader-owned annotation metadata. Ink paths and persistence bookkeeping
+ * never leave the main process on the Reader session path.
+ */
+export interface ReaderAnnotation {
+  anchor_json: string | null;
+  color: string | null;
+  content_md: string | null;
+  id: string;
+  orphaned: number;
+  page_index: number;
+  type: string;
+}
 
 /** Reader metadata request scoped by the main process to the local Library. */
 export interface ReaderGetWorkPdfCandidatesCommandInput {
@@ -12,8 +50,8 @@ export interface ReaderGetWorkPdfCandidatesCommandInput {
  * context but deliberately have no readable PDF candidates.
  */
 export interface ReaderGetWorkPdfCandidatesCommandResult {
-  pdfAttachments: AttachmentRow[];
-  work: WorkWithAuthors | null;
+  pdfAttachments: ReaderAttachment[];
+  work: ReaderWork | null;
 }
 
 /** A selected attachment must be asserted against its parent work. */
@@ -23,7 +61,7 @@ export interface ReaderGetAttachmentCommandInput {
 }
 
 export interface ReaderGetAttachmentCommandResult {
-  attachment: AttachmentRow | null;
+  attachment: ReaderAttachment | null;
 }
 
 /** Reads one active PDF attachment through a main-owned canonical BlobStore path. */
@@ -43,7 +81,7 @@ export interface ReaderListAnnotationsCommandInput {
 }
 
 export interface ReaderListAnnotationsCommandResult {
-  annotations: AnnotationRow[];
+  annotations: ReaderAnnotation[];
 }
 
 /**

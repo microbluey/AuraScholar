@@ -1,5 +1,3 @@
-import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
 import { PdfReader, configureWorker, type ReaderAnnotation } from "@aurascholar/reader";
 import {
   ArrowLineLeft,
@@ -25,6 +23,7 @@ import {
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "@aurascholar/reader/reader.css";
 import { isDesktopRuntime } from "../../services/aura-platform";
+import type { ReaderAttachment, ReaderWork } from "../../services/reader-session-data";
 import { describeSafeError } from "../../services/sensitive-text";
 import {
   CANVAS_EXCERPT_DRAG_VERSION,
@@ -49,9 +48,9 @@ const READER_REFERENCE_PAGE_WIDTH = 640;
 
 export interface CanvasReaderAnnotationPayload {
   annotation: ReaderAnnotation;
-  attachment: AttachmentRow;
+  attachment: ReaderAttachment;
   sourceNodeId?: string;
-  work: WorkWithAuthors;
+  work: ReaderWork;
   workspaceId: string;
 }
 

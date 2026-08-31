@@ -1,4 +1,6 @@
 import type {
+  ReaderAnnotation as ReaderAnnotationCommandDto,
+  ReaderAttachment as ReaderAttachmentCommandDto,
   ReaderCreateAnnotationCommandInput,
   ReaderCreateAnnotationCommandResult,
   ReaderDeleteAnnotationCommandInput,
@@ -13,6 +15,7 @@ import type {
   ReaderRestoreAnnotationCommandResult,
   ReaderUpdateAnnotationContentCommandInput,
   ReaderUpdateAnnotationContentCommandResult,
+  ReaderWork as ReaderWorkCommandDto,
 } from "../../electron/data-command-contract";
 
 /**
@@ -21,7 +24,7 @@ import type {
  * the Reader surface.
  */
 export type ReaderWorkPdfCandidates = ReaderGetWorkPdfCandidatesCommandResult;
-export type ReaderAttachment = ReaderGetAttachmentCommandResult;
+export type ReaderAttachmentResult = ReaderGetAttachmentCommandResult;
 export type ReaderAnnotations = ReaderListAnnotationsCommandResult;
 export type ReaderCreatedAnnotation = ReaderCreateAnnotationCommandResult;
 export type ReaderDeletedAnnotation = ReaderDeleteAnnotationCommandResult;
@@ -30,6 +33,11 @@ export type ReaderUpdatedAnnotationContent = ReaderUpdateAnnotationContentComman
 export type ReaderWorkReadingStarted = ReaderMarkWorkReadingStartedCommandResult;
 export type ReaderAttachmentPdf = ReaderReadAttachmentPdfCommandResult;
 
+/** Narrow, command-owned Reader metadata. These deliberately are not DB rows. */
+export type ReaderAnnotation = ReaderAnnotationCommandDto;
+export type ReaderAttachment = ReaderAttachmentCommandDto;
+export type ReaderWork = ReaderWorkCommandDto;
+
 export function loadReaderWorkPdfCandidates(workId: string): Promise<ReaderWorkPdfCandidates> {
   return window.aura.data.command("reader.getWorkPdfCandidates", { workId });
 }
@@ -37,7 +45,7 @@ export function loadReaderWorkPdfCandidates(workId: string): Promise<ReaderWorkP
 export function loadReaderAttachment(
   workId: string,
   attachmentId: string,
-): Promise<ReaderAttachment> {
+): Promise<ReaderAttachmentResult> {
   return window.aura.data.command("reader.getAttachment", { attachmentId, workId });
 }
 

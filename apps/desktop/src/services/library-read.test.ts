@@ -1,4 +1,3 @@
-import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createReaderPdfIpcBusyError,
@@ -21,8 +20,9 @@ import {
   ReaderPdfBusyError,
   ReaderPdfTooLargeError,
 } from "./library-read";
+import type { ReaderAttachment } from "./reader-session-data";
 
-function attachment(overrides: Partial<AttachmentRow> = {}): AttachmentRow {
+function attachment(overrides: Partial<ReaderAttachment> = {}): ReaderAttachment {
   return {
     id: "attachment-1",
     work_id: "work-1",
@@ -30,9 +30,6 @@ function attachment(overrides: Partial<AttachmentRow> = {}): AttachmentRow {
     sha256: "sha-1",
     byte_size: 123,
     original_filename: "paper.pdf",
-    fetched_via: "local",
-    page_count: 8,
-    created_at: 1,
     ...overrides,
   };
 }

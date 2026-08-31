@@ -245,6 +245,7 @@ describe("main-process data command architecture", () => {
     const readerData = source("src/services/reader-session-data.ts");
     const pdfData = source("src/services/library-read.ts");
     const readerCommands = source("electron/main/reader-commands.ts");
+    const readerMetadataQueries = source("electron/main/reader-metadata-queries.ts");
     const commandNames = [
       "reader.getAttachment",
       "reader.getWorkPdfCandidates",
@@ -288,8 +289,14 @@ describe("main-process data command architecture", () => {
     expect(readerCommands).toContain("requireLocalLibraryId");
     expect(readerCommands).toContain("assertActiveLocalLibrary");
     expect(readerCommands).toContain("new WorksRepo");
-    expect(readerCommands).toContain("new AttachmentsRepo");
     expect(readerCommands).toContain("new AnnotationsRepo");
+    expect(readerCommands).toContain("loadReaderPdfAttachments");
+    expect(readerCommands).toContain("findActiveReaderPdfAttachmentForWork");
+    expect(readerCommands).not.toContain("new AttachmentsRepo");
+    expect(readerMetadataQueries).toContain("loadReaderPdfAttachments");
+    expect(readerMetadataQueries).toContain("findActiveReaderAttachmentForWork");
+    expect(readerMetadataQueries).toContain("findActiveReaderPdfAttachmentForWork");
+    expect(readerMetadataQueries).toContain("loadReaderAnnotations");
     for (const commandName of mutationCommandNames) {
       expect(readerCommands).toContain(commandName);
     }

@@ -1,7 +1,4 @@
 import { PdfDocument, parseAnnotationAnchorJson, type ReaderAnnotation } from "@aurascholar/reader";
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
-import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
 import { MAX_READER_PDF_IPC_MIB } from "../../../electron/reader-pdf-ipc-limit";
 import {
   loadPdfForWork,
@@ -17,13 +14,16 @@ import {
   markReaderWorkReadingStarted,
   restoreReaderAnnotation,
   updateReaderAnnotationContent,
+  type ReaderAnnotation as ReaderAnnotationDto,
+  type ReaderAttachment,
+  type ReaderWork,
 } from "../../services/reader-session-data";
 
 export interface LibraryReaderSession {
   annotations: ReaderAnnotation[];
-  attachment: AttachmentRow;
+  attachment: ReaderAttachment;
   doc: PdfDocument;
-  work: WorkWithAuthors;
+  work: ReaderWork;
 }
 
 export interface LoadLibraryReaderSessionOptions {
@@ -37,14 +37,14 @@ export interface LibraryReaderSessionDataSource {
     annotation: Omit<ReaderAnnotation, "id">,
   ) => Promise<string>;
   deleteAnnotation: (annotationId: string) => Promise<void>;
-  getAttachment: (workId: string, attachmentId: string) => Promise<AttachmentRow | null>;
-  listAnnotations: (workId: string, attachmentId: string) => Promise<AnnotationRow[]>;
+  getAttachment: (workId: string, attachmentId: string) => Promise<ReaderAttachment | null>;
+  listAnnotations: (workId: string, attachmentId: string) => Promise<ReaderAnnotationDto[]>;
   loadDocument: (data: Uint8Array) => Promise<PdfDocument>;
   loadPdf: (
     workId: string,
     attachmentId?: string,
   ) => Promise<{ attachmentId: string; data: Uint8Array } | null>;
-  loadWork: (workId: string) => Promise<WorkWithAuthors | null>;
+  loadWork: (workId: string) => Promise<ReaderWork | null>;
   markReadingStarted: (workId: string) => Promise<boolean>;
   restoreAnnotation: (annotationId: string) => Promise<void>;
   updateAnnotationContent: (annotationId: string, contentMd: string) => Promise<void>;
@@ -61,7 +61,7 @@ export class LibraryReaderSessionError extends Error {
       | "work-archived"
       | "work-missing",
     message: string,
-    readonly work?: WorkWithAuthors,
+    readonly work?: ReaderWork,
   ) {
     super(message);
     this.name = "LibraryReaderSessionError";
@@ -114,7 +114,8 @@ export function isLibraryReaderAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-export function libraryReaderRowToAnnotation(row: AnnotationRow): ReaderAnnotation {
+/** Converts the narrow Reader command DTO into the UI reader model. */
+export function libraryReaderRowToAnnotation(row: ReaderAnnotationDto): ReaderAnnotation {
   const parsedAnchor = parseAnnotationAnchorJson(row.anchor_json, row.page_index);
   return {
     id: row.id,
@@ -182,7 +183,7 @@ export async function loadLibraryReaderSession(
     );
   }
 
-  let attachment: AttachmentRow | null;
+  let attachment: ReaderAttachment | null;
   try {
     attachment = await dataSource.getAttachment(workId, pdf.attachmentId);
   } catch {

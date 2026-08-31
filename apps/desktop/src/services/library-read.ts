@@ -1,9 +1,12 @@
-import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
 import {
   isReaderPdfIpcBusyError,
   isReaderPdfIpcLimitError,
 } from "../../electron/reader-pdf-ipc-limit";
-import { loadReaderAttachmentPdf, loadReaderWorkPdfCandidates } from "./reader-session-data";
+import {
+  loadReaderAttachmentPdf,
+  loadReaderWorkPdfCandidates,
+  type ReaderAttachment,
+} from "./reader-session-data";
 import { describeSafeError } from "./sensitive-text";
 
 /** A safe semantic error for Reader UI, not a raw main-process filesystem error. */
@@ -37,7 +40,7 @@ export async function loadPdfForWork(
 /** Keeps the historical fallback behavior while revalidating each attachment in main. */
 export async function loadPdfFromCandidates(
   workId: string,
-  candidates: readonly AttachmentRow[],
+  candidates: readonly ReaderAttachment[],
   preferredAttachmentId?: string,
 ): Promise<{ attachmentId: string; data: Uint8Array } | null> {
   let pdfs = candidates.filter((attachment) => attachment.kind === "pdf");

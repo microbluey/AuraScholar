@@ -1,7 +1,5 @@
 import {
   AnnotationsRepo,
-  AttachmentsRepo,
-  type AttachmentRow,
   type Database,
   WorksRepo,
 } from "@aurascholar/db";
@@ -39,6 +37,15 @@ import {
   requireRecordId,
   type DataCommandDependencies,
 } from "./data-command-runtime";
+import {
+  findActiveReaderAttachmentForWork,
+  findActiveReaderPdfAttachmentForWork,
+  loadReaderAnnotations,
+  loadReaderPdfAttachments,
+  loadReaderWork,
+  requireBoundedReaderMetadataOutput,
+  type ReaderPdfAttachment,
+} from "./reader-metadata-queries";
 import { CanonicalPdfBlobReadLimitError } from "./platform-fs-policy";
 
 type ReaderReadCommandName =
@@ -293,15 +300,14 @@ async function loadWorkPdfCandidates(
   libraryId: string,
   input: ReaderGetWorkPdfCandidatesCommandInput,
 ): Promise<ReaderGetWorkPdfCandidatesCommandResult> {
-  const work = await new WorksRepo(database, libraryId).get(input.workId);
+  const work = await loadReaderWork(database, libraryId, input.workId);
   if (!work || work.deleted_at !== null) {
-    return { pdfAttachments: [], work };
+    return requireBoundedReaderMetadataOutput({ pdfAttachments: [], work });
   }
-  const attachments = await new AttachmentsRepo(database, libraryId).forWork(input.workId);
-  return {
-    pdfAttachments: attachments.filter((attachment) => attachment.kind === "pdf"),
+  return requireBoundedReaderMetadataOutput({
+    pdfAttachments: await loadReaderPdfAttachments(database, libraryId, input.workId),
     work,
-  };
+  });
 }
 
 async function createAnnotation(
@@ -328,9 +334,9 @@ async function loadAttachment(
   libraryId: string,
   input: ReaderGetAttachmentCommandInput,
 ): Promise<ReaderGetAttachmentCommandResult> {
-  return {
-    attachment: await findActiveAttachmentForWork(database, libraryId, input),
-  };
+  return requireBoundedReaderMetadataOutput({
+    attachment: await findActiveReaderAttachmentForWork(database, libraryId, input),
+  });
 }
 
 async function loadAnnotations(
@@ -338,13 +344,11 @@ async function loadAnnotations(
   libraryId: string,
   input: ReaderListAnnotationsCommandInput,
 ): Promise<ReaderListAnnotationsCommandResult> {
-  const attachment = await findActiveAttachmentForWork(database, libraryId, input);
-  if (!attachment) return { annotations: [] };
-  return {
-    annotations: await new AnnotationsRepo(database, libraryId).listForAttachment(
-      input.attachmentId,
-    ),
-  };
+  const attachment = await findActiveReaderAttachmentForWork(database, libraryId, input);
+  if (!attachment) return requireBoundedReaderMetadataOutput({ annotations: [] });
+  return requireBoundedReaderMetadataOutput({
+    annotations: await loadReaderAnnotations(database, libraryId, input),
+  });
 }
 
 /**
@@ -368,8 +372,7 @@ async function readAttachmentPdf(
 
   const attachment = await dependencies.inspect(async (database) => {
     const libraryId = await requireActiveLocalLibraryId(database);
-    const candidate = await findActiveAttachmentForWork(database, libraryId, input);
-    return candidate?.kind === "pdf" ? candidate : null;
+    return findActiveReaderPdfAttachmentForWork(database, libraryId, input);
   });
   if (!attachment) {
     throw new Error(
@@ -399,7 +402,7 @@ async function readAttachmentPdf(
   }
 }
 
-function assertReaderPdfIpcByteSize(attachment: AttachmentRow): void {
+function assertReaderPdfIpcByteSize(attachment: ReaderPdfAttachment): void {
   const byteSize = attachment.byte_size;
   if (!Number.isSafeInteger(byteSize) || byteSize < 0) {
     throw new Error(`PDF attachment ${attachment.id} has an invalid byte size`);
@@ -433,16 +436,4 @@ async function updateAnnotationContent(
 ): Promise<ReaderUpdateAnnotationContentCommandResult> {
   await new AnnotationsRepo(database, libraryId).updateContent(input.annotationId, input.contentMd);
   return { updated: 1 };
-}
-
-async function findActiveAttachmentForWork(
-  database: Database,
-  libraryId: string,
-  input:
-    | ReaderGetAttachmentCommandInput
-    | ReaderListAnnotationsCommandInput
-    | ReaderReadAttachmentPdfCommandInput,
-): Promise<AttachmentRow | null> {
-  const attachments = await new AttachmentsRepo(database, libraryId).forWork(input.workId);
-  return attachments.find((attachment) => attachment.id === input.attachmentId) ?? null;
 }
