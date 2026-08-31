@@ -13,6 +13,12 @@ describe("Canvas workspace read payload boundary", () => {
     const bounds = source("../../packages/db/src/repos/canvas-workspace-bounds.ts");
     const readQueries = source("../../packages/db/src/repos/canvas-workspace-read.ts");
     const workspaceContract = source("electron/canvas-command-contract.ts");
+    const workspaceDocumentInput = source("electron/main/canvas-workspace-document-input.ts");
+    const workspaceDocumentCodec = source("src/shared/canvas-workspace-document-codec.ts");
+    const workspaceNodeDataCodec = source(
+      "src/shared/canvas-workspace-document-node-data-codec.ts",
+    );
+    const workspaceDocumentLimits = source("src/shared/canvas-workspace-document-limits.ts");
     const rendererPersistence = source("src/features/canvas/persistence.ts");
 
     for (const limit of [
@@ -66,8 +72,24 @@ describe("Canvas workspace read payload boundary", () => {
     expect(workspaceContract).toContain("workspaces: CanvasWorkspaceSummaryDto[]");
     expect(workspaceContract).toContain("export interface CanvasWorkspaceDocumentDto");
     expect(workspaceContract).not.toContain("StoredCanvasWorkspaceDocument");
-    expect(rendererPersistence).toContain("CanvasWorkspaceDocumentDto");
-    expect(rendererPersistence).not.toContain("@aurascholar/db/repos/canvas");
+    expect(workspaceDocumentInput).toContain("decodeCanvasWorkspaceDocument");
+    expect(workspaceDocumentInput).toContain("return decodeCanvasWorkspaceDocument(value)");
+    expect(workspaceDocumentInput).not.toContain("node:buffer");
+    expect(workspaceDocumentInput).not.toContain("requireCanvasNodeData");
+    for (const sourceText of [
+      workspaceDocumentCodec,
+      workspaceNodeDataCodec,
+      workspaceDocumentLimits,
+      rendererPersistence,
+    ]) {
+      expect(sourceText).not.toContain("@aurascholar/db");
+      expect(sourceText).not.toContain("node:buffer");
+    }
+    expect(workspaceDocumentCodec).toContain("decodeCanvasWorkspaceDocument");
+    expect(workspaceNodeDataCodec).toContain("decodeCanvasWorkspaceNodeData");
+    expect(workspaceDocumentLimits).toContain("new TextEncoder()");
+    expect(rendererPersistence).toContain("decodeCanvasWorkspaceDocument");
+    expect(rendererPersistence).not.toContain("CanvasWorkspaceDocumentDto");
 
     expect(workspaceCommands).toMatch(
       /import\s*\{[^}]*MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES[^}]*\}\s*from "@aurascholar\/db";/,

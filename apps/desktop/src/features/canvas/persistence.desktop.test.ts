@@ -7,12 +7,15 @@ import {
   listCanvasWorkspaces,
   loadCanvasWorkspace,
   readLastCanvasWorkspaceId,
+  rememberLastCanvasWorkspaceId,
   renameCanvasWorkspace,
   saveCanvasWorkspace,
 } from "./persistence";
-import { CANVAS_LAST_WORKSPACE_ID_KEY } from "./model";
+import { CANVAS_LAST_WORKSPACE_ID_KEY, CANVAS_STORAGE_V2_KEY } from "./model";
 
-vi.mock("../../services/aura-platform", () => ({ isDesktopRuntime: () => true }));
+const { isDesktopRuntime } = vi.hoisted(() => ({ isDesktopRuntime: vi.fn() }));
+
+vi.mock("../../services/aura-platform", () => ({ isDesktopRuntime }));
 
 class MemoryStorage implements Storage {
   readonly values = new Map<string, string>();
@@ -74,6 +77,7 @@ describe("desktop Canvas workspace persistence", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isDesktopRuntime.mockReturnValue(true);
     storage = new MemoryStorage();
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -124,21 +128,36 @@ describe("desktop Canvas workspace persistence", () => {
 
     const malformed = {
       ...workspace(),
-      nodes: [
-        {
-          id: "bad-node",
-          type: "idea-note",
-          position: { x: 0, y: 0 },
-          dimensions: { width: 200, height: 100 },
-          tags: [],
-          createdAt: 100,
-          updatedAt: 100,
-          data: { contentMarkdown: "missing required hasEquations" },
-        },
-      ],
+      viewport: { x: 0, y: 0, zoom: 0 },
     } as unknown as CanvasWorkspaceDocument;
     command.mockResolvedValueOnce({ workspace: malformed });
     await expect(loadCanvasWorkspace(malformed.workspaceId)).rejects.toThrow("数据格式不兼容");
+  });
+
+  it("keeps every desktop workspace response behind the full document decoder", async () => {
+    const malformed = {
+      ...workspace(),
+      edges: [
+        {
+          createdAt: 100,
+          id: "canvas-edge:missing-target",
+          relationType: "supports",
+          sourceId: "canvas-node:missing",
+          targetId: "canvas-node:also-missing",
+          updatedAt: 100,
+        },
+      ],
+    } as unknown as CanvasWorkspaceDocument;
+    command
+      .mockResolvedValueOnce({ workspace: malformed })
+      .mockResolvedValueOnce({ workspace: malformed })
+      .mockResolvedValueOnce({ workspace: malformed });
+
+    await expect(loadCanvasWorkspace(malformed.workspaceId)).rejects.toThrow("数据格式不兼容");
+    await expect(createCanvasWorkspace("Malformed response")).rejects.toThrow("数据格式不兼容");
+    await expect(
+      renameCanvasWorkspace(malformed.workspaceId, "Malformed response"),
+    ).rejects.toThrow("数据格式不兼容");
   });
 
   it("does not turn a committed deletion into a rejected autosave restore", async () => {
@@ -181,5 +200,77 @@ describe("desktop Canvas workspace persistence", () => {
     await expect(deleteCanvasWorkspace("canvas:missing")).resolves.toBe(false);
     expect(command).toHaveBeenCalledOnce();
     expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it("treats preview workspace ids as own null-prototype keys", async () => {
+    isDesktopRuntime.mockReturnValue(false);
+    const prototypeNamedWorkspace = workspace({
+      name: "Prototype-safe preview",
+      workspaceId: "__proto__",
+    });
+    storage.setItem(
+      CANVAS_STORAGE_V2_KEY,
+      JSON.stringify({
+        activeWorkspaceId: "toString",
+        version: 2,
+        workspaces: { [prototypeNamedWorkspace.workspaceId]: prototypeNamedWorkspace },
+      }),
+    );
+
+    expect(readLastCanvasWorkspaceId()).toBe(prototypeNamedWorkspace.workspaceId);
+    await expect(loadCanvasWorkspace(prototypeNamedWorkspace.workspaceId)).resolves.toEqual(
+      prototypeNamedWorkspace,
+    );
+    await expect(loadCanvasWorkspace("toString")).rejects.toThrow("白板不存在或已被删除");
+    await expect(renameCanvasWorkspace("toString", "Wrong target")).rejects.toThrow(
+      "白板不存在或已被删除",
+    );
+    await expect(deleteCanvasWorkspace("toString")).resolves.toBe(false);
+    expect(() => rememberLastCanvasWorkspaceId("toString")).toThrow("白板不存在或已被删除");
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("does not decode malformed preview documents into local storage state", async () => {
+    isDesktopRuntime.mockReturnValue(false);
+    const malformed = {
+      ...workspace(),
+      viewport: { x: 0, y: 0, zoom: 0 },
+    };
+    const serialized = JSON.stringify({
+      activeWorkspaceId: malformed.workspaceId,
+      version: 2,
+      workspaces: { [malformed.workspaceId]: malformed },
+    });
+    storage.setItem(CANVAS_STORAGE_V2_KEY, serialized);
+
+    await expect(listCanvasWorkspaces()).rejects.toThrow("浏览器白板数据无法读取");
+    expect(storage.getItem(CANVAS_STORAGE_V2_KEY)).toBe(serialized);
+  });
+
+  it("rejects malformed preview saves before changing local storage", async () => {
+    isDesktopRuntime.mockReturnValue(false);
+    const valid = workspace();
+    const serialized = JSON.stringify({
+      activeWorkspaceId: valid.workspaceId,
+      version: 2,
+      workspaces: { [valid.workspaceId]: valid },
+    });
+    storage.setItem(CANVAS_STORAGE_V2_KEY, serialized);
+    const malformed = {
+      ...valid,
+      edges: [
+        {
+          createdAt: 100,
+          id: "canvas-edge:missing-target",
+          relationType: "supports",
+          sourceId: "canvas-node:missing",
+          targetId: "canvas-node:also-missing",
+          updatedAt: 100,
+        },
+      ],
+    } as unknown as CanvasWorkspaceDocument;
+
+    await expect(saveCanvasWorkspace(malformed)).rejects.toThrow("数据格式不兼容");
+    expect(storage.getItem(CANVAS_STORAGE_V2_KEY)).toBe(serialized);
   });
 });

@@ -1,12 +1,9 @@
 import {
   CANVAS_SCHEMA_VERSION,
-  type AISynthesisType,
   type CanvasNode,
   type CanvasWorkspaceDocument,
-  type ExcerptHighlightColor,
 } from "@aurascholar/core";
 import type {
-  CanvasWorkspaceDocumentDto,
   CanvasWorkspaceNodeDto,
   CanvasWorkspaceSummaryDto,
 } from "../../../electron/data-command-contract";
@@ -19,6 +16,7 @@ import {
   renameCanvasWorkspaceData,
   saveCanvasWorkspaceData,
 } from "../../services/canvas-workspace-data";
+import { decodeCanvasWorkspaceDocument } from "../../shared/canvas-workspace-document-codec";
 import {
   CANVAS_LAST_WORKSPACE_ID_KEY,
   CANVAS_STORAGE_KEY,
@@ -33,135 +31,39 @@ interface PreviewCanvasEnvelope {
   workspaces: Record<string, CanvasWorkspaceDocument>;
 }
 
+function createPreviewWorkspaceMap(): Record<string, CanvasWorkspaceDocument> {
+  return Object.create(null) as Record<string, CanvasWorkspaceDocument>;
+}
+
+function hasPreviewWorkspace(
+  workspaces: Record<string, CanvasWorkspaceDocument>,
+  workspaceId: string,
+): boolean {
+  return Object.hasOwn(workspaces, workspaceId);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function isOptionalString(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
-}
-
-function isPaperData(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.workId === "string" &&
-    typeof value.title === "string" &&
-    isStringArray(value.authors) &&
-    (value.year === null || typeof value.year === "number") &&
-    isOptionalString(value.venue) &&
-    isOptionalString(value.doi) &&
-    isOptionalString(value.abstractSnippet) &&
-    typeof value.annotationCount === "number"
-  );
-}
-
-const HIGHLIGHT_COLORS = new Set<ExcerptHighlightColor>([
-  "yellow",
-  "green",
-  "blue",
-  "pink",
-  "purple",
-  "orange",
-]);
-
-function isExcerptData(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.workId === "string" &&
-    typeof value.paperTitle === "string" &&
-    typeof value.highlightText === "string" &&
-    typeof value.highlightColor === "string" &&
-    HIGHLIGHT_COLORS.has(value.highlightColor as ExcerptHighlightColor) &&
-    typeof value.pageIndex === "number" &&
-    isOptionalString(value.annotationId) &&
-    isOptionalString(value.attachmentId) &&
-    isOptionalString(value.marginNote)
-  );
-}
-
-const SYNTHESIS_TYPES = new Set<AISynthesisType>([
-  "methodology_matrix",
-  "contradiction_analysis",
-  "research_gap",
-  "tldr",
-]);
-
-function isStructuredTable(value: unknown): boolean {
-  if (!isRecord(value) || !isStringArray(value.headers) || !Array.isArray(value.rows)) {
-    return false;
-  }
-  const headers = value.headers;
-  const rows = value.rows;
-  if (headers.length < 2 || headers.length > 8 || rows.length > 12) {
-    return false;
-  }
-  return rows.every((row) => isStringArray(row) && row.length === headers.length);
-}
-
-function isSynthData(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  return (
-    isStringArray(value.sourceNodeIds) &&
-    typeof value.synthType === "string" &&
-    SYNTHESIS_TYPES.has(value.synthType as AISynthesisType) &&
-    typeof value.title === "string" &&
-    typeof value.contentMarkdown === "string" &&
-    (value.structuredTable === undefined || isStructuredTable(value.structuredTable)) &&
-    isOptionalString(value.modelName)
-  );
-}
-
-function isIdeaData(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isOptionalString(value.title) &&
-    typeof value.contentMarkdown === "string" &&
-    typeof value.hasEquations === "boolean"
-  );
-}
-
-function isGroupData(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.title === "string" &&
-    isOptionalString(value.colorTheme) &&
-    (value.collapsed === undefined || typeof value.collapsed === "boolean")
-  );
-}
-
 function narrowNode(node: CanvasWorkspaceNodeDto): CanvasNode {
-  const valid =
-    (node.type === "paper" && isPaperData(node.data)) ||
-    (node.type === "excerpt" && isExcerptData(node.data)) ||
-    (node.type === "ai-synth" && isSynthData(node.data)) ||
-    (node.type === "idea-note" && isIdeaData(node.data)) ||
-    (node.type === "group" && isGroupData(node.data));
-  if (!valid) throw new Error(`画布卡片 ${node.id} 的数据格式不兼容`);
   return node as CanvasNode;
 }
 
-function narrowDocument(stored: CanvasWorkspaceDocumentDto): CanvasWorkspaceDocument {
-  if (stored.schemaVersion !== CANVAS_SCHEMA_VERSION) {
-    throw new Error(`暂不支持画布数据版本 ${stored.schemaVersion}`);
+function narrowDocument(stored: unknown): CanvasWorkspaceDocument {
+  try {
+    const decoded = decodeCanvasWorkspaceDocument(stored);
+    return {
+      ...decoded,
+      schemaVersion: CANVAS_SCHEMA_VERSION,
+      nodes: decoded.nodes.map(narrowNode),
+      edges: decoded.edges,
+    };
+  } catch (error) {
+    throw new Error(`白板数据格式不兼容：${error instanceof Error ? error.message : "未知错误"}`, {
+      cause: error,
+    });
   }
-  if (
-    typeof stored.workspaceId !== "string" ||
-    stored.workspaceId.trim().length === 0 ||
-    typeof stored.name !== "string" ||
-    stored.name.trim().length === 0
-  ) {
-    throw new Error("白板数据缺少有效的标识或名称");
-  }
-  return {
-    ...stored,
-    schemaVersion: CANVAS_SCHEMA_VERSION,
-    nodes: stored.nodes.map(narrowNode),
-    edges: stored.edges,
-  };
 }
 
 function normalizeWorkspaceName(name: string): string {
@@ -211,10 +113,12 @@ function persistPreviewEnvelope(envelope: PreviewCanvasEnvelope): void {
 }
 
 function envelopeForWorkspace(document: CanvasWorkspaceDocument): PreviewCanvasEnvelope {
+  const workspaces = createPreviewWorkspaceMap();
+  workspaces[document.workspaceId] = document;
   return {
     version: 2,
     activeWorkspaceId: document.workspaceId,
-    workspaces: { [document.workspaceId]: document },
+    workspaces,
   };
 }
 
@@ -222,7 +126,7 @@ function readLegacyPreviewWorkspace(): CanvasWorkspaceDocument {
   try {
     const raw = window.localStorage.getItem(CANVAS_STORAGE_KEY);
     if (!raw) return createPreviewWorkspace();
-    return narrowDocument(JSON.parse(raw) as CanvasWorkspaceDocumentDto);
+    return narrowDocument(JSON.parse(raw));
   } catch {
     return createPreviewWorkspace();
   }
@@ -233,10 +137,10 @@ function narrowPreviewEnvelope(value: unknown): PreviewCanvasEnvelope {
     throw new Error("浏览器白板存储格式不兼容");
   }
 
-  const workspaces: Record<string, CanvasWorkspaceDocument> = {};
+  const workspaces = createPreviewWorkspaceMap();
   for (const [workspaceId, stored] of Object.entries(value.workspaces)) {
     if (!isRecord(stored)) throw new Error(`白板 ${workspaceId} 的数据格式不兼容`);
-    const document = narrowDocument(stored as unknown as CanvasWorkspaceDocumentDto);
+    const document = narrowDocument(stored);
     if (document.workspaceId !== workspaceId) {
       throw new Error(`白板 ${workspaceId} 的存储标识不一致`);
     }
@@ -249,7 +153,7 @@ function narrowPreviewEnvelope(value: unknown): PreviewCanvasEnvelope {
   if (!fallbackWorkspace) throw new Error("浏览器白板存储不能为空");
   const requestedActiveId =
     typeof value.activeWorkspaceId === "string" ? value.activeWorkspaceId : "";
-  const activeWorkspaceId = workspaces[requestedActiveId]
+  const activeWorkspaceId = hasPreviewWorkspace(workspaces, requestedActiveId)
     ? requestedActiveId
     : fallbackWorkspace.workspaceId;
   return { version: 2, activeWorkspaceId, workspaces };
@@ -295,9 +199,11 @@ export async function loadCanvasWorkspace(workspaceId: string): Promise<CanvasWo
   const normalizedId = workspaceId.trim();
   if (!normalizedId) throw new Error("白板标识不能为空");
   if (!isDesktopRuntime()) {
-    const stored = readPreviewEnvelope().workspaces[normalizedId];
-    if (!stored) throw new Error("白板不存在或已被删除");
-    return stored;
+    const workspaces = readPreviewEnvelope().workspaces;
+    if (!hasPreviewWorkspace(workspaces, normalizedId)) {
+      throw new Error("白板不存在或已被删除");
+    }
+    return workspaces[normalizedId]!;
   }
 
   const { workspace: stored } = await loadCanvasWorkspaceData({ workspaceId: normalizedId });
@@ -335,8 +241,10 @@ export async function renameCanvasWorkspace(
   const normalizedName = normalizeWorkspaceName(name);
   if (!isDesktopRuntime()) {
     const envelope = readPreviewEnvelope();
-    const existing = envelope.workspaces[normalizedId];
-    if (!existing) throw new Error("白板不存在或已被删除");
+    if (!hasPreviewWorkspace(envelope.workspaces, normalizedId)) {
+      throw new Error("白板不存在或已被删除");
+    }
+    const existing = envelope.workspaces[normalizedId]!;
     const document: CanvasWorkspaceDocument = {
       ...existing,
       name: normalizedName,
@@ -363,7 +271,7 @@ export async function deleteCanvasWorkspace(workspaceId: string): Promise<boolea
   if (!normalizedId) throw new Error("白板标识不能为空");
   if (!isDesktopRuntime()) {
     const envelope = readPreviewEnvelope();
-    if (!envelope.workspaces[normalizedId]) return false;
+    if (!hasPreviewWorkspace(envelope.workspaces, normalizedId)) return false;
     if (Object.keys(envelope.workspaces).length <= 1) {
       throw new Error("至少需要保留一个白板");
     }
@@ -428,7 +336,9 @@ export function rememberLastCanvasWorkspaceId(workspaceId: string): void {
   if (!normalizedId) throw new Error("白板标识不能为空");
   if (!isDesktopRuntime()) {
     const envelope = readPreviewEnvelope();
-    if (!envelope.workspaces[normalizedId]) throw new Error("白板不存在或已被删除");
+    if (!hasPreviewWorkspace(envelope.workspaces, normalizedId)) {
+      throw new Error("白板不存在或已被删除");
+    }
     envelope.activeWorkspaceId = normalizedId;
     persistPreviewEnvelope(envelope);
   }
