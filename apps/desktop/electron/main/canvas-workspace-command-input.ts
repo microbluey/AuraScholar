@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+import { MAX_CANVAS_WORKSPACE_NAME_BYTES } from "@aurascholar/db";
 import type {
   CanvasCreateWorkspaceCommandInput,
   CanvasDeleteWorkspaceCommandInput,
@@ -72,6 +74,11 @@ function requireExactCanvasWorkspaceInput(
 function requireCanvasWorkspaceName(value: unknown): string {
   if (typeof value !== "string") throw new Error("Canvas workspace name is invalid");
   const name = value.trim();
-  if (!name || name.length > 512) throw new Error("Canvas workspace name is invalid");
+  if (
+    !name ||
+    Buffer.byteLength(name, "utf8") > MAX_CANVAS_WORKSPACE_NAME_BYTES
+  ) {
+    throw new Error("Canvas workspace name is invalid");
+  }
   return name;
 }
