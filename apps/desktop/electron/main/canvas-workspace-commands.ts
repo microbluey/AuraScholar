@@ -1,4 +1,9 @@
-import { CanvasRepo, type Database } from "@aurascholar/db";
+import { Buffer } from "node:buffer";
+import {
+  CanvasRepo,
+  MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES,
+  type Database,
+} from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import type {
   CanvasCreateWorkspaceCommandInput,
@@ -27,6 +32,12 @@ import {
   parseCanvasRenameWorkspaceInput,
   parseCanvasSaveWorkspaceInput,
 } from "./canvas-workspace-command-input";
+
+// Reserve a small, explicit allowance for the command wrapper and JSON
+// escaping so a valid maximum-size document can still be returned through IPC.
+const MAX_CANVAS_WORKSPACE_ENVELOPE_ALLOWANCE_BYTES = 64 * 1024;
+const MAX_CANVAS_WORKSPACE_OUTPUT_BYTES =
+  MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES + MAX_CANVAS_WORKSPACE_ENVELOPE_ALLOWANCE_BYTES;
 
 type CanvasWorkspaceReadCommandName = "canvas.loadWorkspace";
 type CanvasWorkspaceMutationCommandName =
@@ -58,28 +69,34 @@ export async function executeCanvasWorkspaceCommand(
       parseCanvasListWorkspacesInput(request.input);
       return executeCanvasWorkspaceMutation(dependencies, request.name, async (database) => {
         const libraryId = await requireActiveLocalLibraryId(database);
-        return listCanvasWorkspaces(database, libraryId);
+        return requireBoundedCanvasWorkspaceOutput(await listCanvasWorkspaces(database, libraryId));
       });
     }
     case "canvas.loadWorkspace": {
       const input = parseCanvasLoadWorkspaceInput(request.input);
       return executeCanvasWorkspaceQuery(dependencies, request.name, async (database) => {
         const libraryId = await requireActiveLocalLibraryId(database);
-        return loadCanvasWorkspace(database, libraryId, input);
+        return requireBoundedCanvasWorkspaceOutput(
+          await loadCanvasWorkspace(database, libraryId, input),
+        );
       });
     }
     case "canvas.createWorkspace": {
       const input = parseCanvasCreateWorkspaceInput(request.input);
       return executeCanvasWorkspaceMutation(dependencies, request.name, async (database) => {
         const libraryId = await requireActiveLocalLibraryId(database);
-        return createCanvasWorkspace(database, libraryId, input);
+        return requireBoundedCanvasWorkspaceOutput(
+          await createCanvasWorkspace(database, libraryId, input),
+        );
       });
     }
     case "canvas.renameWorkspace": {
       const input = parseCanvasRenameWorkspaceInput(request.input);
       return executeCanvasWorkspaceMutation(dependencies, request.name, async (database) => {
         const libraryId = await requireActiveLocalLibraryId(database);
-        return renameCanvasWorkspace(database, libraryId, input);
+        return requireBoundedCanvasWorkspaceOutput(
+          await renameCanvasWorkspace(database, libraryId, input),
+        );
       });
     }
     case "canvas.deleteWorkspace": {
@@ -122,6 +139,22 @@ async function requireActiveLocalLibraryId(database: Database): Promise<string> 
   const libraryId = await requireLocalLibraryId(database);
   await assertActiveLocalLibrary(database, libraryId);
   return libraryId;
+}
+
+/** Final serialized envelope guard for Canvas workspace metadata and snapshots. */
+function requireBoundedCanvasWorkspaceOutput<T>(output: T): T {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(output);
+  } catch {
+    throw new Error("Canvas workspace output cannot be serialized");
+  }
+  if (Buffer.byteLength(serialized, "utf8") > MAX_CANVAS_WORKSPACE_OUTPUT_BYTES) {
+    throw new Error(
+      `Canvas workspace output is limited to ${MAX_CANVAS_WORKSPACE_OUTPUT_BYTES} bytes`,
+    );
+  }
+  return output;
 }
 
 async function listCanvasWorkspaces(

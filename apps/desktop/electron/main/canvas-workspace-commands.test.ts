@@ -82,9 +82,14 @@ describe("Canvas workspace data commands", () => {
         input: { libraryId: "library:foreign", name: "Canvas" },
         name: "canvas.createWorkspace",
       },
+      { input: { name: "文".repeat(171) }, name: "canvas.createWorkspace" },
       { input: { workspaceId: "canvas:one" }, name: "canvas.renameWorkspace" },
       {
         input: { name: "Canvas", workspaceId: "canvas:one", extra: true },
+        name: "canvas.renameWorkspace",
+      },
+      {
+        input: { name: "文".repeat(171), workspaceId: "canvas:one" },
         name: "canvas.renameWorkspace",
       },
       { input: { workspaceId: " ", libraryId: "library:foreign" }, name: "canvas.deleteWorkspace" },

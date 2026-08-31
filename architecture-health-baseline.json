@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 83667,
+        ".ts": 84229,
         ".tsx": 35973
       },
       "files": {
@@ -31,8 +31,8 @@
         "apps/desktop/electron/main/annotation-recovery-commands.ts": 122,
         "apps/desktop/electron/main/canvas-ingress-queries.ts": 219,
         "apps/desktop/electron/main/canvas-page-commands.ts": 282,
-        "apps/desktop/electron/main/canvas-workspace-command-input.ts": 77,
-        "apps/desktop/electron/main/canvas-workspace-commands.ts": 177,
+        "apps/desktop/electron/main/canvas-workspace-command-input.ts": 84,
+        "apps/desktop/electron/main/canvas-workspace-commands.ts": 210,
         "apps/desktop/electron/main/canvas-workspace-document-input.ts": 500,
         "apps/desktop/electron/main/citation-bridge.ts": 108,
         "apps/desktop/electron/main/citation-graph-commands.ts": 413,
@@ -475,7 +475,7 @@
         "packages/db/src/error-summary.ts": 7,
         "packages/db/src/fts.ts": 16,
         "packages/db/src/ids.ts": 76,
-        "packages/db/src/index.ts": 191,
+        "packages/db/src/index.ts": 212,
         "packages/db/src/knowledge-worker.ts": 165,
         "packages/db/src/library-schema.ts": 85,
         "packages/db/src/local-first.ts": 155,
@@ -491,7 +491,10 @@
         "packages/db/src/migrations.ts": 979,
         "packages/db/src/repos/annotations.ts": 260,
         "packages/db/src/repos/attachments.ts": 313,
-        "packages/db/src/repos/canvas.ts": 784,
+        "packages/db/src/repos/canvas-workspace-bounds.ts": 34,
+        "packages/db/src/repos/canvas-workspace-read-parse.ts": 160,
+        "packages/db/src/repos/canvas-workspace-read.ts": 462,
+        "packages/db/src/repos/canvas.ts": 629,
         "packages/db/src/repos/collection-membership.ts": 78,
         "packages/db/src/repos/collections.ts": 464,
         "packages/db/src/repos/content-unit-search-repo.ts": 153,
@@ -596,11 +599,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 138961
+      "totalLines": 139523
     },
     "tests": {
       "byExtension": {
-        ".ts": 84420,
+        ".ts": 84635,
         ".tsx": 1035
       },
       "files": {
@@ -612,7 +615,8 @@
         "apps/desktop/electron/main/canvas-ingress-payload-architecture.test.ts": 74,
         "apps/desktop/electron/main/canvas-ingress-queries.test.ts": 246,
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 417,
-        "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 257,
+        "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 262,
+        "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 87,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
         "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
@@ -967,6 +971,7 @@
         "packages/db/src/library-scope-architecture.test.ts": 116,
         "packages/db/src/local-first.test.ts": 64,
         "packages/db/src/migrations.test.ts": 232,
+        "packages/db/src/repos/canvas-workspace-read.test.ts": 123,
         "packages/db/src/repos/canvas.test.ts": 678,
         "packages/db/src/repos/child-library-scope.test.ts": 82,
         "packages/db/src/repos/collections-integrity.test.ts": 329,
@@ -1016,7 +1021,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 85455
+      "totalLines": 85670
     }
   },
   "uiDatabaseBoundary": {}

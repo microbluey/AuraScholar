@@ -1,6 +1,18 @@
 import { Buffer } from "node:buffer";
 import { CANVAS_SCHEMA_VERSION, type CanvasJsonValue } from "@aurascholar/core";
 import {
+  MAX_CANVAS_EDGE_LABEL_BYTES,
+  MAX_CANVAS_EDGES,
+  MAX_CANVAS_JSON_COLLECTION_ITEMS,
+  MAX_CANVAS_JSON_DEPTH,
+  MAX_CANVAS_JSON_KEY_BYTES,
+  MAX_CANVAS_JSON_TEXT_BYTES,
+  MAX_CANVAS_NODE_TAG_BYTES,
+  MAX_CANVAS_NODE_TAGS,
+  MAX_CANVAS_NODES,
+  MAX_CANVAS_WORKSPACE_DESCRIPTION_BYTES,
+  MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES,
+  MAX_CANVAS_WORKSPACE_NAME_BYTES,
   STORED_CANVAS_EDGE_RELATIONS,
   STORED_CANVAS_NODE_TYPES,
   type StoredCanvasEdge,
@@ -11,18 +23,6 @@ import {
   type StoredCanvasWorkspaceDocument,
 } from "@aurascholar/db";
 import { isRecord, requireRecordId } from "./data-command-runtime";
-const MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES = 8 * 1024 * 1024;
-const MAX_CANVAS_WORKSPACE_DESCRIPTION_BYTES = 64 * 1024;
-const MAX_CANVAS_WORKSPACE_NAME_BYTES = 512;
-const MAX_CANVAS_NODES = 2_000;
-const MAX_CANVAS_EDGES = 5_000;
-const MAX_CANVAS_NODE_TAGS = 64;
-const MAX_CANVAS_NODE_TAG_BYTES = 512;
-const MAX_CANVAS_EDGE_LABEL_BYTES = 16 * 1024;
-const MAX_CANVAS_JSON_TEXT_BYTES = 1024 * 1024;
-const MAX_CANVAS_JSON_COLLECTION_ITEMS = 10_000;
-const MAX_CANVAS_JSON_DEPTH = 32;
-const MAX_CANVAS_JSON_KEY_BYTES = 512;
 export function parseCanvasWorkspaceDocument(value: unknown): StoredCanvasWorkspaceDocument {
   const document = requireExactCanvasObject(
     value,

@@ -2,9 +2,12 @@
 // lives in @aurascholar/core; this package intentionally exposes a structural
 // storage contract to avoid a core <-> db dependency cycle.
 import type { Database } from "../database.js";
-import { flattenLegacyCanvasGroups } from "../canvas-legacy-storage.js";
 import { newId } from "../ids.js";
 import { ResearchProjectsRepo } from "./research-projects.js";
+import {
+  listBoundedCanvasWorkspaceSummaries,
+  loadBoundedCanvasWorkspaceDocument,
+} from "./canvas-workspace-read.js";
 
 export const DEFAULT_CANVAS_WORKSPACE_ID = "canvas:default";
 export const DEFAULT_CANVAS_WORKSPACE_NAME = "研究画布";
@@ -95,43 +98,6 @@ export interface CanvasWorkspaceSummary {
   updatedAt: number;
 }
 
-interface CanvasWorkspaceRow {
-  id: string;
-  library_id: string;
-  project_id: string;
-  name: string;
-  description: string | null;
-  schema_version: number;
-  viewport_json: string;
-  created_at: number;
-  updated_at: number;
-}
-
-interface CanvasNodeRow {
-  id: string;
-  type: string;
-  pos_x: number;
-  pos_y: number;
-  width: number;
-  height: number;
-  group_id: string | null;
-  tags_json: string;
-  data_json: string;
-  created_at: number;
-  updated_at: number;
-}
-
-interface CanvasEdgeRow {
-  id: string;
-  source_id: string;
-  target_id: string;
-  relation_type: string;
-  label: string | null;
-  style_json: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
 const canvasWriteQueues = new WeakMap<Database, Promise<void>>();
 const canvasNodeTypeSet = new Set<string>(STORED_CANVAS_NODE_TYPES);
 const canvasEdgeRelationSet = new Set<string>(STORED_CANVAS_EDGE_RELATIONS);
@@ -158,14 +124,6 @@ function assertTimestamp(value: unknown, label: string): asserts value is number
   }
 }
 
-function parseJson(value: string, label: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    throw new Error(`${label} contains invalid JSON`);
-  }
-}
-
 function stringifyJson(value: unknown, label: string): string {
   try {
     const serialized = JSON.stringify(value);
@@ -174,41 +132,6 @@ function stringifyJson(value: unknown, label: string): string {
   } catch {
     throw new Error(`${label} must be JSON-serializable`);
   }
-}
-
-function parseViewport(value: string, workspaceId: string): StoredCanvasViewport {
-  const parsed = parseJson(value, `Canvas workspace ${workspaceId} viewport`);
-  if (!isRecord(parsed)) throw new Error(`Canvas workspace ${workspaceId} viewport is invalid`);
-  assertFiniteNumber(parsed.x, `Canvas workspace ${workspaceId} viewport.x`);
-  assertFiniteNumber(parsed.y, `Canvas workspace ${workspaceId} viewport.y`);
-  assertFiniteNumber(parsed.zoom, `Canvas workspace ${workspaceId} viewport.zoom`);
-  if (parsed.zoom <= 0)
-    throw new Error(`Canvas workspace ${workspaceId} viewport.zoom must be > 0`);
-  return { x: parsed.x, y: parsed.y, zoom: parsed.zoom };
-}
-
-function parseTags(value: string, nodeId: string): string[] {
-  const parsed = parseJson(value, `Canvas node ${nodeId} tags`);
-  if (!Array.isArray(parsed) || !parsed.every((tag) => typeof tag === "string")) {
-    throw new Error(`Canvas node ${nodeId} tags are invalid`);
-  }
-  return parsed;
-}
-
-function parseEdgeStyle(value: string | null, edgeId: string): StoredCanvasEdgeStyle | undefined {
-  if (value === null) return undefined;
-  const parsed = parseJson(value, `Canvas edge ${edgeId} style`);
-  if (!isRecord(parsed)) throw new Error(`Canvas edge ${edgeId} style is invalid`);
-  if (parsed.stroke !== undefined && typeof parsed.stroke !== "string") {
-    throw new Error(`Canvas edge ${edgeId} style.stroke is invalid`);
-  }
-  if (parsed.animated !== undefined && typeof parsed.animated !== "boolean") {
-    throw new Error(`Canvas edge ${edgeId} style.animated is invalid`);
-  }
-  return {
-    ...(typeof parsed.stroke === "string" ? { stroke: parsed.stroke } : {}),
-    ...(typeof parsed.animated === "boolean" ? { animated: parsed.animated } : {}),
-  };
 }
 
 function workIdForNode(node: StoredCanvasNode): string | null {
@@ -483,95 +406,17 @@ export class CanvasRepo {
   }
 
   async list(): Promise<CanvasWorkspaceSummary[]> {
-    const rows = await this.db.query<Omit<CanvasWorkspaceRow, "viewport_json">>(
-      `SELECT id, library_id, project_id, name, description, schema_version, created_at, updated_at
-       FROM canvas_workspaces
-       WHERE library_id = ?
-       ORDER BY updated_at DESC, created_at ASC, id ASC`,
-      [this.libraryId],
-    );
-    return rows.map((row) => ({
-      schemaVersion: row.schema_version,
-      workspaceId: row.id,
-      projectId: row.project_id,
-      name: row.name,
-      ...(row.description === null ? {} : { description: row.description }),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return listBoundedCanvasWorkspaceSummaries(this.db, this.libraryId);
   }
 
   async load(workspaceId: string): Promise<StoredCanvasWorkspaceDocument | null> {
-    const workspaces = await this.db.query<CanvasWorkspaceRow>(
-      `SELECT id, library_id, project_id, name, description, schema_version, viewport_json, created_at, updated_at
-       FROM canvas_workspaces
-       WHERE id = ? AND library_id = ?
-       LIMIT 1`,
-      [workspaceId, this.libraryId],
+    const document = await loadBoundedCanvasWorkspaceDocument(
+      this.db,
+      this.libraryId,
+      workspaceId,
+      { edgeRelationSet: canvasEdgeRelationSet, nodeTypeSet: canvasNodeTypeSet },
     );
-    const workspace = workspaces[0];
-    if (!workspace) return null;
-
-    const [nodeRows, edgeRows] = await Promise.all([
-      this.db.query<CanvasNodeRow>(
-        `SELECT id, type, pos_x, pos_y, width, height, group_id, tags_json, data_json,
-                created_at, updated_at
-         FROM canvas_nodes WHERE workspace_id = ? ORDER BY sort_order, id`,
-        [workspaceId],
-      ),
-      this.db.query<CanvasEdgeRow>(
-        `SELECT id, source_id, target_id, relation_type, label, style_json, created_at, updated_at
-         FROM canvas_edges WHERE workspace_id = ? ORDER BY sort_order, id`,
-        [workspaceId],
-      ),
-    ]);
-
-    const nodes = flattenLegacyCanvasGroups(
-      nodeRows.map<StoredCanvasNode>((row) => {
-        if (!canvasNodeTypeSet.has(row.type))
-          throw new Error(`Unsupported canvas node type ${row.type}`);
-        return {
-          id: row.id,
-          type: row.type as StoredCanvasNodeType,
-          position: { x: row.pos_x, y: row.pos_y },
-          dimensions: { width: row.width, height: row.height },
-          ...(row.group_id === null ? {} : { groupId: row.group_id }),
-          tags: parseTags(row.tags_json, row.id),
-          data: parseJson(row.data_json, `Canvas node ${row.id} data`),
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        };
-      }),
-    );
-
-    const edges = edgeRows.map<StoredCanvasEdge>((row) => {
-      if (!canvasEdgeRelationSet.has(row.relation_type)) {
-        throw new Error(`Unsupported canvas edge relation ${row.relation_type}`);
-      }
-      const style = parseEdgeStyle(row.style_json, row.id);
-      return {
-        id: row.id,
-        sourceId: row.source_id,
-        targetId: row.target_id,
-        relationType: row.relation_type as StoredCanvasEdgeRelation,
-        ...(row.label === null ? {} : { label: row.label }),
-        ...(style === undefined ? {} : { style }),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
-    });
-
-    const document: StoredCanvasWorkspaceDocument = {
-      schemaVersion: workspace.schema_version,
-      workspaceId: workspace.id,
-      name: workspace.name,
-      ...(workspace.description === null ? {} : { description: workspace.description }),
-      viewport: parseViewport(workspace.viewport_json, workspace.id),
-      nodes,
-      edges,
-      createdAt: workspace.created_at,
-      updatedAt: workspace.updated_at,
-    };
+    if (!document) return null;
     validateDocument(document);
     return document;
   }
