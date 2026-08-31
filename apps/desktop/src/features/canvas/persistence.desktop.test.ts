@@ -170,6 +170,72 @@ describe("desktop Canvas workspace persistence", () => {
     ).rejects.toThrow("数据格式不兼容");
   });
 
+  it("rejects malformed desktop command envelopes and mismatched workspace responses", async () => {
+    const requestedId = "canvas:workspace-1";
+    command
+      .mockResolvedValueOnce({ extra: true, workspace: workspace() })
+      .mockResolvedValueOnce({ workspace: workspace({ workspaceId: "canvas:other-load" }) })
+      .mockResolvedValueOnce({ workspace: workspace({ workspaceId: "canvas:other-rename" }) });
+
+    await expect(loadCanvasWorkspace(requestedId)).rejects.toThrow("白板响应数据格式不兼容");
+    await expect(loadCanvasWorkspace(requestedId)).rejects.toThrow("返回的白板标识与请求不一致");
+    await expect(renameCanvasWorkspace(requestedId, "Renamed")).rejects.toThrow(
+      "返回的白板标识与请求不一致",
+    );
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it("checks malformed delete acknowledgements against the current workspace list", async () => {
+    command
+      .mockResolvedValueOnce({ deleted: 1 })
+      .mockResolvedValueOnce({ workspaces: [summary(workspace())] });
+
+    await expect(deleteCanvasWorkspace("canvas:workspace-1")).resolves.toBe(false);
+    expect(command).toHaveBeenNthCalledWith(1, "canvas.deleteWorkspace", {
+      workspaceId: "canvas:workspace-1",
+    });
+    expect(command).toHaveBeenNthCalledWith(2, "canvas.listWorkspaces", {});
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps a possibly committed malformed deletion retired when verification finds it absent", async () => {
+    const deletedId = "canvas:workspace-1";
+    const remaining = workspace({ workspaceId: "canvas:workspace-2", name: "Remaining" });
+    storage.setItem(CANVAS_LAST_WORKSPACE_ID_KEY, deletedId);
+    command
+      .mockResolvedValueOnce({ deleted: 1 })
+      .mockResolvedValueOnce({ workspaces: [summary(remaining)] })
+      .mockResolvedValueOnce({ workspaces: [summary(remaining)] });
+
+    await expect(deleteCanvasWorkspace(deletedId)).resolves.toBe(true);
+    expect(readLastCanvasWorkspaceId()).toBe(remaining.workspaceId);
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an unverifiable malformed deletion retired to prevent autosave resurrection", async () => {
+    const deletedId = "canvas:workspace-1";
+    command
+      .mockResolvedValueOnce({ deleted: 1 })
+      .mockRejectedValueOnce(new Error("verification unavailable"))
+      .mockRejectedValueOnce(new Error("refresh unavailable"));
+
+    await expect(deleteCanvasWorkspace(deletedId)).resolves.toBe(true);
+    expect(command).toHaveBeenNthCalledWith(1, "canvas.deleteWorkspace", {
+      workspaceId: deletedId,
+    });
+    expect(command).toHaveBeenNthCalledWith(2, "canvas.listWorkspaces", {});
+    expect(command).toHaveBeenNthCalledWith(3, "canvas.listWorkspaces", {});
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps malformed save acknowledgements closed", async () => {
+    command.mockResolvedValueOnce({ saved: false });
+
+    await expect(saveCanvasWorkspace(workspace())).rejects.toThrow("白板响应数据格式不兼容");
+    expect(command).toHaveBeenCalledWith("canvas.saveWorkspace", { document: workspace() });
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
   it("does not turn a committed deletion into a rejected autosave restore", async () => {
     const deletedId = "canvas:workspace-1";
     const remaining = workspace({ workspaceId: "canvas:workspace-2", name: "Remaining" });
