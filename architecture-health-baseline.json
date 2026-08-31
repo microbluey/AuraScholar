@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 84373,
+        ".ts": 84490,
         ".tsx": 35973
       },
       "files": {
@@ -33,7 +33,7 @@
         "apps/desktop/electron/main/canvas-page-commands.ts": 282,
         "apps/desktop/electron/main/canvas-workspace-command-input.ts": 84,
         "apps/desktop/electron/main/canvas-workspace-commands.ts": 288,
-        "apps/desktop/electron/main/canvas-workspace-document-input.ts": 500,
+        "apps/desktop/electron/main/canvas-workspace-document-input.ts": 7,
         "apps/desktop/electron/main/citation-bridge.ts": 108,
         "apps/desktop/electron/main/citation-graph-commands.ts": 413,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
@@ -222,7 +222,7 @@
         "apps/desktop/src/features/canvas/library-work.ts": 48,
         "apps/desktop/src/features/canvas/markdown-edit.ts": 76,
         "apps/desktop/src/features/canvas/model.ts": 353,
-        "apps/desktop/src/features/canvas/persistence.ts": 449,
+        "apps/desktop/src/features/canvas/persistence.ts": 359,
         "apps/desktop/src/features/canvas/routes.ts": 20,
         "apps/desktop/src/features/canvas/synthesis.ts": 280,
         "apps/desktop/src/features/canvas/useCanvasIngress.tsx": 168,
@@ -416,6 +416,9 @@
         "apps/desktop/src/services/sync.ts": 103,
         "apps/desktop/src/services/translate.ts": 289,
         "apps/desktop/src/services/work-input.ts": 36,
+        "apps/desktop/src/shared/canvas-workspace-document-codec.ts": 364,
+        "apps/desktop/src/shared/canvas-workspace-document-limits.ts": 26,
+        "apps/desktop/src/shared/canvas-workspace-document-node-data-codec.ts": 310,
         "apps/desktop/src/shared/document-revision-sync-repair.ts": 41,
         "apps/desktop/src/shared/library-backup-config.ts": 243,
         "apps/desktop/src/shared/library-backup-evidence.ts": 347,
@@ -599,11 +602,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 139667
+      "totalLines": 139784
     },
     "tests": {
       "byExtension": {
-        ".ts": 84796,
+        ".ts": 85293,
         ".tsx": 1035
       },
       "files": {
@@ -616,7 +619,7 @@
         "apps/desktop/electron/main/canvas-ingress-queries.test.ts": 246,
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 417,
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 410,
-        "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 98,
+        "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 120,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
         "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
@@ -829,7 +832,7 @@
         "apps/desktop/src/features/canvas/idea-note-edit.test.ts": 169,
         "apps/desktop/src/features/canvas/library-work.test.ts": 60,
         "apps/desktop/src/features/canvas/markdown-edit.test.ts": 28,
-        "apps/desktop/src/features/canvas/persistence.desktop.test.ts": 185,
+        "apps/desktop/src/features/canvas/persistence.desktop.test.ts": 276,
         "apps/desktop/src/features/canvas/persistence.test.ts": 212,
         "apps/desktop/src/features/canvas/routes.test.ts": 41,
         "apps/desktop/src/features/canvas/synthesis.test.ts": 318,
@@ -939,6 +942,7 @@
         "apps/desktop/src/services/sync-storage-state.test.ts": 36,
         "apps/desktop/src/services/sync.test.ts": 136,
         "apps/desktop/src/services/translate.test.ts": 272,
+        "apps/desktop/src/shared/canvas-workspace-document-codec.test.ts": 384,
         "apps/desktop/src/shared/document-revision-sync-repair.test.ts": 223,
         "apps/desktop/src/shared/reference-import.test.ts": 52,
         "apps/desktop/src/shared/saved-search-criteria.test.ts": 69,
@@ -1021,7 +1025,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 85831
+      "totalLines": 86328
     }
   },
   "uiDatabaseBoundary": {}
