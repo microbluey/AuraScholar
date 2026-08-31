@@ -1,6 +1,6 @@
 import { CANVAS_SCHEMA_VERSION, type CanvasWorkspaceDocument } from "@aurascholar/core";
-import type { CanvasWorkspaceSummary } from "@aurascholar/db/repos/canvas";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CanvasWorkspaceSummaryDto } from "../../electron/data-command-contract";
 import {
   createCanvasWorkspaceData,
   deleteCanvasWorkspaceData,
@@ -30,7 +30,9 @@ function workspace(overrides: Partial<CanvasWorkspaceDocument> = {}): CanvasWork
   };
 }
 
-function summary(overrides: Partial<CanvasWorkspaceSummary> = {}): CanvasWorkspaceSummary {
+function summary(
+  overrides: Partial<CanvasWorkspaceSummaryDto> = {},
+): CanvasWorkspaceSummaryDto {
   const document = workspace();
   return {
     schemaVersion: document.schemaVersion,

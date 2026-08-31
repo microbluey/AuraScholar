@@ -133,6 +133,7 @@ describe("Canvas workspace data commands", () => {
     expect(initial.workspaces).toEqual([
       expect.objectContaining({ name: "研究画布", workspaceId: expect.any(String) }),
     ]);
+    expect(initial.workspaces[0]).not.toHaveProperty("projectId");
     const defaultWorkspaceId = initial.workspaces[0]!.workspaceId;
 
     const created = await command("canvas.createWorkspace", { name: "  方法论比较  " });

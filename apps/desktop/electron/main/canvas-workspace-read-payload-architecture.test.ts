@@ -12,6 +12,7 @@ describe("Canvas workspace read payload boundary", () => {
     const canvasRepo = source("../../packages/db/src/repos/canvas.ts");
     const bounds = source("../../packages/db/src/repos/canvas-workspace-bounds.ts");
     const readQueries = source("../../packages/db/src/repos/canvas-workspace-read.ts");
+    const workspaceContract = source("electron/canvas-command-contract.ts");
 
     for (const limit of [
       "MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES",
@@ -56,9 +57,12 @@ describe("Canvas workspace read payload boundary", () => {
     expect(readQueries).toContain("MAX_CANVAS_EDGES + 1");
     expect(readQueries).toContain("LIMIT ?");
     expect(readQueries).not.toMatch(/SELECT\s+(?:[A-Za-z_][\w]*\.)?\*/);
+    expect(readQueries).toContain("WHERE library_id = ?");
 
     expect(canvasRepo).toContain("listBoundedCanvasWorkspaceSummaries");
     expect(canvasRepo).toContain("loadBoundedCanvasWorkspaceDocument");
+    expect(workspaceContract).toContain("export interface CanvasWorkspaceSummaryDto");
+    expect(workspaceContract).toContain("workspaces: CanvasWorkspaceSummaryDto[]");
 
     expect(workspaceCommands).toMatch(
       /import\s*\{[^}]*MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES[^}]*\}\s*from "@aurascholar\/db";/,
@@ -71,6 +75,7 @@ describe("Canvas workspace read payload boundary", () => {
     );
     expect(workspaceCommands).toContain("requireBoundedCanvasWorkspaceOutput");
     expect(workspaceCommands).toContain('Buffer.byteLength(serialized, "utf8")');
+    expect(workspaceCommands).toContain("toCanvasWorkspaceSummaryDto");
     for (const commandName of [
       "canvas.listWorkspaces",
       "canvas.loadWorkspace",

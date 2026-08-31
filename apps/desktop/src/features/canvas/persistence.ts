@@ -6,10 +6,10 @@ import {
   type ExcerptHighlightColor,
 } from "@aurascholar/core";
 import {
-  type CanvasWorkspaceSummary,
   type StoredCanvasNode,
   type StoredCanvasWorkspaceDocument,
 } from "@aurascholar/db/repos/canvas";
+import type { CanvasWorkspaceSummaryDto } from "../../../electron/data-command-contract";
 import { isDesktopRuntime } from "../../services/aura-platform";
 import {
   createCanvasWorkspaceData,
@@ -184,7 +184,7 @@ function createEmptyPreviewWorkspace(name: string): CanvasWorkspaceDocument {
   };
 }
 
-function toWorkspaceSummary(document: CanvasWorkspaceDocument): CanvasWorkspaceSummary {
+function toWorkspaceSummary(document: CanvasWorkspaceDocument): CanvasWorkspaceSummaryDto {
   return {
     schemaVersion: document.schemaVersion,
     workspaceId: document.workspaceId,
@@ -281,7 +281,7 @@ function dispatchCanvasUpdated(): void {
 }
 
 /** Lists every workspace and guarantees at least one workspace exists. */
-export async function listCanvasWorkspaces(): Promise<CanvasWorkspaceSummary[]> {
+export async function listCanvasWorkspaces(): Promise<CanvasWorkspaceSummaryDto[]> {
   if (!isDesktopRuntime()) {
     return Object.values(readPreviewEnvelope().workspaces)
       .sort(workspaceSortNewestFirst)

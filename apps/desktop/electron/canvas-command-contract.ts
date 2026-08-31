@@ -1,16 +1,23 @@
 import type { CanvasCitationRelation } from "@aurascholar/core";
-import type {
-  CanvasWorkspaceSummary,
-  StoredCanvasWorkspaceDocument,
-} from "@aurascholar/db/repos/canvas";
+import type { StoredCanvasWorkspaceDocument } from "@aurascholar/db/repos/canvas";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
 
 /** Canvas workspace snapshots are stored structurally to avoid a core <-> db cycle. */
 export type CanvasListWorkspacesCommandInput = Record<string, never>;
 
+/** Renderer-facing workspace metadata; storage ownership stays in the main process. */
+export interface CanvasWorkspaceSummaryDto {
+  schemaVersion: number;
+  workspaceId: string;
+  name: string;
+  description?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface CanvasListWorkspacesCommandResult {
   /** Always contains at least the active Library's default workspace. */
-  workspaces: CanvasWorkspaceSummary[];
+  workspaces: CanvasWorkspaceSummaryDto[];
 }
 
 export interface CanvasLoadWorkspaceCommandInput {
