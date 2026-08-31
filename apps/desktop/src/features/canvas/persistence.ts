@@ -32,6 +32,10 @@ import {
   createCanvasId,
   createPreviewWorkspace,
 } from "./model";
+import {
+  assertCanvasPreviewStorageByteLimit,
+  MAX_CANVAS_PREVIEW_WORKSPACES,
+} from "./preview-storage-limits";
 
 interface PreviewCanvasEnvelope {
   activeWorkspaceId: string;
@@ -171,7 +175,11 @@ function workspaceSortNewestFirst(
 }
 
 function persistPreviewEnvelope(envelope: PreviewCanvasEnvelope): void {
-  window.localStorage.setItem(CANVAS_STORAGE_V2_KEY, JSON.stringify(envelope));
+  assertPreviewWorkspaceCount(envelope.workspaces);
+  const serialized = JSON.stringify(envelope);
+  if (typeof serialized !== "string") throw new Error("浏览器白板存储无法序列化");
+  assertCanvasPreviewStorageByteLimit(serialized);
+  window.localStorage.setItem(CANVAS_STORAGE_V2_KEY, serialized);
 }
 
 function envelopeForWorkspace(document: CanvasWorkspaceDocument): PreviewCanvasEnvelope {
@@ -185,12 +193,20 @@ function envelopeForWorkspace(document: CanvasWorkspaceDocument): PreviewCanvasE
 }
 
 function readLegacyPreviewWorkspace(): CanvasWorkspaceDocument {
-  try {
-    const raw = window.localStorage.getItem(CANVAS_STORAGE_KEY);
-    if (!raw) return createPreviewWorkspace();
-    return narrowDocument(JSON.parse(raw));
-  } catch {
-    return createPreviewWorkspace();
+  const raw = window.localStorage.getItem(CANVAS_STORAGE_KEY);
+  if (raw === null) return createPreviewWorkspace();
+  assertCanvasPreviewStorageByteLimit(raw);
+  return narrowDocument(JSON.parse(raw) as unknown);
+}
+
+function assertPreviewWorkspaceCount(workspaces: object): void {
+  let workspaceCount = 0;
+  for (const workspaceId in workspaces) {
+    if (!Object.hasOwn(workspaces, workspaceId)) continue;
+    workspaceCount += 1;
+    if (workspaceCount > MAX_CANVAS_PREVIEW_WORKSPACES) {
+      throw new Error(`浏览器白板最多只能保存 ${MAX_CANVAS_PREVIEW_WORKSPACES} 个白板`);
+    }
   }
 }
 
@@ -200,7 +216,10 @@ function narrowPreviewEnvelope(value: unknown): PreviewCanvasEnvelope {
   }
 
   const workspaces = createPreviewWorkspaceMap();
-  for (const [workspaceId, stored] of Object.entries(value.workspaces)) {
+  assertPreviewWorkspaceCount(value.workspaces);
+  for (const workspaceId in value.workspaces) {
+    if (!Object.hasOwn(value.workspaces, workspaceId)) continue;
+    const stored = value.workspaces[workspaceId];
     if (!isRecord(stored)) throw new Error(`白板 ${workspaceId} 的数据格式不兼容`);
     const document = narrowDocument(stored);
     if (document.workspaceId !== workspaceId) {
@@ -223,8 +242,9 @@ function narrowPreviewEnvelope(value: unknown): PreviewCanvasEnvelope {
 
 function readPreviewEnvelope(): PreviewCanvasEnvelope {
   const raw = window.localStorage.getItem(CANVAS_STORAGE_V2_KEY);
-  if (raw) {
+  if (raw !== null) {
     try {
+      assertCanvasPreviewStorageByteLimit(raw);
       const envelope = narrowPreviewEnvelope(JSON.parse(raw) as unknown);
       // Persist repairs such as a stale active workspace id.
       persistPreviewEnvelope(envelope);
@@ -237,9 +257,16 @@ function readPreviewEnvelope(): PreviewCanvasEnvelope {
     }
   }
 
-  const envelope = envelopeForWorkspace(readLegacyPreviewWorkspace());
-  persistPreviewEnvelope(envelope);
-  return envelope;
+  try {
+    const envelope = envelopeForWorkspace(readLegacyPreviewWorkspace());
+    persistPreviewEnvelope(envelope);
+    return envelope;
+  } catch (error) {
+    throw new Error(
+      `浏览器白板数据无法读取：${error instanceof Error ? error.message : "存储格式已损坏"}`,
+      { cause: error },
+    );
+  }
 }
 
 function dispatchCanvasUpdated(): void {
