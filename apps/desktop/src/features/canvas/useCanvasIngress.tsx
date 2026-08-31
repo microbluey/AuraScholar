@@ -1,5 +1,5 @@
-import type { CanvasWorkspaceSummary } from "@aurascholar/db/repos/canvas";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CanvasWorkspaceSummaryDto } from "../../../electron/data-command-contract";
 import { useNavigate } from "react-router-dom";
 import { CanvasTargetPicker } from "./CanvasTargetPicker";
 import {
@@ -25,7 +25,7 @@ interface CanvasTargetState {
   request: CanvasIngressRequest;
   requestSequence: number;
   signal?: AbortSignal;
-  workspaces: CanvasWorkspaceSummary[];
+  workspaces: CanvasWorkspaceSummaryDto[];
 }
 
 export function useCanvasIngress(onError?: (message: string) => void) {

@@ -3,6 +3,7 @@ import {
   CanvasRepo,
   MAX_CANVAS_WORKSPACE_DOCUMENT_BYTES,
   type Database,
+  type CanvasWorkspaceSummary,
 } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import type {
@@ -11,6 +12,7 @@ import type {
   CanvasDeleteWorkspaceCommandInput,
   CanvasDeleteWorkspaceCommandResult,
   CanvasListWorkspacesCommandResult,
+  CanvasWorkspaceSummaryDto,
   CanvasLoadWorkspaceCommandInput,
   CanvasLoadWorkspaceCommandResult,
   CanvasRenameWorkspaceCommandInput,
@@ -163,9 +165,28 @@ async function listCanvasWorkspaces(
 ): Promise<CanvasListWorkspacesCommandResult> {
   const repo = new CanvasRepo(database, libraryId);
   const workspaces = await repo.list();
-  if (workspaces.length > 0) return { workspaces };
+  if (workspaces.length > 0) return toCanvasWorkspaceListResult(workspaces);
   await repo.ensureDefault();
-  return { workspaces: await repo.list() };
+  return toCanvasWorkspaceListResult(await repo.list());
+}
+
+function toCanvasWorkspaceListResult(
+  workspaces: readonly CanvasWorkspaceSummary[],
+): CanvasListWorkspacesCommandResult {
+  return { workspaces: workspaces.map(toCanvasWorkspaceSummaryDto) };
+}
+
+function toCanvasWorkspaceSummaryDto(
+  workspace: CanvasWorkspaceSummary,
+): CanvasWorkspaceSummaryDto {
+  return {
+    schemaVersion: workspace.schemaVersion,
+    workspaceId: workspace.workspaceId,
+    name: workspace.name,
+    ...(workspace.description === undefined ? {} : { description: workspace.description }),
+    createdAt: workspace.createdAt,
+    updatedAt: workspace.updatedAt,
+  };
 }
 
 async function loadCanvasWorkspace(

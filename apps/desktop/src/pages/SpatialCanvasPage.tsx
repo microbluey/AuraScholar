@@ -1,5 +1,4 @@
 import { type CanvasWorkspaceDocument } from "@aurascholar/core";
-import type { CanvasWorkspaceSummary } from "@aurascholar/db/repos/canvas";
 import { CircleNotch, Warning } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -10,6 +9,7 @@ import {
   useSearchParams,
   type BlockerFunction,
 } from "react-router-dom";
+import type { CanvasWorkspaceSummaryDto } from "../../electron/data-command-contract";
 import "@xyflow/react/dist/style.css";
 import "katex/dist/katex.min.css";
 import { useConfirmDialog } from "../components/ConfirmDialog";
@@ -156,7 +156,7 @@ export function SpatialCanvasPage() {
   const requestedAnnotationId = searchParams.get("annotationId")?.trim() || "";
   const desktopRuntime = isDesktopRuntime();
   const [document, setDocument] = useState<CanvasWorkspaceDocument | null>(null);
-  const [workspaces, setWorkspaces] = useState<CanvasWorkspaceSummary[]>([]);
+  const [workspaces, setWorkspaces] = useState<CanvasWorkspaceSummaryDto[]>([]);
   const [works, setWorks] = useState<CanvasLibraryWork[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
