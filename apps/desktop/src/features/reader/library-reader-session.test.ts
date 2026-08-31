@@ -1,7 +1,4 @@
 import type { PdfDocument, ReaderAnnotation } from "@aurascholar/reader";
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
-import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
 import { describe, expect, it, vi } from "vitest";
 import {
   LibraryReaderSessionError,
@@ -14,57 +11,26 @@ import {
   updateLibraryReaderAnnotationContent,
 } from "./library-reader-session";
 import { ReaderPdfBusyError, ReaderPdfTooLargeError } from "../../services/library-read";
+import type {
+  ReaderAnnotation as ReaderAnnotationDto,
+  ReaderAttachment,
+  ReaderWork,
+} from "../../services/reader-session-data";
 
-function work(overrides: Partial<WorkWithAuthors> = {}): WorkWithAuthors {
+function work(overrides: Partial<ReaderWork> = {}): ReaderWork {
   return {
     id: "work-1",
-    library_id: "library:test-reader-session",
     title: "Evidence Graphs",
-    abstract: "Abstract",
     year: 2024,
-    publication_date: null,
-    venue_name: "Journal",
-    venue_type: null,
-    type: "article-journal",
-    arxiv_id: null,
-    openalex_id: null,
-    s2_id: null,
-    pmid: null,
-    fingerprint: null,
-    volume: null,
-    issue: null,
-    pages: null,
-    number_of_volumes: null,
-    edition: null,
-    section: null,
-    publisher: null,
-    place_published: null,
-    series_title: null,
-    short_title: null,
-    original_title: null,
-    issn: null,
-    isbn: null,
-    url: null,
-    accessed_date: null,
-    language: null,
-    call_number: null,
-    accession_number: null,
-    label: null,
-    database_name: null,
-    keywords_json: null,
-    notes_md: null,
-    reading_status: "reading",
-    starred: 0,
     doi: "10.1000/evidence",
-    created_at: 1,
-    updated_at: 1,
+    arxiv_id: null,
     deleted_at: null,
     authorNames: ["Ada Researcher"],
     ...overrides,
   };
 }
 
-function attachment(overrides: Partial<AttachmentRow> = {}): AttachmentRow {
+function attachment(overrides: Partial<ReaderAttachment> = {}): ReaderAttachment {
   return {
     id: "attachment-1",
     work_id: "work-1",
@@ -72,18 +38,13 @@ function attachment(overrides: Partial<AttachmentRow> = {}): AttachmentRow {
     sha256: "abc123",
     byte_size: 123,
     original_filename: "evidence.pdf",
-    fetched_via: "local",
-    page_count: 8,
-    created_at: 2,
     ...overrides,
   };
 }
 
-function annotationRow(overrides: Partial<AnnotationRow> = {}): AnnotationRow {
+function annotationRow(overrides: Partial<ReaderAnnotationDto> = {}): ReaderAnnotationDto {
   return {
     id: "annotation-1",
-    attachment_id: "attachment-1",
-    work_id: "work-1",
     type: "highlight",
     color: "#ffd866",
     page_index: 2,
@@ -93,11 +54,7 @@ function annotationRow(overrides: Partial<AnnotationRow> = {}): AnnotationRow {
       quote: { exact: "important evidence", prefix: "", suffix: "" },
     }),
     content_md: "margin note",
-    ink_paths_json: null,
-    sort_key: 2,
     orphaned: 0,
-    created_at: 3,
-    updated_at: 3,
     ...overrides,
   };
 }
@@ -170,7 +127,7 @@ describe("library reader session", () => {
   });
 
   it("destroys a document that finishes loading after its request is aborted", async () => {
-    const rows = deferred<AnnotationRow[]>();
+    const rows = deferred<ReaderAnnotationDto[]>();
     const doc = fakeDocument();
     const source = dataSource({
       loadDocument: vi.fn(async () => doc),

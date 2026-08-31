@@ -10,7 +10,7 @@ import {
   restoreReaderAnnotation,
   updateReaderAnnotationContent,
   type ReaderAnnotations,
-  type ReaderAttachment,
+  type ReaderAttachmentResult,
   type ReaderAttachmentPdf,
   type ReaderCreatedAnnotation,
   type ReaderDeletedAnnotation,
@@ -40,7 +40,7 @@ describe("reader session data facade", () => {
   });
 
   it("keeps work identity on attachment and annotation reads", async () => {
-    const attachment = { attachment: null } satisfies ReaderAttachment;
+    const attachment = { attachment: null } satisfies ReaderAttachmentResult;
     const annotations = { annotations: [] } satisfies ReaderAnnotations;
     command.mockResolvedValueOnce(attachment).mockResolvedValueOnce(annotations);
 

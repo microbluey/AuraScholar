@@ -1,7 +1,6 @@
-import type { AttachmentRow } from "@aurascholar/db/repos/attachments";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
 import type { ReaderAnnotation } from "@aurascholar/reader";
 import { describe, expect, it } from "vitest";
+import type { ReaderAttachment, ReaderWork } from "../../services/reader-session-data";
 import { CANVAS_EXCERPT_DRAG_VERSION } from "./canvas-excerpt-dnd";
 import {
   canvasReaderExcerptDragPayload,
@@ -35,13 +34,21 @@ describe("CanvasReaderDrawer helpers", () => {
       attachment: {
         id: "attachment-1",
         work_id: "work-1",
-      } as AttachmentRow,
+        kind: "pdf",
+        sha256: "sha-1",
+        byte_size: 123,
+        original_filename: "evidence.pdf",
+      } satisfies ReaderAttachment,
       sourceNodeId: "paper-node-1",
       work: {
         id: "work-1",
         title: "Evidence Graphs",
+        doi: "10.1000/evidence",
+        year: 2024,
+        arxiv_id: null,
+        deleted_at: null,
         authorNames: ["Ada Researcher"],
-      } as WorkWithAuthors,
+      } satisfies ReaderWork,
       workspaceId: "workspace-1",
     };
 

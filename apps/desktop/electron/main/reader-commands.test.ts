@@ -189,7 +189,6 @@ describe("Reader data commands", () => {
         expect.objectContaining({
           content_md: "Edited annotation",
           id: created.annotationId,
-          ink_paths_json: JSON.stringify([{ points: [0, 1, 2] }]),
           page_index: 2,
           type: "highlight",
         }),

@@ -5,8 +5,8 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 82956,
-        ".tsx": 35974
+        ".ts": 83410,
+        ".tsx": 35973
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
@@ -92,7 +92,8 @@
         "apps/desktop/electron/main/oa-pdf-http.ts": 390,
         "apps/desktop/electron/main/platform-fs-policy.ts": 188,
         "apps/desktop/electron/main/platform.ts": 152,
-        "apps/desktop/electron/main/reader-commands.ts": 448,
+        "apps/desktop/electron/main/reader-commands.ts": 439,
+        "apps/desktop/electron/main/reader-metadata-queries.ts": 413,
         "apps/desktop/electron/main/reader-pdf-read-gate.ts": 42,
         "apps/desktop/electron/main/reference-import-command-input.ts": 179,
         "apps/desktop/electron/main/reference-import-commands.ts": 56,
@@ -154,7 +155,7 @@
         "apps/desktop/electron/main/work-metadata-commands.ts": 371,
         "apps/desktop/electron/preload.ts": 231,
         "apps/desktop/electron/preload/close-lifecycle.ts": 77,
-        "apps/desktop/electron/reader-command-contract.ts": 146,
+        "apps/desktop/electron/reader-command-contract.ts": 184,
         "apps/desktop/electron/reader-pdf-ipc-limit.ts": 33,
         "apps/desktop/electron/reference-import-command-contract.ts": 23,
         "apps/desktop/electron/saved-search-command-contract.ts": 132,
@@ -193,7 +194,7 @@
         "apps/desktop/src/features/canvas/CanvasNodeContextMenu.tsx": 257,
         "apps/desktop/src/features/canvas/CanvasNoteEditorDialog.tsx": 842,
         "apps/desktop/src/features/canvas/CanvasNoteExitDialog.tsx": 119,
-        "apps/desktop/src/features/canvas/CanvasReaderDrawer.tsx": 592,
+        "apps/desktop/src/features/canvas/CanvasReaderDrawer.tsx": 591,
         "apps/desktop/src/features/canvas/CanvasSelectionToolbar.tsx": 318,
         "apps/desktop/src/features/canvas/CanvasTargetPicker.tsx": 298,
         "apps/desktop/src/features/canvas/CanvasToolbox.tsx": 115,
@@ -326,7 +327,7 @@
         "apps/desktop/src/features/reader/ReaderPageChrome.tsx": 314,
         "apps/desktop/src/features/reader/SelectionTranslationPopover.tsx": 154,
         "apps/desktop/src/features/reader/evidence-deep-link.ts": 95,
-        "apps/desktop/src/features/reader/library-reader-session.ts": 279,
+        "apps/desktop/src/features/reader/library-reader-session.ts": 280,
         "apps/desktop/src/features/reader/reader-evidence-recovery.ts": 43,
         "apps/desktop/src/features/reader/reader-session-coordinator.ts": 107,
         "apps/desktop/src/features/reader/reader-session-state.ts": 45,
@@ -384,7 +385,7 @@
         "apps/desktop/src/services/library-oa.ts": 9,
         "apps/desktop/src/services/library-organization.ts": 126,
         "apps/desktop/src/services/library-page-data.ts": 55,
-        "apps/desktop/src/services/library-read.ts": 70,
+        "apps/desktop/src/services/library-read.ts": 73,
         "apps/desktop/src/services/library-types.ts": 101,
         "apps/desktop/src/services/library-work-actions.ts": 50,
         "apps/desktop/src/services/library.ts": 502,
@@ -392,7 +393,7 @@
         "apps/desktop/src/services/metadata.ts": 20,
         "apps/desktop/src/services/minimum-busy.ts": 8,
         "apps/desktop/src/services/preview-library.ts": 70,
-        "apps/desktop/src/services/reader-session-data.ts": 90,
+        "apps/desktop/src/services/reader-session-data.ts": 98,
         "apps/desktop/src/services/research-browser.ts": 103,
         "apps/desktop/src/services/research-downloads.ts": 247,
         "apps/desktop/src/services/research-project-desktop-service.ts": 74,
@@ -594,11 +595,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 138251
+      "totalLines": 138704
     },
     "tests": {
       "byExtension": {
-        ".ts": 83739,
+        ".ts": 84092,
         ".tsx": 1035
       },
       "files": {
@@ -611,7 +612,7 @@
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 257,
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 749,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
         "apps/desktop/electron/main/data-command-core-architecture.test.ts": 110,
         "apps/desktop/electron/main/data-command-lockstep.test.ts": 82,
         "apps/desktop/electron/main/data-commands.test.ts": 1025,
@@ -667,7 +668,9 @@
         "apps/desktop/electron/main/platform-fs-policy.test.ts": 103,
         "apps/desktop/electron/main/platform-fs-read-architecture.test.ts": 85,
         "apps/desktop/electron/main/raw-db-bridge-architecture.test.ts": 59,
-        "apps/desktop/electron/main/reader-commands.test.ts": 720,
+        "apps/desktop/electron/main/reader-commands.test.ts": 719,
+        "apps/desktop/electron/main/reader-metadata-payload-architecture.test.ts": 72,
+        "apps/desktop/electron/main/reader-metadata-queries.test.ts": 314,
         "apps/desktop/electron/main/reader-pdf-read-gate.test.ts": 36,
         "apps/desktop/electron/main/reference-import-commands-architecture.test.ts": 70,
         "apps/desktop/electron/main/reference-import-commands.test.ts": 192,
@@ -800,7 +803,7 @@
         "apps/desktop/src/features/canvas/CanvasConnectionHandles.test.ts": 31,
         "apps/desktop/src/features/canvas/CanvasEdgeLabelEditor.test.ts": 14,
         "apps/desktop/src/features/canvas/CanvasNodeContextMenu.test.tsx": 52,
-        "apps/desktop/src/features/canvas/CanvasReaderDrawer.test.ts": 58,
+        "apps/desktop/src/features/canvas/CanvasReaderDrawer.test.ts": 65,
         "apps/desktop/src/features/canvas/CanvasSelectionToolbar.test.tsx": 52,
         "apps/desktop/src/features/canvas/canvas-annotation-ingress.test.ts": 237,
         "apps/desktop/src/features/canvas/canvas-citation-resolver.test.ts": 409,
@@ -868,7 +871,7 @@
         "apps/desktop/src/features/projects/routes.test.ts": 41,
         "apps/desktop/src/features/reader/SelectionTranslationPopover.test.ts": 22,
         "apps/desktop/src/features/reader/evidence-deep-link.test.ts": 135,
-        "apps/desktop/src/features/reader/library-reader-session.test.ts": 507,
+        "apps/desktop/src/features/reader/library-reader-session.test.ts": 464,
         "apps/desktop/src/features/reader/reader-evidence-recovery.test.ts": 90,
         "apps/desktop/src/features/reader/reader-session-coordinator.test.ts": 113,
         "apps/desktop/src/features/reader/reader-session-stale-completion.test.ts": 127,
@@ -904,7 +907,7 @@
         "apps/desktop/src/services/library-list.test.ts": 71,
         "apps/desktop/src/services/library-organization.test.ts": 135,
         "apps/desktop/src/services/library-page-data.test.ts": 109,
-        "apps/desktop/src/services/library-read.test.ts": 132,
+        "apps/desktop/src/services/library-read.test.ts": 129,
         "apps/desktop/src/services/library-work-actions.test.ts": 76,
         "apps/desktop/src/services/library.test.ts": 292,
         "apps/desktop/src/services/local-embedding-artifact.test.ts": 65,
@@ -1010,7 +1013,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 84774
+      "totalLines": 85127
     }
   },
   "uiDatabaseBoundary": {}
