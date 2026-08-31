@@ -147,7 +147,7 @@ describe("Canvas ingress data commands", () => {
     });
 
     await expect(command("canvas.getActiveWork", { workId })).resolves.toEqual({
-      work: expect.objectContaining({ deleted_at: null, id: workId }),
+      work: expect.objectContaining({ id: workId }),
     });
     await expect(
       command("canvas.getAnnotationIngressSource", { annotationId, workId }),

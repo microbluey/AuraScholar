@@ -1,5 +1,5 @@
-import type { WorkWithAuthors } from "@aurascholar/db";
 import { describe, expect, it } from "vitest";
+import type { CanvasIngressWork } from "../../../electron/data-command-contract";
 import type { LibraryListWork } from "../../services/library-list";
 import { toCanvasLibraryWork } from "./library-work";
 
@@ -32,18 +32,18 @@ describe("Canvas library-work adapter", () => {
     });
   });
 
-  it("preserves scoped ingress rows using their database-shaped fields", () => {
+  it("adapts a narrow Canvas ingress work without database-only fields", () => {
     const source = {
       abstract: null,
       authorNames: ["Grace Hopper"],
+      deleted_at: null,
       doi: null,
       id: "work-ingress",
       reading_status: "read",
-      tagNames: ["Archive"],
       title: "Ingress row",
       venue_name: "Proceedings",
       year: 1952,
-    } as WorkWithAuthors & { tagNames: string[] };
+    } satisfies CanvasIngressWork;
 
     expect(toCanvasLibraryWork(source)).toEqual({
       abstract: null,
@@ -51,7 +51,7 @@ describe("Canvas library-work adapter", () => {
       doi: null,
       id: "work-ingress",
       readingStatus: "read",
-      tags: ["Archive"],
+      tags: [],
       title: "Ingress row",
       venue: "Proceedings",
       year: 1952,

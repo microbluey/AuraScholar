@@ -1,14 +1,15 @@
-import type { AnnotationRow } from "@aurascholar/db/repos/annotations";
-import type { WorkWithAuthors } from "@aurascholar/db/repos/works";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadCanvasActiveWork,
   loadCanvasAnnotationIngressSource,
+  type CanvasActiveWork,
   type CanvasAnnotationIngressSource,
+  type CanvasIngressAnnotation,
+  type CanvasIngressWork,
   type CanvasPageDataSource,
 } from "./canvas-page-data";
 
-function annotation(overrides: Partial<AnnotationRow> = {}): AnnotationRow {
+function annotation(overrides: Partial<CanvasIngressAnnotation> = {}): CanvasIngressAnnotation {
   return {
     id: "annotation-1",
     attachment_id: "attachment-1",
@@ -18,24 +19,31 @@ function annotation(overrides: Partial<AnnotationRow> = {}): AnnotationRow {
     page_index: 0,
     anchor_json: null,
     content_md: null,
-    ink_paths_json: null,
-    sort_key: 0,
     orphaned: 0,
-    created_at: 1,
-    updated_at: 1,
     ...overrides,
   };
 }
 
-function work(overrides: Partial<WorkWithAuthors> = {}): WorkWithAuthors {
+function activeWork(overrides: Partial<CanvasActiveWork> = {}): CanvasActiveWork {
   return {
     id: "work-1",
-    library_id: "library-1",
     title: "Scoped paper",
-    deleted_at: null,
+    abstract: null,
     authorNames: ["Researcher"],
+    doi: null,
+    reading_status: "reading",
+    venue_name: null,
+    year: 2025,
     ...overrides,
-  } as WorkWithAuthors;
+  };
+}
+
+function ingressWork(overrides: Partial<CanvasIngressWork> = {}): CanvasIngressWork {
+  return {
+    ...activeWork(),
+    deleted_at: null,
+    ...overrides,
+  };
 }
 
 function ingressSource(
@@ -43,14 +51,14 @@ function ingressSource(
 ): CanvasAnnotationIngressSource {
   return {
     annotation: annotation(),
-    work: work(),
+    work: ingressWork(),
     ...overrides,
   };
 }
 
 function dataSource(overrides: Partial<CanvasPageDataSource> = {}): CanvasPageDataSource {
   return {
-    getActiveWork: vi.fn(async () => work()),
+    getActiveWork: vi.fn(async () => activeWork()),
     getAnnotationIngressSource: vi.fn(async () => ingressSource()),
     ...overrides,
   };
@@ -68,7 +76,7 @@ describe("canvas page data gateway", () => {
   });
 
   it("loads an active work through the scoped Canvas command", async () => {
-    const sourceWork = work();
+    const sourceWork = activeWork();
     command.mockResolvedValueOnce({ work: sourceWork });
 
     await expect(loadCanvasActiveWork(sourceWork.id)).resolves.toBe(sourceWork);
@@ -128,7 +136,7 @@ describe("canvas page data gateway", () => {
   it("rejects an ingress source whose work is no longer active", async () => {
     const injected = dataSource({
       getAnnotationIngressSource: vi.fn(async () =>
-        ingressSource({ work: work({ deleted_at: 123 }) }),
+        ingressSource({ work: ingressWork({ deleted_at: 123 }) }),
       ),
     });
 
@@ -155,7 +163,7 @@ describe("canvas page data gateway", () => {
     const injected = dataSource({
       getActiveWork: vi.fn(async () => {
         controller.abort();
-        return work();
+        return activeWork();
       }),
     });
 
