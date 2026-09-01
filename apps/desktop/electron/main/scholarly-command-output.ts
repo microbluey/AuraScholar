@@ -1,21 +1,11 @@
 import { Buffer } from "node:buffer";
 import type {
-  CitationGraph,
   DiscoveryResult,
   DiscoverySearchReport,
   DiscoverySource,
-  GraphEdge,
-  GraphNode,
   ResolvedWork,
 } from "@aurascholar/core";
 import type { NormalizedAuthor, NormalizedWork, S2Enrichment } from "@aurascholar/connectors";
-import {
-  MAX_CITATION_GRAPH_DOI_BYTES,
-  MAX_CITATION_GRAPH_EDGES,
-  MAX_CITATION_GRAPH_NODE_ID_BYTES,
-  MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
-  MAX_CITATION_GRAPH_NODES,
-} from "../../src/shared/citation-graph-limits";
 import {
   MAX_SCHOLARLY_AUTHOR_COUNT as SHARED_MAX_AUTHOR_COUNT,
   MAX_SCHOLARLY_AUTHOR_TEXT_BYTES as SHARED_MAX_AUTHOR_TEXT_BYTES,
@@ -46,10 +36,6 @@ const MAX_CSL_JSON_ENTRIES = SHARED_MAX_CSL_JSON_ENTRIES;
 const MAX_DISCOVERY_ERROR_BYTES = SHARED_MAX_DISCOVERY_ERROR_BYTES;
 const MAX_DISCOVERY_RESULT_ID_BYTES = SHARED_MAX_DISCOVERY_RESULT_ID_BYTES;
 const MAX_DISCOVERY_RESULTS = SHARED_MAX_DISCOVERY_RESULTS;
-const MAX_GRAPH_EDGES = MAX_CITATION_GRAPH_EDGES;
-const MAX_GRAPH_NODE_ID_BYTES = MAX_CITATION_GRAPH_NODE_ID_BYTES;
-const MAX_GRAPH_NODES = MAX_CITATION_GRAPH_NODES;
-const MAX_GRAPH_NODE_TEXT_BYTES = MAX_CITATION_GRAPH_NODE_TEXT_BYTES;
 const MAX_KEYWORDS = SHARED_MAX_KEYWORDS;
 const MAX_YEAR = SHARED_MAX_YEAR;
 const MAX_SAFE_COUNT = SHARED_MAX_SAFE_COUNT;
@@ -67,6 +53,13 @@ const WORK_SOURCES: readonly NormalizedWorkSource[] = [
   "unpaywall",
   "datacite",
 ];
+
+// Keep the public graph sanitizer export in this module for the command
+// architecture contract; its bounded implementation lives in a focused file.
+export {
+  sanitizeCitationGraph,
+  sanitizeCitationGraphBuild,
+} from "./scholarly-citation-graph-output";
 
 export function sanitizeDiscoverySearchReport(
   value: DiscoverySearchReport,
@@ -137,38 +130,6 @@ export function sanitizeScholarEnrichment(value: S2Enrichment | null): S2Enrichm
       : { tldr: safeText(value.tldr, MAX_WORK_LONG_TEXT_BYTES) }),
     ...(safeUrl(value.url) === undefined ? {} : { url: safeUrl(value.url) }),
   };
-}
-
-export function sanitizeCitationGraph(value: CitationGraph | null): CitationGraph | null {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !Array.isArray(value.nodes) ||
-    !Array.isArray(value.edges)
-  ) {
-    return null;
-  }
-  const nodes = value.nodes
-    .slice(0, MAX_GRAPH_NODES)
-    .map(sanitizeGraphNode)
-    .filter((node): node is GraphNode => node !== null);
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  if (nodeIds.size !== nodes.length || nodes.length === 0) return null;
-  const centerId = safeText(value.centerId, MAX_GRAPH_NODE_ID_BYTES);
-  const centers = nodes.filter((node) => node.relation === "center");
-  if (!centerId || centers.length !== 1 || centers[0]?.id !== centerId) return null;
-
-  const edgeKeys = new Set<string>();
-  const edges: GraphEdge[] = [];
-  for (const valueEdge of value.edges.slice(0, MAX_GRAPH_EDGES)) {
-    const edge = sanitizeGraphEdge(valueEdge, nodeIds);
-    if (!edge) continue;
-    const key = JSON.stringify([edge.source, edge.target]);
-    if (edgeKeys.has(key)) continue;
-    edgeKeys.add(key);
-    edges.push(edge);
-  }
-  return { centerId, edges, nodes, truncated: value.truncated === true };
 }
 
 export function sanitizeResolvedWork(value: ResolvedWork | null): ResolvedWork | null {
@@ -334,39 +295,6 @@ function sanitizeAuthor(value: unknown, index: number): NormalizedAuthor | null 
   };
 }
 
-function sanitizeGraphNode(value: unknown): GraphNode | null {
-  if (!isRecord(value)) return null;
-  const id = safeText(value.id, MAX_GRAPH_NODE_ID_BYTES);
-  const title = safeText(value.title, MAX_GRAPH_NODE_TEXT_BYTES);
-  if (!id || !title || !isGraphRelation(value.relation)) return null;
-  return {
-    citedByCount: safeCount(value.citedByCount) ?? 0,
-    ...(safeText(value.doi, MAX_CITATION_GRAPH_DOI_BYTES) === undefined
-      ? {}
-      : { doi: safeText(value.doi, MAX_CITATION_GRAPH_DOI_BYTES) }),
-    ...(safeText(value.firstAuthor, MAX_GRAPH_NODE_TEXT_BYTES) === undefined
-      ? {}
-      : { firstAuthor: safeText(value.firstAuthor, MAX_GRAPH_NODE_TEXT_BYTES) }),
-    id,
-    relation: value.relation,
-    title,
-    ...(safeText(value.venue, MAX_GRAPH_NODE_TEXT_BYTES) === undefined
-      ? {}
-      : { venue: safeText(value.venue, MAX_GRAPH_NODE_TEXT_BYTES) }),
-    ...(safeYear(value.year) === undefined ? {} : { year: safeYear(value.year) }),
-  };
-}
-
-function sanitizeGraphEdge(value: unknown, nodeIds: ReadonlySet<string>): GraphEdge | null {
-  if (!isRecord(value)) return null;
-  const source = safeText(value.source, MAX_GRAPH_NODE_ID_BYTES);
-  const target = safeText(value.target, MAX_GRAPH_NODE_ID_BYTES);
-  if (!source || !target || source === target || !nodeIds.has(source) || !nodeIds.has(target)) {
-    return null;
-  }
-  return { source, target };
-}
-
 function sanitizeCslJson(value: unknown): Record<string, unknown> | undefined {
   const sanitized = sanitizeJson(value, 0);
   if (!isRecord(sanitized)) return undefined;
@@ -426,10 +354,6 @@ function safeDiscoveryStatus(
     value === "aborted"
     ? value
     : "error";
-}
-
-function isGraphRelation(value: unknown): value is GraphNode["relation"] {
-  return value === "center" || value === "reference" || value === "citer";
 }
 
 function safeText(value: unknown, maximumBytes: number): string | undefined {

@@ -2,13 +2,13 @@ import {
   buildCitationGraph,
   resolveClue,
   searchOpenSourcesDetailed,
-  type CitationGraph,
   type DiscoverySearchReport,
   type ResolvedWork,
 } from "@aurascholar/core";
 import { s2EnrichByDoi, type ConnectorContext, type S2Enrichment } from "@aurascholar/connectors";
 import type { DataCommandOutput, DataCommandRequest } from "../data-command-contract";
 import type {
+  CitationGraphBuildServiceResult,
   ScholarlyDataCommandName,
   ScholarlyResolvableClue,
   ScholarlySearchDiscoveryCommandInput,
@@ -22,13 +22,18 @@ import {
 } from "./scholarly-command-input";
 import {
   requireBoundedScholarlyOutput,
-  sanitizeCitationGraph,
+  sanitizeCitationGraphBuild,
   sanitizeDiscoverySearchReport,
   sanitizeResolvedWork,
   sanitizeScholarEnrichment,
 } from "./scholarly-command-output";
 import { mainScholarlyHttp } from "./scholarly-http";
 import { mainScholarlyRunRegistry, type MainScholarlyRunRegistry } from "./scholarly-run-registry";
+import {
+  citationGraphCenterDoi,
+  normalizeCitationGraphDoi,
+} from "../../src/shared/citation-graph-limits";
+import { createOpenAlexCitationGraphProvenance } from "../../src/shared/citation-graph-provenance";
 
 const DISCOVERY_COMMAND_TIMEOUT_MS = 5_000;
 
@@ -43,7 +48,7 @@ export interface ScholarlyCommandDependencies {
 }
 
 export interface MainScholarlyService {
-  buildCitationGraph(doi: string, signal: AbortSignal): Promise<CitationGraph | null>;
+  buildCitationGraph(doi: string, signal: AbortSignal): Promise<CitationGraphBuildServiceResult>;
   enrichByDoi(doi: string, signal: AbortSignal): Promise<S2Enrichment | null>;
   resolveClue(clue: ScholarlyResolvableClue, signal: AbortSignal): Promise<ResolvedWork | null>;
   searchDiscovery(
@@ -82,8 +87,21 @@ export function enrichScholarByDoi(
 }
 
 const defaultScholarlyService: MainScholarlyService = {
-  buildCitationGraph(doi, signal) {
-    return buildCitationGraph(mainScholarlyConnectorContext, { doi }, { signal });
+  async buildCitationGraph(doi, signal) {
+    const graph = await buildCitationGraph(mainScholarlyConnectorContext, { doi }, { signal });
+    if (!graph) return null;
+    const centerDoi = citationGraphCenterDoi(graph);
+    if (centerDoi === null || centerDoi !== normalizeCitationGraphDoi(doi)) return graph;
+    // The provider response is considered captured only after the main process
+    // has received it. Cache freshness uses a separate commit timestamp.
+    return {
+      graph,
+      provenance: createOpenAlexCitationGraphProvenance({
+        capturedAt: Date.now(),
+        centerDoi,
+        requestedDoi: doi,
+      }),
+    };
   },
   enrichByDoi: enrichScholarByDoi,
   resolveClue: resolveScholarlyClue,
@@ -116,7 +134,7 @@ export async function executeScholarlyCommand(
         const graph = await scholarlyService(dependencies).buildCitationGraph(input.doi, signal);
         throwIfAborted(signal);
         return requireBoundedScholarlyOutput(
-          { graph: sanitizeCitationGraph(graph) },
+          sanitizeCitationGraphBuild(graph, input.doi),
           "Citation graph output",
         );
       });

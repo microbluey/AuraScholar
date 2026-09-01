@@ -1,6 +1,18 @@
 import type { CanvasCitationRelation, CitationGraph } from "@aurascholar/core";
 import type { LibraryScopeToken } from "../../../electron/data-command-contract";
-import { loadCitationGraphByDoi } from "../../services/citation-graph";
+import {
+  loadCitationGraphByDoi,
+  loadCitationGraphSnapshotByDoi,
+  type CitationGraphSnapshotBuilder,
+} from "../../services/citation-graph";
+import {
+  CITATION_GRAPH_PROVIDER,
+  CITATION_GRAPH_PROVENANCE_SCHEMA_VERSION,
+  CITATION_GRAPH_PROVIDER_VERSION,
+  citationGraphProvenanceBindsGraph,
+  type CitationGraphProvider,
+  type CitationGraphSnapshot,
+} from "../../shared/citation-graph-provenance";
 import {
   decodeCanvasGetCitationRelationsResult,
   decodeCanvasPersistCitationRelationsResult,
@@ -39,6 +51,7 @@ export interface ResolveCanvasCitationRelationsOptions {
   getLibraryScope?: () => Promise<LibraryScopeToken>;
   listLocalRelations?: (workIds: string[]) => Promise<CanvasCitationRelation[]>;
   loadGraph?: (doi: string, signal?: AbortSignal) => Promise<CitationGraph | null>;
+  loadGraphSnapshot?: CitationGraphSnapshotBuilder;
   maxGraphLoads?: number;
   persistRelations?: (relations: CanvasCitationRelation[]) => Promise<void>;
   signal?: AbortSignal;
@@ -91,14 +104,17 @@ async function loadLocalCanvasCitationRelations(
 async function persistCanvasCitationRelations(
   relations: CanvasCitationRelation[],
   expectedScope: LibraryScopeToken,
+  provider: CitationGraphProvider,
 ): Promise<void> {
   decodeCanvasPersistCitationRelationsResult(
     await window.aura.data.command("canvas.persistCitationRelations", {
       expectedScope,
+      provider,
       relations,
     }),
     relations.length,
     expectedScope,
+    provider,
   );
 }
 
@@ -160,17 +176,73 @@ export async function resolveCanvasCitationRelations(
     options.loadGraph ??
     ((doi: string, requestSignal?: AbortSignal) =>
       loadCitationGraphByDoi(doi, { signal: requestSignal }));
+  const loadGraphSnapshot =
+    options.loadGraphSnapshot ??
+    (options.loadGraph
+      ? async (doi: string, requestSignal?: AbortSignal): Promise<CitationGraphSnapshot | null> => {
+          const graph = await loadGraph(doi, requestSignal);
+          if (!graph) return null;
+          const centerDoi = normalizeCitationDoi(
+            graph.nodes.find((node) => node.relation === "center")?.doi,
+          );
+          // The graph-only seam has no trustworthy provider envelope. It may
+          // be retained for compatibility only when its center is explicitly
+          // bound to the requested DOI; otherwise keep it untrusted so it
+          // cannot contribute expansion relations.
+          return {
+            graph,
+            provenance:
+              centerDoi === doi
+                ? {
+                    capturedAt: 0,
+                    centerDoi,
+                    provider: CITATION_GRAPH_PROVIDER,
+                    providerVersion: CITATION_GRAPH_PROVIDER_VERSION,
+                    requestedDoi: doi,
+                    schemaVersion: CITATION_GRAPH_PROVENANCE_SCHEMA_VERSION,
+                  }
+                : null,
+          };
+        }
+      : (doi: string, requestSignal?: AbortSignal) =>
+          loadCitationGraphSnapshotByDoi(doi, { signal: requestSignal }));
   const graphRelations: CanvasCitationRelation[][] = [];
   let graphCount = 0;
   let firstError: unknown;
+  let graphProvider: CitationGraphProvider | undefined;
 
   for (const doi of dois) {
     throwIfAborted(signal);
+    let snapshot: CitationGraphSnapshot | null | undefined;
     try {
-      const graph = await loadGraph(doi, signal);
+      snapshot = await loadGraphSnapshot(doi, signal);
       throwIfAborted(signal);
-      if (!graph) continue;
-      graphCount += 1;
+    } catch (error) {
+      if (isAbortError(error) || signal?.aborted) throw abortError();
+      firstError ??= error;
+      continue;
+    }
+    if (!snapshot) continue;
+
+    // Provider consistency is a layout-wide invariant. Keep this check
+    // outside the recoverable per-DOI error boundary: a mixed-provider graph
+    // must fail closed even when an earlier graph already produced relations.
+    const graph = snapshot.graph;
+    if (!snapshot.provenance) {
+      firstError ??= new Error("Citation graph provenance is missing");
+      continue;
+    }
+    if (!citationGraphProvenanceBindsGraph(graph, snapshot.provenance, doi)) {
+      firstError ??= new Error("Citation graph provenance is invalid");
+      continue;
+    }
+    const provider = snapshot.provenance.provider;
+    if (graphProvider && graphProvider !== provider) {
+      throw new Error("Citation graph providers must match within one layout");
+    }
+    graphProvider = provider;
+    graphCount += 1;
+    try {
       graphRelations.push(canvasCitationRelationsFromGraph(graph, selectedPapers));
     } catch (error) {
       if (isAbortError(error) || signal?.aborted) throw abortError();
@@ -188,7 +260,8 @@ export async function resolveCanvasCitationRelations(
     if (options.persistRelations) {
       await options.persistRelations(newGraphRelations);
     } else {
-      await persistCanvasCitationRelations(newGraphRelations, await captureScope());
+      if (!graphProvider) throw new Error("Citation graph provenance is missing");
+      await persistCanvasCitationRelations(newGraphRelations, await captureScope(), graphProvider);
     }
   }
   throwIfAborted(signal);

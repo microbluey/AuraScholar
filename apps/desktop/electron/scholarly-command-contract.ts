@@ -8,6 +8,10 @@ import type {
   SourceCursor,
 } from "@aurascholar/core";
 import type { S2Enrichment } from "@aurascholar/connectors";
+import type {
+  CitationGraphProvenance,
+  CitationGraphSnapshot,
+} from "../src/shared/citation-graph-provenance";
 
 /**
  * Public scholarly operations are semantic, bounded requests. In particular,
@@ -44,7 +48,12 @@ export interface CitationGraphBuildCommandInput {
 
 export interface CitationGraphBuildCommandResult {
   graph: CitationGraph | null;
+  /** Null is paired with a null graph; unbound graphs remain display-only. */
+  provenance: CitationGraphProvenance | null;
 }
+
+/** Main service result before the public command sanitizer runs. */
+export type CitationGraphBuildServiceResult = CitationGraphSnapshot | CitationGraph | null;
 
 /** Only identifiers and title queries are resolvable via the public command. */
 export type ScholarlyResolvableClue =

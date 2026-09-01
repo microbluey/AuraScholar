@@ -6,6 +6,7 @@ import type {
 } from "../../electron/citation-graph-command-contract";
 import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
 import type { CitationGraphBuildCommandResult } from "../../electron/scholarly-command-contract";
+import { decodeCitationGraphProvenance } from "./citation-graph-provenance-codec";
 import {
   citationGraphMatchesDoi,
   citationGraphUtf8ByteLength,
@@ -22,9 +23,26 @@ import {
 } from "./citation-graph-limits";
 
 /** Validates and clones Citation Graph command responses received over IPC. */
-export function decodeCitationGraphBuildResult(value: unknown): CitationGraphBuildCommandResult {
-  const result = requireExactCitationGraphObject(value, "Citation graph build result", ["graph"]);
-  return { graph: result.graph === null ? null : decodeCitationGraph(result.graph) };
+export function decodeCitationGraphBuildResult(
+  value: unknown,
+  requestedDoi?: string,
+): CitationGraphBuildCommandResult {
+  const result = requireExactCitationGraphObject(value, "Citation graph build result", [
+    "graph",
+    "provenance",
+  ]);
+  const graph = result.graph === null ? null : decodeCitationGraph(result.graph);
+  const provenance =
+    result.provenance === null
+      ? null
+      : decodeCitationGraphProvenance(result.provenance, graph, requestedDoi);
+  if (graph === null && provenance !== null) {
+    throw new Error("Citation graph null result cannot carry provenance");
+  }
+  if (graph !== null && provenance === null) {
+    throw new Error("Citation graph result is missing provenance");
+  }
+  return { graph, provenance };
 }
 
 export function decodeCitationGraphGetCachedResult(
@@ -38,16 +56,19 @@ export function decodeCitationGraphGetCachedResult(
     "cacheVersion",
     "fetchedAt",
     "graph",
+    "provenance",
   ]);
   const graph = decodeCitationGraph(entry.graph);
   if (requestedDoi !== undefined && !citationGraphMatchesDoi(graph, requestedDoi)) {
     throw new Error("Citation graph cache center DOI does not match the requested DOI");
   }
+  const provenance = decodeCitationGraphProvenance(entry.provenance, graph, requestedDoi);
   return {
     entry: {
       cacheVersion: requirePositiveSafeInteger(entry.cacheVersion, "Citation graph cache version"),
       fetchedAt: requireNonnegativeSafeInteger(entry.fetchedAt, "Citation graph cache timestamp"),
       graph,
+      provenance,
     },
   };
 }

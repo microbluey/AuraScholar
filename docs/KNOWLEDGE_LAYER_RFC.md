@@ -1233,6 +1233,28 @@ graph-dependent held-out retrieval slice without breaking the agreed latency,
 cost, or human-review budget. Citation graph data must gain explicit provider,
 freshness, and provenance semantics before it can become trusted graph input.
 
+The desktop citation-graph contract therefore treats provenance as part of the
+graph value, rather than as an optional annotation:
+
+- Every provider response carries `provider`, `providerVersion`, and a
+  `schemaVersion`. The current graph builder is `openalex` with the
+  `openalex-citation-graph-v1` adapter contract; a provider/version change is
+  a different graph contract and cannot silently reuse an old snapshot.
+- `requestedDoi` and `centerDoi` are canonical DOI bindings. A cache entry is
+  trusted only when both values bind to the requested key and the graph's
+  center node; an unbound graph may be displayed but is never written to a
+  DOI-keyed cache or used as trusted expansion input.
+- `capturedAt` is the main-process wall-clock time after a provider response
+  has been accepted. It is distinct from `fetchedAt`: `fetchedAt` is written
+  by the main process only after a cache commit succeeds and is the renderer's
+  TTL/freshness anchor. Neither timestamp is a publication date or a substitute
+  for the other.
+- Rows created before this envelope existed are marked `legacy-unknown`.
+  Provenance-aware reads reject (and may retire) those rows fail-closed; a
+  migration or old writer must never infer that an unknown row came from
+  OpenAlex. Canvas citation relations preserve the validated provider and a
+  single graph-expansion layout cannot mix providers.
+
 ## 15. Evaluation and CI
 
 Maintain two bilingual datasets:

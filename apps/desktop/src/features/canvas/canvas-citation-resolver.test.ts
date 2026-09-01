@@ -1,6 +1,7 @@
 import type { CitationGraph } from "@aurascholar/core";
 import { describe, expect, it, vi } from "vitest";
 import type { LibraryScopeToken } from "../../../electron/data-command-contract";
+import { CITATION_GRAPH_PROVIDER } from "../../shared/citation-graph-provenance";
 import {
   MAX_CANVAS_CITATION_RELATIONS_TO_PERSIST,
   MAX_CANVAS_CITATION_WORK_IDS,
@@ -38,6 +39,17 @@ const GRAPH: CitationGraph = {
   ],
   edges: [{ source: "openalex-a", target: "openalex-b" }],
 };
+
+function graphWithCenterDoi(doi: string | undefined): CitationGraph {
+  return {
+    ...GRAPH,
+    nodes: GRAPH.nodes.map((node) => {
+      if (node.relation !== "center") return node;
+      const { doi: _doi, ...withoutDoi } = node;
+      return doi === undefined ? withoutDoi : { ...withoutDoi, doi };
+    }),
+  };
+}
 
 function options(
   overrides: Partial<ResolveCanvasCitationRelationsOptions> = {},
@@ -146,7 +158,7 @@ describe("canvas citation relation resolver", () => {
     command
       .mockResolvedValueOnce(SCOPE)
       .mockResolvedValueOnce({ relations: [], scope: SCOPE })
-      .mockResolvedValueOnce({ persisted: 1, scope: SCOPE });
+      .mockResolvedValueOnce({ persisted: 1, provider: CITATION_GRAPH_PROVIDER, scope: SCOPE });
     const loadGraph = vi.fn(async (doi: string) => (doi === "10.1000/a" ? GRAPH : null));
 
     await expect(resolveCanvasCitationRelations(PAPERS, { loadGraph })).resolves.toMatchObject({
@@ -160,8 +172,161 @@ describe("canvas citation relation resolver", () => {
     });
     expect(command).toHaveBeenNthCalledWith(3, "canvas.persistCitationRelations", {
       expectedScope: SCOPE,
+      provider: CITATION_GRAPH_PROVIDER,
       relations: [{ citingWorkId: "work-a", citedWorkId: "work-b" }],
     });
+  });
+
+  it("propagates a non-OpenAlex graph provider through Canvas persistence", async () => {
+    const command = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    command
+      .mockResolvedValueOnce(SCOPE)
+      .mockResolvedValueOnce({ relations: [], scope: SCOPE })
+      .mockResolvedValueOnce({ persisted: 1, provider: "semantic-scholar", scope: SCOPE });
+    const loadGraphSnapshot = vi.fn(async (doi: string) =>
+      doi === "10.1000/a"
+        ? {
+            graph: GRAPH,
+            provenance: {
+              capturedAt: 1,
+              centerDoi: "10.1000/a",
+              provider: "semantic-scholar" as const,
+              providerVersion: "semantic-scholar-citation-graph-v1",
+              requestedDoi: "10.1000/a",
+              schemaVersion: 1 as const,
+            },
+          }
+        : null,
+    );
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, { loadGraphSnapshot }),
+    ).resolves.toMatchObject({
+      graphCount: 1,
+      source: "graph",
+    });
+    expect(command).toHaveBeenNthCalledWith(3, "canvas.persistCitationRelations", {
+      expectedScope: SCOPE,
+      provider: "semantic-scholar",
+      relations: [{ citingWorkId: "work-a", citedWorkId: "work-b" }],
+    });
+  });
+
+  it("fails closed on mixed graph providers after an earlier graph produced relations", async () => {
+    const graphForB: CitationGraph = {
+      centerId: "openalex-b",
+      truncated: false,
+      nodes: [
+        {
+          id: "openalex-b",
+          title: "B",
+          citedByCount: 5,
+          doi: "10.1000/b",
+          relation: "center",
+        },
+        {
+          id: "openalex-a",
+          title: "A",
+          citedByCount: 10,
+          doi: "10.1000/a",
+          relation: "reference",
+        },
+      ],
+      edges: [{ source: "openalex-b", target: "openalex-a" }],
+    };
+    const persistRelations = vi.fn(async () => undefined);
+    const loadGraphSnapshot = vi.fn(async (doi: string) => {
+      const isFirstProvider = doi === "10.1000/a";
+      return {
+        graph: isFirstProvider ? GRAPH : graphForB,
+        provenance: {
+          capturedAt: 1,
+          centerDoi: doi,
+          provider: isFirstProvider ? ("semantic-scholar" as const) : CITATION_GRAPH_PROVIDER,
+          providerVersion: isFirstProvider
+            ? "semantic-scholar-citation-graph-v1"
+            : "openalex-citation-graph-v1",
+          requestedDoi: doi,
+          schemaVersion: 1 as const,
+        },
+      };
+    });
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, options({ loadGraphSnapshot, persistRelations })),
+    ).rejects.toThrow("Citation graph providers must match within one layout");
+    expect(loadGraphSnapshot).toHaveBeenCalledTimes(2);
+    expect(persistRelations).not.toHaveBeenCalled();
+  });
+
+  it("rejects a persistence acknowledgement from a different provider", async () => {
+    const command = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    command
+      .mockResolvedValueOnce(SCOPE)
+      .mockResolvedValueOnce({ relations: [], scope: SCOPE })
+      .mockResolvedValueOnce({ persisted: 1, provider: "semantic-scholar", scope: SCOPE });
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, {
+        loadGraph: vi.fn(async (doi: string) => (doi === "10.1000/a" ? GRAPH : null)),
+      }),
+    ).rejects.toThrow("Canvas citation provider does not match the request");
+  });
+
+  it("fails closed when a graph snapshot has no provenance", async () => {
+    const persistRelations = vi.fn(async () => undefined);
+    const loadGraphSnapshot = vi.fn(async () => ({ graph: GRAPH, provenance: null }));
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, options({ loadGraphSnapshot, persistRelations })),
+    ).rejects.toThrow("Citation graph provenance is missing");
+    expect(persistRelations).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a missing center DOI", graphWithCenterDoi(undefined)],
+    ["a center DOI bound to another request", graphWithCenterDoi("10.1000/other")],
+  ])("does not persist an unbound legacy graph (%s)", async (_label, graph) => {
+    const persistRelations = vi.fn(async () => undefined);
+    const loadGraph = vi.fn(async (doi: string) => (doi === "10.1000/a" ? graph : null));
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, options({ loadGraph, persistRelations })),
+    ).rejects.toThrow("Citation graph provenance is missing");
+    expect(loadGraph).toHaveBeenCalled();
+    expect(persistRelations).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a custom snapshot whose provenance is not bound to its graph", async () => {
+    const persistRelations = vi.fn(async () => undefined);
+    const loadGraphSnapshot = vi.fn(async (doi: string) =>
+      doi === "10.1000/a"
+        ? {
+            graph: GRAPH,
+            provenance: {
+              capturedAt: 1,
+              centerDoi: "10.1000/other",
+              provider: CITATION_GRAPH_PROVIDER,
+              providerVersion: "openalex-citation-graph-v1",
+              requestedDoi: "10.1000/other",
+              schemaVersion: 1 as const,
+            },
+          }
+        : null,
+    );
+
+    await expect(
+      resolveCanvasCitationRelations(PAPERS, options({ loadGraphSnapshot, persistRelations })),
+    ).rejects.toThrow("Citation graph provenance is invalid");
+    expect(persistRelations).not.toHaveBeenCalled();
   });
 
   it("rejects an out-of-scope default local relation before graph work", async () => {
@@ -193,7 +358,7 @@ describe("canvas citation relation resolver", () => {
     command
       .mockResolvedValueOnce(SCOPE)
       .mockResolvedValueOnce({ relations: [], scope: SCOPE })
-      .mockResolvedValueOnce({ persisted: 0, scope: SCOPE });
+      .mockResolvedValueOnce({ persisted: 0, provider: CITATION_GRAPH_PROVIDER, scope: SCOPE });
 
     await expect(
       resolveCanvasCitationRelations(PAPERS, {
@@ -214,7 +379,7 @@ describe("canvas citation relation resolver", () => {
     command
       .mockResolvedValueOnce(SCOPE)
       .mockResolvedValueOnce({ relations: [], scope: SCOPE })
-      .mockResolvedValueOnce({ persisted: 2, scope: SCOPE });
+      .mockResolvedValueOnce({ persisted: 2, provider: CITATION_GRAPH_PROVIDER, scope: SCOPE });
 
     await expect(
       resolveCanvasCitationRelations(PAPERS, {
@@ -407,9 +572,30 @@ describe("canvas citation relation resolver", () => {
   });
 
   it("keeps useful graph results when another selected DOI fails", async () => {
+    const graphForB: CitationGraph = {
+      centerId: "openalex-b",
+      truncated: false,
+      nodes: [
+        {
+          id: "openalex-a",
+          title: "A",
+          citedByCount: 10,
+          doi: "10.1000/a",
+          relation: "reference",
+        },
+        {
+          id: "openalex-b",
+          title: "B",
+          citedByCount: 5,
+          doi: "10.1000/b",
+          relation: "center",
+        },
+      ],
+      edges: [{ source: "openalex-a", target: "openalex-b" }],
+    };
     const loadGraph = vi.fn(async (doi: string) => {
       if (doi === "10.1000/a") throw new Error("temporary graph failure");
-      return GRAPH;
+      return graphForB;
     });
 
     await expect(

@@ -34,6 +34,8 @@
 
 当所选卡片全部为 `PaperNode` 时，菜单额外启用文献专用布局：时间轴按发表年份排列；引用树优先读取 Library `citations` 中所选文献之间的关系，也兼容白板文档内既有的系统/历史 `cites` 数据。若仍有尚未参与任何本地关系的所选文献，桌面端会复用引文脉络缓存，或按其 DOI 从 OpenAlex 补充图谱；解析结果只作为本次布局的临时输入，不会创建可见连线或改变手工连线的 `custom` 类型。存在循环引用时会作为同一强连通分量保留在同一列，避免循环导致布局失败。
 
+引文脉络缓存和提供商响应都必须经过主进程的 `provider`、`providerVersion`、`schemaVersion` 及 `requestedDoi` / `centerDoi` 绑定校验；当前 OpenAlex 图谱使用 `openalex-citation-graph-v1` 合约。`capturedAt` 表示主进程接受提供商响应后的观测时间，`fetchedAt` 表示缓存成功提交后的时间，并由渲染层作为七天新鲜度锚点，两者都不是发表时间。迁移前的缓存会标为 `legacy-unknown`，无法通过 provenance 校验时安全失效，不会默认为 OpenAlex。引用树一次从图谱加载的布局只接受同一 provider，Canvas 持久化的引用关系也会回显并校验该 provider。
+
 主要流程如下：
 
 1. 主导航进入 `/canvas` 时，页面会以 `replace` 方式转到最近使用的 `/canvas/:workspaceId`；直接访问具名路由可打开对应白板。
@@ -155,7 +157,7 @@ AI 合成实现于 `packages/ai/src/canvas-synthesis.ts` 与桌面服务 `apps/d
 - 每次打开文献、切换来源或更换白板都会取消上一轮未完成的阅读器加载；加载结果还会按请求序号、`workspaceId`、`workId`、来源节点和附件身份复核。已经成功写入数据库的高亮仍是有效的文献库批注，但旧视图的完成回调不能把它加入后来切换到的白板。
 - 高亮拖放 payload 带有版本、`workspaceId`、`workId`、来源 `PaperNode`、附件和批注锚点。画布只接受当前阅读会话登记且与当前工作区完全匹配的 payload，并从来源 `PaperNode` 读取可信题名；创建摘录和来源连线作为同一次画布文档变更提交，不能跨白板落点。
 - 从完整阅读器经路由加入批注时，查询同时绑定 `annotationId + workId`，并用数据库中的未删除 Work 与同属该 Work 的 Attachment 复核来源。`PaperNode → ExcerptNode → derived-from` 来源链只针对提交时的实时文档计算并一次写入；冲突、切换白板或更新边界拒绝都不会留下半张文献卡。重复加入会定位既有摘录，并按需补回来源文献卡或来源边。
-- 引用树整理先查询两端均为未删除文献的本地 `citations`；若仍有尚未参与任何本地关系的所选文献，桌面端最多按 12 个相关 DOI 复用七天内的 `graph_cache` 或调用 OpenAlex，并把命中的关系通过未删除文献校验后写回 `citations` 供后续复用。请求携带 `AbortSignal`，结果提交前还会复核 `workspaceId + nodeId + workId + DOI` 的顺序无关指纹，以及发起请求时的 `nodes` / `edges` 布局内容身份；切换白板、换选区、拖动/编辑节点或执行撤销重做后，旧结果既不会移动卡片，也不会生成 Canvas 连线，纯平移与缩放则不会中断加载。浏览器预览不会联网拉取图谱，菜单会明确提示只使用画布既有引文；无数据时保留原布局。
+- 引用树整理先查询两端均为未删除文献的本地 `citations`；若仍有尚未参与任何本地关系的所选文献，桌面端最多按 12 个相关 DOI 复用七天内且 provenance 绑定有效的 `graph_cache`，或调用 OpenAlex，并把命中的关系通过未删除文献校验后写回 `citations` 供后续复用。缓存的 `fetchedAt` 是成功提交后的 TTL 锚点，`capturedAt` 保留主进程接受提供商响应的时间；旧的 `legacy-unknown` 行会被拒绝并安全重建。请求携带 `AbortSignal`，结果提交前还会复核 `workspaceId + nodeId + workId + DOI` 的顺序无关指纹，以及发起请求时的 `nodes` / `edges` 布局内容身份；切换白板、换选区、拖动/编辑节点或执行撤销重做后，旧结果既不会移动卡片，也不会生成 Canvas 连线，纯平移与缩放则不会中断加载。浏览器预览不会联网拉取图谱，菜单会明确提示只使用画布既有引文；无数据时保留原布局。
 - 路由层使用 `/canvas/:workspaceId` 标识具体白板；无参数的 `/canvas` 只负责定位最近使用的工作区。
 - 导航屏障只承诺 React Router 管理的跳转；浏览器预览中手工修改地址栏 hash 可能绕过 blocker，此时设备本地恢复草稿是兜底。Electron 桌面窗口没有该地址栏入口；若未来要为这一浏览器边界提供同等级保证，需要迁移到可完整拦截的 history 路由或增加通用编辑草稿日志。
 

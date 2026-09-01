@@ -34,8 +34,8 @@ export function buildScholarlyCitationGraph(
   input: Omit<CitationGraphBuildCommandInput, "requestId">,
   signal?: AbortSignal,
 ): Promise<CitationGraphBuildCommandResult> {
-  return invokeCancellableScholarlyCommand("citationGraph.build", input, signal).then(
-    decodeCitationGraphBuildResult,
+  return invokeCancellableScholarlyCommand("citationGraph.build", input, signal).then((result) =>
+    decodeCitationGraphBuildResult(result, input.doi),
   );
 }
 

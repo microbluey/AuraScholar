@@ -79,8 +79,17 @@ export const smokeLibrarySeedSitesGraph = String.raw`            await window.au
                 now
               ]
             );
+            const graphCacheProvenance = (doi) =>
+              JSON.stringify({
+                capturedAt: now,
+                centerDoi: doi,
+                provider: "openalex",
+                providerVersion: "openalex-citation-graph-v1",
+                requestedDoi: doi,
+                schemaVersion: 1
+              });
             await window.aura.db.run(
-              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)",
+              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at, provider, provenance_json) VALUES (?, ?, ?, ?, ?)",
               [
                 SAMPLE.doi,
                 JSON.stringify({
@@ -100,11 +109,13 @@ export const smokeLibrarySeedSitesGraph = String.raw`            await window.au
                   edges: [],
                   truncated: false
                 }),
-                now
+                now,
+                "openalex",
+                graphCacheProvenance(SAMPLE.doi)
               ]
             );
             await window.aura.db.run(
-              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)",
+              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at, provider, provenance_json) VALUES (?, ?, ?, ?, ?)",
               [
                 GRAPH_SMOKE.centerDoi,
                 JSON.stringify({
@@ -147,11 +158,13 @@ export const smokeLibrarySeedSitesGraph = String.raw`            await window.au
                   ],
                   truncated: false
                 }),
-                now
+                now,
+                "openalex",
+                graphCacheProvenance(GRAPH_SMOKE.centerDoi)
               ]
             );
             await window.aura.db.run(
-              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)",
+              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at, provider, provenance_json) VALUES (?, ?, ?, ?, ?)",
               [
                 GRAPH_SMOKE.raceOldDoi,
                 JSON.stringify({
@@ -171,11 +184,13 @@ export const smokeLibrarySeedSitesGraph = String.raw`            await window.au
                   edges: [],
                   truncated: false
                 }),
-                now
+                now,
+                "openalex",
+                graphCacheProvenance(GRAPH_SMOKE.raceOldDoi)
               ]
             );
             await window.aura.db.run(
-              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)",
+              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at, provider, provenance_json) VALUES (?, ?, ?, ?, ?)",
               [
                 GRAPH_SMOKE.raceNewDoi,
                 JSON.stringify({
@@ -195,11 +210,13 @@ export const smokeLibrarySeedSitesGraph = String.raw`            await window.au
                   edges: [],
                   truncated: false
                 }),
-                now
+                now,
+                "openalex",
+                graphCacheProvenance(GRAPH_SMOKE.raceNewDoi)
               ]
             );
             await window.aura.db.run(
-              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)",
+              "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at, provider, provenance_json) VALUES (?, ?, ?, ?, ?)",
               [
                 GRAPH_SMOKE.deepLinkDoi,
                 JSON.stringify({
@@ -219,7 +236,9 @@ export const smokeLibrarySeedSitesGraph = String.raw`            await window.au
                   edges: [],
                   truncated: false
                 }),
-                now
+                now,
+                "openalex",
+                graphCacheProvenance(GRAPH_SMOKE.deepLinkDoi)
               ]
             );
             await window.aura.db.exec("COMMIT");

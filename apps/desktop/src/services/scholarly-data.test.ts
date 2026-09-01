@@ -6,6 +6,12 @@ import {
   resolveLibraryScholarlyClue,
   searchScholarlyOpenSources,
 } from "./scholarly-data";
+import {
+  CITATION_GRAPH_PROVENANCE_SCHEMA_VERSION,
+  CITATION_GRAPH_PROVIDER,
+  CITATION_GRAPH_PROVIDER_VERSION,
+  type CitationGraphProvenance,
+} from "../shared/citation-graph-provenance";
 
 const command = vi.fn();
 
@@ -29,6 +35,15 @@ const GRAPH: CitationGraph = {
     },
   ],
   edges: [{ source: "W-center", target: "W-reference" }],
+};
+
+const PROVENANCE: CitationGraphProvenance = {
+  capturedAt: 1_725_000_000_000,
+  centerDoi: "10.1000/center",
+  provider: CITATION_GRAPH_PROVIDER,
+  providerVersion: CITATION_GRAPH_PROVIDER_VERSION,
+  requestedDoi: "10.1000/center",
+  schemaVersion: CITATION_GRAPH_PROVENANCE_SCHEMA_VERSION,
 };
 
 const EMPTY_OPENALEX_REPORT = {
@@ -93,12 +108,13 @@ describe("scholarly typed command client", () => {
 
   it("routes graph, enrichment, and clue intents through their named main commands", async () => {
     command
-      .mockResolvedValueOnce({ graph: null })
+      .mockResolvedValueOnce({ graph: null, provenance: null })
       .mockResolvedValueOnce({ enrichment: null })
       .mockResolvedValueOnce({ resolved: null });
 
     await expect(buildScholarlyCitationGraph({ doi: "10.1000/graph" })).resolves.toEqual({
       graph: null,
+      provenance: null,
     });
     await expect(enrichScholarByDoi({ doi: "10.1000/s2" })).resolves.toEqual({ enrichment: null });
     await expect(
@@ -152,11 +168,11 @@ describe("scholarly typed command client", () => {
   });
 
   it("deep-clones a valid graph returned by the default build command", async () => {
-    command.mockResolvedValueOnce({ graph: GRAPH });
+    command.mockResolvedValueOnce({ graph: GRAPH, provenance: PROVENANCE });
 
-    const result = await buildScholarlyCitationGraph({ doi: "10.1000/graph" });
+    const result = await buildScholarlyCitationGraph({ doi: "10.1000/center" });
 
-    expect(result).toEqual({ graph: GRAPH });
+    expect(result).toEqual({ graph: GRAPH, provenance: PROVENANCE });
     expect(result.graph).not.toBe(GRAPH);
     expect(result.graph?.nodes).not.toBe(GRAPH.nodes);
     expect(result.graph?.nodes[0]).not.toBe(GRAPH.nodes[0]);
@@ -168,6 +184,21 @@ describe("scholarly typed command client", () => {
 
     await expect(buildScholarlyCitationGraph({ doi: "10.1000/malformed" })).rejects.toThrow(
       "Citation graph build result is invalid",
+    );
+  });
+
+  it("fails closed when graph provenance is missing or bound to another DOI", async () => {
+    command.mockResolvedValueOnce({ graph: GRAPH });
+    await expect(buildScholarlyCitationGraph({ doi: "10.1000/center" })).rejects.toThrow(
+      "Citation graph build result is invalid",
+    );
+
+    command.mockResolvedValueOnce({
+      graph: GRAPH,
+      provenance: { ...PROVENANCE, requestedDoi: "10.1000/other" },
+    });
+    await expect(buildScholarlyCitationGraph({ doi: "10.1000/center" })).rejects.toThrow(
+      "Citation graph provenance",
     );
   });
 

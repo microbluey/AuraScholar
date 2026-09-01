@@ -7,6 +7,7 @@ import type {
   CanvasIngressWork,
 } from "../../electron/canvas-command-contract";
 import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
+import { CITATION_GRAPH_PROVIDER } from "./citation-graph-provenance";
 import {
   decodeCanvasGetActiveWorkResult,
   decodeCanvasGetAnnotationIngressSourceResult,
@@ -102,8 +103,14 @@ describe("Canvas page command-result codec", () => {
       () => decodeCanvasGetCitationRelationsResult({}, ["work-1"], SCOPE),
       () =>
         decodeCanvasGetCitationRelationsResult({ extra: true, relations: [] }, ["work-1"], SCOPE),
-      () => decodeCanvasPersistCitationRelationsResult({}, 1, SCOPE),
-      () => decodeCanvasPersistCitationRelationsResult({ extra: true, persisted: 0 }, 1, SCOPE),
+      () => decodeCanvasPersistCitationRelationsResult({}, 1, SCOPE, CITATION_GRAPH_PROVIDER),
+      () =>
+        decodeCanvasPersistCitationRelationsResult(
+          { extra: true, persisted: 0 },
+          1,
+          SCOPE,
+          CITATION_GRAPH_PROVIDER,
+        ),
     ];
 
     for (const decode of invalid) expect(decode).toThrow("is invalid");
@@ -240,23 +247,67 @@ describe("Canvas page command-result codec", () => {
 
   it("accepts only feasible exact persistence acknowledgements", () => {
     expect(
-      decodeCanvasPersistCitationRelationsResult({ persisted: 0, scope: SCOPE }, 1, SCOPE),
+      decodeCanvasPersistCitationRelationsResult(
+        { persisted: 0, provider: CITATION_GRAPH_PROVIDER, scope: SCOPE },
+        1,
+        SCOPE,
+        CITATION_GRAPH_PROVIDER,
+      ),
     ).toEqual({
       persisted: 0,
+      provider: CITATION_GRAPH_PROVIDER,
       scope: SCOPE,
     });
     expect(
-      decodeCanvasPersistCitationRelationsResult({ persisted: 2, scope: SCOPE }, 2, SCOPE),
+      decodeCanvasPersistCitationRelationsResult(
+        { persisted: 2, provider: CITATION_GRAPH_PROVIDER, scope: SCOPE },
+        2,
+        SCOPE,
+        CITATION_GRAPH_PROVIDER,
+      ),
     ).toEqual({
       persisted: 2,
+      provider: CITATION_GRAPH_PROVIDER,
       scope: SCOPE,
     });
 
     for (const persisted of [-1, 1.5, 3, Number.MAX_SAFE_INTEGER + 1, "1", true, null]) {
       expect(() =>
-        decodeCanvasPersistCitationRelationsResult({ persisted, scope: SCOPE }, 2, SCOPE),
+        decodeCanvasPersistCitationRelationsResult(
+          { persisted, provider: CITATION_GRAPH_PROVIDER, scope: SCOPE },
+          2,
+          SCOPE,
+          CITATION_GRAPH_PROVIDER,
+        ),
       ).toThrow("Canvas persist citation relations result is invalid");
     }
+  });
+
+  it("validates the provider acknowledgement against the request", () => {
+    expect(() =>
+      decodeCanvasPersistCitationRelationsResult(
+        { persisted: 0, provider: "unknown-provider", scope: SCOPE },
+        0,
+        SCOPE,
+        CITATION_GRAPH_PROVIDER,
+      ),
+    ).toThrow("Canvas citation provider is invalid");
+    expect(() =>
+      decodeCanvasPersistCitationRelationsResult(
+        { persisted: 0, provider: "semantic-scholar", scope: SCOPE },
+        0,
+        SCOPE,
+        CITATION_GRAPH_PROVIDER,
+      ),
+    ).toThrow("Canvas citation provider does not match the request");
+    expect(() =>
+      decodeCanvasPersistCitationRelationsResult(
+        { persisted: 0, provider: CITATION_GRAPH_PROVIDER, scope: SCOPE },
+        0,
+        SCOPE,
+        "semantic-scholar",
+      ),
+    ).toThrow("Canvas citation provider does not match the request");
   });
 
   it("rejects a citation scope acknowledgement that differs from the request", () => {
@@ -269,9 +320,14 @@ describe("Canvas page command-result codec", () => {
     ).toThrow("Canvas Library scope does not match the request");
     expect(() =>
       decodeCanvasPersistCitationRelationsResult(
-        { persisted: 0, scope: { ...SCOPE, libraryId: "library:other" } },
+        {
+          persisted: 0,
+          provider: CITATION_GRAPH_PROVIDER,
+          scope: { ...SCOPE, libraryId: "library:other" },
+        },
         0,
         SCOPE,
+        CITATION_GRAPH_PROVIDER,
       ),
     ).toThrow("Canvas Library scope does not match the request");
   });

@@ -13,6 +13,12 @@ import {
   normalizeCitationGraphDoi,
 } from "../shared/citation-graph-limits";
 import { buildScholarlyCitationGraph } from "./scholarly-data";
+import {
+  citationGraphProvenanceMatches,
+  createOpenAlexCitationGraphProvenance,
+  type CitationGraphProvenance,
+  type CitationGraphSnapshot,
+} from "../shared/citation-graph-provenance";
 
 export { normalizeCitationGraphDoi } from "../shared/citation-graph-limits";
 
@@ -23,8 +29,14 @@ export type CitationGraphBuilder = (
   signal?: AbortSignal,
 ) => Promise<CitationGraph | null | undefined>;
 
+export type CitationGraphSnapshotBuilder = (
+  doi: string,
+  signal?: AbortSignal,
+) => Promise<CitationGraphSnapshot | null | undefined>;
+
 export interface LoadCitationGraphOptions {
   buildGraph?: CitationGraphBuilder;
+  buildSnapshot?: CitationGraphSnapshotBuilder;
   cacheTtlMs?: number;
   cache?: CitationGraphCacheDataSource;
   forceRefresh?: boolean;
@@ -38,6 +50,7 @@ export interface CitationGraphCacheDataSource {
   putCached: (
     doi: string,
     graph: CitationGraph,
+    provenance: CitationGraphProvenance,
     expectedCacheVersion?: number | null,
   ) => Promise<boolean>;
 }
@@ -92,8 +105,12 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw error;
 }
 
-async function defaultBuildGraph(doi: string, signal?: AbortSignal): Promise<CitationGraph | null> {
-  return (await buildScholarlyCitationGraph({ doi }, signal)).graph;
+async function defaultBuildSnapshot(
+  doi: string,
+  signal?: AbortSignal,
+): Promise<CitationGraphSnapshot | null> {
+  const result = await buildScholarlyCitationGraph({ doi }, signal);
+  return result.graph === null ? null : { graph: result.graph, provenance: result.provenance };
 }
 
 const defaultCacheDataSource: CitationGraphCacheDataSource = {
@@ -101,11 +118,12 @@ const defaultCacheDataSource: CitationGraphCacheDataSource = {
     const result = await window.aura.data.command("citationGraph.getCached", { doi: rawDoi });
     return decodeCitationGraphGetCachedResult(result, rawDoi).entry;
   },
-  async putCached(doi, graph, expectedCacheVersion) {
+  async putCached(doi, graph, provenance, expectedCacheVersion) {
     const result = await window.aura.data.command("citationGraph.putCached", {
       doi,
       expectedCacheVersion: expectedCacheVersion ?? null,
       graph,
+      provenance,
     });
     return decodeCitationGraphPutCachedResult(result).stored;
   },
@@ -115,6 +133,18 @@ export async function loadCitationGraphByDoi(
   rawDoi: string,
   options: LoadCitationGraphOptions = {},
 ): Promise<CitationGraph | null> {
+  const snapshot = await loadCitationGraphSnapshotByDoi(rawDoi, options);
+  return snapshot?.graph ?? null;
+}
+
+/**
+ * Loads a graph together with its validated provider contract. The legacy
+ * graph-only API above remains available to views that only need topology.
+ */
+export async function loadCitationGraphSnapshotByDoi(
+  rawDoi: string,
+  options: LoadCitationGraphOptions = {},
+): Promise<CitationGraphSnapshot | null> {
   const doi = normalizeCitationGraphDoi(rawDoi);
   if (!doi) return null;
   const signal = options.signal;
@@ -122,6 +152,11 @@ export async function loadCitationGraphByDoi(
   const cacheTtlMs = options.cacheTtlMs ?? CITATION_GRAPH_CACHE_TTL_MS;
   const cache = options.cache ?? defaultCacheDataSource;
   throwIfAborted(signal);
+  // A graph-only builder predates the provenance envelope and is the sole
+  // compatibility seam allowed to receive a locally synthesized OpenAlex
+  // envelope. An explicit snapshot with `provenance: null` is intentional
+  // display-only data and must not be silently promoted to cacheable trust.
+  const legacyGraphBuilder = !options.buildSnapshot && Boolean(options.buildGraph);
 
   // Always take a cache snapshot, including force refreshes. Force refresh
   // bypasses reuse, but the snapshot is still required to prevent a slow
@@ -134,26 +169,63 @@ export async function loadCitationGraphByDoi(
       entry &&
       isFreshCitationGraphCacheEntry(entry, now(), cacheTtlMs) &&
       isCitationGraph(entry.graph) &&
-      citationGraphMatchesDoi(entry.graph, doi)
+      citationGraphMatchesDoi(entry.graph, doi) &&
+      citationGraphProvenanceMatches(entry.graph, entry.provenance, doi)
     ) {
-      return entry.graph;
+      return { graph: entry.graph, provenance: entry.provenance };
     }
   }
 
-  const overriddenGraph = options.buildGraph ? await options.buildGraph(doi, signal) : undefined;
-  const graph =
-    overriddenGraph === undefined ? await defaultBuildGraph(doi, signal) : overriddenGraph;
+  let builtSnapshot: CitationGraphSnapshot | null | undefined;
+  if (options.buildSnapshot) {
+    const overriddenSnapshot = await options.buildSnapshot(doi, signal);
+    builtSnapshot =
+      overriddenSnapshot === undefined
+        ? await defaultBuildSnapshot(doi, signal)
+        : overriddenSnapshot;
+  } else if (options.buildGraph) {
+    const overriddenGraph = await options.buildGraph(doi, signal);
+    // Preserve the historical hook semantics: an installed optional hook may
+    // return `undefined` when it is inactive (the smoke hook does this in a
+    // normal desktop build), in which case the main OpenAlex builder remains
+    // the source of truth. `null` is the explicit no-result response.
+    builtSnapshot =
+      overriddenGraph === undefined
+        ? await defaultBuildSnapshot(doi, signal)
+        : overriddenGraph === null
+          ? null
+          : { graph: overriddenGraph, provenance: null };
+  } else {
+    builtSnapshot = await defaultBuildSnapshot(doi, signal);
+  }
   throwIfAborted(signal);
-  if (!isCitationGraph(graph)) return null;
+  if (!builtSnapshot || !isCitationGraph(builtSnapshot.graph)) return null;
+  const graph = builtSnapshot.graph;
+  const centerDoi = citationGraphCenterDoi(graph);
+  let provenance = builtSnapshot.provenance;
+  if (provenance !== null && !citationGraphProvenanceMatches(graph, provenance, doi)) {
+    return null;
+  }
+  if (legacyGraphBuilder && centerDoi === doi && provenance === null) {
+    // Test seams and older local callers may provide only topology. Main still
+    // owns the real provider contract; this fallback is never used by the
+    // default IPC builder and keeps those seams display/cache-compatible.
+    provenance = createOpenAlexCitationGraphProvenance({
+      capturedAt: now(),
+      centerDoi,
+      requestedDoi: doi,
+    });
+  }
 
   // A graph without a center DOI is still useful for the current view, but it
   // is not safe to persist or reuse as a DOI-keyed cache entry. A present DOI
   // that names a different work indicates a bad response and is rejected.
-  const centerDoi = citationGraphCenterDoi(graph);
   if (centerDoi !== null) {
     if (centerDoi !== doi) return null;
-    await cache.putCached(doi, graph, expectedCacheVersion);
+    if (provenance) {
+      await cache.putCached(doi, graph, provenance, expectedCacheVersion);
+    }
   }
   throwIfAborted(signal);
-  return graph;
+  return { graph, provenance };
 }

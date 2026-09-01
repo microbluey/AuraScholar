@@ -6,6 +6,12 @@ import type {
 } from "../../electron/citation-graph-command-contract";
 import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
 import {
+  CITATION_GRAPH_PROVENANCE_SCHEMA_VERSION,
+  CITATION_GRAPH_PROVIDER,
+  CITATION_GRAPH_PROVIDER_VERSION,
+  type CitationGraphProvenance,
+} from "./citation-graph-provenance";
+import {
   decodeCitationGraph,
   decodeCitationGraphBuildResult,
   decodeCitationGraphGetActiveLibraryDoisResult,
@@ -47,8 +53,19 @@ const GRAPH: CitationGraph = {
   truncated: false,
 };
 
-function validCacheEntry(): CitationGraphCacheEntry {
-  return { cacheVersion: 1, fetchedAt: 0, graph: GRAPH };
+const PROVENANCE: CitationGraphProvenance = {
+  capturedAt: 0,
+  centerDoi: "10.1000/center",
+  provider: CITATION_GRAPH_PROVIDER,
+  providerVersion: CITATION_GRAPH_PROVIDER_VERSION,
+  requestedDoi: "10.1000/center",
+  schemaVersion: CITATION_GRAPH_PROVENANCE_SCHEMA_VERSION,
+};
+
+function validCacheEntry(
+  overrides: Partial<CitationGraphCacheEntry> = {},
+): CitationGraphCacheEntry {
+  return { cacheVersion: 1, fetchedAt: 0, graph: GRAPH, provenance: PROVENANCE, ...overrides };
 }
 
 function expectInvalid(decoder: () => unknown): void {
@@ -57,13 +74,20 @@ function expectInvalid(decoder: () => unknown): void {
 
 describe("Citation Graph command-result codec", () => {
   it("accepts nullable/exact envelopes and deeply clones valid graphs", () => {
-    expect(decodeCitationGraphBuildResult({ graph: null })).toEqual({ graph: null });
-    const nullPrototypeResult = Object.create(null) as { graph: null };
+    expect(decodeCitationGraphBuildResult({ graph: null, provenance: null })).toEqual({
+      graph: null,
+      provenance: null,
+    });
+    const nullPrototypeResult = Object.create(null) as { graph: null; provenance: null };
     nullPrototypeResult.graph = null;
-    expect(decodeCitationGraphBuildResult(nullPrototypeResult)).toEqual({ graph: null });
+    nullPrototypeResult.provenance = null;
+    expect(decodeCitationGraphBuildResult(nullPrototypeResult)).toEqual({
+      graph: null,
+      provenance: null,
+    });
 
-    const decodedBuild = decodeCitationGraphBuildResult({ graph: GRAPH });
-    expect(decodedBuild).toEqual({ graph: GRAPH });
+    const decodedBuild = decodeCitationGraphBuildResult({ graph: GRAPH, provenance: PROVENANCE });
+    expect(decodedBuild).toEqual({ graph: GRAPH, provenance: PROVENANCE });
     expect(decodedBuild.graph).not.toBe(GRAPH);
     expect(decodedBuild.graph?.nodes).not.toBe(GRAPH.nodes);
     expect(decodedBuild.graph?.nodes[0]).not.toBe(GRAPH.nodes[0]);
@@ -98,6 +122,9 @@ describe("Citation Graph command-result codec", () => {
       { graph: null, extra: true },
       { graph: undefined },
       { graph: "not-a-graph" },
+      { graph: GRAPH },
+      { graph: null, provenance: PROVENANCE },
+      { graph: GRAPH, provenance: null },
     ];
     for (const value of invalidBuild) expectInvalid(() => decodeCitationGraphBuildResult(value));
 
@@ -105,7 +132,7 @@ describe("Citation Graph command-result codec", () => {
       {},
       { entry: null, extra: true },
       { entry: undefined },
-      { entry: { fetchedAt: 0, graph: GRAPH } },
+      { entry: { fetchedAt: 0, graph: GRAPH, provenance: PROVENANCE } },
       {
         entry: { ...validCacheEntry(), extra: true },
       },
@@ -118,6 +145,70 @@ describe("Citation Graph command-result codec", () => {
     for (const value of [{}, { stored: 1 }, { stored: "true" }, { stored: true, extra: true }]) {
       expectInvalid(() => decodeCitationGraphPutCachedResult(value));
     }
+  });
+
+  it("requires a supported, DOI-bound provenance contract", () => {
+    const invalidProvenance = [
+      undefined,
+      null,
+      { ...PROVENANCE, schemaVersion: 0 },
+      { ...PROVENANCE, provider: "semantic-scholar" },
+      { ...PROVENANCE, providerVersion: "openalex-citation-graph-v0" },
+      { ...PROVENANCE, capturedAt: -1 },
+      { ...PROVENANCE, capturedAt: 1.5 },
+      { ...PROVENANCE, capturedAt: Number.NaN },
+      { ...PROVENANCE, capturedAt: Number.POSITIVE_INFINITY },
+      { ...PROVENANCE, capturedAt: Number.MAX_SAFE_INTEGER + 1 },
+      { ...PROVENANCE, requestedDoi: "10.1000/center\u0000" },
+      { ...PROVENANCE, centerDoi: "10.1000/other" },
+      { ...PROVENANCE, extra: true },
+    ];
+    for (const provenance of invalidProvenance) {
+      expectInvalid(() => decodeCitationGraphBuildResult({ graph: GRAPH, provenance }));
+    }
+
+    expectInvalid(() => decodeCitationGraphBuildResult({ graph: GRAPH }));
+    expectInvalid(() =>
+      decodeCitationGraphBuildResult(
+        { graph: GRAPH, provenance: { ...PROVENANCE, requestedDoi: "10.1000/other" } },
+        "10.1000/center",
+      ),
+    );
+    expectInvalid(() =>
+      decodeCitationGraphBuildResult({ graph: GRAPH, provenance: PROVENANCE }, "10.1000/other"),
+    );
+
+    const graphBoundToAnotherDoi: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: "10.1000/other" } : node,
+      ),
+    };
+    const internallyMisbound = {
+      ...PROVENANCE,
+      centerDoi: "10.1000/other",
+      requestedDoi: "10.1000/center",
+    };
+    // Both DOI fields must identify the graph center as well as the request;
+    // checking each field only against its corresponding input is insufficient.
+    expectInvalid(() =>
+      decodeCitationGraphBuildResult(
+        { graph: graphBoundToAnotherDoi, provenance: internallyMisbound },
+        "10.1000/center",
+      ),
+    );
+    expectInvalid(() =>
+      decodeCitationGraphBuildResult({
+        graph: graphBoundToAnotherDoi,
+        provenance: internallyMisbound,
+      }),
+    );
+    expect(
+      decodeCitationGraphBuildResult(
+        { graph: GRAPH, provenance: PROVENANCE },
+        " HTTPS://DOI.ORG/10.1000/CENTER ",
+      ),
+    ).toEqual({ graph: GRAPH, provenance: PROVENANCE });
   });
 
   it("validates graph topology, exact fields, dense arrays, and scalar bounds", () => {
@@ -245,14 +336,14 @@ describe("Citation Graph command-result codec", () => {
     for (const fetchedAt of [-1, 1.5, "now", Infinity, Number.MAX_SAFE_INTEGER + 1]) {
       expectInvalid(() =>
         decodeCitationGraphGetCachedResult({
-          entry: { cacheVersion: 1, fetchedAt, graph: GRAPH },
+          entry: { cacheVersion: 1, fetchedAt, graph: GRAPH, provenance: PROVENANCE },
         }),
       );
     }
     for (const cacheVersion of [0, -1, 1.5, "one", Infinity, Number.MAX_SAFE_INTEGER + 1]) {
       expectInvalid(() =>
         decodeCitationGraphGetCachedResult({
-          entry: { cacheVersion, fetchedAt: 0, graph: GRAPH },
+          entry: { cacheVersion, fetchedAt: 0, graph: GRAPH, provenance: PROVENANCE },
         }),
       );
     }
@@ -280,24 +371,42 @@ describe("Citation Graph command-result codec", () => {
     };
     expectInvalid(() =>
       decodeCitationGraphGetCachedResult(
-        { entry: { cacheVersion: 1, fetchedAt: 0, graph: mismatchedGraph } },
+        {
+          entry: {
+            cacheVersion: 1,
+            fetchedAt: 0,
+            graph: mismatchedGraph,
+            provenance: { ...PROVENANCE, centerDoi: "10.1000/other" },
+          },
+        },
         "10.1000/center",
       ),
     );
     expectInvalid(() =>
       decodeCitationGraphGetCachedResult(
-        { entry: { cacheVersion: 1, fetchedAt: 0, graph: unboundGraph } },
+        {
+          entry: {
+            cacheVersion: 1,
+            fetchedAt: 0,
+            graph: unboundGraph,
+            provenance: { ...PROVENANCE, centerDoi: null },
+          },
+        },
         "10.1000/center",
       ),
     );
-    // The legacy one-argument decoder remains useful for generic graph reads.
-    expect(
+    // Cache entries must always be bound; display-only unbound graphs are not
+    // durable cache records and therefore cannot carry a provenance envelope.
+    expectInvalid(() =>
       decodeCitationGraphGetCachedResult({
-        entry: { cacheVersion: 1, fetchedAt: 0, graph: unboundGraph },
+        entry: {
+          cacheVersion: 1,
+          fetchedAt: 0,
+          graph: unboundGraph,
+          provenance: { ...PROVENANCE, centerDoi: null },
+        },
       }),
-    ).toEqual({
-      entry: { cacheVersion: 1, fetchedAt: 0, graph: unboundGraph },
-    });
+    );
   });
 
   it("bounds and scopes active-Library DOI membership, then clones the response", () => {

@@ -9,6 +9,7 @@ import type {
   DataCommandOutput,
 } from "../data-command-contract";
 import type { LibraryScopeToken } from "../library-read-command-contract";
+import { CITATION_GRAPH_PROVIDER } from "../../src/shared/citation-graph-provenance";
 import { DatabaseCoordinator } from "./database-coordinator";
 import { executeDataCommand } from "./data-commands";
 import type { DataCommandDependencies } from "./data-command-runtime";
@@ -121,6 +122,7 @@ describe("Canvas ingress data commands", () => {
       {
         input: {
           expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
+          provider: CITATION_GRAPH_PROVIDER,
           relations: [{ citedWorkId: "work-2", citingWorkId: "work-1", source: "openalex" }],
         },
         name: "canvas.persistCitationRelations",
@@ -128,6 +130,7 @@ describe("Canvas ingress data commands", () => {
       {
         input: {
           expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
+          provider: CITATION_GRAPH_PROVIDER,
           relations: [{ citedWorkId: "work-1", citingWorkId: "work-1" }],
         },
         name: "canvas.persistCitationRelations",
@@ -135,6 +138,7 @@ describe("Canvas ingress data commands", () => {
       {
         input: {
           expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
+          provider: CITATION_GRAPH_PROVIDER,
           relations: [{ citedWorkId: "work-2", citingWorkId: oversizedMultibyteId }],
         },
         name: "canvas.persistCitationRelations",
@@ -142,6 +146,7 @@ describe("Canvas ingress data commands", () => {
       {
         input: {
           expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
+          provider: CITATION_GRAPH_PROVIDER,
           relations: [
             { citedWorkId: "work-2", citingWorkId: "work-1" },
             { citedWorkId: "work-2", citingWorkId: "work-1" },
@@ -153,6 +158,15 @@ describe("Canvas ingress data commands", () => {
         input: {
           libraryId: "library:foreign",
           expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
+          provider: CITATION_GRAPH_PROVIDER,
+          relations: [{ citedWorkId: "work-2", citingWorkId: "work-1" }],
+        },
+        name: "canvas.persistCitationRelations",
+      },
+      {
+        input: {
+          expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
+          provider: "unknown-provider",
           relations: [{ citedWorkId: "work-2", citingWorkId: "work-1" }],
         },
         name: "canvas.persistCitationRelations",
@@ -272,18 +286,20 @@ describe("Canvas ingress data commands", () => {
     await expect(
       command("canvas.persistCitationRelations", {
         expectedScope: scope,
+        provider: CITATION_GRAPH_PROVIDER,
         relations: [
           { citedWorkId: secondWorkId, citingWorkId: firstWorkId },
           { citedWorkId: thirdWorkId, citingWorkId: secondWorkId },
         ],
       }),
-    ).resolves.toEqual({ persisted: 1, scope });
+    ).resolves.toEqual({ persisted: 1, provider: CITATION_GRAPH_PROVIDER, scope });
     await expect(
       command("canvas.persistCitationRelations", {
         expectedScope: scope,
+        provider: CITATION_GRAPH_PROVIDER,
         relations: [{ citedWorkId: thirdWorkId, citingWorkId: secondWorkId }],
       }),
-    ).resolves.toEqual({ persisted: 0, scope });
+    ).resolves.toEqual({ persisted: 0, provider: CITATION_GRAPH_PROVIDER, scope });
 
     const persisted = await database.query<{
       cited_work_id: string;
@@ -311,6 +327,28 @@ describe("Canvas ingress data commands", () => {
     expect(persisted).toHaveLength(2);
   });
 
+  it("validates, echoes, and stores the requested citation provider", async () => {
+    const citingWorkId = await addWork("Provider citation source");
+    const citedWorkId = await addWork("Provider citation target");
+
+    await expect(
+      command("canvas.persistCitationRelations", {
+        expectedScope: scope,
+        provider: "semantic-scholar",
+        relations: [{ citedWorkId, citingWorkId }],
+      }),
+    ).resolves.toEqual({ persisted: 1, provider: "semantic-scholar", scope });
+
+    await expect(
+      database.query<{ source: string }>(
+        `SELECT source
+         FROM citations
+         WHERE citing_work_id = ? AND cited_work_id = ?`,
+        [citingWorkId, citedWorkId],
+      ),
+    ).resolves.toEqual([{ source: "semantic-scholar" }]);
+  });
+
   it("safely skips foreign, missing, and archived citation endpoints in one batch", async () => {
     const activeCitingWorkId = await addWork("Active citation source");
     const activeCitedWorkId = await addWork("Active citation target");
@@ -329,6 +367,7 @@ describe("Canvas ingress data commands", () => {
     await expect(
       command("canvas.persistCitationRelations", {
         expectedScope: scope,
+        provider: CITATION_GRAPH_PROVIDER,
         relations: [
           { citedWorkId: activeCitedWorkId, citingWorkId: activeCitingWorkId },
           { citedWorkId: archivedWorkId, citingWorkId: activeCitingWorkId },
@@ -336,7 +375,7 @@ describe("Canvas ingress data commands", () => {
           { citedWorkId: "missing-work", citingWorkId: activeCitingWorkId },
         ],
       }),
-    ).resolves.toEqual({ persisted: 1, scope });
+    ).resolves.toEqual({ persisted: 1, provider: CITATION_GRAPH_PROVIDER, scope });
     await expect(
       command("canvas.getCitationRelations", {
         expectedScope: scope,
@@ -364,6 +403,7 @@ describe("Canvas ingress data commands", () => {
     await expect(
       command("canvas.persistCitationRelations", {
         expectedScope: scope,
+        provider: CITATION_GRAPH_PROVIDER,
         relations: [
           { citedWorkId: firstCitedWorkId, citingWorkId },
           { citedWorkId: failingCitedWorkId, citingWorkId },
@@ -396,6 +436,7 @@ describe("Canvas ingress data commands", () => {
     await expect(
       command("canvas.persistCitationRelations", {
         expectedScope: scope,
+        provider: CITATION_GRAPH_PROVIDER,
         relations: [{ citedWorkId, citingWorkId }],
       }),
     ).rejects.toThrow("Rejected stale or foreign Library scope");

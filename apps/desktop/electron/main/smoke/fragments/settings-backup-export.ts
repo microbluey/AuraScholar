@@ -10,12 +10,23 @@ export const smokeSettingsBackupExport = String.raw`        const backupExportBu
         const backupExportDiscoverySiteId = "smoke-backup-export-discovery-site";
         const backupExportSavedSearchId = "smoke-backup-export-saved-search";
         const backupExportDerivedArtifactId = "smoke-backup-export-derived-artifact";
+        const backupExportGraphCacheDoi = "10.4242/aurascholar.smoke-backup-export-graph-cache";
+        const backupExportGraphCacheFetchedAt = Date.now();
         await window.aura.db.run(
-          "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)",
+          "INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at, provider, provenance_json) VALUES (?, ?, ?, ?, ?)",
           [
             backupExportGraphCacheKey,
             JSON.stringify({ stale: "backup-export-graph-cache" }),
-            Date.now()
+            backupExportGraphCacheFetchedAt,
+            "openalex",
+            JSON.stringify({
+              capturedAt: backupExportGraphCacheFetchedAt,
+              centerDoi: backupExportGraphCacheDoi,
+              provider: "openalex",
+              providerVersion: "openalex-citation-graph-v1",
+              requestedDoi: backupExportGraphCacheDoi,
+              schemaVersion: 1
+            })
           ]
         );
         await window.aura.db.run(
