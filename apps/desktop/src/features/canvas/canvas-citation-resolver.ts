@@ -1,6 +1,10 @@
 import type { CanvasCitationRelation, CitationGraph } from "@aurascholar/core";
 import { loadCitationGraphByDoi } from "../../services/citation-graph";
 import {
+  decodeCanvasGetCitationRelationsResult,
+  decodeCanvasPersistCitationRelationsResult,
+} from "../../shared/canvas-page-command-result-codec";
+import {
   canvasCitationRelationsFromGraph,
   mergeCanvasCitationRelations,
   normalizeCitationDoi,
@@ -59,9 +63,7 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function assertCanvasCitationRelationLimit(
-  relations: readonly CanvasCitationRelation[],
-): void {
+function assertCanvasCitationRelationLimit(relations: readonly CanvasCitationRelation[]): void {
   if (relations.length > MAX_CANVAS_CITATION_RELATIONS_TO_PERSIST) {
     throw new Error(
       `引用关系过多（最多 ${MAX_CANVAS_CITATION_RELATIONS_TO_PERSIST} 条），请缩小画布选择范围后重试。`,
@@ -72,11 +74,17 @@ function assertCanvasCitationRelationLimit(
 async function loadLocalCanvasCitationRelations(
   workIds: string[],
 ): Promise<CanvasCitationRelation[]> {
-  return (await window.aura.data.command("canvas.getCitationRelations", { workIds })).relations;
+  return decodeCanvasGetCitationRelationsResult(
+    await window.aura.data.command("canvas.getCitationRelations", { workIds }),
+    workIds,
+  ).relations;
 }
 
 async function persistCanvasCitationRelations(relations: CanvasCitationRelation[]): Promise<void> {
-  await window.aura.data.command("canvas.persistCitationRelations", { relations });
+  decodeCanvasPersistCitationRelationsResult(
+    await window.aura.data.command("canvas.persistCitationRelations", { relations }),
+    relations.length,
+  );
 }
 
 export async function resolveCanvasCitationRelations(

@@ -79,7 +79,9 @@ describe("canvas page data gateway", () => {
     const sourceWork = activeWork();
     command.mockResolvedValueOnce({ work: sourceWork });
 
-    await expect(loadCanvasActiveWork(sourceWork.id)).resolves.toBe(sourceWork);
+    const result = await loadCanvasActiveWork(sourceWork.id);
+    expect(result).toEqual(sourceWork);
+    expect(result).not.toBe(sourceWork);
     expect(command).toHaveBeenCalledWith("canvas.getActiveWork", { workId: sourceWork.id });
   });
 
@@ -87,13 +89,40 @@ describe("canvas page data gateway", () => {
     const source = ingressSource();
     command.mockResolvedValueOnce({ source });
 
-    await expect(
-      loadCanvasAnnotationIngressSource(source.annotation.id, source.work.id),
-    ).resolves.toBe(source);
+    const result = await loadCanvasAnnotationIngressSource(source.annotation.id, source.work.id);
+    expect(result).toEqual(source);
+    expect(result).not.toBe(source);
+    expect(result.annotation).not.toBe(source.annotation);
+    expect(result.work).not.toBe(source.work);
     expect(command).toHaveBeenCalledWith("canvas.getAnnotationIngressSource", {
       annotationId: source.annotation.id,
       workId: source.work.id,
     });
+  });
+
+  it("rejects default command responses whose work identities are crossed", async () => {
+    command
+      .mockResolvedValueOnce({ work: activeWork({ id: "work-other" }) })
+      .mockResolvedValueOnce({
+        source: ingressSource({ annotation: annotation({ id: "annotation-other" }) }),
+      })
+      .mockResolvedValueOnce({
+        source: ingressSource({ annotation: annotation({ work_id: "work-other" }) }),
+      })
+      .mockResolvedValueOnce({
+        source: ingressSource({ work: ingressWork({ id: "work-other" }) }),
+      });
+
+    await expect(loadCanvasActiveWork("work-1")).rejects.toThrow("does not match");
+    await expect(loadCanvasAnnotationIngressSource("annotation-1", "work-1")).rejects.toThrow(
+      "does not match",
+    );
+    await expect(loadCanvasAnnotationIngressSource("annotation-1", "work-1")).rejects.toThrow(
+      "does not match",
+    );
+    await expect(loadCanvasAnnotationIngressSource("annotation-1", "work-1")).rejects.toThrow(
+      "does not match",
+    );
   });
 
   it("retains an injectable data source for Canvas ingress lifecycle tests", async () => {
@@ -131,6 +160,18 @@ describe("canvas page data gateway", () => {
     await expect(
       loadCanvasAnnotationIngressSource("annotation-1", "work-1", undefined, injected),
     ).rejects.toThrow("这条批注不属于请求加入的文献");
+  });
+
+  it("rejects a mismatched annotation id returned by a faulty data source", async () => {
+    const injected = dataSource({
+      getAnnotationIngressSource: vi.fn(async () =>
+        ingressSource({ annotation: annotation({ id: "annotation-2" }) }),
+      ),
+    });
+
+    await expect(
+      loadCanvasAnnotationIngressSource("annotation-1", "work-1", undefined, injected),
+    ).rejects.toThrow("返回的批注与请求加入的批注不一致");
   });
 
   it("rejects an ingress source whose work is no longer active", async () => {

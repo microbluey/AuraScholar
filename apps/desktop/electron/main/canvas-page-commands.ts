@@ -2,6 +2,8 @@ import type { CanvasCitationRelation } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
+import { MAX_CANVAS_INGRESS_IDENTIFIER_BYTES } from "../../src/shared/canvas-ingress-limits";
+import { canvasUtf8ByteLength } from "../../src/shared/canvas-workspace-document-limits";
 import type {
   CanvasGetActiveWorkCommandInput,
   CanvasGetActiveWorkCommandResult,
@@ -104,7 +106,7 @@ function executeCanvasPageMutation<K extends CanvasPageMutationCommandName>(
 
 function parseCanvasGetActiveWorkInput(value: unknown): CanvasGetActiveWorkCommandInput {
   const input = requireExactCanvasInput(value, "canvas.getActiveWork", ["workId"]);
-  return { workId: requireRecordId(input.workId, "Work id") };
+  return { workId: requireCanvasIngressRecordId(input.workId, "Work id") };
 }
 
 function parseCanvasGetAnnotationIngressSourceInput(
@@ -115,8 +117,8 @@ function parseCanvasGetAnnotationIngressSourceInput(
     "workId",
   ]);
   return {
-    annotationId: requireRecordId(input.annotationId, "Annotation id"),
-    workId: requireRecordId(input.workId, "Work id"),
+    annotationId: requireCanvasIngressRecordId(input.annotationId, "Annotation id"),
+    workId: requireCanvasIngressRecordId(input.workId, "Work id"),
   };
 }
 
@@ -155,7 +157,7 @@ function requireUniqueCanvasWorkIds(value: unknown): string[] {
     throw new Error(`Canvas citation work ids are limited to ${MAX_CANVAS_CITATION_WORK_IDS}`);
   }
   const workIds = value.map((workId, index) =>
-    requireRecordId(workId, `Work id at index ${index}`),
+    requireCanvasIngressRecordId(workId, `Work id at index ${index}`),
   );
   if (new Set(workIds).size !== workIds.length) {
     throw new Error("Canvas citation work ids must be unique");
@@ -176,8 +178,14 @@ function requireUniqueCanvasCitationRelations(value: unknown): CanvasCitationRel
     ) {
       throw new Error(`Canvas citation relation at index ${index} is invalid`);
     }
-    const citingWorkId = requireRecordId(relation.citingWorkId, `Citing work id at index ${index}`);
-    const citedWorkId = requireRecordId(relation.citedWorkId, `Cited work id at index ${index}`);
+    const citingWorkId = requireCanvasIngressRecordId(
+      relation.citingWorkId,
+      `Citing work id at index ${index}`,
+    );
+    const citedWorkId = requireCanvasIngressRecordId(
+      relation.citedWorkId,
+      `Cited work id at index ${index}`,
+    );
     if (citingWorkId === citedWorkId) {
       throw new Error("Canvas citation relations cannot cite themselves");
     }
@@ -190,6 +198,15 @@ function requireUniqueCanvasCitationRelations(value: unknown): CanvasCitationRel
     throw new Error("Canvas citation relations must be unique");
   }
   return relations;
+}
+
+/** Matches renderer-side Canvas ingress decoding and SQL byte predicates. */
+function requireCanvasIngressRecordId(value: unknown, label: string): string {
+  const id = requireRecordId(value, label);
+  if (canvasUtf8ByteLength(id) > MAX_CANVAS_INGRESS_IDENTIFIER_BYTES) {
+    throw new Error(`${label} is too long`);
+  }
+  return id;
 }
 
 async function requireActiveLocalLibraryId(database: Database): Promise<string> {

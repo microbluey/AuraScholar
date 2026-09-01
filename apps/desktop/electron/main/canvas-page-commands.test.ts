@@ -70,6 +70,7 @@ describe("Canvas ingress data commands", () => {
         throw new Error("transaction reached");
       },
     };
+    const oversizedMultibyteId = "界".repeat(171);
     const invalidRequests = [
       { input: {}, name: "canvas.getActiveWork" },
       { input: { workId: " " }, name: "canvas.getActiveWork" },
@@ -95,6 +96,7 @@ describe("Canvas ingress data commands", () => {
         name: "canvas.getCitationRelations",
       },
       { input: { workIds: ["work-1", "work-1"] }, name: "canvas.getCitationRelations" },
+      { input: { workIds: [oversizedMultibyteId] }, name: "canvas.getCitationRelations" },
       {
         input: { workIds: Array.from({ length: 401 }, (_, index) => `work-${index}`) },
         name: "canvas.getCitationRelations",
@@ -107,6 +109,12 @@ describe("Canvas ingress data commands", () => {
       },
       {
         input: { relations: [{ citedWorkId: "work-1", citingWorkId: "work-1" }] },
+        name: "canvas.persistCitationRelations",
+      },
+      {
+        input: {
+          relations: [{ citedWorkId: "work-2", citingWorkId: oversizedMultibyteId }],
+        },
         name: "canvas.persistCitationRelations",
       },
       {
