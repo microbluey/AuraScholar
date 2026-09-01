@@ -102,17 +102,27 @@ function parseDiscoveryQuery(value: unknown): ScholarlySearchDiscoveryCommandInp
     MAX_DISCOVERY_QUERY_TEXT_BYTES,
   );
   const author = optionalBoundedText(
-    value.author,
+    readOwn(value, "author"),
     "Discovery query author",
     MAX_DISCOVERY_AUTHOR_BYTES,
   );
   const venue = optionalBoundedText(
-    value.venue,
+    readOwn(value, "venue"),
     "Discovery query venue",
     MAX_DISCOVERY_VENUE_BYTES,
   );
-  const yearFrom = optionalBoundedInteger(value.yearFrom, "Discovery query start year", 1000, 3000);
-  const yearTo = optionalBoundedInteger(value.yearTo, "Discovery query end year", 1000, 3000);
+  const yearFrom = optionalBoundedInteger(
+    readOwn(value, "yearFrom"),
+    "Discovery query start year",
+    1000,
+    3000,
+  );
+  const yearTo = optionalBoundedInteger(
+    readOwn(value, "yearTo"),
+    "Discovery query end year",
+    1000,
+    3000,
+  );
   if (yearFrom !== undefined && yearTo !== undefined && yearFrom > yearTo) {
     throw new Error("Discovery query year range is invalid");
   }
@@ -127,7 +137,12 @@ function parseDiscoveryQuery(value: unknown): ScholarlySearchDiscoveryCommandInp
 
 function optionalSources(value: unknown): DiscoverySource[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length === 0 || value.length > DISCOVERY_SOURCES.length) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > DISCOVERY_SOURCES.length ||
+    !isDenseArray(value)
+  ) {
     throw new Error("Discovery sources are invalid");
   }
   const sources = value.map((source) => requireDiscoverySource(source));
@@ -355,4 +370,15 @@ function requireBoundedBytes(value: unknown, maximum: number, label: string): vo
   if (Buffer.byteLength(serialized, "utf8") > maximum) {
     throw new Error(`${label} is limited to ${maximum} bytes`);
   }
+}
+
+function readOwn(record: Record<string, unknown>, field: string): unknown {
+  return Object.hasOwn(record, field) ? record[field] : undefined;
+}
+
+function isDenseArray(value: readonly unknown[]): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) return false;
+  }
+  return true;
 }

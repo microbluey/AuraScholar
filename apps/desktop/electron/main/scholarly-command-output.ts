@@ -16,29 +16,47 @@ import {
   MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
   MAX_CITATION_GRAPH_NODES,
 } from "../../src/shared/citation-graph-limits";
-
-export const MAX_SCHOLARLY_OUTPUT_BYTES = 2 * 1024 * 1024;
-
+import {
+  MAX_SCHOLARLY_AUTHOR_COUNT as SHARED_MAX_AUTHOR_COUNT,
+  MAX_SCHOLARLY_AUTHOR_TEXT_BYTES as SHARED_MAX_AUTHOR_TEXT_BYTES,
+  MAX_SCHOLARLY_CANDIDATES,
+  MAX_SCHOLARLY_COUNT as SHARED_MAX_SAFE_COUNT,
+  MAX_SCHOLARLY_CSL_JSON_BYTES as SHARED_MAX_CSL_JSON_BYTES,
+  MAX_SCHOLARLY_CSL_JSON_DEPTH as SHARED_MAX_CSL_JSON_DEPTH,
+  MAX_SCHOLARLY_CSL_JSON_ENTRIES as SHARED_MAX_CSL_JSON_ENTRIES,
+  MAX_SCHOLARLY_DISCOVERY_ERROR_BYTES as SHARED_MAX_DISCOVERY_ERROR_BYTES,
+  MAX_SCHOLARLY_DISCOVERY_PAGE as SHARED_MAX_DISCOVERY_PAGE,
+  MAX_SCHOLARLY_DISCOVERY_RESULT_ID_BYTES as SHARED_MAX_DISCOVERY_RESULT_ID_BYTES,
+  MAX_SCHOLARLY_DISCOVERY_RESULTS as SHARED_MAX_DISCOVERY_RESULTS,
+  MAX_SCHOLARLY_KEYWORDS as SHARED_MAX_KEYWORDS,
+  MAX_SCHOLARLY_OUTPUT_BYTES as SHARED_MAX_OUTPUT_BYTES,
+  MAX_SCHOLARLY_TITLE_BYTES as SHARED_MAX_TITLE_BYTES,
+  MAX_SCHOLARLY_URL_BYTES as SHARED_MAX_URL_BYTES,
+  MAX_SCHOLARLY_WORK_LONG_TEXT_BYTES as SHARED_MAX_WORK_LONG_TEXT_BYTES,
+  MAX_SCHOLARLY_WORK_SHORT_TEXT_BYTES as SHARED_MAX_WORK_SHORT_TEXT_BYTES,
+  MAX_SCHOLARLY_YEAR as SHARED_MAX_YEAR,
+} from "../../src/shared/scholarly-command-limits";
+export const MAX_SCHOLARLY_OUTPUT_BYTES = SHARED_MAX_OUTPUT_BYTES;
 const ALL_DISCOVERY_SOURCES: readonly DiscoverySource[] = ["crossref", "openalex", "s2", "arxiv"];
-const MAX_AUTHOR_COUNT = 100;
-const MAX_AUTHOR_TEXT_BYTES = 2 * 1024;
-const MAX_CSL_JSON_BYTES = 64 * 1024;
-const MAX_CSL_JSON_DEPTH = 8;
-const MAX_CSL_JSON_ENTRIES = 512;
-const MAX_DISCOVERY_ERROR_BYTES = 2 * 1024;
-const MAX_DISCOVERY_RESULT_ID_BYTES = 2 * 1024;
-const MAX_DISCOVERY_RESULTS = 100;
+const MAX_AUTHOR_COUNT = SHARED_MAX_AUTHOR_COUNT;
+const MAX_AUTHOR_TEXT_BYTES = SHARED_MAX_AUTHOR_TEXT_BYTES;
+const MAX_CSL_JSON_BYTES = SHARED_MAX_CSL_JSON_BYTES;
+const MAX_CSL_JSON_DEPTH = SHARED_MAX_CSL_JSON_DEPTH;
+const MAX_CSL_JSON_ENTRIES = SHARED_MAX_CSL_JSON_ENTRIES;
+const MAX_DISCOVERY_ERROR_BYTES = SHARED_MAX_DISCOVERY_ERROR_BYTES;
+const MAX_DISCOVERY_RESULT_ID_BYTES = SHARED_MAX_DISCOVERY_RESULT_ID_BYTES;
+const MAX_DISCOVERY_RESULTS = SHARED_MAX_DISCOVERY_RESULTS;
 const MAX_GRAPH_EDGES = MAX_CITATION_GRAPH_EDGES;
 const MAX_GRAPH_NODE_ID_BYTES = MAX_CITATION_GRAPH_NODE_ID_BYTES;
 const MAX_GRAPH_NODES = MAX_CITATION_GRAPH_NODES;
 const MAX_GRAPH_NODE_TEXT_BYTES = MAX_CITATION_GRAPH_NODE_TEXT_BYTES;
-const MAX_KEYWORDS = 50;
-const MAX_SAFE_COUNT = 1_000_000_000;
-const MAX_TITLE_BYTES = 16 * 1024;
-const MAX_URL_BYTES = 8 * 1024;
-const MAX_WORK_LONG_TEXT_BYTES = 128 * 1024;
-const MAX_WORK_SHORT_TEXT_BYTES = 8 * 1024;
-
+const MAX_KEYWORDS = SHARED_MAX_KEYWORDS;
+const MAX_YEAR = SHARED_MAX_YEAR;
+const MAX_SAFE_COUNT = SHARED_MAX_SAFE_COUNT;
+const MAX_TITLE_BYTES = SHARED_MAX_TITLE_BYTES;
+const MAX_URL_BYTES = SHARED_MAX_URL_BYTES;
+const MAX_WORK_LONG_TEXT_BYTES = SHARED_MAX_WORK_LONG_TEXT_BYTES;
+const MAX_WORK_SHORT_TEXT_BYTES = SHARED_MAX_WORK_SHORT_TEXT_BYTES;
 type NormalizedWorkSource = NormalizedWork["source"];
 
 const WORK_SOURCES: readonly NormalizedWorkSource[] = [
@@ -54,12 +72,26 @@ export function sanitizeDiscoverySearchReport(
   value: DiscoverySearchReport,
   requestedSources: readonly DiscoverySource[] | undefined,
 ): DiscoverySearchReport {
+  if (!isRecord(value)) throw new Error("Discovery search report is invalid");
   const sources = requestedSources ?? ALL_DISCOVERY_SOURCES;
+  const requested = new Set(sources);
+  const resultIds = new Set<string>();
   const results = Array.isArray(value.results)
     ? value.results
         .slice(0, MAX_DISCOVERY_RESULTS)
         .map((result) => sanitizeDiscoveryResult(result))
-        .filter((result): result is DiscoveryResult => result !== null)
+        .filter((result): result is DiscoveryResult => {
+          if (
+            result === null ||
+            !requested.has(result.source) ||
+            result.work.source !== result.source ||
+            resultIds.has(result.id)
+          ) {
+            return false;
+          }
+          resultIds.add(result.id);
+          return true;
+        })
     : [];
   const reportSources = {} as DiscoverySearchReport["sources"];
   const cursors = {} as DiscoverySearchReport["cursors"];
@@ -83,7 +115,7 @@ export function sanitizeDiscoverySearchReport(
 }
 
 export function sanitizeScholarEnrichment(value: S2Enrichment | null): S2Enrichment | null {
-  if (value === null || typeof value !== "object") return null;
+  if (value === null || !isRecord(value)) return null;
   return {
     ...(safeCount(value.citationCount) === undefined
       ? {}
@@ -145,7 +177,7 @@ export function sanitizeResolvedWork(value: ResolvedWork | null): ResolvedWork |
   if (!work) return null;
   const candidates = Array.isArray(value.candidates)
     ? value.candidates
-        .slice(0, 10)
+        .slice(0, MAX_SCHOLARLY_CANDIDATES)
         .map(sanitizeNormalizedWork)
         .filter((candidate): candidate is NormalizedWork => candidate !== null)
     : [];
@@ -167,6 +199,7 @@ export function requireBoundedScholarlyOutput<T>(output: T, label: string): T {
   } catch {
     throw new Error(`${label} cannot be serialized`);
   }
+  if (typeof serialized !== "string") throw new Error(`${label} cannot be serialized`);
   if (Buffer.byteLength(serialized, "utf8") > MAX_SCHOLARLY_OUTPUT_BYTES) {
     throw new Error(`${label} is limited to ${MAX_SCHOLARLY_OUTPUT_BYTES} bytes`);
   }
@@ -362,7 +395,9 @@ function sanitizeJson(value: unknown, depth: number): unknown {
   for (const [key, entry] of Object.entries(value).slice(0, MAX_CSL_JSON_ENTRIES)) {
     const safeKey = safeText(key, 256);
     const safeEntry = sanitizeJson(entry, depth + 1);
-    if (!safeKey || safeEntry === undefined || safeKey === "__proto__") continue;
+    const unsafeKey =
+      safeKey === "__proto__" || safeKey === "prototype" || safeKey === "constructor";
+    if (!safeKey || safeEntry === undefined || unsafeKey) continue;
     output[safeKey] = safeEntry;
   }
   return output;
@@ -415,7 +450,8 @@ function safeUrl(value: unknown): string | undefined {
     if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
       return undefined;
     }
-    return url.toString();
+    const canonical = url.toString();
+    return Buffer.byteLength(canonical, "utf8") <= MAX_URL_BYTES ? canonical : undefined;
   } catch {
     return undefined;
   }
@@ -440,13 +476,15 @@ function safeScore(value: unknown): number {
 }
 
 function safeYear(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 10_000
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_YEAR
     ? (value as number)
     : undefined;
 }
 
 function boundedPage(value: unknown): number {
-  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 10_000
+  return Number.isSafeInteger(value) &&
+    (value as number) >= 1 &&
+    (value as number) <= SHARED_MAX_DISCOVERY_PAGE
     ? (value as number)
     : 1;
 }

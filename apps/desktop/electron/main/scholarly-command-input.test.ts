@@ -60,6 +60,23 @@ describe("scholarly command input boundary", () => {
         sources: ["s2", "s2"],
       }),
     ).toThrow("unique");
+    const sparseSources = new Array(1) as unknown[];
+    expect(() =>
+      parseScholarlySearchDiscoveryInput({
+        query: { text: "graph methods" },
+        requestId: "search-4",
+        sources: sparseSources,
+      }),
+    ).toThrow("sources");
+
+    const inheritedQuery = Object.create({ author: "Injected author" }) as Record<string, unknown>;
+    inheritedQuery.text = "graph methods";
+    expect(
+      parseScholarlySearchDiscoveryInput({ query: inheritedQuery, requestId: "search-5" }),
+    ).toEqual({
+      query: { text: "graph methods" },
+      requestId: "search-5",
+    });
   });
 
   it("allows only DOI, arXiv, and title clue variants", () => {
