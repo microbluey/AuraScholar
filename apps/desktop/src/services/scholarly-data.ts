@@ -10,6 +10,7 @@ import type {
   ScholarlySearchDiscoveryCommandInput,
   ScholarlySearchDiscoveryCommandResult,
 } from "../../electron/scholarly-command-contract";
+import { decodeCitationGraphBuildResult } from "../shared/citation-graph-command-result-codec";
 
 type CancellableScholarlyCommandName =
   | "citationGraph.build"
@@ -27,7 +28,9 @@ export function buildScholarlyCitationGraph(
   input: Omit<CitationGraphBuildCommandInput, "requestId">,
   signal?: AbortSignal,
 ): Promise<CitationGraphBuildCommandResult> {
-  return invokeCancellableScholarlyCommand("citationGraph.build", input, signal);
+  return invokeCancellableScholarlyCommand("citationGraph.build", input, signal).then(
+    decodeCitationGraphBuildResult,
+  );
 }
 
 /** Main-owned Crossref/OpenAlex/S2/arXiv discovery search. */

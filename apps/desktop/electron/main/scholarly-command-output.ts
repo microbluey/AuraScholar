@@ -9,6 +9,13 @@ import type {
   ResolvedWork,
 } from "@aurascholar/core";
 import type { NormalizedAuthor, NormalizedWork, S2Enrichment } from "@aurascholar/connectors";
+import {
+  MAX_CITATION_GRAPH_DOI_BYTES,
+  MAX_CITATION_GRAPH_EDGES,
+  MAX_CITATION_GRAPH_NODE_ID_BYTES,
+  MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
+  MAX_CITATION_GRAPH_NODES,
+} from "../../src/shared/citation-graph-limits";
 
 export const MAX_SCHOLARLY_OUTPUT_BYTES = 2 * 1024 * 1024;
 
@@ -21,10 +28,10 @@ const MAX_CSL_JSON_ENTRIES = 512;
 const MAX_DISCOVERY_ERROR_BYTES = 2 * 1024;
 const MAX_DISCOVERY_RESULT_ID_BYTES = 2 * 1024;
 const MAX_DISCOVERY_RESULTS = 100;
-const MAX_GRAPH_EDGES = 10_000;
-const MAX_GRAPH_NODE_ID_BYTES = 512;
-const MAX_GRAPH_NODES = 100;
-const MAX_GRAPH_NODE_TEXT_BYTES = 16 * 1024;
+const MAX_GRAPH_EDGES = MAX_CITATION_GRAPH_EDGES;
+const MAX_GRAPH_NODE_ID_BYTES = MAX_CITATION_GRAPH_NODE_ID_BYTES;
+const MAX_GRAPH_NODES = MAX_CITATION_GRAPH_NODES;
+const MAX_GRAPH_NODE_TEXT_BYTES = MAX_CITATION_GRAPH_NODE_TEXT_BYTES;
 const MAX_KEYWORDS = 50;
 const MAX_SAFE_COUNT = 1_000_000_000;
 const MAX_TITLE_BYTES = 16 * 1024;
@@ -124,7 +131,7 @@ export function sanitizeCitationGraph(value: CitationGraph | null): CitationGrap
   for (const valueEdge of value.edges.slice(0, MAX_GRAPH_EDGES)) {
     const edge = sanitizeGraphEdge(valueEdge, nodeIds);
     if (!edge) continue;
-    const key = `${edge.source}\u0000${edge.target}`;
+    const key = JSON.stringify([edge.source, edge.target]);
     if (edgeKeys.has(key)) continue;
     edgeKeys.add(key);
     edges.push(edge);
@@ -301,9 +308,9 @@ function sanitizeGraphNode(value: unknown): GraphNode | null {
   if (!id || !title || !isGraphRelation(value.relation)) return null;
   return {
     citedByCount: safeCount(value.citedByCount) ?? 0,
-    ...(safeText(value.doi, MAX_WORK_SHORT_TEXT_BYTES) === undefined
+    ...(safeText(value.doi, MAX_CITATION_GRAPH_DOI_BYTES) === undefined
       ? {}
-      : { doi: safeText(value.doi, MAX_WORK_SHORT_TEXT_BYTES) }),
+      : { doi: safeText(value.doi, MAX_CITATION_GRAPH_DOI_BYTES) }),
     ...(safeText(value.firstAuthor, MAX_GRAPH_NODE_TEXT_BYTES) === undefined
       ? {}
       : { firstAuthor: safeText(value.firstAuthor, MAX_GRAPH_NODE_TEXT_BYTES) }),

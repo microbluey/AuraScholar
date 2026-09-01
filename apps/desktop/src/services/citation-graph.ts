@@ -1,15 +1,17 @@
-import { type CitationGraph, type GraphEdge, type GraphNode } from "@aurascholar/core";
+import type { CitationGraph } from "@aurascholar/core";
 import type { CitationGraphCacheEntry } from "../../electron/data-command-contract";
+import {
+  decodeCitationGraph,
+  decodeCitationGraphGetCachedResult,
+  decodeCitationGraphPutCachedResult,
+} from "../shared/citation-graph-command-result-codec";
+import {
+  citationGraphUtf8ByteLength,
+  MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES,
+} from "../shared/citation-graph-limits";
 import { buildScholarlyCitationGraph } from "./scholarly-data";
 
 export const CITATION_GRAPH_CACHE_TTL_MS = 7 * 86_400_000;
-
-const MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES = 2 * 1024 * 1024;
-const MAX_CITATION_GRAPH_DOI_LENGTH = 2_048;
-const MAX_CITATION_GRAPH_EDGES = 10_000;
-const MAX_CITATION_GRAPH_NODE_ID_LENGTH = 512;
-const MAX_CITATION_GRAPH_NODE_TEXT_LENGTH = 16_384;
-const MAX_CITATION_GRAPH_NODES = 100;
 
 export type CitationGraphBuilder = (
   doi: string,
@@ -31,121 +33,21 @@ export interface CitationGraphCacheDataSource {
   putCached: (doi: string, graph: CitationGraph) => Promise<boolean>;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(
-  value: Record<string, unknown>,
-  requiredFields: readonly string[],
-  optionalFields: readonly string[] = [],
-): boolean {
-  const allowedFields = [...requiredFields, ...optionalFields];
-  return (
-    Object.keys(value).every((field) => allowedFields.includes(field)) &&
-    requiredFields.every((field) => Object.hasOwn(value, field))
-  );
-}
-
-function isCitationGraphText(value: unknown, maximum: number, requireNonEmpty = false): boolean {
-  return (
-    typeof value === "string" &&
-    value.length <= maximum &&
-    (!requireNonEmpty || value.trim().length > 0)
-  );
-}
-
-function isOptionalCitationGraphText(value: unknown, maximum: number): boolean {
-  return value === undefined || isCitationGraphText(value, maximum);
-}
-
-function isOptionalCitationGraphYear(value: unknown): boolean {
-  return (
-    value === undefined ||
-    (Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 10_000)
-  );
-}
-
-function isGraphNode(value: unknown): value is GraphNode {
-  if (!isRecord(value)) return false;
-  if (
-    !hasExactKeys(
-      value,
-      ["id", "title", "citedByCount", "relation"],
-      ["year", "doi", "venue", "firstAuthor"],
-    )
-  ) {
-    return false;
-  }
-  if (value.relation !== "center" && value.relation !== "reference" && value.relation !== "citer") {
-    return false;
-  }
-  return (
-    isCitationGraphText(value.id, MAX_CITATION_GRAPH_NODE_ID_LENGTH, true) &&
-    isCitationGraphText(value.title, MAX_CITATION_GRAPH_NODE_TEXT_LENGTH) &&
-    Number.isSafeInteger(value.citedByCount) &&
-    (value.citedByCount as number) >= 0 &&
-    isOptionalCitationGraphYear(value.year) &&
-    isOptionalCitationGraphText(value.doi, MAX_CITATION_GRAPH_DOI_LENGTH) &&
-    isOptionalCitationGraphText(value.venue, MAX_CITATION_GRAPH_NODE_TEXT_LENGTH) &&
-    isOptionalCitationGraphText(value.firstAuthor, MAX_CITATION_GRAPH_NODE_TEXT_LENGTH)
-  );
-}
-
-function isGraphEdge(value: unknown): value is GraphEdge {
-  return (
-    isRecord(value) &&
-    hasExactKeys(value, ["source", "target"]) &&
-    isCitationGraphText(value.source, MAX_CITATION_GRAPH_NODE_ID_LENGTH, true) &&
-    isCitationGraphText(value.target, MAX_CITATION_GRAPH_NODE_ID_LENGTH, true)
-  );
-}
-
 export function isCitationGraph(value: unknown): value is CitationGraph {
-  if (!isRecord(value)) return false;
-  if (
-    !hasExactKeys(value, ["centerId", "nodes", "edges", "truncated"]) ||
-    !isCitationGraphText(value.centerId, MAX_CITATION_GRAPH_NODE_ID_LENGTH, true) ||
-    typeof value.truncated !== "boolean" ||
-    !Array.isArray(value.nodes) ||
-    value.nodes.length === 0 ||
-    value.nodes.length > MAX_CITATION_GRAPH_NODES ||
-    !Array.isArray(value.edges) ||
-    value.edges.length > MAX_CITATION_GRAPH_EDGES
-  ) {
-    return false;
-  }
-  if (!value.nodes.every(isGraphNode) || !value.edges.every(isGraphEdge)) return false;
-
-  const nodeIds = new Set(value.nodes.map((node) => node.id));
-  if (nodeIds.size !== value.nodes.length) return false;
-  const centerNodes = value.nodes.filter((node) => node.relation === "center");
-  if (centerNodes.length !== 1 || centerNodes[0]?.id !== value.centerId) return false;
-
-  const edgeKeys = new Set<string>();
-  for (const edge of value.edges) {
-    if (edge.source === edge.target || !nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
-      return false;
-    }
-    const key = `${edge.source}\u0000${edge.target}`;
-    if (edgeKeys.has(key)) return false;
-    edgeKeys.add(key);
-  }
-
   try {
-    const serialized = JSON.stringify(value);
-    return (
-      new TextEncoder().encode(serialized).byteLength <= MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES
-    );
+    decodeCitationGraph(value);
+    return true;
   } catch {
     return false;
   }
 }
 
 export function parseCachedCitationGraph(payload: string): CitationGraph | null {
+  if (typeof payload !== "string") return null;
   try {
+    if (citationGraphUtf8ByteLength(payload) > MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES) return null;
     const parsed: unknown = JSON.parse(payload);
-    return isCitationGraph(parsed) ? parsed : null;
+    return decodeCitationGraph(parsed);
   } catch {
     return null;
   }
@@ -172,10 +74,12 @@ async function defaultBuildGraph(doi: string, signal?: AbortSignal): Promise<Cit
 
 const defaultCacheDataSource: CitationGraphCacheDataSource = {
   async getCached(rawDoi) {
-    return (await window.aura.data.command("citationGraph.getCached", { doi: rawDoi })).entry;
+    const result = await window.aura.data.command("citationGraph.getCached", { doi: rawDoi });
+    return decodeCitationGraphGetCachedResult(result).entry;
   },
   async putCached(doi, graph) {
-    return (await window.aura.data.command("citationGraph.putCached", { doi, graph })).stored;
+    const result = await window.aura.data.command("citationGraph.putCached", { doi, graph });
+    return decodeCitationGraphPutCachedResult(result).stored;
   },
 };
 
