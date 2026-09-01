@@ -22,13 +22,11 @@ import {
   syncScopePredicate,
 } from "../services/document-evidence-sync-scope";
 import { documentRevisionBridgeRepairStatement } from "./document-revision-sync-repair";
+import { projectLocalSyncLogRows, type LocalSyncLogRow } from "./sqlite-sync-log";
 import {
-  assertSupportedSyncLogColumns,
   parseStoredNumber,
   parseStoredRecord,
   parseStoredStringRecord,
-  parseSyncLogRecord,
-  parseSyncLogStringRecord,
   quoteIdentifier,
 } from "./sqlite-sync-values";
 
@@ -110,13 +108,6 @@ export class SqliteSyncStorage implements SyncStorage {
     }
   }
 
-  private assertLocalOwner(table: string, values: Record<string, unknown>): void {
-    if (!Object.hasOwn(values, SYNC_OWNER_COLUMN)) return;
-    if (values[SYNC_OWNER_COLUMN] !== this.libraryId) {
-      throw new Error(`Rejected cross-library local sync owner for ${table}`);
-    }
-  }
-
   private withoutOwner<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
     if (!Object.hasOwn(value, SYNC_OWNER_COLUMN)) return value;
     const { [SYNC_OWNER_COLUMN]: _owner, ...rest } = value;
@@ -131,6 +122,24 @@ export class SqliteSyncStorage implements SyncStorage {
       scoped ? [rowId, this.libraryId] : [rowId],
     );
     return rows.length > 0;
+  }
+
+  /**
+   * A delete log may outlive the row (and its row clocks) after physical
+   * purge, so the scoped sync_log owner is the only durable ownership signal
+   * in that case. If an identically-keyed row still exists in another Library,
+   * never project the tombstone onto a peer.
+   */
+  private async assertLocalDeleteScope(table: string, rowId: string): Promise<void> {
+    if (!rowId.trim()) {
+      throw new Error("Invalid local sync log entry: delete is missing a row id");
+    }
+    if (
+      !(await this.rowExists(table, rowId, true)) &&
+      (await this.rowExists(table, rowId, false))
+    ) {
+      throw new Error(`Rejected cross-library sync row ${table}.${rowId}`);
+    }
   }
 
   /**
@@ -250,12 +259,18 @@ export class SqliteSyncStorage implements SyncStorage {
       .filter(({ transportSeq }) => transportSeq <= uptoSeq)
       .map(({ databaseSeq }) => databaseSeq);
     if (pushedDatabaseSeqs.length > 0) {
-      const maxDatabaseSeq = Math.max(...pushedDatabaseSeqs);
-      await this.db.run(
-        `UPDATE sync_log SET synced_at = ?
-         WHERE seq <= ? AND synced_at IS NULL AND library_id = ?`,
-        [now, maxDatabaseSeq, this.libraryId],
-      );
+      // A legacy NULL upsert is intentionally not projected. Ack only the
+      // rows that were actually published, rather than marking every older
+      // database sequence in the gap as synced.
+      for (let start = 0; start < pushedDatabaseSeqs.length; start += 500) {
+        const batch = pushedDatabaseSeqs.slice(start, start + 500);
+        const placeholders = batch.map(() => "?").join(",");
+        await this.db.run(
+          `UPDATE sync_log SET synced_at = ?
+           WHERE synced_at IS NULL AND library_id = ? AND seq IN (${placeholders})`,
+          [now, this.libraryId, ...batch],
+        );
+      }
       this.pendingLoggedSeqs = this.pendingLoggedSeqs.filter(
         ({ transportSeq }) => transportSeq > uptoSeq,
       );
@@ -627,72 +642,19 @@ export class SqliteSyncStorage implements SyncStorage {
   }
 
   private async loggedChanges(): Promise<Array<{ databaseSeq: number; entry: ChangeEntry }>> {
-    const rows = await this.db.query<{
-      seq: number;
-      entity_table: string;
-      entity_id: string;
-      op: "upsert" | "delete";
-      values_json: string | null;
-      column_hlcs_json: string | null;
-      hlc: string;
-      device_id: string;
-    }>(
+    const rows = await this.db.query<LocalSyncLogRow>(
       `SELECT seq, entity_table, entity_id, op, values_json, column_hlcs_json, hlc, device_id
        FROM sync_log
-       WHERE library_id = ? AND synced_at IS NULL AND values_json IS NOT NULL
+       WHERE library_id = ? AND synced_at IS NULL
+         AND (op <> 'upsert' OR values_json IS NOT NULL)
       ORDER BY seq`,
       [this.libraryId],
     );
-    return rows.map((row) => {
-      const tableColumns = syncedColumnsForTable(row.entity_table);
-      if (!tableColumns) {
-        throw new Error(
-          `Unsupported sync table "${row.entity_table}" in local sync log; update AuraScholar before syncing this library`,
-        );
-      }
-      const rawValues = parseSyncLogRecord(row.seq, "values_json", row.values_json);
-      this.assertLocalOwner(row.entity_table, rawValues);
-      const portableValues = this.withoutOwner(rawValues);
-      const rawColumnHlcs = parseSyncLogStringRecord(
-        row.seq,
-        "column_hlcs_json",
-        row.column_hlcs_json,
-      );
-      const portableColumnHlcs = this.withoutOwner(rawColumnHlcs) as Record<string, string>;
-      assertSupportedSyncLogColumns(
-        row.seq,
-        row.entity_table,
-        tableColumns,
-        portableValues,
-        portableColumnHlcs,
-      );
-      if (row.op === "upsert" && Object.keys(portableValues).length === 0) {
-        throw new Error(`Invalid local sync log entry ${row.seq}: upsert has no synced values`);
-      }
-      const values =
-        row.op === "upsert"
-          ? { ...portableValues, [SYNC_OWNER_COLUMN]: this.transportLibraryId }
-          : portableValues;
-      const columnHlcs =
-        row.op === "upsert"
-          ? {
-              ...portableColumnHlcs,
-              [SYNC_OWNER_COLUMN]: rawColumnHlcs[SYNC_OWNER_COLUMN] ?? row.hlc,
-            }
-          : portableColumnHlcs;
-      return {
-        databaseSeq: row.seq,
-        entry: {
-          seq: 0,
-          table: row.entity_table,
-          rowId: row.entity_id,
-          op: row.op,
-          values,
-          columnHlcs,
-          hlc: row.hlc,
-          deviceId: this.deviceId,
-        },
-      };
+    return projectLocalSyncLogRows(rows, {
+      libraryId: this.libraryId,
+      transportLibraryId: this.transportLibraryId,
+      deviceId: this.deviceId,
+      assertDeleteScope: (table, rowId) => this.assertLocalDeleteScope(table, rowId),
     });
   }
 

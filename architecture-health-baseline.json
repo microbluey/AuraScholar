@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 88174,
+        ".ts": 88244,
         ".tsx": 35973
       },
       "files": {
@@ -445,7 +445,8 @@
         "apps/desktop/src/shared/scholarly-command-limits.ts": 25,
         "apps/desktop/src/shared/scholarly-command-result-codec.ts": 267,
         "apps/desktop/src/shared/scholarly-command-value-codec.ts": 433,
-        "apps/desktop/src/shared/sqlite-sync-storage.ts": 777,
+        "apps/desktop/src/shared/sqlite-sync-log.ts": 108,
+        "apps/desktop/src/shared/sqlite-sync-storage.ts": 739,
         "apps/desktop/src/shared/sqlite-sync-values.ts": 85,
         "apps/desktop/src/shortcut-labels.ts": 29,
         "apps/desktop/src/storage.ts": 74,
@@ -624,11 +625,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 143468
+      "totalLines": 143538
     },
     "tests": {
       "byExtension": {
-        ".ts": 89531,
+        ".ts": 89718,
         ".tsx": 1035
       },
       "files": {
@@ -963,6 +964,7 @@
         "apps/desktop/src/services/sentinel.test.ts": 101,
         "apps/desktop/src/services/snippets.test.ts": 98,
         "apps/desktop/src/services/sync-backup.test.ts": 1206,
+        "apps/desktop/src/services/sync-legacy-delete.test.ts": 187,
         "apps/desktop/src/services/sync-storage-state.test.ts": 36,
         "apps/desktop/src/services/sync.test.ts": 136,
         "apps/desktop/src/services/translate.test.ts": 272,
@@ -1056,7 +1058,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 90566
+      "totalLines": 90753
     }
   },
   "uiDatabaseBoundary": {}
