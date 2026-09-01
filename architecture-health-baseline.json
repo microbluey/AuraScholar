@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 86540,
+        ".ts": 86546,
         ".tsx": 35973
       },
       "files": {
@@ -35,7 +35,7 @@
         "apps/desktop/electron/main/canvas-workspace-commands.ts": 288,
         "apps/desktop/electron/main/canvas-workspace-document-input.ts": 7,
         "apps/desktop/electron/main/citation-bridge.ts": 108,
-        "apps/desktop/electron/main/citation-graph-commands.ts": 448,
+        "apps/desktop/electron/main/citation-graph-commands.ts": 452,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
         "apps/desktop/electron/main/data-command-envelope.ts": 167,
@@ -425,7 +425,7 @@
         "apps/desktop/src/shared/canvas-workspace-document-node-data-codec.ts": 310,
         "apps/desktop/src/shared/canvas-workspace-summary-codec.ts": 137,
         "apps/desktop/src/shared/citation-graph-command-result-codec.ts": 379,
-        "apps/desktop/src/shared/citation-graph-limits.ts": 49,
+        "apps/desktop/src/shared/citation-graph-limits.ts": 51,
         "apps/desktop/src/shared/document-revision-sync-repair.ts": 41,
         "apps/desktop/src/shared/library-backup-config.ts": 243,
         "apps/desktop/src/shared/library-backup-evidence.ts": 347,
@@ -612,11 +612,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 141834
+      "totalLines": 141840
     },
     "tests": {
       "byExtension": {
-        ".ts": 87707,
+        ".ts": 87746,
         ".tsx": 1035
       },
       "files": {
@@ -630,7 +630,7 @@
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 425,
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 410,
         "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 135,
-        "apps/desktop/electron/main/citation-graph-commands.test.ts": 400,
+        "apps/desktop/electron/main/citation-graph-commands.test.ts": 439,
         "apps/desktop/electron/main/citation-graph-payload-architecture.test.ts": 60,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
         "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
@@ -1042,7 +1042,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 88742
+      "totalLines": 88781
     }
   },
   "uiDatabaseBoundary": {}

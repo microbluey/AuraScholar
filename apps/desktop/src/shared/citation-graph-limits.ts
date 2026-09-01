@@ -35,7 +35,9 @@ export function normalizeCitationGraphDoi(value: string): string | null {
 export function citationGraphCenterDoi(graph: CitationGraph): string | null {
   const centerNodes = graph.nodes.filter((node) => node.relation === "center");
   if (centerNodes.length !== 1 || centerNodes[0]?.id !== graph.centerId) return null;
-  const centerDoi = centerNodes[0]?.doi;
+  const centerNode = centerNodes[0];
+  if (!centerNode || !Object.hasOwn(centerNode, "doi")) return null;
+  const centerDoi = centerNode.doi;
   return typeof centerDoi === "string" ? normalizeCitationGraphDoi(centerDoi) : null;
 }
 
