@@ -93,6 +93,93 @@ describe("Citation Graph data commands", () => {
     ).resolves.toEqual([{ count: 1 }]);
   });
 
+  it("drops cached graphs whose center DOI is missing or bound to another request", async () => {
+    const mismatchedGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: "10.1000/other" } : node,
+      ),
+    };
+    const unboundGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) => {
+        if (node.id !== GRAPH.centerId) return node;
+        const { doi: _doi, ...withoutDoi } = node;
+        return withoutDoi;
+      }),
+    };
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
+      ["10.1000/mismatched", JSON.stringify(mismatchedGraph), 9_900],
+    );
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
+      ["10.1000/unbound", JSON.stringify(unboundGraph), 9_900],
+    );
+
+    await expect(
+      command("citationGraph.getCached", { doi: "10.1000/mismatched" }),
+    ).resolves.toEqual({ entry: null });
+    await expect(command("citationGraph.getCached", { doi: "10.1000/unbound" })).resolves.toEqual({
+      entry: null,
+    });
+    await expect(
+      database.query<{ count: number }>(`SELECT COUNT(*) AS count FROM graph_cache`),
+    ).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("does not store an unbound or mismatched graph under a DOI key", async () => {
+    const mismatchedGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: "10.1000/other" } : node,
+      ),
+    };
+    const unboundGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) => {
+        if (node.id !== GRAPH.centerId) return node;
+        const { doi: _doi, ...withoutDoi } = node;
+        return withoutDoi;
+      }),
+    };
+
+    await expect(
+      command("citationGraph.putCached", { doi: "10.1000/center", graph: mismatchedGraph }),
+    ).resolves.toEqual({ stored: false });
+    await expect(
+      command("citationGraph.putCached", { doi: "10.1000/center", graph: unboundGraph }),
+    ).resolves.toEqual({ stored: false });
+    await expect(
+      database.query<{ count: number }>(`SELECT COUNT(*) AS count FROM graph_cache`),
+    ).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("prefers a valid canonical row and retires a conflicting legacy raw-key row", async () => {
+    const legacyDoi = "HTTPS://DOI.ORG/10.1000/CENTER";
+    const legacyGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, title: "Legacy center" } : node,
+      ),
+    };
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
+      ["10.1000/center", JSON.stringify(GRAPH), 20_000],
+    );
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
+      [legacyDoi, JSON.stringify(legacyGraph), 10_000],
+    );
+
+    await expect(command("citationGraph.getCached", { doi: legacyDoi })).resolves.toEqual({
+      entry: { fetchedAt: 20_000, graph: GRAPH },
+    });
+    await expect(
+      database.query<{ work_id: string }>(`SELECT work_id FROM graph_cache ORDER BY work_id`),
+    ).resolves.toEqual([{ work_id: "10.1000/center" }]);
+  });
+
   it("removes malformed and sparse-derived cached JSON and migrates a legacy raw DOI key", async () => {
     const legacyDoi = "HTTPS://DOI.ORG/10.1000/CENTER";
     const sparseNodes = [GRAPH.nodes[0]!];
@@ -179,7 +266,13 @@ describe("Citation Graph data commands", () => {
         { source: "a\u0000b", target: "c" },
       ],
       nodes: [
-        { citedByCount: 0, id: "center", relation: "center", title: "Center" },
+        {
+          citedByCount: 0,
+          doi: "10.1000/delimiter",
+          id: "center",
+          relation: "center",
+          title: "Center",
+        },
         { citedByCount: 0, id: "a", relation: "reference", title: "A" },
         { citedByCount: 0, id: "b\u0000c", relation: "reference", title: "B C" },
         { citedByCount: 0, id: "a\u0000b", relation: "reference", title: "A B" },
