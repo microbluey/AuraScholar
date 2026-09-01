@@ -1,5 +1,6 @@
 import type { CitationGraph } from "@aurascholar/core";
 import { describe, expect, it, vi } from "vitest";
+import type { LibraryScopeToken } from "../../electron/data-command-contract";
 import {
   loadCitationGraphPageSnapshot,
   type CitationGraphPageDataSource,
@@ -34,18 +35,23 @@ const GRAPH: CitationGraph = {
   edges: [{ source: "center", target: "reference" }],
 };
 
+const SCOPE: LibraryScopeToken = { libraryId: "library:active", scopeToken: "scope-token" };
+
 function dataSource(
   getActiveLibraryDois = vi.fn(async () => ["10.1000/reference"]),
   loadGraph = vi.fn(async () => GRAPH as CitationGraph | null),
 ): {
   getActiveLibraryDois: typeof getActiveLibraryDois;
+  getLibraryScope: ReturnType<typeof vi.fn>;
   loadGraph: typeof loadGraph;
   source: CitationGraphPageDataSource;
 } {
+  const getLibraryScope = vi.fn(async () => SCOPE);
   return {
     getActiveLibraryDois,
+    getLibraryScope,
     loadGraph,
-    source: { getActiveLibraryDois, loadGraph },
+    source: { getActiveLibraryDois, getLibraryScope, loadGraph },
   };
 }
 
@@ -64,10 +70,11 @@ describe("citation graph page data gateway", () => {
       buildGraph,
       signal: undefined,
     });
-    expect(fixture.getActiveLibraryDois).toHaveBeenCalledWith([
-      "10.1000/center",
-      "10.1000/reference",
-    ]);
+    expect(fixture.getLibraryScope).toHaveBeenCalledOnce();
+    expect(fixture.getActiveLibraryDois).toHaveBeenCalledWith(
+      ["10.1000/center", "10.1000/reference"],
+      SCOPE,
+    );
     expect(snapshot.graph).toBe(GRAPH);
     expect([...snapshot.inLibraryDois]).toEqual(["10.1000/reference"]);
   });
@@ -79,11 +86,12 @@ describe("citation graph page data gateway", () => {
       value: { aura: { data: { command } } },
     });
     command
+      .mockResolvedValueOnce(SCOPE)
       .mockResolvedValueOnce({ entry: null })
       .mockResolvedValueOnce({ stored: true })
       .mockResolvedValueOnce({
         dois: ["10.1000/reference"],
-        libraryId: "library:active",
+        scope: SCOPE,
       });
 
     await expect(
@@ -91,8 +99,9 @@ describe("citation graph page data gateway", () => {
         buildGraph: vi.fn(async () => GRAPH),
       }),
     ).resolves.toEqual({ graph: GRAPH, inLibraryDois: new Set(["10.1000/reference"]) });
-    expect(command).toHaveBeenNthCalledWith(3, "citationGraph.getActiveLibraryDois", {
+    expect(command).toHaveBeenNthCalledWith(4, "citationGraph.getActiveLibraryDois", {
       dois: ["10.1000/center", "10.1000/reference"],
+      expectedScope: SCOPE,
     });
   });
 
@@ -103,11 +112,12 @@ describe("citation graph page data gateway", () => {
       value: { aura: { data: { command } } },
     });
     command
+      .mockResolvedValueOnce(SCOPE)
       .mockResolvedValueOnce({ entry: null })
       .mockResolvedValueOnce({ stored: true })
       .mockResolvedValueOnce({
         dois: ["10.1000/reference"],
-        libraryId: "library:active",
+        scope: SCOPE,
         unexpected: true,
       });
 
@@ -125,11 +135,12 @@ describe("citation graph page data gateway", () => {
       value: { aura: { data: { command } } },
     });
     command
+      .mockResolvedValueOnce(SCOPE)
       .mockResolvedValueOnce({ entry: null })
       .mockResolvedValueOnce({ stored: true })
       .mockResolvedValueOnce({
         dois: ["10.1000/not-requested"],
-        libraryId: "library:active",
+        scope: SCOPE,
       });
 
     await expect(
@@ -158,10 +169,10 @@ describe("citation graph page data gateway", () => {
 
     const snapshot = await loadCitationGraphPageSnapshot("10.1000/center", {}, fixture.source);
 
-    expect(fixture.getActiveLibraryDois).toHaveBeenCalledWith([
-      "10.1000/center",
-      "10.1000/reference",
-    ]);
+    expect(fixture.getActiveLibraryDois).toHaveBeenCalledWith(
+      ["10.1000/center", "10.1000/reference"],
+      SCOPE,
+    );
     expect([...snapshot.inLibraryDois]).toEqual([
       "10.1000/reference",
       "HTTPS://DOI.ORG/10.1000/REFERENCE",

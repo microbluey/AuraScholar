@@ -1,5 +1,6 @@
 import type { CitationGraph } from "@aurascholar/core";
 import { describe, expect, it, vi } from "vitest";
+import type { LibraryScopeToken } from "../../../electron/data-command-contract";
 import {
   MAX_CANVAS_CITATION_RELATIONS_TO_PERSIST,
   MAX_CANVAS_CITATION_WORK_IDS,
@@ -13,6 +14,8 @@ const PAPERS: CanvasCitationPaperIdentity[] = [
   { nodeId: "node-b", workId: "work-b", doi: "10.1000/b" },
   { nodeId: "node-c", workId: "work-c", doi: null },
 ];
+
+const SCOPE: LibraryScopeToken = { libraryId: "library:active", scopeToken: "scope-token" };
 
 const GRAPH: CitationGraph = {
   centerId: "openalex-a",
@@ -40,6 +43,7 @@ function options(
   overrides: Partial<ResolveCanvasCitationRelationsOptions> = {},
 ): ResolveCanvasCitationRelationsOptions {
   return {
+    getLibraryScope: vi.fn(async () => SCOPE),
     listLocalRelations: vi.fn(async () => []),
     persistRelations: vi.fn(async () => undefined),
     ...overrides,
@@ -47,6 +51,24 @@ function options(
 }
 
 describe("canvas citation relation resolver", () => {
+  it("does not capture Library scope for an empty injected selection", async () => {
+    const getLibraryScope = vi.fn(async () => SCOPE);
+
+    await expect(
+      resolveCanvasCitationRelations([], {
+        getLibraryScope,
+        listLocalRelations: vi.fn(async () => []),
+        persistRelations: vi.fn(async () => undefined),
+      }),
+    ).resolves.toEqual({
+      graphCount: 0,
+      relations: [],
+      source: "none",
+      truncated: false,
+    });
+    expect(getLibraryScope).not.toHaveBeenCalled();
+  });
+
   it("uses active Library relations without making graph requests", async () => {
     const loadGraph = vi.fn();
     const result = await resolveCanvasCitationRelations(
@@ -121,7 +143,10 @@ describe("canvas citation relation resolver", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    command.mockResolvedValueOnce({ relations: [] }).mockResolvedValueOnce({ persisted: 1 });
+    command
+      .mockResolvedValueOnce(SCOPE)
+      .mockResolvedValueOnce({ relations: [], scope: SCOPE })
+      .mockResolvedValueOnce({ persisted: 1, scope: SCOPE });
     const loadGraph = vi.fn(async (doi: string) => (doi === "10.1000/a" ? GRAPH : null));
 
     await expect(resolveCanvasCitationRelations(PAPERS, { loadGraph })).resolves.toMatchObject({
@@ -129,18 +154,24 @@ describe("canvas citation relation resolver", () => {
       relations: [{ citingWorkId: "work-a", citedWorkId: "work-b" }],
       source: "graph",
     });
-    expect(command).toHaveBeenNthCalledWith(1, "canvas.getCitationRelations", {
+    expect(command).toHaveBeenNthCalledWith(2, "canvas.getCitationRelations", {
+      expectedScope: SCOPE,
       workIds: ["work-a", "work-b", "work-c"],
     });
-    expect(command).toHaveBeenNthCalledWith(2, "canvas.persistCitationRelations", {
+    expect(command).toHaveBeenNthCalledWith(3, "canvas.persistCitationRelations", {
+      expectedScope: SCOPE,
       relations: [{ citingWorkId: "work-a", citedWorkId: "work-b" }],
     });
   });
 
   it("rejects an out-of-scope default local relation before graph work", async () => {
-    const command = vi.fn(async () => ({
-      relations: [{ citedWorkId: "work-b", citingWorkId: "work-outside" }],
-    }));
+    const command = vi
+      .fn()
+      .mockResolvedValueOnce(SCOPE)
+      .mockResolvedValueOnce({
+        relations: [{ citedWorkId: "work-b", citingWorkId: "work-outside" }],
+        scope: SCOPE,
+      });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: { aura: { data: { command } } },
@@ -159,7 +190,10 @@ describe("canvas citation relation resolver", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    command.mockResolvedValueOnce({ relations: [] }).mockResolvedValueOnce({ persisted: 0 });
+    command
+      .mockResolvedValueOnce(SCOPE)
+      .mockResolvedValueOnce({ relations: [], scope: SCOPE })
+      .mockResolvedValueOnce({ persisted: 0, scope: SCOPE });
 
     await expect(
       resolveCanvasCitationRelations(PAPERS, {
@@ -177,7 +211,10 @@ describe("canvas citation relation resolver", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    command.mockResolvedValueOnce({ relations: [] }).mockResolvedValueOnce({ persisted: 2 });
+    command
+      .mockResolvedValueOnce(SCOPE)
+      .mockResolvedValueOnce({ relations: [], scope: SCOPE })
+      .mockResolvedValueOnce({ persisted: 2, scope: SCOPE });
 
     await expect(
       resolveCanvasCitationRelations(PAPERS, {

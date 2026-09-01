@@ -60,7 +60,10 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   void dependencies.execute?.("library.getWorkInspectorDetail", async () => ({ detail: null }));
   // @ts-expect-error library.getWorkInspectorDetail must return its detail envelope.
   void dependencies.execute?.("library.getWorkInspectorDetail", async () => ({ work: null }));
-  void dependencies.execute?.("library.getScope", async () => ({ libraryId: "library-id" }));
+  void dependencies.execute?.("library.getScope", async () => ({
+    libraryId: "library-id",
+    scopeToken: "scope-token",
+  }));
   // @ts-expect-error library.getScope must return the local Library id.
   void dependencies.execute?.("library.getScope", async () => ({}));
   void dependencies.execute?.("library.getShellStats", async () => ({
@@ -127,10 +130,16 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   void dependencies.execute?.("canvas.getAnnotationIngressSource", async () => ({ source: null }));
   // @ts-expect-error canvas.getAnnotationIngressSource must return its source envelope.
   void dependencies.execute?.("canvas.getAnnotationIngressSource", async () => ({ work: null }));
-  void dependencies.execute?.("canvas.getCitationRelations", async () => ({ relations: [] }));
+  void dependencies.execute?.("canvas.getCitationRelations", async () => ({
+    relations: [],
+    scope: { libraryId: "library-id", scopeToken: "scope-token" },
+  }));
   // @ts-expect-error canvas.getCitationRelations must return its relation envelope.
   void dependencies.execute?.("canvas.getCitationRelations", async () => ({ persisted: 0 }));
-  void dependencies.transaction("canvas.persistCitationRelations", async () => ({ persisted: 0 }));
+  void dependencies.transaction("canvas.persistCitationRelations", async () => ({
+    persisted: 0,
+    scope: { libraryId: "library-id", scopeToken: "scope-token" },
+  }));
   // @ts-expect-error canvas.persistCitationRelations must return its persisted count.
   void dependencies.transaction("canvas.persistCitationRelations", async () => ({ relations: [] }));
   void dependencies.execute?.("canvas.loadWorkspace", async () => ({ workspace: null }));
@@ -147,7 +156,7 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   void dependencies.transaction("citationGraph.putCached", async () => ({ entry: null }));
   void dependencies.execute?.("citationGraph.getActiveLibraryDois", async () => ({
     dois: [],
-    libraryId: "library-id",
+    scope: { libraryId: "library-id", scopeToken: "scope-token" },
   }));
   // @ts-expect-error citationGraph.getActiveLibraryDois must return its Library-scoped result.
   void dependencies.execute?.("citationGraph.getActiveLibraryDois", async () => ({ dois: [] }));

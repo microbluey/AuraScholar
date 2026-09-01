@@ -4,6 +4,11 @@ import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
 import { MAX_CANVAS_INGRESS_IDENTIFIER_BYTES } from "../../src/shared/canvas-ingress-limits";
 import { canvasUtf8ByteLength } from "../../src/shared/canvas-workspace-document-limits";
+import {
+  MAX_LIBRARY_SCOPE_ID_BYTES,
+  MAX_LIBRARY_SCOPE_TOKEN_BYTES,
+  libraryScopeUtf8ByteLength,
+} from "../../src/shared/library-scope-limits";
 import type {
   CanvasGetActiveWorkCommandInput,
   CanvasGetActiveWorkCommandResult,
@@ -28,6 +33,7 @@ import {
   requireBoundedCanvasIngressOutput,
   toCanvasActiveWork,
 } from "./canvas-ingress-queries";
+import { assertActiveLibraryScopeToken } from "./library-scope-token";
 
 const MAX_CANVAS_CITATION_RELATIONS = 1_000;
 // The scoped relation query binds every id twice plus two Library parameters.
@@ -71,15 +77,15 @@ export async function executeCanvasPageCommand(
     case "canvas.getCitationRelations": {
       const input = parseCanvasGetCitationRelationsInput(request.input);
       return executeCanvasPageQuery(dependencies, request.name, async (database) => {
-        const libraryId = await requireActiveLocalLibraryId(database);
-        return loadCitationRelations(database, libraryId, input);
+        const scope = await assertActiveLibraryScopeToken(database, input.expectedScope);
+        return loadCitationRelations(database, scope, input);
       });
     }
     case "canvas.persistCitationRelations": {
       const input = parseCanvasPersistCitationRelationsInput(request.input);
       return executeCanvasPageMutation(dependencies, request.name, async (database) => {
-        const libraryId = await requireActiveLocalLibraryId(database);
-        return persistCitationRelations(database, libraryId, input);
+        const scope = await assertActiveLibraryScopeToken(database, input.expectedScope);
+        return persistCitationRelations(database, scope, input);
       });
     }
   }
@@ -125,15 +131,43 @@ function parseCanvasGetAnnotationIngressSourceInput(
 function parseCanvasGetCitationRelationsInput(
   value: unknown,
 ): CanvasGetCitationRelationsCommandInput {
-  const input = requireExactCanvasInput(value, "canvas.getCitationRelations", ["workIds"]);
-  return { workIds: requireUniqueCanvasWorkIds(input.workIds) };
+  const input = requireExactCanvasInput(value, "canvas.getCitationRelations", [
+    "expectedScope",
+    "workIds",
+  ]);
+  return {
+    expectedScope: requireCanvasScopeToken(input.expectedScope),
+    workIds: requireUniqueCanvasWorkIds(input.workIds),
+  };
 }
 
 function parseCanvasPersistCitationRelationsInput(
   value: unknown,
 ): CanvasPersistCitationRelationsCommandInput {
-  const input = requireExactCanvasInput(value, "canvas.persistCitationRelations", ["relations"]);
-  return { relations: requireUniqueCanvasCitationRelations(input.relations) };
+  const input = requireExactCanvasInput(value, "canvas.persistCitationRelations", [
+    "expectedScope",
+    "relations",
+  ]);
+  return {
+    expectedScope: requireCanvasScopeToken(input.expectedScope),
+    relations: requireUniqueCanvasCitationRelations(input.relations),
+  };
+}
+
+function requireCanvasScopeToken(value: unknown) {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 2 ||
+    typeof value.libraryId !== "string" ||
+    !value.libraryId.trim() ||
+    libraryScopeUtf8ByteLength(value.libraryId) > MAX_LIBRARY_SCOPE_ID_BYTES ||
+    typeof value.scopeToken !== "string" ||
+    !value.scopeToken.trim() ||
+    libraryScopeUtf8ByteLength(value.scopeToken) > MAX_LIBRARY_SCOPE_TOKEN_BYTES
+  ) {
+    throw new Error("Canvas Library scope is invalid");
+  }
+  return { libraryId: value.libraryId, scopeToken: value.scopeToken };
 }
 
 function requireExactCanvasInput(
@@ -235,10 +269,10 @@ async function loadAnnotationIngressSource(
 
 async function loadCitationRelations(
   database: Database,
-  libraryId: string,
+  scope: CanvasGetCitationRelationsCommandInput["expectedScope"],
   input: CanvasGetCitationRelationsCommandInput,
 ): Promise<CanvasGetCitationRelationsCommandResult> {
-  if (input.workIds.length === 0) return { relations: [] };
+  if (input.workIds.length === 0) return { relations: [], scope: { ...scope } };
   const placeholders = input.workIds.map(() => "?").join(",");
   // Ask SQLite for one more row than the contract permits so we can reject a
   // dense selected subgraph explicitly without materializing it over IPC.
@@ -256,19 +290,26 @@ async function loadCitationRelations(
        AND c.citing_work_id <> c.cited_work_id
      ORDER BY c.citing_work_id, c.cited_work_id
      LIMIT ?`,
-    [libraryId, libraryId, ...input.workIds, ...input.workIds, MAX_CANVAS_CITATION_RELATIONS + 1],
+    [
+      scope.libraryId,
+      scope.libraryId,
+      ...input.workIds,
+      ...input.workIds,
+      MAX_CANVAS_CITATION_RELATIONS + 1,
+    ],
   );
   if (relations.length > MAX_CANVAS_CITATION_RELATIONS) {
     throw new Error(`Canvas citation relations are limited to ${MAX_CANVAS_CITATION_RELATIONS}`);
   }
   return {
     relations,
+    scope: { ...scope },
   };
 }
 
 async function persistCitationRelations(
   database: Database,
-  libraryId: string,
+  scope: CanvasPersistCitationRelationsCommandInput["expectedScope"],
   input: CanvasPersistCitationRelationsCommandInput,
 ): Promise<CanvasPersistCitationRelationsCommandResult> {
   let persisted = 0;
@@ -290,10 +331,10 @@ async function persistCitationRelations(
         relation.citedWorkId,
         relation.citedWorkId,
         relation.citingWorkId,
-        libraryId,
-        libraryId,
+        scope.libraryId,
+        scope.libraryId,
       ],
     );
   }
-  return { persisted };
+  return { persisted, scope: { ...scope } };
 }

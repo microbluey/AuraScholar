@@ -1,4 +1,5 @@
 import type { CitationGraph } from "@aurascholar/core";
+import type { LibraryScopeToken } from "./library-read-command-contract";
 
 /**
  * A validated graph-cache entry. Both the freshness timestamp and the
@@ -44,11 +45,14 @@ export interface CitationGraphPutCachedCommandResult {
 /** DOI membership is derived from the durable active local Library. */
 export interface CitationGraphGetActiveLibraryDoisCommandInput {
   dois: string[];
+  /** Snapshot captured before remote graph work; main treats this as a guard. */
+  expectedScope: LibraryScopeToken;
 }
 
 export interface CitationGraphGetActiveLibraryDoisCommandResult {
   dois: string[];
-  libraryId: string;
+  /** Scope that was actually used for the membership query. */
+  scope: LibraryScopeToken;
 }
 
 /**

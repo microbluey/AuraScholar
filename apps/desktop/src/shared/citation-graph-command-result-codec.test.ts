@@ -4,6 +4,7 @@ import type {
   CitationGraphCacheEntry,
   CitationGraphGetActiveLibraryDoisCommandResult,
 } from "../../electron/citation-graph-command-contract";
+import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
 import {
   decodeCitationGraph,
   decodeCitationGraphBuildResult,
@@ -301,32 +302,35 @@ describe("Citation Graph command-result codec", () => {
 
   it("bounds and scopes active-Library DOI membership, then clones the response", () => {
     const requested = ["10.1000/center", "10.1000/reference"];
+    const scope: LibraryScopeToken = { libraryId: "library:active", scopeToken: "scope-token" };
     const response: CitationGraphGetActiveLibraryDoisCommandResult = {
       dois: [" DOI:10.1000/CENTER "],
-      libraryId: "library:active",
+      scope,
     };
-    const decoded = decodeCitationGraphGetActiveLibraryDoisResult(response, requested);
-    expect(decoded).toEqual({ dois: ["DOI:10.1000/CENTER"], libraryId: "library:active" });
+    const decoded = decodeCitationGraphGetActiveLibraryDoisResult(response, requested, scope);
+    expect(decoded).toEqual({ dois: ["DOI:10.1000/CENTER"], scope });
     expect(decoded.dois).not.toBe(response.dois);
+    expect(decoded.scope).not.toBe(response.scope);
 
     const invalid = [
-      { dois: ["10.1000/other"], libraryId: "library:active" },
-      { dois: ["10.1000/center", "doi:10.1000/CENTER"], libraryId: "library:active" },
-      { dois: ["10.1000/center", undefined], libraryId: "library:active" },
-      { dois: ["10.1000/center"], libraryId: "" },
-      { dois: ["10.1000/center"], libraryId: "x".repeat(MAX_CITATION_GRAPH_LIBRARY_ID_BYTES + 1) },
-      { dois: ["10.1000/center"], libraryId: "library:active", extra: true },
+      { dois: ["10.1000/other"], scope },
+      { dois: ["10.1000/center", "doi:10.1000/CENTER"], scope },
+      { dois: ["10.1000/center", undefined], scope },
+      { dois: ["10.1000/center"], scope: { ...scope, libraryId: "" } },
+      {
+        dois: ["10.1000/center"],
+        scope: { ...scope, libraryId: "x".repeat(MAX_CITATION_GRAPH_LIBRARY_ID_BYTES + 1) },
+      },
+      { dois: ["10.1000/center"], scope, extra: true },
+      { dois: ["10.1000/center"], scope: { ...scope, scopeToken: "different" } },
     ];
     for (const value of invalid) {
-      expectInvalid(() => decodeCitationGraphGetActiveLibraryDoisResult(value, requested));
+      expectInvalid(() => decodeCitationGraphGetActiveLibraryDoisResult(value, requested, scope));
     }
 
     const sparseDois = new Array<string>(1);
     expectInvalid(() =>
-      decodeCitationGraphGetActiveLibraryDoisResult(
-        { dois: sparseDois, libraryId: "library:active" },
-        requested,
-      ),
+      decodeCitationGraphGetActiveLibraryDoisResult({ dois: sparseDois, scope }, requested, scope),
     );
 
     const tooMany = Array.from(
@@ -334,10 +338,7 @@ describe("Citation Graph command-result codec", () => {
       (_, index) => `10.1000/${index}`,
     );
     expectInvalid(() =>
-      decodeCitationGraphGetActiveLibraryDoisResult(
-        { dois: tooMany, libraryId: "library:active" },
-        tooMany,
-      ),
+      decodeCitationGraphGetActiveLibraryDoisResult({ dois: tooMany, scope }, tooMany, scope),
     );
   });
 });

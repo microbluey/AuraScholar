@@ -1,9 +1,6 @@
-import type {
-  CanvasCitationRelation,
-  CanvasEdgeRelation,
-  CanvasNodeType,
-} from "@aurascholar/core";
+import type { CanvasCitationRelation, CanvasEdgeRelation, CanvasNodeType } from "@aurascholar/core";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
+import type { LibraryScopeToken } from "./library-read-command-contract";
 
 /** Canvas workspace snapshots are stored structurally to avoid a core <-> db cycle. */
 export type CanvasListWorkspacesCommandInput = Record<string, never>;
@@ -183,11 +180,13 @@ export interface CanvasGetAnnotationIngressSourceCommandResult {
 
 /** Active local citation edges whose endpoints are both among `workIds`. */
 export interface CanvasGetCitationRelationsCommandInput {
+  expectedScope: LibraryScopeToken;
   workIds: string[];
 }
 
 export interface CanvasGetCitationRelationsCommandResult {
   relations: WorkCitationRelation[];
+  scope: LibraryScopeToken;
 }
 
 /**
@@ -195,12 +194,14 @@ export interface CanvasGetCitationRelationsCommandResult {
  * both endpoints against the active local Library before it persists them.
  */
 export interface CanvasPersistCitationRelationsCommandInput {
+  expectedScope: LibraryScopeToken;
   relations: CanvasCitationRelation[];
 }
 
 export interface CanvasPersistCitationRelationsCommandResult {
   /** Actual INSERT OR IGNORE rows newly persisted by this command. */
   persisted: number;
+  scope: LibraryScopeToken;
 }
 
 /**
