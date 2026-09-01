@@ -1,8 +1,10 @@
 import { createRequire } from "node:module";
 import {
   ContentUnitsRepo,
+  DocumentAssetsRepo,
   EmbeddingProfilesRepo,
   KnowledgeIndexesRepo,
+  WorksRepo,
   type ContentUnit,
   type Database,
 } from "@aurascholar/db";
@@ -156,6 +158,94 @@ describe("SqliteVecIndexStore", () => {
     });
     await expect(nativeTableExists()).resolves.toBe(false);
     await expect(nativeRowCount(index.id)).resolves.toBe(0);
+  });
+
+  it("suppresses a physically retained vector after its PDF revision is no longer current", async () => {
+    const work = await new WorksRepo(database, libraryId).upsert({
+      title: "Vector visibility paper",
+    });
+    const asset = await new DocumentAssetsRepo(database, libraryId).create({
+      workId: work.id,
+      kind: "pdf",
+      title: "vector-visibility.pdf",
+    });
+    const first = await new DocumentAssetsRepo(database, libraryId).createRevision(asset.id, {
+      id: "revision:vector-visibility-first",
+      mimeType: "application/pdf",
+      blobSha256: "1".repeat(64),
+      byteSize: 10,
+      extractionStatus: "ready",
+    });
+    const second = await new DocumentAssetsRepo(database, libraryId).createRevision(asset.id, {
+      id: "revision:vector-visibility-second",
+      mimeType: "application/pdf",
+      blobSha256: "2".repeat(64),
+      byteSize: 10,
+      extractionStatus: "ready",
+      makeCurrent: false,
+    });
+    const oldUnit = contentUnit("content-unit:vector-visibility-old", {
+      sourceId: first.id,
+      assetId: asset.id,
+      revisionId: first.id,
+      workId: work.id,
+      contentHash: "e".repeat(64),
+    });
+    await units.upsertMany([oldUnit]);
+    const index = await beginHybridIndex();
+    await store.persist({
+      libraryId,
+      indexId: index.id,
+      entries: [{ contentUnitId: oldUnit.id, vector: new Float32Array([0, 1]) }],
+      now: 300,
+    });
+    await indexes.activate(index.id, { now: 301 });
+
+    // Simulate a canonical pointer switch before the asynchronous vector GC.
+    await database.run(
+      `UPDATE document_assets SET current_revision_id = ?, updated_at = 302 WHERE id = ?`,
+      [second.id, asset.id],
+    );
+    await expect(
+      store.search({
+        libraryId,
+        indexId: index.id,
+        allowedSourceIds: [first.id],
+        vector: new Float32Array([0, 1]),
+        limit: 1,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("ignores an orphaned native vector mapping instead of surfacing it", async () => {
+    const unit = contentUnit("content-unit:vector-orphan", {
+      sourceId: "revision:vector-orphan",
+    });
+    await units.upsertMany([unit]);
+    const index = await beginHybridIndex();
+    await store.persist({
+      libraryId,
+      indexId: index.id,
+      entries: [{ contentUnitId: unit.id, vector: new Float32Array([0, 1]) }],
+      now: 400,
+    });
+    await indexes.activate(index.id, { now: 401 });
+
+    // Simulate a damaged legacy database with foreign-key enforcement disabled.
+    // The physical row remains, but a missing relational ContentUnit must not
+    // become a result or an adapter error.
+    await database.exec("PRAGMA foreign_keys = OFF");
+    await database.run("DELETE FROM content_units WHERE id = ?", [unit.id]);
+    await database.exec("PRAGMA foreign_keys = ON");
+    await expect(
+      store.search({
+        libraryId,
+        indexId: index.id,
+        allowedSourceIds: [unit.sourceId],
+        vector: new Float32Array([0, 1]),
+        limit: 1,
+      }),
+    ).resolves.toEqual([]);
   });
 });
 

@@ -2,6 +2,7 @@ import type { Database } from "../database.js";
 import { withDatabaseSavepoint } from "../savepoint.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
 import * as Content from "./content-unit-support.js";
+import { contentUnitCanonicalVisibilitySql } from "./content-unit-visibility.js";
 import * as Contract from "./knowledge-contract.js";
 import * as Utils from "./knowledge-utils.js";
 
@@ -15,13 +16,19 @@ export class ContentUnitsRepo {
 
   async get(
     contentUnitId: string,
-    options: { includeDeleted?: boolean } = {},
+    options: { includeDeleted?: boolean; includeHistorical?: boolean } = {},
   ): Promise<Contract.ContentUnitRow | null> {
     Utils.assertId(contentUnitId, "ContentUnit id");
+    const lifecycleClause = options.includeDeleted
+      ? ""
+      : ` AND unit.deleted_at IS NULL AND ${contentUnitCanonicalVisibilitySql({
+          includeHistoricalPdf: options.includeHistorical === true,
+        })}`;
     const rows = await this.db.query<Contract.ContentUnitStorageRow>(
       `SELECT ${Content.CONTENT_UNIT_COLUMNS}
-       FROM content_units
-       WHERE id = ? AND library_id = ?${options.includeDeleted ? "" : " AND deleted_at IS NULL"}
+       FROM content_units unit
+       WHERE unit.id = ? AND unit.library_id = ?
+         ${lifecycleClause}
        LIMIT 1`,
       [contentUnitId, this.libraryId],
     );
@@ -31,22 +38,33 @@ export class ContentUnitsRepo {
   async listForSource(
     sourceType: Contract.ContentUnitSourceType,
     sourceId: string,
-    options: { revisionId?: string | null; includeDeleted?: boolean } = {},
+    options: {
+      revisionId?: string | null;
+      includeDeleted?: boolean;
+      includeHistorical?: boolean;
+    } = {},
   ): Promise<Contract.ContentUnitRow[]> {
     Utils.assertKnownContentUnitSourceType(sourceType);
     Utils.assertId(sourceId, "ContentUnit source id");
-    const clauses = ["library_id = ?", "source_type = ?", "source_id = ?"];
+    const clauses = ["unit.library_id = ?", "unit.source_type = ?", "unit.source_id = ?"];
     const params: unknown[] = [this.libraryId, sourceType, sourceId];
     if (options.revisionId !== undefined) {
-      clauses.push("revision_id IS ?");
+      clauses.push("unit.revision_id IS ?");
       params.push(options.revisionId);
     }
-    if (!options.includeDeleted) clauses.push("deleted_at IS NULL");
+    if (!options.includeDeleted) {
+      clauses.push("unit.deleted_at IS NULL");
+      clauses.push(
+        contentUnitCanonicalVisibilitySql({
+          includeHistoricalPdf: options.includeHistorical === true,
+        }),
+      );
+    }
     const rows = await this.db.query<Contract.ContentUnitStorageRow>(
       `SELECT ${Content.CONTENT_UNIT_COLUMNS}
-       FROM content_units
+       FROM content_units unit
        WHERE ${clauses.join(" AND ")}
-       ORDER BY ordinal ASC, id ASC`,
+       ORDER BY unit.ordinal ASC, unit.id ASC`,
       params,
     );
     return rows.map(Content.toContentUnitRow);
@@ -71,6 +89,7 @@ export class ContentUnitsRepo {
             AND work.library_id = unit.library_id
             AND work.deleted_at IS NULL
           WHERE unit.library_id = ? AND unit.deleted_at IS NULL
+            AND ${contentUnitCanonicalVisibilitySql()}
        ),
        normalized_units AS (
          SELECT source_type,

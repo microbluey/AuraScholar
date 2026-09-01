@@ -1,5 +1,8 @@
 import type { Migration } from "./migrations.js";
-import { knowledgeMigrations } from "./migration-knowledge-registry.js";
+import {
+  knowledgeMigrations,
+  knowledgePostRuntimeMigrations,
+} from "./migration-knowledge-registry.js";
 import { libraryMaintenanceMigrations } from "./migration-library-maintenance.js";
 import { runtimeCacheMigrations } from "./migration-runtime-cache.js";
 
@@ -8,4 +11,5 @@ export const postCoreMigrations: Migration[] = [
   ...knowledgeMigrations,
   ...libraryMaintenanceMigrations,
   ...runtimeCacheMigrations,
+  ...knowledgePostRuntimeMigrations,
 ];
