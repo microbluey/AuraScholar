@@ -10,6 +10,7 @@ import type {
   CanvasPersistCitationRelationsCommandResult,
 } from "../../electron/canvas-command-contract";
 import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
+import { CITATION_GRAPH_PROVIDERS, type CitationGraphProvider } from "./citation-graph-provenance";
 import {
   MAX_CANVAS_INGRESS_ANNOTATION_ANCHOR_BYTES,
   MAX_CANVAS_INGRESS_ANNOTATION_CONTENT_BYTES,
@@ -110,9 +111,11 @@ export function decodeCanvasPersistCitationRelationsResult(
   value: unknown,
   relationCount: number,
   expectedScope: LibraryScopeToken,
+  expectedProvider: CitationGraphProvider,
 ): CanvasPersistCitationRelationsCommandResult {
   const result = requireExactCanvasResult(value, "Canvas persist citation relations result", [
     "persisted",
+    "provider",
     "scope",
   ]);
   if (
@@ -124,10 +127,24 @@ export function decodeCanvasPersistCitationRelationsResult(
   ) {
     throw new Error("Canvas persist citation relations result is invalid");
   }
+  const provider = requireCanvasCitationProvider(result.provider);
+  if (provider !== expectedProvider) {
+    throw new Error("Canvas citation provider does not match the request");
+  }
   const scope = decodeCanvasScopeToken(result.scope);
   const decodedExpectedScope = decodeCanvasScopeToken(expectedScope);
   assertCanvasScopeMatches(scope, decodedExpectedScope);
-  return { persisted: result.persisted as number, scope };
+  return { persisted: result.persisted as number, provider, scope };
+}
+
+function requireCanvasCitationProvider(value: unknown): CitationGraphProvider {
+  if (
+    typeof value !== "string" ||
+    !CITATION_GRAPH_PROVIDERS.includes(value as CitationGraphProvider)
+  ) {
+    throw new Error("Canvas citation provider is invalid");
+  }
+  return value as CitationGraphProvider;
 }
 
 function decodeCanvasScopeToken(value: unknown): LibraryScopeToken {

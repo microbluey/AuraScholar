@@ -14,9 +14,14 @@ describe("Citation Graph command payload boundary", () => {
     const pageGateway = source("src/services/citation-graph-page-data.ts");
     const scholarlyGateway = source("src/services/scholarly-data.ts");
     const mainCommands = source("electron/main/citation-graph-commands.ts");
+    const mainPayload = source("electron/main/citation-graph-payload.ts");
+    const mainProvenance = source("electron/main/citation-graph-provenance.ts");
     const scholarlyOutput = source("electron/main/scholarly-command-output.ts");
+    const scholarlyGraphOutput = source("electron/main/scholarly-citation-graph-output.ts");
+    const provenanceCodec = source("src/shared/citation-graph-provenance-codec.ts");
+    const provenanceContract = source("src/shared/citation-graph-provenance.ts");
 
-    for (const rendererSafeSource of [limits, codec]) {
+    for (const rendererSafeSource of [limits, codec, provenanceCodec, provenanceContract]) {
       expect(rendererSafeSource).not.toContain("@aurascholar/db");
       expect(rendererSafeSource).not.toMatch(/(?:from|import\()\s*["']node:/u);
       expect(rendererSafeSource).not.toContain("window.");
@@ -46,15 +51,35 @@ describe("Citation Graph command payload boundary", () => {
     ]) {
       expect(limits).toContain(`export const ${limit}`);
       expect(codec).toContain(limit);
-      expect(mainCommands).toContain(limit);
     }
-    expect(codec).toContain("isDenseArray");
+    expect(codec).toMatch(/function isDenseArray\(value: readonly unknown\[\]\): boolean/u);
+    expect(codec).toContain("Object.hasOwn(value, index)");
     expect(mainCommands).toContain("isDenseCitationGraphArray");
-    expect(mainCommands).toContain("JSON.stringify([edge.source, edge.target])");
-    expect(scholarlyOutput).toContain("MAX_CITATION_GRAPH_DOI_BYTES");
-    expect(scholarlyOutput).toContain("MAX_CITATION_GRAPH_EDGES");
-    expect(scholarlyOutput).toContain("MAX_CITATION_GRAPH_NODE_ID_BYTES");
-    expect(scholarlyOutput).toContain("MAX_CITATION_GRAPH_NODE_TEXT_BYTES");
-    expect(scholarlyOutput).toContain("MAX_CITATION_GRAPH_NODES");
+    expect(mainPayload).toContain("MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES");
+    expect(mainPayload).toContain("MAX_CITATION_GRAPH_EDGES");
+    expect(mainPayload).toContain("MAX_CITATION_GRAPH_NODE_ID_BYTES");
+    expect(mainPayload).toContain("MAX_CITATION_GRAPH_NODE_TEXT_BYTES");
+    expect(mainPayload).toContain("MAX_CITATION_GRAPH_NODES");
+    expect(mainPayload).toContain("JSON.stringify([edge.source, edge.target])");
+    expect(mainProvenance).toContain("MAX_CITATION_GRAPH_DOI_BYTES");
+    expect(mainProvenance).toContain("MAX_CITATION_GRAPH_PROVIDER_BYTES");
+    expect(mainProvenance).toContain("MAX_CITATION_GRAPH_PROVIDER_VERSION_BYTES");
+    expect(mainProvenance).toContain("MAX_CITATION_GRAPH_PROVENANCE_BYTES");
+    for (const limit of [
+      "MAX_CITATION_GRAPH_DOI_BYTES",
+      "MAX_CITATION_GRAPH_EDGES",
+      "MAX_CITATION_GRAPH_NODE_ID_BYTES",
+      "MAX_CITATION_GRAPH_NODE_TEXT_BYTES",
+      "MAX_CITATION_GRAPH_NODES",
+      "MAX_CITATION_GRAPH_PROVENANCE_BYTES",
+      "MAX_CITATION_GRAPH_PROVENANCE_BYTES",
+    ]) {
+      expect(scholarlyGraphOutput).toContain(limit);
+    }
+    expect(scholarlyOutput).toContain("sanitizeCitationGraphBuild");
+    expect(scholarlyGraphOutput).toContain("safeIdentifier");
+    expect(mainCommands).toContain("requireCitationGraphProvenance");
+    expect(codec).toContain("decodeCitationGraphProvenance");
+    expect(provenanceContract).toContain("CITATION_GRAPH_PROVIDER_VERSION");
   });
 });

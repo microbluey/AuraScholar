@@ -22,6 +22,10 @@ import type {
   DataCommandRequest,
 } from "../data-command-contract";
 import {
+  CITATION_GRAPH_PROVIDERS,
+  type CitationGraphProvider,
+} from "../../src/shared/citation-graph-provenance";
+import {
   assertActiveLocalLibrary,
   isRecord,
   requireRecordId,
@@ -146,12 +150,24 @@ function parseCanvasPersistCitationRelationsInput(
 ): CanvasPersistCitationRelationsCommandInput {
   const input = requireExactCanvasInput(value, "canvas.persistCitationRelations", [
     "expectedScope",
+    "provider",
     "relations",
   ]);
   return {
     expectedScope: requireCanvasScopeToken(input.expectedScope),
+    provider: requireCanvasProvider(input.provider),
     relations: requireUniqueCanvasCitationRelations(input.relations),
   };
+}
+
+function requireCanvasProvider(value: unknown): CitationGraphProvider {
+  if (
+    typeof value !== "string" ||
+    !CITATION_GRAPH_PROVIDERS.includes(value as CitationGraphProvider)
+  ) {
+    throw new Error("Canvas citation provider is invalid");
+  }
+  return value as CitationGraphProvider;
 }
 
 function requireCanvasScopeToken(value: unknown) {
@@ -318,7 +334,7 @@ async function persistCitationRelations(
     // under one main-process transaction rather than renderer-owned IPC calls.
     persisted += await database.run(
       `INSERT OR IGNORE INTO citations (citing_work_id, cited_work_id, source)
-       SELECT ?, ?, 'openalex'
+       SELECT ?, ?, ?
        FROM works citing
        JOIN works cited ON cited.id = ?
        WHERE citing.id = ?
@@ -329,6 +345,7 @@ async function persistCitationRelations(
       [
         relation.citingWorkId,
         relation.citedWorkId,
+        input.provider,
         relation.citedWorkId,
         relation.citingWorkId,
         scope.libraryId,
@@ -336,5 +353,5 @@ async function persistCitationRelations(
       ],
     );
   }
-  return { persisted, scope: { ...scope } };
+  return { persisted, provider: input.provider, scope: { ...scope } };
 }

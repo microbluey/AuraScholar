@@ -138,6 +138,7 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
   void dependencies.execute?.("canvas.getCitationRelations", async () => ({ persisted: 0 }));
   void dependencies.transaction("canvas.persistCitationRelations", async () => ({
     persisted: 0,
+    provider: "openalex",
     scope: { libraryId: "library-id", scopeToken: "scope-token" },
   }));
   // @ts-expect-error canvas.persistCitationRelations must return its persisted count.

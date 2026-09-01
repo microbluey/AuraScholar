@@ -1,5 +1,6 @@
 import type { CitationGraph } from "@aurascholar/core";
 import type { LibraryScopeToken } from "./library-read-command-contract";
+import type { CitationGraphProvenance } from "../src/shared/citation-graph-provenance";
 
 /**
  * A validated graph-cache entry. Both the freshness timestamp and the
@@ -9,6 +10,12 @@ import type { LibraryScopeToken } from "./library-read-command-contract";
 export interface CitationGraphCacheEntry {
   /** Monotonic compare-and-swap token owned by the main-process database. */
   cacheVersion: number;
+  /** Main-observed provider contract for this topology. */
+  provenance: CitationGraphProvenance;
+  /**
+   * Successful main-process cache commit time. This is the renderer TTL
+   * anchor; it is intentionally distinct from provenance.capturedAt.
+   */
   fetchedAt: number;
   graph: CitationGraph;
 }
@@ -36,6 +43,8 @@ export interface CitationGraphPutCachedCommandInput {
   doi: string;
   expectedCacheVersion?: number | null;
   graph: CitationGraph;
+  /** Main validates the binding and owns all provider/timestamp decisions. */
+  provenance: CitationGraphProvenance;
 }
 
 export interface CitationGraphPutCachedCommandResult {

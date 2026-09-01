@@ -3,6 +3,7 @@ import type { S2Enrichment } from "@aurascholar/connectors";
 import { describe, expect, it, vi } from "vitest";
 import { executeScholarlyCommand, type MainScholarlyService } from "./scholarly-commands";
 import { MainScholarlyRunRegistry } from "./scholarly-run-registry";
+import type { CitationGraphProvenance } from "../../src/shared/citation-graph-provenance";
 
 const GRAPH: CitationGraph = {
   centerId: "W-center",
@@ -10,12 +11,22 @@ const GRAPH: CitationGraph = {
   nodes: [
     {
       citedByCount: 0,
+      doi: "10.1000/graph",
       id: "W-center",
       relation: "center",
       title: "Center work",
     },
   ],
   truncated: false,
+};
+
+const GRAPH_PROVENANCE: CitationGraphProvenance = {
+  capturedAt: 1_725_000_000_000,
+  centerDoi: "10.1000/graph",
+  provider: "openalex",
+  providerVersion: "openalex-citation-graph-v1",
+  requestedDoi: "10.1000/graph",
+  schemaVersion: 1,
 };
 
 const RESOLVED: ResolvedWork = {
@@ -62,7 +73,16 @@ describe("scholarly data commands", () => {
         },
         { runs, service: scholarlyService },
       ),
-    ).resolves.toEqual({ graph: GRAPH });
+    ).resolves.toMatchObject({
+      graph: GRAPH,
+      provenance: {
+        centerDoi: "10.1000/graph",
+        provider: "openalex",
+        providerVersion: "openalex-citation-graph-v1",
+        requestedDoi: "10.1000/graph",
+        schemaVersion: 1,
+      },
+    });
 
     expect(scholarlyService.buildCitationGraph).toHaveBeenCalledWith(
       "10.1000/graph",
@@ -101,6 +121,37 @@ describe("scholarly data commands", () => {
     ).rejects.toThrow("unsupported");
     expect(scholarlyService.searchDiscovery).not.toHaveBeenCalled();
     expect(scholarlyService.resolveClue).not.toHaveBeenCalled();
+  });
+
+  it("rejects an injected graph snapshot whose provenance is missing or misbound", async () => {
+    const missing = service({
+      buildCitationGraph: vi.fn(async () => ({ graph: GRAPH, provenance: null })),
+    });
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: { doi: "10.1000/graph", requestId: "missing-provenance" },
+          name: "citationGraph.build",
+        },
+        { runs: new MainScholarlyRunRegistry(), service: missing },
+      ),
+    ).rejects.toThrow("Citation graph provenance is invalid");
+
+    const misbound = service({
+      buildCitationGraph: vi.fn(async () => ({
+        graph: GRAPH,
+        provenance: { ...GRAPH_PROVENANCE, requestedDoi: "10.1000/other" },
+      })),
+    });
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: { doi: "10.1000/graph", requestId: "misbound-provenance" },
+          name: "citationGraph.build",
+        },
+        { runs: new MainScholarlyRunRegistry(), service: misbound },
+      ),
+    ).rejects.toThrow("Citation graph provenance is invalid");
   });
 
   it("passes a cancellation signal to the active operation and rejects after cancellation", async () => {

@@ -1,17 +1,10 @@
-import { Buffer } from "node:buffer";
-import type { CitationGraph, GraphEdge, GraphNode } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
 import {
   citationGraphMatchesDoi,
   citationGraphUtf8ByteLength,
   MAX_CITATION_GRAPH_ACTIVE_LIBRARY_DOIS,
-  MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES,
   MAX_CITATION_GRAPH_DOI_BYTES,
-  MAX_CITATION_GRAPH_EDGES,
   MAX_CITATION_GRAPH_LIBRARY_ID_BYTES,
-  MAX_CITATION_GRAPH_NODE_ID_BYTES,
-  MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
-  MAX_CITATION_GRAPH_NODES,
   MAX_CITATION_GRAPH_SCOPE_TOKEN_BYTES,
   normalizeCitationGraphDoi,
 } from "../../src/shared/citation-graph-limits";
@@ -26,11 +19,20 @@ import type {
 } from "../data-command-contract";
 import { isRecord, type DataCommandDependencies } from "./data-command-runtime";
 import { loadActiveLibraryDois } from "./citation-graph-library-query";
+import {
+  parseCachedCitationGraphProvenance,
+  requireCitationGraphProvenance,
+  requireCitationGraphProvenanceInput,
+  serializeCitationGraphProvenance,
+} from "./citation-graph-provenance";
+import {
+  parseCachedCitationGraph,
+  requireCitationGraph,
+  serializeCitationGraph,
+} from "./citation-graph-payload";
 import { assertActiveLibraryScopeToken } from "./library-scope-token";
 
 const MAX_CITATION_GRAPH_DOI_LENGTH = MAX_CITATION_GRAPH_DOI_BYTES;
-const MAX_CITATION_GRAPH_NODE_ID_LENGTH = MAX_CITATION_GRAPH_NODE_ID_BYTES;
-const MAX_CITATION_GRAPH_NODE_TEXT_LENGTH = MAX_CITATION_GRAPH_NODE_TEXT_BYTES;
 const MAX_ACTIVE_LIBRARY_DOIS = MAX_CITATION_GRAPH_ACTIVE_LIBRARY_DOIS;
 
 type CitationGraphReadCommandName = "citationGraph.getActiveLibraryDois";
@@ -46,6 +48,8 @@ interface CachedCitationGraphRow {
   cache_version: number;
   fetched_at: number;
   payload_json: string;
+  provider: string;
+  provenance_json: string;
 }
 
 /**
@@ -72,7 +76,9 @@ export async function executeCitationGraphCommand(
       // Do not place an unbound or differently-centered graph under this DOI;
       // the freshly built graph can still be displayed by the caller.
       if (!citationGraphMatchesDoi(input.graph, doi)) return { stored: false };
+      const provenance = requireCitationGraphProvenance(input.provenance, input.graph, doi);
       const payloadJson = serializeCitationGraph(input.graph);
+      const provenanceJson = serializeCitationGraphProvenance(provenance);
       return executeCitationGraphCacheMutation(dependencies, request.name, async (database) => {
         const fetchedAt = Date.now();
         if (!isValidCacheTimestamp(fetchedAt)) {
@@ -81,8 +87,9 @@ export async function executeCitationGraphCommand(
         if (input.expectedCacheVersion === null) {
           const changed = await database.run(
             `INSERT OR IGNORE INTO graph_cache
-             (work_id, payload_json, fetched_at, cache_version) VALUES (?, ?, ?, ?)`,
-            [doi, payloadJson, fetchedAt, 1],
+             (work_id, payload_json, fetched_at, cache_version, provider, provenance_json)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [doi, payloadJson, fetchedAt, 1, provenance.provider, provenanceJson],
           );
           return { stored: changed === 1 };
         }
@@ -91,9 +98,18 @@ export async function executeCitationGraphCommand(
         // freshness data and may repeat, while versions must advance.
         const changed = await database.run(
           `UPDATE graph_cache
-           SET payload_json = ?, fetched_at = ?, cache_version = cache_version + 1
+           SET payload_json = ?, fetched_at = ?, cache_version = cache_version + 1,
+               provider = ?, provenance_json = ?
            WHERE work_id = ? AND cache_version = ? AND cache_version < ?`,
-          [payloadJson, fetchedAt, doi, input.expectedCacheVersion, Number.MAX_SAFE_INTEGER],
+          [
+            payloadJson,
+            fetchedAt,
+            provenance.provider,
+            provenanceJson,
+            doi,
+            input.expectedCacheVersion,
+            Number.MAX_SAFE_INTEGER,
+          ],
         );
         return { stored: changed === 1 };
       });
@@ -140,7 +156,7 @@ function parseCitationGraphPutCachedInput(value: unknown): CitationGraphPutCache
   const input = requireExactCitationGraphInput(
     value,
     "citationGraph.putCached",
-    ["doi", "graph"],
+    ["doi", "graph", "provenance"],
     ["expectedCacheVersion"],
   );
   return {
@@ -149,6 +165,7 @@ function parseCitationGraphPutCachedInput(value: unknown): CitationGraphPutCache
       ? requireNullableCitationGraphCacheVersion(input.expectedCacheVersion)
       : null,
     graph: requireCitationGraph(input.graph),
+    provenance: requireCitationGraphProvenanceInput(input.provenance),
   };
 }
 
@@ -227,130 +244,14 @@ function canonicalCitationGraphDoi(doi: string): string {
   return normalizeCitationGraphDoi(doi) ?? doi.toLowerCase();
 }
 
-function requireCitationGraph(value: unknown): CitationGraph {
-  const graph = requireExactCitationGraphRecord(value, "Citation graph", [
-    "centerId",
-    "nodes",
-    "edges",
-    "truncated",
-  ]);
-  const centerId = requireCitationGraphNodeId(graph.centerId, "Citation graph center id");
-  if (typeof graph.truncated !== "boolean") {
-    throw new Error("Citation graph truncation state is invalid");
-  }
-  if (
-    !Array.isArray(graph.nodes) ||
-    graph.nodes.length === 0 ||
-    graph.nodes.length > MAX_CITATION_GRAPH_NODES ||
-    !isDenseCitationGraphArray(graph.nodes)
-  ) {
-    throw new Error(`Citation graph nodes are limited to ${MAX_CITATION_GRAPH_NODES}`);
-  }
-  if (
-    !Array.isArray(graph.edges) ||
-    graph.edges.length > MAX_CITATION_GRAPH_EDGES ||
-    !isDenseCitationGraphArray(graph.edges)
-  ) {
-    throw new Error(`Citation graph edges are limited to ${MAX_CITATION_GRAPH_EDGES}`);
-  }
-
-  const nodes = graph.nodes.map((node, index) => requireCitationGraphNode(node, index));
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  if (nodeIds.size !== nodes.length) throw new Error("Citation graph node ids must be unique");
-  const centerNodes = nodes.filter((node) => node.relation === "center");
-  if (centerNodes.length !== 1 || centerNodes[0]?.id !== centerId) {
-    throw new Error("Citation graph must contain exactly one matching center node");
-  }
-
-  const edges = graph.edges.map((edge, index) => requireCitationGraphEdge(edge, index, nodeIds));
-  const edgeKeys = edges.map((edge) => JSON.stringify([edge.source, edge.target]));
-  if (new Set(edgeKeys).size !== edgeKeys.length) {
-    throw new Error("Citation graph edges must be unique");
-  }
-
-  return { centerId, edges, nodes, truncated: graph.truncated };
-}
-
-function requireCitationGraphNode(value: unknown, index: number): GraphNode {
-  const node = requireExactCitationGraphRecord(
-    value,
-    `Citation graph node at index ${index}`,
-    ["id", "title", "citedByCount", "relation"],
-    ["year", "doi", "venue", "firstAuthor"],
-  );
-  if (node.relation !== "center" && node.relation !== "reference" && node.relation !== "citer") {
-    throw new Error(`Citation graph node relation at index ${index} is invalid`);
-  }
-  if (!Number.isSafeInteger(node.citedByCount) || (node.citedByCount as number) < 0) {
-    throw new Error(`Citation graph cited-by count at index ${index} is invalid`);
-  }
-
-  const year = optionalCitationGraphYear(readOptionalCitationGraphField(node, "year"), index);
-  const doi = optionalCitationGraphText(
-    readOptionalCitationGraphField(node, "doi"),
-    `Citation graph DOI at index ${index}`,
-    MAX_CITATION_GRAPH_DOI_LENGTH,
-  );
-  const venue = optionalCitationGraphText(
-    readOptionalCitationGraphField(node, "venue"),
-    `Citation graph venue at index ${index}`,
-    MAX_CITATION_GRAPH_NODE_TEXT_LENGTH,
-  );
-  const firstAuthor = optionalCitationGraphText(
-    readOptionalCitationGraphField(node, "firstAuthor"),
-    `Citation graph first author at index ${index}`,
-    MAX_CITATION_GRAPH_NODE_TEXT_LENGTH,
-  );
-  return {
-    citedByCount: node.citedByCount as number,
-    ...(doi === undefined ? {} : { doi }),
-    ...(firstAuthor === undefined ? {} : { firstAuthor }),
-    id: requireCitationGraphNodeId(node.id, `Citation graph node id at index ${index}`),
-    relation: node.relation,
-    title: requireCitationGraphText(
-      node.title,
-      `Citation graph title at index ${index}`,
-      MAX_CITATION_GRAPH_NODE_TEXT_LENGTH,
-    ),
-    ...(venue === undefined ? {} : { venue }),
-    ...(year === undefined ? {} : { year }),
-  };
-}
-
-function requireCitationGraphEdge(
-  value: unknown,
-  index: number,
-  nodeIds: ReadonlySet<string>,
-): GraphEdge {
-  const edge = requireExactCitationGraphRecord(value, `Citation graph edge at index ${index}`, [
-    "source",
-    "target",
-  ]);
-  const source = requireCitationGraphNodeId(
-    edge.source,
-    `Citation graph edge source at index ${index}`,
-  );
-  const target = requireCitationGraphNodeId(
-    edge.target,
-    `Citation graph edge target at index ${index}`,
-  );
-  if (source === target) throw new Error("Citation graph edges cannot be self-referential");
-  if (!nodeIds.has(source) || !nodeIds.has(target)) {
-    throw new Error("Citation graph edges must reference graph nodes");
-  }
-  return { source, target };
-}
-
 function requireExactCitationGraphRecord(
   value: unknown,
   label: string,
   requiredFields: readonly string[],
-  optionalFields: readonly string[] = [],
 ): Record<string, unknown> {
-  const allowedFields = [...requiredFields, ...optionalFields];
   if (
     !isRecord(value) ||
-    Object.keys(value).some((field) => !allowedFields.includes(field)) ||
+    Object.keys(value).some((field) => !requiredFields.includes(field)) ||
     requiredFields.some((field) => !Object.hasOwn(value, field))
   ) {
     throw new Error(`${label} is invalid`);
@@ -363,10 +264,6 @@ function isDenseCitationGraphArray(value: readonly unknown[]): boolean {
     if (!Object.hasOwn(value, index)) return false;
   }
   return true;
-}
-
-function requireCitationGraphNodeId(value: unknown, label: string): string {
-  return requireCitationGraphText(value, label, MAX_CITATION_GRAPH_NODE_ID_LENGTH, true);
 }
 
 function requireCitationGraphText(
@@ -383,49 +280,6 @@ function requireCitationGraphText(
     throw new Error(`${label} is invalid`);
   }
   return value;
-}
-
-function optionalCitationGraphText(
-  value: unknown,
-  label: string,
-  maximum: number,
-): string | undefined {
-  if (value === undefined) return undefined;
-  return requireCitationGraphText(value, label, maximum);
-}
-
-function readOptionalCitationGraphField(value: Record<string, unknown>, field: string): unknown {
-  return Object.hasOwn(value, field) ? value[field] : undefined;
-}
-
-function optionalCitationGraphYear(value: unknown, index: number): number | undefined {
-  if (value === undefined) return undefined;
-  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 10_000) {
-    throw new Error(`Citation graph year at index ${index} is invalid`);
-  }
-  return value as number;
-}
-
-function serializeCitationGraph(graph: CitationGraph): string {
-  const payloadJson = JSON.stringify(graph);
-  if (Buffer.byteLength(payloadJson, "utf8") > MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES) {
-    throw new Error("Citation graph cache payload is too large");
-  }
-  return payloadJson;
-}
-
-function parseCachedCitationGraph(payloadJson: unknown): CitationGraph | null {
-  if (
-    typeof payloadJson !== "string" ||
-    Buffer.byteLength(payloadJson, "utf8") > MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES
-  ) {
-    return null;
-  }
-  try {
-    return requireCitationGraph(JSON.parse(payloadJson));
-  } catch {
-    return null;
-  }
 }
 
 function isValidCacheTimestamp(value: unknown): value is number {
@@ -453,15 +307,19 @@ async function loadCachedCitationGraph(
   const cacheKeys = legacyCacheKey !== doi ? [doi, legacyCacheKey] : [doi];
   for (const cacheKey of cacheKeys) {
     const rows = await database.query<CachedCitationGraphRow>(
-      `SELECT payload_json, fetched_at, cache_version FROM graph_cache WHERE work_id = ?`,
+      `SELECT payload_json, fetched_at, cache_version, provider, provenance_json
+       FROM graph_cache WHERE work_id = ?`,
       [cacheKey],
     );
     const row = rows[0];
     if (!row) continue;
 
     const graph = parseCachedCitationGraph(row.payload_json);
+    const provenance = parseCachedCitationGraphProvenance(row.provenance_json, graph, doi);
     if (
       !graph ||
+      !provenance ||
+      row.provider !== provenance.provider ||
       !isValidCacheTimestamp(row.fetched_at) ||
       !isValidCacheVersion(row.cache_version) ||
       !citationGraphMatchesDoi(graph, doi)
@@ -474,12 +332,21 @@ async function loadCachedCitationGraph(
       cacheVersion: row.cache_version,
       fetchedAt: row.fetched_at,
       graph,
+      provenance,
     };
     if (cacheKey !== doi) {
       await database.run(
         `INSERT OR IGNORE INTO graph_cache
-         (work_id, payload_json, fetched_at, cache_version) VALUES (?, ?, ?, ?)`,
-        [doi, row.payload_json, row.fetched_at, row.cache_version],
+         (work_id, payload_json, fetched_at, cache_version, provider, provenance_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          doi,
+          row.payload_json,
+          row.fetched_at,
+          row.cache_version,
+          row.provider,
+          row.provenance_json,
+        ],
       );
       await database.run(`DELETE FROM graph_cache WHERE work_id = ?`, [cacheKey]);
     } else if (legacyCacheKey !== doi) {

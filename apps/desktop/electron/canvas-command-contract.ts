@@ -1,6 +1,7 @@
 import type { CanvasCitationRelation, CanvasEdgeRelation, CanvasNodeType } from "@aurascholar/core";
 import type { WorkCitationRelation } from "@aurascholar/db/work-list";
 import type { LibraryScopeToken } from "./library-read-command-contract";
+import type { CitationGraphProvider } from "../src/shared/citation-graph-provenance";
 
 /** Canvas workspace snapshots are stored structurally to avoid a core <-> db cycle. */
 export type CanvasListWorkspacesCommandInput = Record<string, never>;
@@ -195,12 +196,16 @@ export interface CanvasGetCitationRelationsCommandResult {
  */
 export interface CanvasPersistCitationRelationsCommandInput {
   expectedScope: LibraryScopeToken;
+  /** Provider provenance for the graph-derived relations being asserted. */
+  provider: CitationGraphProvider;
   relations: CanvasCitationRelation[];
 }
 
 export interface CanvasPersistCitationRelationsCommandResult {
   /** Actual INSERT OR IGNORE rows newly persisted by this command. */
   persisted: number;
+  /** Echoed provider lets the renderer verify the write boundary. */
+  provider: CitationGraphProvider;
   scope: LibraryScopeToken;
 }
 

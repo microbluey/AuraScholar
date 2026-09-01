@@ -13,6 +13,10 @@ export const MAX_CITATION_GRAPH_SCOPE_TOKEN_BYTES = MAX_LIBRARY_SCOPE_TOKEN_BYTE
 export const MAX_CITATION_GRAPH_NODE_ID_BYTES = 512;
 export const MAX_CITATION_GRAPH_NODE_TEXT_BYTES = 16 * 1024;
 export const MAX_CITATION_GRAPH_NODES = 100;
+/** Bounds for the typed graph provenance envelope shared by both IPC sides. */
+export const MAX_CITATION_GRAPH_PROVIDER_BYTES = 64;
+export const MAX_CITATION_GRAPH_PROVIDER_VERSION_BYTES = 128;
+export const MAX_CITATION_GRAPH_PROVENANCE_BYTES = 4 * 1024;
 
 const utf8Encoder = new TextEncoder();
 

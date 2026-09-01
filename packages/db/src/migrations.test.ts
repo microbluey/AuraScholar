@@ -139,6 +139,137 @@ describe("migrations", () => {
     ).resolves.toEqual([{ cache_version: 1, fetched_at: 42, payload_json: '{"nodes":[]}' }]);
   });
 
+  it("adds graph-cache provider provenance without upgrading legacy rows", async () => {
+    expect(await columnExists("graph_cache", "provider")).toBe(true);
+    expect(await columnExists("graph_cache", "provenance_json")).toBe(true);
+
+    const columns = await db.query<{
+      dflt_value: string | null;
+      name: string;
+      notnull: number;
+    }>(`PRAGMA table_info(graph_cache)`);
+    expect(columns.find((column) => column.name === "provider")).toMatchObject({
+      dflt_value: "'legacy-unknown'",
+      notnull: 1,
+    });
+    expect(columns.find((column) => column.name === "provenance_json")).toMatchObject({
+      dflt_value: `'${JSON.stringify({ provider: "legacy-unknown", schemaVersion: 0 })}'`,
+      notnull: 1,
+    });
+
+    // This is the shape used by pre-v27 callers. Defaults keep it explicitly
+    // unknown and therefore fail closed at the provenance-aware boundary.
+    await db.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at)
+       VALUES (?, ?, ?)`,
+      ["migration-legacy-provenance", "{}", 1],
+    );
+    const legacyRows = await db.query<{
+      provider: string;
+      provenance_json: string;
+    }>(
+      `SELECT provider, provenance_json
+       FROM graph_cache WHERE work_id = ?`,
+      ["migration-legacy-provenance"],
+    );
+    expect(legacyRows).toEqual([
+      {
+        provider: "legacy-unknown",
+        provenance_json: JSON.stringify({ provider: "legacy-unknown", schemaVersion: 0 }),
+      },
+    ]);
+
+    const trustedProvenance = JSON.stringify({
+      capturedAt: 10,
+      centerDoi: "10.1000/example",
+      provider: "openalex",
+      providerVersion: "openalex-citation-graph-v1",
+      requestedDoi: "10.1000/example",
+      schemaVersion: 1,
+    });
+    await db.run(
+      `INSERT INTO graph_cache
+       (work_id, payload_json, fetched_at, provider, provenance_json)
+       VALUES (?, ?, ?, ?, ?)`,
+      ["migration-openalex-provenance", "{}", 2, "openalex", trustedProvenance],
+    );
+    await expect(
+      db.query<{ provider: string; provenance_json: string }>(
+        `SELECT provider, provenance_json FROM graph_cache WHERE work_id = ?`,
+        ["migration-openalex-provenance"],
+      ),
+    ).resolves.toEqual([{ provider: "openalex", provenance_json: trustedProvenance }]);
+
+    for (const [key, provider] of [
+      ["migration-invalid-provenance-provider", "unknown-provider"],
+      ["migration-invalid-provenance-empty", ""],
+    ] as const) {
+      await expect(
+        db.run(
+          `INSERT INTO graph_cache
+           (work_id, payload_json, fetched_at, provider, provenance_json)
+           VALUES (?, ?, ?, ?, ?)`,
+          [key, "{}", 3, provider, JSON.stringify({ provider })],
+        ),
+      ).rejects.toThrow(/CHECK constraint failed/i);
+    }
+
+    await expect(
+      db.run(
+        `INSERT INTO graph_cache
+         (work_id, payload_json, fetched_at, provider, provenance_json)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          "migration-invalid-provenance-mismatch",
+          "{}",
+          4,
+          "openalex",
+          JSON.stringify({ provider: "legacy-unknown", schemaVersion: 0 }),
+        ],
+      ),
+    ).rejects.toThrow(/CHECK constraint failed/i);
+
+    await expect(
+      db.run(
+        `INSERT INTO graph_cache
+         (work_id, payload_json, fetched_at, provider, provenance_json)
+         VALUES (?, ?, ?, ?, ?)`,
+        ["migration-invalid-provenance-json", "{}", 5, "openalex", "{"],
+      ),
+    ).rejects.toThrow(/CHECK constraint failed/i);
+  });
+
+  it("marks rows from a pre-provenance database as legacy-unknown", async () => {
+    const legacy = await migrateThrough(26);
+    await legacy.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at, cache_version)
+       VALUES (?, ?, ?, ?)`,
+      ["legacy-provenance-upgrade", '{"nodes":[]}', 42, 7],
+    );
+
+    await runMigrations(legacy);
+
+    await expect(
+      legacy.query<{
+        cache_version: number;
+        fetched_at: number;
+        provider: string;
+        provenance_json: string;
+      }>(
+        `SELECT cache_version, fetched_at, provider, provenance_json
+         FROM graph_cache WHERE work_id = ?`,
+        ["legacy-provenance-upgrade"],
+      ),
+    ).resolves.toEqual([
+      {
+        cache_version: 7,
+        fetched_at: 42,
+        provider: "legacy-unknown",
+        provenance_json: JSON.stringify({ provider: "legacy-unknown", schemaVersion: 0 }),
+      },
+    ]);
+  });
+
   it("creates discovery_sites and seeds the built-in academic sites", async () => {
     expect(await tableExists("discovery_sites")).toBe(true);
     const rows = await db.query<{ id: string }>(
