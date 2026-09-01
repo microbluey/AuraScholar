@@ -511,7 +511,6 @@ export class WorksRepo {
     await this.mergeCollections(primaryId, duplicateId);
     await this.moveTags(primaryId, duplicateId);
     await this.moveCitations(primaryId, duplicateId);
-    await this.moveGraphCache(primaryId, duplicateId);
     await this.moveCanvasReferences(primaryId, duplicateId, now);
     await mergeProjectWorkMemberships(this.db, this.libraryId, primaryId, duplicateId, now);
     await mergeWorkKnowledgeRecords(this.db, this.libraryId, primaryId, duplicateId, now);
@@ -914,28 +913,6 @@ export class WorksRepo {
       [duplicateId, duplicateId],
     );
     if (residual !== 0) throw new Error("Duplicate citations could not be retired");
-  }
-
-  private async moveGraphCache(primaryId: string, duplicateId: string): Promise<void> {
-    const primaryRows = await this.db.query<{ work_id: string }>(
-      `SELECT work_id FROM graph_cache WHERE work_id = ?`,
-      [primaryId],
-    );
-    const duplicateRows = await this.db.query<{ work_id: string }>(
-      `SELECT work_id FROM graph_cache WHERE work_id = ?`,
-      [duplicateId],
-    );
-    if (!duplicateRows[0]) return;
-    if (primaryRows[0]) {
-      const changed = await this.db.run(`DELETE FROM graph_cache WHERE work_id = ?`, [duplicateId]);
-      this.assertChangedExactly(changed, 1, "Duplicate graph cache could not be retired");
-    } else {
-      const changed = await this.db.run(`UPDATE graph_cache SET work_id = ? WHERE work_id = ?`, [
-        primaryId,
-        duplicateId,
-      ]);
-      this.assertChangedExactly(changed, 1, "Graph cache could not be merged");
-    }
   }
 
   private async moveCanvasReferences(
@@ -1445,7 +1422,6 @@ export class WorksRepo {
       workId,
       workId,
     ]);
-    await this.db.run(`DELETE FROM graph_cache WHERE work_id = ?`, [workId]);
     await this.db.run(`DELETE FROM collection_items WHERE work_id = ?`, [workId]);
     await purgeProjectWorkMemberships(this.db, workId);
     await purgeWorkKnowledgeRecords(this.db, this.libraryId, workId);
