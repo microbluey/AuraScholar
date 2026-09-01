@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 86493,
+        ".ts": 86469,
         ".tsx": 35973
       },
       "files": {
@@ -534,7 +534,7 @@
         "packages/db/src/repos/snippets.ts": 155,
         "packages/db/src/repos/tags.ts": 389,
         "packages/db/src/repos/work-knowledge-lifecycle.ts": 144,
-        "packages/db/src/repos/works.ts": 1493,
+        "packages/db/src/repos/works.ts": 1469,
         "packages/db/src/repos/write-lock.ts": 28,
         "packages/db/src/research-project-defaults.ts": 7,
         "packages/db/src/research-project-schema.ts": 64,
@@ -612,11 +612,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 141787
+      "totalLines": 141763
     },
     "tests": {
       "byExtension": {
-        ".ts": 87413,
+        ".ts": 87488,
         ".tsx": 1035
       },
       "files": {
@@ -999,6 +999,7 @@
         "packages/db/src/repos/evidence-inbox.test.ts": 237,
         "packages/db/src/repos/evidence.test.ts": 485,
         "packages/db/src/repos/flashcards.test.ts": 304,
+        "packages/db/src/repos/graph-cache-lifecycle.test.ts": 75,
         "packages/db/src/repos/knowledge-indexes.test.ts": 314,
         "packages/db/src/repos/knowledge-search.test.ts": 337,
         "packages/db/src/repos/knowledge.test.ts": 385,
@@ -1041,7 +1042,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 88448
+      "totalLines": 88523
     }
   },
   "uiDatabaseBoundary": {}
