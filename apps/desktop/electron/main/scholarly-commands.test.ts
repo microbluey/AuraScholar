@@ -163,4 +163,103 @@ describe("scholarly data commands", () => {
       },
     });
   });
+
+  it("drops URLs whose canonical form exceeds the public output bound", async () => {
+    const scholarlyService = service({
+      enrichByDoi: vi.fn(async () => ({
+        openAccessPdfUrl: `https://example.test/${"界".repeat(2700)}`,
+      })),
+    });
+
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: { doi: "10.1000/unicode-url", requestId: "unicode-url-1" },
+          name: "scholar.enrichByDoi",
+        },
+        { runs: new MainScholarlyRunRegistry(), service: scholarlyService },
+      ),
+    ).resolves.toEqual({ enrichment: {} });
+  });
+
+  it("fails closed for malformed discovery reports and enrichment containers", async () => {
+    const malformedReport = service({
+      searchDiscovery: vi.fn(async () => null as never),
+    });
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: {
+            query: { text: "malformed report" },
+            requestId: "malformed-report",
+          },
+          name: "discovery.searchOpenSources",
+        },
+        { runs: new MainScholarlyRunRegistry(), service: malformedReport },
+      ),
+    ).rejects.toThrow("Discovery search report is invalid");
+
+    const malformedEnrichment = service({
+      enrichByDoi: vi.fn(async () => [] as never),
+    });
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: { doi: "10.1000/array", requestId: "array-enrichment" },
+          name: "scholar.enrichByDoi",
+        },
+        { runs: new MainScholarlyRunRegistry(), service: malformedEnrichment },
+      ),
+    ).resolves.toEqual({ enrichment: null });
+  });
+
+  it("drops discovery results that lose source provenance or repeat an id", async () => {
+    const report: DiscoverySearchReport = {
+      cursors: {
+        arxiv: { hasMore: false, page: 1 },
+        crossref: { hasMore: false, page: 1 },
+        openalex: { hasMore: false, page: 1 },
+        s2: { hasMore: false, page: 1 },
+      },
+      results: [
+        {
+          id: "same-id",
+          score: 1,
+          source: "openalex",
+          work: { authors: [], source: "crossref", title: "Mismatched" },
+        },
+        {
+          id: "same-id",
+          score: 1,
+          source: "crossref",
+          work: { authors: [], source: "crossref", title: "First" },
+        },
+        {
+          id: "same-id",
+          score: 0.5,
+          source: "crossref",
+          work: { authors: [], source: "crossref", title: "Duplicate" },
+        },
+      ],
+      sources: {
+        arxiv: { count: 0, source: "arxiv", status: "empty" },
+        crossref: { count: 2, source: "crossref", status: "done" },
+        openalex: { count: 1, source: "openalex", status: "done" },
+        s2: { count: 0, source: "s2", status: "empty" },
+      },
+    };
+    const scholarlyService = service({ searchDiscovery: vi.fn(async () => report) });
+
+    await expect(
+      executeScholarlyCommand(
+        {
+          input: { query: { text: "provenance" }, requestId: "provenance-1" },
+          name: "discovery.searchOpenSources",
+        },
+        { runs: new MainScholarlyRunRegistry(), service: scholarlyService },
+      ),
+    ).resolves.toMatchObject({
+      report: { results: [{ id: "same-id", work: { title: "First" } }] },
+    });
+  });
 });

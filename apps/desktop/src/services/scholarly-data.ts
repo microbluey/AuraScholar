@@ -11,6 +11,12 @@ import type {
   ScholarlySearchDiscoveryCommandResult,
 } from "../../electron/scholarly-command-contract";
 import { decodeCitationGraphBuildResult } from "../shared/citation-graph-command-result-codec";
+import {
+  decodeLibraryResolveClueResult,
+  decodeScholarlyCancelRunResult,
+  decodeScholarEnrichByDoiResult,
+  decodeScholarlySearchDiscoveryResult,
+} from "../shared/scholarly-command-result-codec";
 
 type CancellableScholarlyCommandName =
   | "citationGraph.build"
@@ -38,7 +44,9 @@ export function searchScholarlyOpenSources(
   input: Omit<ScholarlySearchDiscoveryCommandInput, "requestId">,
   signal?: AbortSignal,
 ): Promise<ScholarlySearchDiscoveryCommandResult> {
-  return invokeCancellableScholarlyCommand("discovery.searchOpenSources", input, signal);
+  return invokeCancellableScholarlyCommand("discovery.searchOpenSources", input, signal).then(
+    (result) => decodeScholarlySearchDiscoveryResult(result, input.sources),
+  );
 }
 
 /** Main-owned Semantic Scholar enrichment request. */
@@ -46,7 +54,9 @@ export function enrichScholarByDoi(
   input: Omit<ScholarEnrichByDoiCommandInput, "requestId">,
   signal?: AbortSignal,
 ): Promise<ScholarEnrichByDoiCommandResult> {
-  return invokeCancellableScholarlyCommand("scholar.enrichByDoi", input, signal);
+  return invokeCancellableScholarlyCommand("scholar.enrichByDoi", input, signal).then(
+    decodeScholarEnrichByDoiResult,
+  );
 }
 
 /** Main-owned DOI/arXiv/title metadata resolution for interactive Library ingest. */
@@ -54,7 +64,9 @@ export function resolveLibraryScholarlyClue(
   input: Omit<LibraryResolveClueCommandInput, "requestId">,
   signal?: AbortSignal,
 ): Promise<LibraryResolveClueCommandResult> {
-  return invokeCancellableScholarlyCommand("library.resolveClue", input, signal);
+  return invokeCancellableScholarlyCommand("library.resolveClue", input, signal).then(
+    decodeLibraryResolveClueResult,
+  );
 }
 
 async function invokeCancellableScholarlyCommand<K extends CancellableScholarlyCommandName>(
@@ -70,7 +82,10 @@ async function invokeCancellableScholarlyCommand<K extends CancellableScholarlyC
     cancellationRequested = true;
     // The original request stays authoritative for the user-visible outcome;
     // main may have crossed a short completion boundary when this arrives.
-    void window.aura.data.command("scholarly.cancelRun", { requestId }).catch(() => undefined);
+    void window.aura.data
+      .command("scholarly.cancelRun", { requestId })
+      .then(decodeScholarlyCancelRunResult)
+      .catch(() => undefined);
   };
   signal?.addEventListener("abort", cancel, { once: true });
   try {

@@ -31,6 +31,28 @@ const GRAPH: CitationGraph = {
   edges: [{ source: "W-center", target: "W-reference" }],
 };
 
+const EMPTY_OPENALEX_REPORT = {
+  cursors: { openalex: { hasMore: false, page: 1 } },
+  results: [],
+  sources: { openalex: { count: 0, source: "openalex", status: "empty" } },
+};
+
+const EMPTY_ALL_SOURCES_REPORT = {
+  cursors: {
+    arxiv: { hasMore: false, page: 1 },
+    crossref: { hasMore: false, page: 1 },
+    openalex: { hasMore: false, page: 1 },
+    s2: { hasMore: false, page: 1 },
+  },
+  results: [],
+  sources: {
+    arxiv: { count: 0, source: "arxiv", status: "empty" },
+    crossref: { count: 0, source: "crossref", status: "empty" },
+    openalex: { count: 0, source: "openalex", status: "empty" },
+    s2: { count: 0, source: "s2", status: "empty" },
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("window", { aura: { data: { command } } });
@@ -42,7 +64,7 @@ afterEach(() => {
 
 describe("scholarly typed command client", () => {
   it("sends only semantic discovery input", async () => {
-    command.mockResolvedValueOnce({ report: { cursors: {}, results: [], sources: {} } });
+    command.mockResolvedValueOnce({ report: { ...EMPTY_OPENALEX_REPORT } });
 
     await expect(
       searchScholarlyOpenSources({
@@ -51,7 +73,7 @@ describe("scholarly typed command client", () => {
         sources: ["openalex"],
         sort: "relevance",
       }),
-    ).resolves.toEqual({ report: { cursors: {}, results: [], sources: {} } });
+    ).resolves.toEqual({ report: EMPTY_OPENALEX_REPORT });
 
     expect(command).toHaveBeenCalledWith(
       "discovery.searchOpenSources",
@@ -88,6 +110,45 @@ describe("scholarly typed command client", () => {
       "scholar.enrichByDoi",
       "library.resolveClue",
     ]);
+  });
+
+  it("decodes every non-graph scholarly response at the renderer gateway", async () => {
+    command
+      .mockResolvedValueOnce({ report: EMPTY_ALL_SOURCES_REPORT })
+      .mockResolvedValueOnce({ enrichment: { citationCount: 3, tldr: "summary" } })
+      .mockResolvedValueOnce({
+        resolved: {
+          confidence: 1,
+          work: { authors: [], source: "crossref", title: "Resolved" },
+        },
+      });
+
+    const report = await searchScholarlyOpenSources({ query: { text: "all sources" } });
+    const enrichment = await enrichScholarByDoi({ doi: "10.1000/enrichment" });
+    const resolved = await resolveLibraryScholarlyClue({
+      clue: { kind: "title", title: "A title" },
+    });
+
+    expect(report.report).toEqual(EMPTY_ALL_SOURCES_REPORT);
+    expect(enrichment.enrichment).toEqual({ citationCount: 3, tldr: "summary" });
+    expect(resolved.resolved?.work.title).toBe("Resolved");
+  });
+
+  it("fails closed on malformed non-graph scholarly responses", async () => {
+    command
+      .mockResolvedValueOnce({ report: EMPTY_OPENALEX_REPORT, unexpected: true })
+      .mockResolvedValueOnce({ enrichment: [] })
+      .mockResolvedValueOnce({ resolved: { confidence: 2, work: null } });
+
+    await expect(
+      searchScholarlyOpenSources({ query: { text: "malformed" }, sources: ["openalex"] }),
+    ).rejects.toThrow("Discovery search result is invalid");
+    await expect(enrichScholarByDoi({ doi: "10.1000/malformed" })).rejects.toThrow(
+      "Semantic Scholar enrichment",
+    );
+    await expect(
+      resolveLibraryScholarlyClue({ clue: { kind: "title", title: "malformed" } }),
+    ).rejects.toThrow("Resolved scholarly work confidence is invalid");
   });
 
   it("deep-clones a valid graph returned by the default build command", async () => {

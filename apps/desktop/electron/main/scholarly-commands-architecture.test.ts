@@ -15,6 +15,9 @@ describe("main-owned scholarly command architecture", () => {
       "src/services/library.ts",
     ].map(source);
     const client = source("src/services/scholarly-data.ts");
+    const resultCodec = source("src/shared/scholarly-command-result-codec.ts");
+    const valueCodec = source("src/shared/scholarly-command-value-codec.ts");
+    const limits = source("src/shared/scholarly-command-limits.ts");
 
     for (const service of services) {
       expect(service).not.toContain("auraHttp");
@@ -24,8 +27,18 @@ describe("main-owned scholarly command architecture", () => {
     expect(client).toContain('"scholar.enrichByDoi"');
     expect(client).toContain('"citationGraph.build"');
     expect(client).toContain('"library.resolveClue"');
-    expect(client).toContain('data.command("scholarly.cancelRun"');
+    expect(client).toMatch(/data\s*\.\s*command\(\s*"scholarly\.cancelRun"/);
     expect(client).toContain("window.aura.data.command(name");
+    expect(client).toContain("decodeScholarlySearchDiscoveryResult");
+    expect(client).toContain("decodeScholarEnrichByDoiResult");
+    expect(client).toContain("decodeLibraryResolveClueResult");
+    expect(client).toContain("decodeScholarlyCancelRunResult");
+    for (const rendererSafeSource of [resultCodec, valueCodec, limits]) {
+      expect(rendererSafeSource).not.toContain("node:");
+      expect(rendererSafeSource).not.toContain("getLibraryDb");
+      expect(rendererSafeSource).not.toContain("aura-db");
+      expect(rendererSafeSource).not.toContain("window.");
+    }
   });
 
   it("keeps the command surface semantic and the main handler on the allowlisted transport", () => {

@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 85608,
+        ".ts": 86412,
         ".tsx": 35973
       },
       "files": {
@@ -125,8 +125,8 @@
         "apps/desktop/electron/main/research-project-query-data.ts": 219,
         "apps/desktop/electron/main/saved-search-commands.ts": 342,
         "apps/desktop/electron/main/saved-search-create-input.ts": 84,
-        "apps/desktop/electron/main/scholarly-command-input.ts": 358,
-        "apps/desktop/electron/main/scholarly-command-output.ts": 462,
+        "apps/desktop/electron/main/scholarly-command-input.ts": 384,
+        "apps/desktop/electron/main/scholarly-command-output.ts": 500,
         "apps/desktop/electron/main/scholarly-commands.ts": 196,
         "apps/desktop/electron/main/scholarly-http.ts": 378,
         "apps/desktop/electron/main/scholarly-run-registry.ts": 35,
@@ -409,7 +409,7 @@
         "apps/desktop/src/services/saved-search-service-contract.ts": 71,
         "apps/desktop/src/services/saved-searches.ts": 402,
         "apps/desktop/src/services/scholar.ts": 15,
-        "apps/desktop/src/services/scholarly-data.ts": 99,
+        "apps/desktop/src/services/scholarly-data.ts": 114,
         "apps/desktop/src/services/sensitive-text.ts": 7,
         "apps/desktop/src/services/sentinel-page-data.ts": 161,
         "apps/desktop/src/services/sentinel.ts": 126,
@@ -433,6 +433,9 @@
         "apps/desktop/src/shared/library-backup.ts": 915,
         "apps/desktop/src/shared/reference-import.ts": 115,
         "apps/desktop/src/shared/saved-search-criteria.ts": 111,
+        "apps/desktop/src/shared/scholarly-command-limits.ts": 25,
+        "apps/desktop/src/shared/scholarly-command-result-codec.ts": 267,
+        "apps/desktop/src/shared/scholarly-command-value-codec.ts": 433,
         "apps/desktop/src/shared/sqlite-sync-storage.ts": 777,
         "apps/desktop/src/shared/sqlite-sync-values.ts": 85,
         "apps/desktop/src/shortcut-labels.ts": 29,
@@ -609,11 +612,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 140902
+      "totalLines": 141706
     },
     "tests": {
       "byExtension": {
-        ".ts": 86778,
+        ".ts": 87309,
         ".tsx": 1035
       },
       "files": {
@@ -716,9 +719,9 @@
         "apps/desktop/electron/main/research-project-commands.test.ts": 412,
         "apps/desktop/electron/main/saved-search-commands.test.ts": 540,
         "apps/desktop/electron/main/saved-search-structured-query.test.ts": 164,
-        "apps/desktop/electron/main/scholarly-command-input.test.ts": 85,
-        "apps/desktop/electron/main/scholarly-commands-architecture.test.ts": 65,
-        "apps/desktop/electron/main/scholarly-commands.test.ts": 166,
+        "apps/desktop/electron/main/scholarly-command-input.test.ts": 102,
+        "apps/desktop/electron/main/scholarly-commands-architecture.test.ts": 78,
+        "apps/desktop/electron/main/scholarly-commands.test.ts": 265,
         "apps/desktop/electron/main/scholarly-http.test.ts": 228,
         "apps/desktop/electron/main/sentinel-commands.test.ts": 546,
         "apps/desktop/electron/main/sentinel-read-architecture.test.ts": 90,
@@ -942,7 +945,7 @@
         "apps/desktop/src/services/saved-search-structured-query.test.ts": 121,
         "apps/desktop/src/services/saved-searches.test.ts": 592,
         "apps/desktop/src/services/scholar.test.ts": 28,
-        "apps/desktop/src/services/scholarly-data.test.ts": 135,
+        "apps/desktop/src/services/scholarly-data.test.ts": 196,
         "apps/desktop/src/services/sentinel-page-data.test.ts": 288,
         "apps/desktop/src/services/sentinel.test.ts": 101,
         "apps/desktop/src/services/snippets.test.ts": 98,
@@ -958,6 +961,7 @@
         "apps/desktop/src/shared/document-revision-sync-repair.test.ts": 223,
         "apps/desktop/src/shared/reference-import.test.ts": 52,
         "apps/desktop/src/shared/saved-search-criteria.test.ts": 69,
+        "apps/desktop/src/shared/scholarly-command-result-codec.test.ts": 341,
         "packages/ai/src/anthropic.test.ts": 107,
         "packages/ai/src/canvas-synthesis.test.ts": 71,
         "packages/ai/src/openai-compatible.test.ts": 74,
@@ -1037,7 +1041,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 87813
+      "totalLines": 88344
     }
   },
   "uiDatabaseBoundary": {}
