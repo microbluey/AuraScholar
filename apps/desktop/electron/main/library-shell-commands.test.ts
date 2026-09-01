@@ -170,7 +170,10 @@ describe("Library shell data commands", () => {
     );
     await addCanvasWorkspaceAndNodes(foreignLibraryId, foreignWork.id, 1);
 
-    await expect(command("library.getScope", {})).resolves.toEqual({ libraryId });
+    await expect(command("library.getScope", {})).resolves.toMatchObject({
+      libraryId,
+      scopeToken: expect.any(String),
+    });
     await expect(command("library.getShellStats", {})).resolves.toEqual({
       annotations: 1,
       canvasNodes: 2,

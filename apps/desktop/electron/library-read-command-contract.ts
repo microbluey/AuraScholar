@@ -12,9 +12,17 @@ import type { ReadingStatus } from "@aurascholar/db/repos/works";
 /** A deliberately empty request: the main process resolves the local Library. */
 export type LibraryScopeCommandInput = Record<string, never>;
 
-export interface LibraryGetScopeCommandResult {
+/**
+ * A process-local scope snapshot. `scopeToken` is an opaque generation bound
+ * to the Library identity by the main process; renderers may echo it back as
+ * a stale-result guard, but it is never an authority to select a Library.
+ */
+export interface LibraryScopeToken {
   libraryId: string;
+  scopeToken: string;
 }
+
+export type LibraryGetScopeCommandResult = LibraryScopeToken;
 
 export interface LibraryShellCollection {
   count: number;

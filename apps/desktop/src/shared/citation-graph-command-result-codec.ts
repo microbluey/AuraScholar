@@ -4,6 +4,7 @@ import type {
   CitationGraphGetCachedCommandResult,
   CitationGraphPutCachedCommandResult,
 } from "../../electron/citation-graph-command-contract";
+import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
 import type { CitationGraphBuildCommandResult } from "../../electron/scholarly-command-contract";
 import {
   citationGraphMatchesDoi,
@@ -16,6 +17,7 @@ import {
   MAX_CITATION_GRAPH_NODE_ID_BYTES,
   MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
   MAX_CITATION_GRAPH_NODES,
+  MAX_CITATION_GRAPH_SCOPE_TOKEN_BYTES,
   normalizeCitationGraphDoi as normalizeSharedCitationGraphDoi,
 } from "./citation-graph-limits";
 
@@ -65,20 +67,44 @@ export function decodeCitationGraphPutCachedResult(
 export function decodeCitationGraphGetActiveLibraryDoisResult(
   value: unknown,
   requestedDois: readonly string[],
+  expectedScope: LibraryScopeToken,
 ): CitationGraphGetActiveLibraryDoisCommandResult {
   const result = requireExactCitationGraphObject(
     value,
     "Citation graph active Library DOI result",
-    ["dois", "libraryId"],
+    ["dois", "scope"],
   );
   const requestedNormalizedDois = normalizeRequestedCitationGraphDois(requestedDois);
   const dois = decodeActiveLibraryDois(result.dois, requestedNormalizedDois);
+  const scope = decodeCitationGraphScopeToken(result.scope);
+  const decodedExpectedScope = decodeCitationGraphScopeToken(expectedScope);
+  if (
+    scope.libraryId !== decodedExpectedScope.libraryId ||
+    scope.scopeToken !== decodedExpectedScope.scopeToken
+  ) {
+    throw new Error("Citation graph active Library scope does not match the request");
+  }
   return {
     dois,
+    scope,
+  };
+}
+
+function decodeCitationGraphScopeToken(value: unknown): LibraryScopeToken {
+  const scope = requireExactCitationGraphObject(value, "Citation graph Library scope", [
+    "libraryId",
+    "scopeToken",
+  ]);
+  return {
     libraryId: requireCitationGraphIdentifier(
-      result.libraryId,
-      "Citation graph active Library id",
+      scope.libraryId,
+      "Citation graph Library id",
       MAX_CITATION_GRAPH_LIBRARY_ID_BYTES,
+    ),
+    scopeToken: requireCitationGraphIdentifier(
+      scope.scopeToken,
+      "Citation graph Library scope token",
+      MAX_CITATION_GRAPH_SCOPE_TOKEN_BYTES,
     ),
   };
 }

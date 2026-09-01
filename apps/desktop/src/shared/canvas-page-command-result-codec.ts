@@ -9,6 +9,7 @@ import type {
   CanvasIngressWork,
   CanvasPersistCitationRelationsCommandResult,
 } from "../../electron/canvas-command-contract";
+import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
 import {
   MAX_CANVAS_INGRESS_ANNOTATION_ANCHOR_BYTES,
   MAX_CANVAS_INGRESS_ANNOTATION_CONTENT_BYTES,
@@ -18,6 +19,11 @@ import {
   MAX_CANVAS_INGRESS_OUTPUT_BYTES,
 } from "./canvas-ingress-limits";
 import { canvasUtf8ByteLength } from "./canvas-workspace-document-limits";
+import {
+  MAX_LIBRARY_SCOPE_ID_BYTES,
+  MAX_LIBRARY_SCOPE_TOKEN_BYTES,
+  libraryScopeUtf8ByteLength,
+} from "./library-scope-limits";
 
 export const MAX_CANVAS_CITATION_RESULT_RELATIONS = 1_000;
 
@@ -65,8 +71,12 @@ export function decodeCanvasGetAnnotationIngressSourceResult(
 export function decodeCanvasGetCitationRelationsResult(
   value: unknown,
   requestedWorkIds: readonly string[],
+  expectedScope: LibraryScopeToken,
 ): CanvasGetCitationRelationsCommandResult {
-  const result = requireExactCanvasResult(value, "Canvas citation relations result", ["relations"]);
+  const result = requireExactCanvasResult(value, "Canvas citation relations result", [
+    "relations",
+    "scope",
+  ]);
   if (
     !Array.isArray(result.relations) ||
     result.relations.length > MAX_CANVAS_CITATION_RESULT_RELATIONS ||
@@ -90,15 +100,20 @@ export function decodeCanvasGetCitationRelationsResult(
     relationKeys.add(key);
     return decoded;
   });
-  return { relations };
+  const scope = decodeCanvasScopeToken(result.scope);
+  const decodedExpectedScope = decodeCanvasScopeToken(expectedScope);
+  assertCanvasScopeMatches(scope, decodedExpectedScope);
+  return { relations, scope };
 }
 
 export function decodeCanvasPersistCitationRelationsResult(
   value: unknown,
   relationCount: number,
+  expectedScope: LibraryScopeToken,
 ): CanvasPersistCitationRelationsCommandResult {
   const result = requireExactCanvasResult(value, "Canvas persist citation relations result", [
     "persisted",
+    "scope",
   ]);
   if (
     !Number.isSafeInteger(relationCount) ||
@@ -109,7 +124,50 @@ export function decodeCanvasPersistCitationRelationsResult(
   ) {
     throw new Error("Canvas persist citation relations result is invalid");
   }
-  return { persisted: result.persisted as number };
+  const scope = decodeCanvasScopeToken(result.scope);
+  const decodedExpectedScope = decodeCanvasScopeToken(expectedScope);
+  assertCanvasScopeMatches(scope, decodedExpectedScope);
+  return { persisted: result.persisted as number, scope };
+}
+
+function decodeCanvasScopeToken(value: unknown): LibraryScopeToken {
+  const scope = requireExactCanvasResult(value, "Canvas Library scope", [
+    "libraryId",
+    "scopeToken",
+  ]);
+  return {
+    libraryId: requireCanvasScopeField(
+      scope.libraryId,
+      "Canvas Library id",
+      MAX_LIBRARY_SCOPE_ID_BYTES,
+    ),
+    scopeToken: requireCanvasScopeToken(scope.scopeToken),
+  };
+}
+
+function requireCanvasScopeToken(value: unknown): string {
+  return requireCanvasScopeField(
+    value,
+    "Canvas Library scope token",
+    MAX_LIBRARY_SCOPE_TOKEN_BYTES,
+  );
+}
+
+function requireCanvasScopeField(value: unknown, label: string, maximumBytes: number): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    libraryScopeUtf8ByteLength(value) > maximumBytes
+  ) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
+}
+
+function assertCanvasScopeMatches(actual: LibraryScopeToken, expected: LibraryScopeToken): void {
+  if (actual.libraryId !== expected.libraryId || actual.scopeToken !== expected.scopeToken) {
+    throw new Error("Canvas Library scope does not match the request");
+  }
 }
 
 function decodeCanvasActiveWork(value: unknown): CanvasActiveWork {

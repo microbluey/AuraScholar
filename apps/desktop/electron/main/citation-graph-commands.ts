@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { CitationGraph, GraphEdge, GraphNode } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
-import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import {
   citationGraphMatchesDoi,
   citationGraphUtf8ByteLength,
@@ -13,23 +12,21 @@ import {
   MAX_CITATION_GRAPH_NODE_ID_BYTES,
   MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
   MAX_CITATION_GRAPH_NODES,
+  MAX_CITATION_GRAPH_SCOPE_TOKEN_BYTES,
   normalizeCitationGraphDoi,
 } from "../../src/shared/citation-graph-limits";
 import type {
   CitationGraphCacheEntry,
   CitationGraphGetActiveLibraryDoisCommandInput,
-  CitationGraphGetActiveLibraryDoisCommandResult,
   CitationGraphGetCachedCommandInput,
   CitationGraphGetCachedCommandResult,
   CitationGraphPutCachedCommandInput,
   DataCommandOutput,
   DataCommandRequest,
 } from "../data-command-contract";
-import {
-  assertActiveLocalLibrary,
-  isRecord,
-  type DataCommandDependencies,
-} from "./data-command-runtime";
+import { isRecord, type DataCommandDependencies } from "./data-command-runtime";
+import { loadActiveLibraryDois } from "./citation-graph-library-query";
+import { assertActiveLibraryScopeToken } from "./library-scope-token";
 
 const MAX_CITATION_GRAPH_DOI_LENGTH = MAX_CITATION_GRAPH_DOI_BYTES;
 const MAX_CITATION_GRAPH_NODE_ID_LENGTH = MAX_CITATION_GRAPH_NODE_ID_BYTES;
@@ -104,9 +101,8 @@ export async function executeCitationGraphCommand(
     case "citationGraph.getActiveLibraryDois": {
       const input = parseCitationGraphGetActiveLibraryDoisInput(request.input);
       return executeCitationGraphQuery(dependencies, request.name, async (database) => {
-        const libraryId = await requireLocalLibraryId(database);
-        await assertActiveLocalLibrary(database, libraryId);
-        return loadActiveLibraryDois(database, libraryId, input);
+        const scope = await assertActiveLibraryScopeToken(database, input.expectedScope);
+        return loadActiveLibraryDois(database, scope, input);
       });
     }
   }
@@ -161,6 +157,7 @@ function parseCitationGraphGetActiveLibraryDoisInput(
 ): CitationGraphGetActiveLibraryDoisCommandInput {
   const input = requireExactCitationGraphInput(value, "citationGraph.getActiveLibraryDois", [
     "dois",
+    "expectedScope",
   ]);
   if (!Array.isArray(input.dois) || input.dois.length > MAX_ACTIVE_LIBRARY_DOIS) {
     throw new Error(`Citation graph DOI lookups are limited to ${MAX_ACTIVE_LIBRARY_DOIS}`);
@@ -175,7 +172,28 @@ function parseCitationGraphGetActiveLibraryDoisInput(
   if (new Set(dois).size !== dois.length) {
     throw new Error("Citation graph DOIs must be unique");
   }
-  return { dois };
+  return { dois, expectedScope: requireCitationGraphScopeToken(input.expectedScope) };
+}
+
+function requireCitationGraphScopeToken(value: unknown) {
+  const scope = requireExactCitationGraphRecord(value, "Citation graph Library scope", [
+    "libraryId",
+    "scopeToken",
+  ]);
+  return {
+    libraryId: requireCitationGraphText(
+      scope.libraryId,
+      "Citation graph Library id",
+      MAX_CITATION_GRAPH_LIBRARY_ID_BYTES,
+      true,
+    ),
+    scopeToken: requireCitationGraphText(
+      scope.scopeToken,
+      "Citation graph Library scope token",
+      MAX_CITATION_GRAPH_SCOPE_TOKEN_BYTES,
+      true,
+    ),
+  };
 }
 
 function requireExactCitationGraphInput(
@@ -472,29 +490,4 @@ async function loadCachedCitationGraph(
     return { entry };
   }
   return { entry: null };
-}
-
-async function loadActiveLibraryDois(
-  database: Database,
-  libraryId: string,
-  input: CitationGraphGetActiveLibraryDoisCommandInput,
-): Promise<CitationGraphGetActiveLibraryDoisCommandResult> {
-  requireCitationGraphText(
-    libraryId,
-    "Citation graph active Library id",
-    MAX_CITATION_GRAPH_LIBRARY_ID_BYTES,
-    true,
-  );
-  if (input.dois.length === 0) return { dois: [], libraryId };
-  const placeholders = input.dois.map(() => "?").join(",");
-  const rows = await database.query<{ doi: string }>(
-    `SELECT DISTINCT doi
-     FROM works
-     WHERE library_id = ?
-       AND doi IN (${placeholders})
-       AND deleted_at IS NULL
-     ORDER BY doi`,
-    [libraryId, ...input.dois],
-  );
-  return { dois: rows.map((row) => row.doi), libraryId };
 }

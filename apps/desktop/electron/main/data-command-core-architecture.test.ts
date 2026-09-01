@@ -64,6 +64,7 @@ describe("main-process data command core architecture", () => {
     const canvasPageCommands = source("electron/main/canvas-page-commands.ts");
     const canvasWorkspaceCommands = source("electron/main/canvas-workspace-commands.ts");
     const citationGraphCommands = source("electron/main/citation-graph-commands.ts");
+    const citationGraphScope = source("electron/main/library-scope-token.ts");
 
     expect(runtime).toContain("DataCommandOutput<NoInfer<K>>");
     expect(dispatcher).not.toContain("): Promise<unknown>");
@@ -91,8 +92,8 @@ describe("main-process data command core architecture", () => {
     expect(canvasPageCommands).toContain("executeCanvasPageMutation");
     expect(canvasWorkspaceCommands).toContain("new CanvasRepo");
     expect(canvasWorkspaceCommands).toContain("executeCanvasWorkspaceMutation");
-    expect(citationGraphCommands).toContain("requireLocalLibraryId");
-    expect(citationGraphCommands).toContain("assertActiveLocalLibrary");
+    expect(citationGraphCommands).toContain("assertActiveLibraryScopeToken");
+    expect(citationGraphScope).toContain("assertActiveLocalLibrary");
     expect(citationGraphCommands).toContain("executeCitationGraphCacheMutation");
     expect(sentinelReadCommands).toContain("requireLocalLibraryId");
     expect(sentinelReadCommands).toContain("assertActiveLocalLibrary");

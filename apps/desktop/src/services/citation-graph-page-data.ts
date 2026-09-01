@@ -1,4 +1,5 @@
 import type { CitationGraph } from "@aurascholar/core";
+import type { LibraryScopeToken } from "../../electron/data-command-contract";
 import { decodeCitationGraphGetActiveLibraryDoisResult } from "../shared/citation-graph-command-result-codec";
 import {
   loadCitationGraphByDoi,
@@ -6,6 +7,7 @@ import {
   type CitationGraphBuilder,
   type LoadCitationGraphOptions,
 } from "./citation-graph";
+import { getActiveLibraryCommandScopeToken } from "./library-command-scope";
 
 export interface CitationGraphPageSnapshot {
   graph: CitationGraph | null;
@@ -18,14 +20,19 @@ export interface LoadCitationGraphPageOptions {
 }
 
 export interface CitationGraphPageDataSource {
-  getActiveLibraryDois: (dois: string[]) => Promise<string[]>;
+  getActiveLibraryDois: (dois: string[], expectedScope: LibraryScopeToken) => Promise<string[]>;
+  getLibraryScope: () => Promise<LibraryScopeToken>;
   loadGraph: (rawDoi: string, options: LoadCitationGraphOptions) => Promise<CitationGraph | null>;
 }
 
 const defaultDataSource: CitationGraphPageDataSource = {
-  async getActiveLibraryDois(dois) {
-    const result = await window.aura.data.command("citationGraph.getActiveLibraryDois", { dois });
-    return decodeCitationGraphGetActiveLibraryDoisResult(result, dois).dois;
+  getLibraryScope: getActiveLibraryCommandScopeToken,
+  async getActiveLibraryDois(dois, expectedScope) {
+    const result = await window.aura.data.command("citationGraph.getActiveLibraryDois", {
+      dois,
+      expectedScope,
+    });
+    return decodeCitationGraphGetActiveLibraryDoisResult(result, dois, expectedScope).dois;
   },
   loadGraph: loadCitationGraphByDoi,
 };
@@ -41,6 +48,8 @@ export async function loadCitationGraphPageSnapshot(
 ): Promise<CitationGraphPageSnapshot> {
   const { buildGraph, signal } = options;
   throwIfAborted(signal);
+  const expectedScope = await dataSource.getLibraryScope();
+  throwIfAborted(signal);
   const graph = await dataSource.loadGraph(rawDoi, { buildGraph, signal });
   throwIfAborted(signal);
   if (!graph) return { graph: null, inLibraryDois: new Set() };
@@ -53,7 +62,7 @@ export async function loadCitationGraphPageSnapshot(
   const dois = [...new Set(graphDois.map(({ normalizedDoi }) => normalizedDoi))];
   if (dois.length === 0) return { graph, inLibraryDois: new Set() };
 
-  const activeLibraryDois = await dataSource.getActiveLibraryDois(dois);
+  const activeLibraryDois = await dataSource.getActiveLibraryDois(dois, expectedScope);
   throwIfAborted(signal);
   const activeNormalizedDois = new Set(
     activeLibraryDois

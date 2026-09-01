@@ -1,4 +1,5 @@
 import type { CanvasCitationRelation, CitationGraph } from "@aurascholar/core";
+import type { LibraryScopeToken } from "../../../electron/data-command-contract";
 import { loadCitationGraphByDoi } from "../../services/citation-graph";
 import {
   decodeCanvasGetCitationRelationsResult,
@@ -10,6 +11,7 @@ import {
   normalizeCitationDoi,
   type CanvasCitationPaperIdentity,
 } from "./canvas-citation";
+import { getActiveLibraryCommandScopeToken } from "../../services/library-command-scope";
 
 export const MAX_CANVAS_CITATION_GRAPH_LOADS = 12;
 /**
@@ -34,6 +36,7 @@ export interface CanvasCitationResolution {
 }
 
 export interface ResolveCanvasCitationRelationsOptions {
+  getLibraryScope?: () => Promise<LibraryScopeToken>;
   listLocalRelations?: (workIds: string[]) => Promise<CanvasCitationRelation[]>;
   loadGraph?: (doi: string, signal?: AbortSignal) => Promise<CitationGraph | null>;
   maxGraphLoads?: number;
@@ -73,17 +76,29 @@ function assertCanvasCitationRelationLimit(relations: readonly CanvasCitationRel
 
 async function loadLocalCanvasCitationRelations(
   workIds: string[],
+  expectedScope: LibraryScopeToken,
 ): Promise<CanvasCitationRelation[]> {
   return decodeCanvasGetCitationRelationsResult(
-    await window.aura.data.command("canvas.getCitationRelations", { workIds }),
+    await window.aura.data.command("canvas.getCitationRelations", {
+      expectedScope,
+      workIds,
+    }),
     workIds,
+    expectedScope,
   ).relations;
 }
 
-async function persistCanvasCitationRelations(relations: CanvasCitationRelation[]): Promise<void> {
+async function persistCanvasCitationRelations(
+  relations: CanvasCitationRelation[],
+  expectedScope: LibraryScopeToken,
+): Promise<void> {
   decodeCanvasPersistCitationRelationsResult(
-    await window.aura.data.command("canvas.persistCitationRelations", { relations }),
+    await window.aura.data.command("canvas.persistCitationRelations", {
+      expectedScope,
+      relations,
+    }),
     relations.length,
+    expectedScope,
   );
 }
 
@@ -102,8 +117,21 @@ export async function resolveCanvasCitationRelations(
       `画布论文过多（最多 ${MAX_CANVAS_CITATION_WORK_IDS} 篇），请缩小画布选择范围后重试。`,
     );
   }
+  let expectedScope: LibraryScopeToken | undefined;
+  const captureScope = async (): Promise<LibraryScopeToken> => {
+    expectedScope ??= await (options.getLibraryScope ?? getActiveLibraryCommandScopeToken)();
+    return expectedScope;
+  };
+  // Capture before any graph work whenever a default scoped read or write may
+  // be used. Fully injected seams can remain I/O-free in unit/integration use.
+  if (workIds.length > 0 && (!options.listLocalRelations || !options.persistRelations)) {
+    await captureScope();
+    throwIfAborted(signal);
+  }
   const localRelations = workIds.length
-    ? await (options.listLocalRelations ?? loadLocalCanvasCitationRelations)(workIds)
+    ? await (options.listLocalRelations
+        ? options.listLocalRelations(workIds)
+        : loadLocalCanvasCitationRelations(workIds, await captureScope()))
     : [];
   throwIfAborted(signal);
   const normalizedLocalRelations = mergeCanvasCitationRelations(localRelations);
@@ -157,7 +185,11 @@ export async function resolveCanvasCitationRelations(
   assertCanvasCitationRelationLimit(relations);
   if (newGraphRelations.length > 0) {
     throwIfAborted(signal);
-    await (options.persistRelations ?? persistCanvasCitationRelations)(newGraphRelations);
+    if (options.persistRelations) {
+      await options.persistRelations(newGraphRelations);
+    } else {
+      await persistCanvasCitationRelations(newGraphRelations, await captureScope());
+    }
   }
   throwIfAborted(signal);
 

@@ -9,6 +9,7 @@ import type {
   DataCommandName,
   DataCommandOutput,
 } from "../data-command-contract";
+import type { LibraryScopeToken } from "../library-read-command-contract";
 import { DatabaseCoordinator } from "./database-coordinator";
 import { executeDataCommand } from "./data-commands";
 import type { DataCommandDependencies } from "./data-command-runtime";
@@ -45,6 +46,7 @@ function graphWithCenterTitle(title: string): CitationGraph {
 let database: Database;
 let dependencies: DataCommandDependencies;
 let libraryId: string;
+let scope: LibraryScopeToken;
 let works: WorksRepo;
 
 beforeEach(async () => {
@@ -61,6 +63,7 @@ beforeEach(async () => {
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
   };
   works = new WorksRepo(database, libraryId);
+  scope = await command("library.getScope", {});
 });
 
 function command<K extends DataCommandName>(
@@ -411,19 +414,25 @@ describe("Citation Graph data commands", () => {
         name: "citationGraph.putCached",
       },
       {
-        input: { dois: ["10.1000/center"], libraryId: "library:foreign" },
+        input: {
+          dois: ["10.1000/center"],
+          expectedScope: { libraryId: "library:foreign" },
+        },
         name: "citationGraph.getActiveLibraryDois",
       },
       {
-        input: { dois: ["10.1000/center", "10.1000/CENTER"] },
+        input: { dois: ["10.1000/center", "10.1000/CENTER"], expectedScope: scope },
         name: "citationGraph.getActiveLibraryDois",
       },
       {
-        input: { dois: Array.from({ length: 501 }, (_, index) => `10.1000/${index}`) },
+        input: {
+          dois: Array.from({ length: 501 }, (_, index) => `10.1000/${index}`),
+          expectedScope: scope,
+        },
         name: "citationGraph.getActiveLibraryDois",
       },
       {
-        input: { dois: sparseDois },
+        input: { dois: sparseDois, expectedScope: scope },
         name: "citationGraph.getActiveLibraryDois",
       },
     ];
@@ -710,15 +719,75 @@ describe("Citation Graph data commands", () => {
     await expect(
       command("citationGraph.getActiveLibraryDois", {
         dois: ["10.1000/ACTIVE", "10.1000/archived", "10.1000/foreign", "10.1000/missing"],
+        expectedScope: scope,
       }),
-    ).resolves.toEqual({ dois: ["10.1000/active"], libraryId });
+    ).resolves.toEqual({ dois: ["10.1000/active"], scope });
   });
 
   it("rejects membership reads when the durable active Library has been deleted", async () => {
     await database.run(`UPDATE libraries SET deleted_at = 10_000 WHERE id = ?`, [libraryId]);
 
-    await expect(command("citationGraph.getActiveLibraryDois", { dois: [] })).rejects.toThrow(
-      "Local Library identity is not active",
+    await expect(
+      command("citationGraph.getActiveLibraryDois", { dois: [], expectedScope: scope }),
+    ).rejects.toThrow("Local Library identity is not active");
+  });
+
+  it("rejects a scope token captured before an active Library change", async () => {
+    const foreignLibraryId = "library:citation-graph-scope-foreign";
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Foreign Citation Graph', 'personal', 1, 1)`,
+      [foreignLibraryId],
+    );
+    await database.run(`UPDATE settings SET value_json = ? WHERE key = 'local.library_id'`, [
+      JSON.stringify(foreignLibraryId),
+    ]);
+
+    await expect(
+      command("citationGraph.getActiveLibraryDois", {
+        dois: [],
+        expectedScope: scope,
+      }),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
+  });
+
+  it("rotates the scope token across an A-to-B-to-A identity cycle", async () => {
+    const foreignLibraryId = "library:citation-graph-scope-cycle";
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Cycle Citation Graph', 'personal', 1, 1)`,
+      [foreignLibraryId],
+    );
+    await database.run(`UPDATE settings SET value_json = ? WHERE key = 'local.library_id'`, [
+      JSON.stringify(foreignLibraryId),
+    ]);
+    await expect(command("library.getScope", {})).resolves.toMatchObject({
+      libraryId: foreignLibraryId,
+    });
+    await database.run(`UPDATE settings SET value_json = ? WHERE key = 'local.library_id'`, [
+      JSON.stringify(libraryId),
+    ]);
+    const returnedScope = await command("library.getScope", {});
+    expect(returnedScope.libraryId).toBe(libraryId);
+    expect(returnedScope.scopeToken).not.toBe(scope.scopeToken);
+    await expect(
+      command("citationGraph.getActiveLibraryDois", { dois: [], expectedScope: scope }),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
+  });
+
+  it("fails closed before exposing an oversized durable Library id", async () => {
+    const oversizedLibraryId = "界".repeat(171);
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Oversized Citation Graph Library', 'personal', 1, 1)`,
+      [oversizedLibraryId],
+    );
+    await database.run(`UPDATE settings SET value_json = ? WHERE key = 'local.library_id'`, [
+      JSON.stringify(oversizedLibraryId),
+    ]);
+
+    await expect(command("library.getScope", {})).rejects.toThrow(
+      "Local Library scope id is invalid",
     );
   });
 });

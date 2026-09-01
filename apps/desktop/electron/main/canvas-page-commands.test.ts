@@ -8,6 +8,7 @@ import type {
   DataCommandName,
   DataCommandOutput,
 } from "../data-command-contract";
+import type { LibraryScopeToken } from "../library-read-command-contract";
 import { DatabaseCoordinator } from "./database-coordinator";
 import { executeDataCommand } from "./data-commands";
 import type { DataCommandDependencies } from "./data-command-runtime";
@@ -15,6 +16,7 @@ import type { DataCommandDependencies } from "./data-command-runtime";
 let database: Database;
 let dependencies: DataCommandDependencies;
 let libraryId: string;
+let scope: LibraryScopeToken;
 let works: WorksRepo;
 
 beforeEach(async () => {
@@ -31,6 +33,7 @@ beforeEach(async () => {
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
   };
   works = new WorksRepo(database, libraryId);
+  scope = await command("library.getScope", {});
 });
 
 function command<K extends DataCommandName>(
@@ -95,6 +98,20 @@ describe("Canvas ingress data commands", () => {
         input: { libraryId: "library:foreign", workIds: ["work-1"] },
         name: "canvas.getCitationRelations",
       },
+      {
+        input: {
+          expectedScope: { libraryId: "library:active", scopeToken: "界".repeat(43) },
+          workIds: [],
+        },
+        name: "canvas.getCitationRelations",
+      },
+      {
+        input: {
+          expectedScope: { libraryId: "界".repeat(171), scopeToken: "scope-token" },
+          workIds: [],
+        },
+        name: "canvas.getCitationRelations",
+      },
       { input: { workIds: ["work-1", "work-1"] }, name: "canvas.getCitationRelations" },
       { input: { workIds: [oversizedMultibyteId] }, name: "canvas.getCitationRelations" },
       {
@@ -103,22 +120,28 @@ describe("Canvas ingress data commands", () => {
       },
       {
         input: {
+          expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
           relations: [{ citedWorkId: "work-2", citingWorkId: "work-1", source: "openalex" }],
         },
         name: "canvas.persistCitationRelations",
       },
       {
-        input: { relations: [{ citedWorkId: "work-1", citingWorkId: "work-1" }] },
+        input: {
+          expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
+          relations: [{ citedWorkId: "work-1", citingWorkId: "work-1" }],
+        },
         name: "canvas.persistCitationRelations",
       },
       {
         input: {
+          expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
           relations: [{ citedWorkId: "work-2", citingWorkId: oversizedMultibyteId }],
         },
         name: "canvas.persistCitationRelations",
       },
       {
         input: {
+          expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
           relations: [
             { citedWorkId: "work-2", citingWorkId: "work-1" },
             { citedWorkId: "work-2", citingWorkId: "work-1" },
@@ -129,6 +152,7 @@ describe("Canvas ingress data commands", () => {
       {
         input: {
           libraryId: "library:foreign",
+          expectedScope: { libraryId: "library:active", scopeToken: "scope-token" },
           relations: [{ citedWorkId: "work-2", citingWorkId: "work-1" }],
         },
         name: "canvas.persistCitationRelations",
@@ -195,15 +219,20 @@ describe("Canvas ingress data commands", () => {
       title: "Foreign cited work",
     });
 
-    await expect(command("canvas.getCitationRelations", { workIds: [] })).resolves.toEqual({
+    await expect(
+      command("canvas.getCitationRelations", { expectedScope: scope, workIds: [] }),
+    ).resolves.toEqual({
       relations: [],
+      scope,
     });
     await expect(
       command("canvas.getCitationRelations", {
+        expectedScope: scope,
         workIds: [citingWorkId, citedWorkId, archivedWorkId, foreignWork.id, "missing-work"],
       }),
     ).resolves.toEqual({
       relations: [{ citedWorkId, citingWorkId }],
+      scope,
     });
   });
 
@@ -226,9 +255,9 @@ describe("Canvas ingress data commands", () => {
        VALUES ${relationValues.slice(0, 1_001).join(",")}`,
     );
 
-    await expect(command("canvas.getCitationRelations", { workIds })).rejects.toThrow(
-      "Canvas citation relations are limited to 1000",
-    );
+    await expect(
+      command("canvas.getCitationRelations", { expectedScope: scope, workIds }),
+    ).rejects.toThrow("Canvas citation relations are limited to 1000");
   });
 
   it("persists a citation batch once, preserves existing sources, and reports actual inserts", async () => {
@@ -242,17 +271,19 @@ describe("Canvas ingress data commands", () => {
 
     await expect(
       command("canvas.persistCitationRelations", {
+        expectedScope: scope,
         relations: [
           { citedWorkId: secondWorkId, citingWorkId: firstWorkId },
           { citedWorkId: thirdWorkId, citingWorkId: secondWorkId },
         ],
       }),
-    ).resolves.toEqual({ persisted: 1 });
+    ).resolves.toEqual({ persisted: 1, scope });
     await expect(
       command("canvas.persistCitationRelations", {
+        expectedScope: scope,
         relations: [{ citedWorkId: thirdWorkId, citingWorkId: secondWorkId }],
       }),
-    ).resolves.toEqual({ persisted: 0 });
+    ).resolves.toEqual({ persisted: 0, scope });
 
     const persisted = await database.query<{
       cited_work_id: string;
@@ -297,6 +328,7 @@ describe("Canvas ingress data commands", () => {
 
     await expect(
       command("canvas.persistCitationRelations", {
+        expectedScope: scope,
         relations: [
           { citedWorkId: activeCitedWorkId, citingWorkId: activeCitingWorkId },
           { citedWorkId: archivedWorkId, citingWorkId: activeCitingWorkId },
@@ -304,13 +336,15 @@ describe("Canvas ingress data commands", () => {
           { citedWorkId: "missing-work", citingWorkId: activeCitingWorkId },
         ],
       }),
-    ).resolves.toEqual({ persisted: 1 });
+    ).resolves.toEqual({ persisted: 1, scope });
     await expect(
       command("canvas.getCitationRelations", {
+        expectedScope: scope,
         workIds: [activeCitingWorkId, activeCitedWorkId, archivedWorkId, foreignWork.id],
       }),
     ).resolves.toEqual({
       relations: [{ citedWorkId: activeCitedWorkId, citingWorkId: activeCitingWorkId }],
+      scope,
     });
   });
 
@@ -329,6 +363,7 @@ describe("Canvas ingress data commands", () => {
 
     await expect(
       command("canvas.persistCitationRelations", {
+        expectedScope: scope,
         relations: [
           { citedWorkId: firstCitedWorkId, citingWorkId },
           { citedWorkId: failingCitedWorkId, citingWorkId },
@@ -343,6 +378,49 @@ describe("Canvas ingress data commands", () => {
         [citingWorkId],
       ),
     ).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("rejects a late citation persistence batch after the Library scope changes", async () => {
+    const citingWorkId = await addWork("Stale citation source");
+    const citedWorkId = await addWork("Stale citation target");
+    const foreignLibraryId = "library:canvas-stale-scope";
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Stale Canvas scope', 'personal', 1, 1)`,
+      [foreignLibraryId],
+    );
+    await database.run(`UPDATE settings SET value_json = ? WHERE key = 'local.library_id'`, [
+      JSON.stringify(foreignLibraryId),
+    ]);
+
+    await expect(
+      command("canvas.persistCitationRelations", {
+        expectedScope: scope,
+        relations: [{ citedWorkId, citingWorkId }],
+      }),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
+    await expect(
+      database.query<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM citations WHERE citing_work_id = ?`,
+        [citingWorkId],
+      ),
+    ).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("rejects a late citation relation read after the Library scope changes", async () => {
+    const foreignLibraryId = "library:canvas-stale-read-scope";
+    await database.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at)
+       VALUES (?, 'Stale Canvas read scope', 'personal', 1, 1)`,
+      [foreignLibraryId],
+    );
+    await database.run(`UPDATE settings SET value_json = ? WHERE key = 'local.library_id'`, [
+      JSON.stringify(foreignLibraryId),
+    ]);
+
+    await expect(
+      command("canvas.getCitationRelations", { expectedScope: scope, workIds: [] }),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
   });
 
   it("fails closed for foreign, mismatched, archived, and removed ingress records", async () => {

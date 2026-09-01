@@ -12,6 +12,7 @@ import {
   isRecord,
   type DataCommandDependencies,
 } from "./data-command-runtime";
+import { getActiveLibraryScopeToken } from "./library-scope-token";
 
 type LibraryShellCommandName = "library.getScope" | "library.getShellStats";
 
@@ -39,9 +40,9 @@ export async function executeLibraryShellCommand(
   switch (request.name) {
     case "library.getScope": {
       parseLibraryScopeInput(request.input, request.name);
-      return executeLibraryShellQuery(dependencies, request.name, async (database) => ({
-        libraryId: await requireActiveLocalLibraryId(database),
-      }));
+      return executeLibraryShellQuery(dependencies, request.name, (database) =>
+        getActiveLibraryScopeToken(database),
+      );
     }
     case "library.getShellStats": {
       parseLibraryScopeInput(request.input, request.name);

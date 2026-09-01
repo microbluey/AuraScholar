@@ -6,6 +6,7 @@ import type {
   CanvasIngressAnnotation,
   CanvasIngressWork,
 } from "../../electron/canvas-command-contract";
+import type { LibraryScopeToken } from "../../electron/library-read-command-contract";
 import {
   decodeCanvasGetActiveWorkResult,
   decodeCanvasGetAnnotationIngressSourceResult,
@@ -57,6 +58,8 @@ function relation(overrides: Partial<CanvasCitationRelation> = {}): CanvasCitati
   return { citedWorkId: "work-2", citingWorkId: "work-1", ...overrides };
 }
 
+const SCOPE: LibraryScopeToken = { libraryId: "library:active", scopeToken: "scope-token" };
+
 describe("Canvas page command-result codec", () => {
   it("accepts exact nullable read envelopes", () => {
     expect(decodeCanvasGetActiveWorkResult({ work: null }, "work-1")).toEqual({ work: null });
@@ -96,10 +99,11 @@ describe("Canvas page command-result codec", () => {
           "annotation-1",
           "work-1",
         ),
-      () => decodeCanvasGetCitationRelationsResult({}, ["work-1"]),
-      () => decodeCanvasGetCitationRelationsResult({ extra: true, relations: [] }, ["work-1"]),
-      () => decodeCanvasPersistCitationRelationsResult({}, 1),
-      () => decodeCanvasPersistCitationRelationsResult({ extra: true, persisted: 0 }, 1),
+      () => decodeCanvasGetCitationRelationsResult({}, ["work-1"], SCOPE),
+      () =>
+        decodeCanvasGetCitationRelationsResult({ extra: true, relations: [] }, ["work-1"], SCOPE),
+      () => decodeCanvasPersistCitationRelationsResult({}, 1, SCOPE),
+      () => decodeCanvasPersistCitationRelationsResult({ extra: true, persisted: 0 }, 1, SCOPE),
     ];
 
     for (const decode of invalid) expect(decode).toThrow("is invalid");
@@ -170,14 +174,23 @@ describe("Canvas page command-result codec", () => {
   it("validates citation relations against the requested dense selection", () => {
     const source = relation();
     const relations = [source];
-    const decoded = decodeCanvasGetCitationRelationsResult({ relations }, ["work-1", "work-2"]);
-    expect(decoded).toEqual({ relations });
+    const decoded = decodeCanvasGetCitationRelationsResult(
+      { relations, scope: SCOPE },
+      ["work-1", "work-2"],
+      SCOPE,
+    );
+    expect(decoded).toEqual({ relations, scope: SCOPE });
     expect(decoded.relations).not.toBe(relations);
     expect(decoded.relations[0]).not.toBe(source);
 
     const sparse = new Array<CanvasCitationRelation>(1);
     const invalid = [
-      () => decodeCanvasGetCitationRelationsResult({ relations: sparse }, ["work-1", "work-2"]),
+      () =>
+        decodeCanvasGetCitationRelationsResult(
+          { relations: sparse, scope: SCOPE },
+          ["work-1", "work-2"],
+          SCOPE,
+        ),
       () =>
         decodeCanvasGetCitationRelationsResult(
           {
@@ -185,31 +198,40 @@ describe("Canvas page command-result codec", () => {
               { length: MAX_CANVAS_CITATION_RESULT_RELATIONS + 1 },
               (_, index) => relation({ citedWorkId: `work-${index + 2}` }),
             ),
+            scope: SCOPE,
           },
           Array.from(
             { length: MAX_CANVAS_CITATION_RESULT_RELATIONS + 2 },
             (_, index) => `work-${index + 1}`,
           ),
+          SCOPE,
         ),
       () =>
         decodeCanvasGetCitationRelationsResult(
-          { relations: [{ citedWorkId: "work-2", citingWorkId: "work-1", extra: true }] },
+          {
+            relations: [{ citedWorkId: "work-2", citingWorkId: "work-1", extra: true }],
+            scope: SCOPE,
+          },
           ["work-1", "work-2"],
+          SCOPE,
         ),
       () =>
         decodeCanvasGetCitationRelationsResult(
-          { relations: [relation({ citedWorkId: "work-1" })] },
+          { relations: [relation({ citedWorkId: "work-1" })], scope: SCOPE },
           ["work-1", "work-2"],
+          SCOPE,
         ),
       () =>
-        decodeCanvasGetCitationRelationsResult({ relations: [source, source] }, [
-          "work-1",
-          "work-2",
-        ]),
+        decodeCanvasGetCitationRelationsResult(
+          { relations: [source, source], scope: SCOPE },
+          ["work-1", "work-2"],
+          SCOPE,
+        ),
       () =>
         decodeCanvasGetCitationRelationsResult(
-          { relations: [relation({ citedWorkId: "work-outside" })] },
+          { relations: [relation({ citedWorkId: "work-outside" })], scope: SCOPE },
           ["work-1", "work-2"],
+          SCOPE,
         ),
     ];
 
@@ -217,17 +239,40 @@ describe("Canvas page command-result codec", () => {
   });
 
   it("accepts only feasible exact persistence acknowledgements", () => {
-    expect(decodeCanvasPersistCitationRelationsResult({ persisted: 0 }, 1)).toEqual({
+    expect(
+      decodeCanvasPersistCitationRelationsResult({ persisted: 0, scope: SCOPE }, 1, SCOPE),
+    ).toEqual({
       persisted: 0,
+      scope: SCOPE,
     });
-    expect(decodeCanvasPersistCitationRelationsResult({ persisted: 2 }, 2)).toEqual({
+    expect(
+      decodeCanvasPersistCitationRelationsResult({ persisted: 2, scope: SCOPE }, 2, SCOPE),
+    ).toEqual({
       persisted: 2,
+      scope: SCOPE,
     });
 
     for (const persisted of [-1, 1.5, 3, Number.MAX_SAFE_INTEGER + 1, "1", true, null]) {
-      expect(() => decodeCanvasPersistCitationRelationsResult({ persisted }, 2)).toThrow(
-        "Canvas persist citation relations result is invalid",
-      );
+      expect(() =>
+        decodeCanvasPersistCitationRelationsResult({ persisted, scope: SCOPE }, 2, SCOPE),
+      ).toThrow("Canvas persist citation relations result is invalid");
     }
+  });
+
+  it("rejects a citation scope acknowledgement that differs from the request", () => {
+    expect(() =>
+      decodeCanvasGetCitationRelationsResult(
+        { relations: [], scope: { ...SCOPE, scopeToken: "other-scope" } },
+        [],
+        SCOPE,
+      ),
+    ).toThrow("Canvas Library scope does not match the request");
+    expect(() =>
+      decodeCanvasPersistCitationRelationsResult(
+        { persisted: 0, scope: { ...SCOPE, libraryId: "library:other" } },
+        0,
+        SCOPE,
+      ),
+    ).toThrow("Canvas Library scope does not match the request");
   });
 });
