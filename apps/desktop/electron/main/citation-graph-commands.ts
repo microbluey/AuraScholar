@@ -241,19 +241,19 @@ function requireCitationGraphNode(value: unknown, index: number): GraphNode {
     throw new Error(`Citation graph cited-by count at index ${index} is invalid`);
   }
 
-  const year = optionalCitationGraphYear(node.year, index);
+  const year = optionalCitationGraphYear(readOptionalCitationGraphField(node, "year"), index);
   const doi = optionalCitationGraphText(
-    node.doi,
+    readOptionalCitationGraphField(node, "doi"),
     `Citation graph DOI at index ${index}`,
     MAX_CITATION_GRAPH_DOI_LENGTH,
   );
   const venue = optionalCitationGraphText(
-    node.venue,
+    readOptionalCitationGraphField(node, "venue"),
     `Citation graph venue at index ${index}`,
     MAX_CITATION_GRAPH_NODE_TEXT_LENGTH,
   );
   const firstAuthor = optionalCitationGraphText(
-    node.firstAuthor,
+    readOptionalCitationGraphField(node, "firstAuthor"),
     `Citation graph first author at index ${index}`,
     MAX_CITATION_GRAPH_NODE_TEXT_LENGTH,
   );
@@ -348,6 +348,10 @@ function optionalCitationGraphText(
 ): string | undefined {
   if (value === undefined) return undefined;
   return requireCitationGraphText(value, label, maximum);
+}
+
+function readOptionalCitationGraphField(value: Record<string, unknown>, field: string): unknown {
+  return Object.hasOwn(value, field) ? value[field] : undefined;
 }
 
 function optionalCitationGraphYear(value: unknown, index: number): number | undefined {

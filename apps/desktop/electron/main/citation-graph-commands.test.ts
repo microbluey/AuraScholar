@@ -1,4 +1,4 @@
-import type { CitationGraph } from "@aurascholar/core";
+import type { CitationGraph, GraphNode } from "@aurascholar/core";
 import { WorksRepo, type Database } from "@aurascholar/db";
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
@@ -153,6 +153,45 @@ describe("Citation Graph data commands", () => {
     await expect(
       database.query<{ count: number }>(`SELECT COUNT(*) AS count FROM graph_cache`),
     ).resolves.toEqual([{ count: 0 }]);
+  });
+
+  it("ignores inherited optional node fields at the main boundary", async () => {
+    const inheritedCenter = Object.create({ doi: "10.1000/center", venue: "spoofed" }) as GraphNode;
+    Object.assign(inheritedCenter, {
+      citedByCount: 10,
+      id: GRAPH.centerId,
+      relation: "center",
+      title: "Center work",
+    });
+    const graph: CitationGraph = { ...GRAPH, nodes: [inheritedCenter, GRAPH.nodes[1]!] };
+
+    await expect(
+      command("citationGraph.putCached", { doi: "10.1000/center", graph }),
+    ).resolves.toEqual({ stored: false });
+    await expect(
+      database.query<{ count: number }>(`SELECT COUNT(*) AS count FROM graph_cache`),
+    ).resolves.toEqual([{ count: 0 }]);
+
+    const ownDoiWithInheritedInvalidYear = Object.create({ year: "spoofed" }) as GraphNode;
+    Object.assign(ownDoiWithInheritedInvalidYear, {
+      citedByCount: 10,
+      doi: "10.1000/center",
+      id: GRAPH.centerId,
+      relation: "center",
+      title: "Center work",
+    });
+    const safeGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: [ownDoiWithInheritedInvalidYear, GRAPH.nodes[1]!],
+    };
+    await expect(
+      command("citationGraph.putCached", { doi: "10.1000/center", graph: safeGraph }),
+    ).resolves.toEqual({ stored: true });
+    const rows = await database.query<{ payload_json: string }>(
+      `SELECT payload_json FROM graph_cache WHERE work_id = ?`,
+      ["10.1000/center"],
+    );
+    expect(JSON.parse(rows[0]!.payload_json).nodes[0]).not.toHaveProperty("year");
   });
 
   it("prefers a valid canonical row and retires a conflicting legacy raw-key row", async () => {
