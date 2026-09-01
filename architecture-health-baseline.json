@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 86412,
+        ".ts": 86493,
         ".tsx": 35973
       },
       "files": {
@@ -460,7 +460,7 @@
         "packages/connectors/src/client.ts": 153,
         "packages/connectors/src/crossref.ts": 173,
         "packages/connectors/src/index.ts": 20,
-        "packages/connectors/src/openalex.ts": 175,
+        "packages/connectors/src/openalex.ts": 256,
         "packages/connectors/src/semanticscholar.ts": 188,
         "packages/connectors/src/types.ts": 66,
         "packages/connectors/src/unpaywall.ts": 38,
@@ -612,11 +612,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 141706
+      "totalLines": 141787
     },
     "tests": {
       "byExtension": {
-        ".ts": 87309,
+        ".ts": 87413,
         ".tsx": 1035
       },
       "files": {
@@ -970,7 +970,7 @@
         "packages/cite/src/import.test.ts": 242,
         "packages/connectors/src/arxiv.test.ts": 97,
         "packages/connectors/src/crossref.test.ts": 95,
-        "packages/connectors/src/openalex.test.ts": 74,
+        "packages/connectors/src/openalex.test.ts": 178,
         "packages/connectors/src/semanticscholar.test.ts": 97,
         "packages/core/src/canvas/layout.test.ts": 619,
         "packages/core/src/discovery/search.test.ts": 405,
@@ -1041,7 +1041,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 88344
+      "totalLines": 88448
     }
   },
   "uiDatabaseBoundary": {}
