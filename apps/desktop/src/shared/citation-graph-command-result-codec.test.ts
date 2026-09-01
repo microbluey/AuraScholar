@@ -47,7 +47,7 @@ const GRAPH: CitationGraph = {
 };
 
 function validCacheEntry(): CitationGraphCacheEntry {
-  return { fetchedAt: 0, graph: GRAPH };
+  return { cacheVersion: 1, fetchedAt: 0, graph: GRAPH };
 }
 
 function expectInvalid(decoder: () => unknown): void {
@@ -104,6 +104,7 @@ describe("Citation Graph command-result codec", () => {
       {},
       { entry: null, extra: true },
       { entry: undefined },
+      { entry: { fetchedAt: 0, graph: GRAPH } },
       {
         entry: { ...validCacheEntry(), extra: true },
       },
@@ -242,7 +243,16 @@ describe("Citation Graph command-result codec", () => {
     });
     for (const fetchedAt of [-1, 1.5, "now", Infinity, Number.MAX_SAFE_INTEGER + 1]) {
       expectInvalid(() =>
-        decodeCitationGraphGetCachedResult({ entry: { fetchedAt, graph: GRAPH } }),
+        decodeCitationGraphGetCachedResult({
+          entry: { cacheVersion: 1, fetchedAt, graph: GRAPH },
+        }),
+      );
+    }
+    for (const cacheVersion of [0, -1, 1.5, "one", Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expectInvalid(() =>
+        decodeCitationGraphGetCachedResult({
+          entry: { cacheVersion, fetchedAt: 0, graph: GRAPH },
+        }),
       );
     }
   });
@@ -269,21 +279,23 @@ describe("Citation Graph command-result codec", () => {
     };
     expectInvalid(() =>
       decodeCitationGraphGetCachedResult(
-        { entry: { fetchedAt: 0, graph: mismatchedGraph } },
+        { entry: { cacheVersion: 1, fetchedAt: 0, graph: mismatchedGraph } },
         "10.1000/center",
       ),
     );
     expectInvalid(() =>
       decodeCitationGraphGetCachedResult(
-        { entry: { fetchedAt: 0, graph: unboundGraph } },
+        { entry: { cacheVersion: 1, fetchedAt: 0, graph: unboundGraph } },
         "10.1000/center",
       ),
     );
     // The legacy one-argument decoder remains useful for generic graph reads.
     expect(
-      decodeCitationGraphGetCachedResult({ entry: { fetchedAt: 0, graph: unboundGraph } }),
+      decodeCitationGraphGetCachedResult({
+        entry: { cacheVersion: 1, fetchedAt: 0, graph: unboundGraph },
+      }),
     ).toEqual({
-      entry: { fetchedAt: 0, graph: unboundGraph },
+      entry: { cacheVersion: 1, fetchedAt: 0, graph: unboundGraph },
     });
   });
 

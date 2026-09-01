@@ -18,8 +18,7 @@ import { DDL_V1 } from "./ddl.js";
 import { ensureLocalLibraryIdentity } from "./local-first.js";
 import { createLibraryBoundaryTriggers } from "./migration-library-boundary-triggers.js";
 import { applyDocumentEvidenceV19 } from "./migration-document-evidence.js";
-import { knowledgeMigrations } from "./migration-knowledge-registry.js";
-import { libraryMaintenanceMigrations } from "./migration-library-maintenance.js";
+import { postCoreMigrations } from "./migration-catalog.js";
 import { applyResearchProjectsV18 } from "./migration-research-projects.js";
 
 export const MIGRATIONS: Migration[] = [
@@ -400,8 +399,7 @@ export const MIGRATIONS: Migration[] = [
     disableForeignKeys: true,
   },
   { version: 19, name: "document_evidence", sql: "", apply: applyDocumentEvidenceV19 },
-  ...knowledgeMigrations,
-  ...libraryMaintenanceMigrations,
+  ...postCoreMigrations,
 ];
 
 async function applyLibraryOwnershipV17(db: SqlExecutor): Promise<void> {

@@ -1,5 +1,6 @@
-// Schema DDL v1 — must stay in sync with schema.ts (the Drizzle definitions
-// are the typed view; this is the executable source for migrations).
+// Schema DDL v1 — defines the bootstrap subset of the Drizzle schema modules;
+// later additive migrations extend it. The definitions are the typed view,
+// while this remains the executable source for the initial migration.
 export const DDL_V1 = `
 CREATE TABLE IF NOT EXISTS works (
   id TEXT PRIMARY KEY,

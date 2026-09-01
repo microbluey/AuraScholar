@@ -3,7 +3,7 @@ import { WorksRepo, type Database } from "@aurascholar/db";
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DataCommandInput,
   DataCommandName,
@@ -34,6 +34,13 @@ const GRAPH: CitationGraph = {
   ],
   truncated: false,
 };
+
+function graphWithCenterTitle(title: string): CitationGraph {
+  return {
+    ...GRAPH,
+    nodes: GRAPH.nodes.map((node) => (node.id === GRAPH.centerId ? { ...node, title } : node)),
+  };
+}
 
 let database: Database;
 let dependencies: DataCommandDependencies;
@@ -73,7 +80,7 @@ describe("Citation Graph data commands", () => {
 
     await expect(
       command("citationGraph.getCached", { doi: " HTTPS://DOI.ORG/10.1000/CENTER " }),
-    ).resolves.toEqual({ entry: { fetchedAt: 9_900, graph: GRAPH } });
+    ).resolves.toEqual({ entry: { cacheVersion: 1, fetchedAt: 9_900, graph: GRAPH } });
   });
 
   it("returns old cache timestamps for renderer-owned freshness decisions", async () => {
@@ -83,7 +90,7 @@ describe("Citation Graph data commands", () => {
     );
 
     await expect(command("citationGraph.getCached", { doi: "10.1000/center" })).resolves.toEqual({
-      entry: { fetchedAt: 0, graph: GRAPH },
+      entry: { cacheVersion: 1, fetchedAt: 0, graph: GRAPH },
     });
     await expect(
       database.query<{ count: number }>(
@@ -145,10 +152,18 @@ describe("Citation Graph data commands", () => {
     };
 
     await expect(
-      command("citationGraph.putCached", { doi: "10.1000/center", graph: mismatchedGraph }),
+      command("citationGraph.putCached", {
+        doi: "10.1000/center",
+        expectedCacheVersion: null,
+        graph: mismatchedGraph,
+      }),
     ).resolves.toEqual({ stored: false });
     await expect(
-      command("citationGraph.putCached", { doi: "10.1000/center", graph: unboundGraph }),
+      command("citationGraph.putCached", {
+        doi: "10.1000/center",
+        expectedCacheVersion: null,
+        graph: unboundGraph,
+      }),
     ).resolves.toEqual({ stored: false });
     await expect(
       database.query<{ count: number }>(`SELECT COUNT(*) AS count FROM graph_cache`),
@@ -166,7 +181,11 @@ describe("Citation Graph data commands", () => {
     const graph: CitationGraph = { ...GRAPH, nodes: [inheritedCenter, GRAPH.nodes[1]!] };
 
     await expect(
-      command("citationGraph.putCached", { doi: "10.1000/center", graph }),
+      command("citationGraph.putCached", {
+        doi: "10.1000/center",
+        expectedCacheVersion: null,
+        graph,
+      }),
     ).resolves.toEqual({ stored: false });
     await expect(
       database.query<{ count: number }>(`SELECT COUNT(*) AS count FROM graph_cache`),
@@ -185,7 +204,11 @@ describe("Citation Graph data commands", () => {
       nodes: [ownDoiWithInheritedInvalidYear, GRAPH.nodes[1]!],
     };
     await expect(
-      command("citationGraph.putCached", { doi: "10.1000/center", graph: safeGraph }),
+      command("citationGraph.putCached", {
+        doi: "10.1000/center",
+        expectedCacheVersion: null,
+        graph: safeGraph,
+      }),
     ).resolves.toEqual({ stored: true });
     const rows = await database.query<{ payload_json: string }>(
       `SELECT payload_json FROM graph_cache WHERE work_id = ?`,
@@ -212,7 +235,7 @@ describe("Citation Graph data commands", () => {
     );
 
     await expect(command("citationGraph.getCached", { doi: legacyDoi })).resolves.toEqual({
-      entry: { fetchedAt: 20_000, graph: GRAPH },
+      entry: { cacheVersion: 1, fetchedAt: 20_000, graph: GRAPH },
     });
     await expect(
       database.query<{ work_id: string }>(`SELECT work_id FROM graph_cache ORDER BY work_id`),
@@ -242,8 +265,9 @@ describe("Citation Graph data commands", () => {
       ["10.1000/sparse-edges", JSON.stringify({ ...GRAPH, edges: sparseEdges }), 9_900],
     );
     await database.run(
-      `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
-      [legacyDoi, JSON.stringify(GRAPH), 9_900],
+      `INSERT INTO graph_cache
+       (work_id, payload_json, fetched_at, cache_version) VALUES (?, ?, ?, ?)`,
+      [legacyDoi, JSON.stringify(GRAPH), 9_900, 7],
     );
 
     await expect(command("citationGraph.getCached", { doi: "10.1000/malformed" })).resolves.toEqual(
@@ -267,7 +291,7 @@ describe("Citation Graph data commands", () => {
       entry: null,
     });
     await expect(command("citationGraph.getCached", { doi: legacyDoi })).resolves.toEqual({
-      entry: { fetchedAt: 9_900, graph: GRAPH },
+      entry: { cacheVersion: 7, fetchedAt: 9_900, graph: GRAPH },
     });
     await expect(
       database.query<{ work_id: string }>(`SELECT work_id FROM graph_cache ORDER BY work_id`),
@@ -279,6 +303,7 @@ describe("Citation Graph data commands", () => {
     await expect(
       command("citationGraph.putCached", {
         doi: "doi: 10.1000/CENTER",
+        expectedCacheVersion: null,
         graph: GRAPH,
       }),
     ).resolves.toEqual({ stored: true });
@@ -321,7 +346,11 @@ describe("Citation Graph data commands", () => {
     };
 
     await expect(
-      command("citationGraph.putCached", { doi: "10.1000/delimiter", graph: delimiterGraph }),
+      command("citationGraph.putCached", {
+        doi: "10.1000/delimiter",
+        expectedCacheVersion: null,
+        graph: delimiterGraph,
+      }),
     ).resolves.toEqual({ stored: true });
   });
 
@@ -404,6 +433,262 @@ describe("Citation Graph data commands", () => {
     }
     expect(executeCalls).toBe(0);
     expect(transactionCalls).toBe(0);
+  });
+
+  it("uses a null cache version for insert-if-absent and preserves the winner on conflict", async () => {
+    const before = Date.now();
+    await expect(
+      command("citationGraph.putCached", {
+        doi: "10.1000/center",
+        expectedCacheVersion: null,
+        graph: GRAPH,
+      }),
+    ).resolves.toEqual({ stored: true });
+
+    const firstRows = await database.query<{
+      cache_version: number;
+      fetched_at: number;
+      payload_json: string;
+    }>(
+      `SELECT cache_version, fetched_at, payload_json
+       FROM graph_cache WHERE work_id = ?`,
+      ["10.1000/center"],
+    );
+    expect(firstRows).toHaveLength(1);
+    expect(firstRows[0]).toMatchObject({
+      cache_version: 1,
+      payload_json: JSON.stringify(GRAPH),
+    });
+    expect(firstRows[0]?.fetched_at).toBeGreaterThanOrEqual(before);
+
+    await expect(
+      command("citationGraph.putCached", {
+        doi: "10.1000/center",
+        expectedCacheVersion: null,
+        graph: graphWithCenterTitle("Conflicting insert"),
+      }),
+    ).resolves.toEqual({ stored: false });
+    await expect(
+      database.query(
+        `SELECT cache_version, fetched_at, payload_json FROM graph_cache WHERE work_id = ?`,
+        ["10.1000/center"],
+      ),
+    ).resolves.toEqual(firstRows);
+  });
+
+  it("treats an omitted cache version as the legacy insert-only form", async () => {
+    await expect(
+      command("citationGraph.putCached", { doi: "10.1000/center", graph: GRAPH }),
+    ).resolves.toEqual({ stored: true });
+    await expect(
+      database.query<{ cache_version: number }>(
+        `SELECT cache_version FROM graph_cache WHERE work_id = ?`,
+        ["10.1000/center"],
+      ),
+    ).resolves.toEqual([{ cache_version: 1 }]);
+  });
+
+  it("updates a matching cache version while recording the wall-clock fetchedAt", async () => {
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at, cache_version)
+       VALUES (?, ?, ?, ?)`,
+      ["10.1000/center", JSON.stringify(GRAPH), 1_234, 7],
+    );
+    const updatedGraph = graphWithCenterTitle("Matching update");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(5_000);
+    try {
+      await expect(
+        command("citationGraph.putCached", {
+          doi: "10.1000/center",
+          expectedCacheVersion: 7,
+          graph: updatedGraph,
+        }),
+      ).resolves.toEqual({ stored: true });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    await expect(
+      database.query(
+        `SELECT cache_version, fetched_at, payload_json FROM graph_cache WHERE work_id = ?`,
+        ["10.1000/center"],
+      ),
+    ).resolves.toEqual([
+      { cache_version: 8, fetched_at: 5_000, payload_json: JSON.stringify(updatedGraph) },
+    ]);
+  });
+
+  it("does not let a stale cache version overwrite a newer graph", async () => {
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at, cache_version)
+       VALUES (?, ?, ?, ?)`,
+      ["10.1000/center", JSON.stringify(GRAPH), 5_000, 3],
+    );
+    const winningGraph = graphWithCenterTitle("Winner");
+    const staleGraph = graphWithCenterTitle("Stale writer");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(6_000);
+    try {
+      await expect(
+        command("citationGraph.putCached", {
+          doi: "10.1000/center",
+          expectedCacheVersion: 3,
+          graph: winningGraph,
+        }),
+      ).resolves.toEqual({ stored: true });
+      await expect(
+        command("citationGraph.putCached", {
+          doi: "10.1000/center",
+          expectedCacheVersion: 3,
+          graph: staleGraph,
+        }),
+      ).resolves.toEqual({ stored: false });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    await expect(
+      database.query(
+        `SELECT cache_version, fetched_at, payload_json FROM graph_cache WHERE work_id = ?`,
+        ["10.1000/center"],
+      ),
+    ).resolves.toEqual([
+      { cache_version: 4, fetched_at: 6_000, payload_json: JSON.stringify(winningGraph) },
+    ]);
+  });
+
+  it("increments versions for same-millisecond writes without manufacturing a future timestamp", async () => {
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at, cache_version)
+       VALUES (?, ?, ?, ?)`,
+      ["10.1000/center", JSON.stringify(GRAPH), 1_000, 10],
+    );
+    const firstGraph = graphWithCenterTitle("Same millisecond one");
+    const secondGraph = graphWithCenterTitle("Same millisecond two");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    try {
+      await expect(
+        command("citationGraph.putCached", {
+          doi: "10.1000/center",
+          expectedCacheVersion: 10,
+          graph: firstGraph,
+        }),
+      ).resolves.toEqual({ stored: true });
+      await expect(
+        command("citationGraph.putCached", {
+          doi: "10.1000/center",
+          expectedCacheVersion: 11,
+          graph: secondGraph,
+        }),
+      ).resolves.toEqual({ stored: true });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    await expect(
+      database.query(
+        `SELECT cache_version, fetched_at, payload_json FROM graph_cache WHERE work_id = ?`,
+        ["10.1000/center"],
+      ),
+    ).resolves.toEqual([
+      { cache_version: 12, fetched_at: 2_000, payload_json: JSON.stringify(secondGraph) },
+    ]);
+  });
+
+  it("repairs a future fetchedAt on the next successful versioned write", async () => {
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at, cache_version)
+       VALUES (?, ?, ?, ?)`,
+      ["10.1000/center", JSON.stringify(GRAPH), 99_999, 20],
+    );
+    const repairedGraph = graphWithCenterTitle("Future repaired");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      await expect(
+        command("citationGraph.putCached", {
+          doi: "10.1000/center",
+          expectedCacheVersion: 20,
+          graph: repairedGraph,
+        }),
+      ).resolves.toEqual({ stored: true });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    await expect(
+      database.query<{ cache_version: number; fetched_at: number; payload_json: string }>(
+        `SELECT cache_version, fetched_at, payload_json FROM graph_cache WHERE work_id = ?`,
+        ["10.1000/center"],
+      ),
+    ).resolves.toEqual([
+      { cache_version: 21, fetched_at: 10_000, payload_json: JSON.stringify(repairedGraph) },
+    ]);
+  });
+
+  it("rejects invalid expected cache versions before obtaining a database lease", async () => {
+    let transactionCalls = 0;
+    const noLeaseDependencies: DataCommandDependencies = {
+      async transaction() {
+        transactionCalls += 1;
+        throw new Error("transaction reached");
+      },
+    };
+    const invalidVersions: unknown[] = [
+      -1,
+      0,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+      "1",
+      undefined,
+    ];
+
+    for (const expectedCacheVersion of invalidVersions) {
+      await expect(
+        executeDataCommand(
+          {
+            name: "citationGraph.putCached",
+            input: { doi: "10.1000/center", expectedCacheVersion, graph: GRAPH },
+          },
+          noLeaseDependencies,
+        ),
+      ).rejects.toThrow("Citation graph expected cache version is invalid");
+    }
+    expect(transactionCalls).toBe(0);
+  });
+
+  it("does not advance a cache version at the MAX_SAFE_INTEGER boundary", async () => {
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at, cache_version)
+       VALUES (?, ?, ?, ?)`,
+      ["10.1000/center", JSON.stringify(GRAPH), 1_000, Number.MAX_SAFE_INTEGER],
+    );
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    try {
+      await expect(
+        command("citationGraph.putCached", {
+          doi: "10.1000/center",
+          expectedCacheVersion: Number.MAX_SAFE_INTEGER,
+          graph: graphWithCenterTitle("Overflow attempt"),
+        }),
+      ).resolves.toEqual({ stored: false });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    await expect(
+      database.query(
+        `SELECT cache_version, fetched_at, payload_json FROM graph_cache WHERE work_id = ?`,
+        ["10.1000/center"],
+      ),
+    ).resolves.toEqual([
+      {
+        cache_version: Number.MAX_SAFE_INTEGER,
+        fetched_at: 1_000,
+        payload_json: JSON.stringify(GRAPH),
+      },
+    ]);
   });
 
   it("returns DOI membership for active local works only", async () => {

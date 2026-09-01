@@ -35,7 +35,11 @@ export interface LoadCitationGraphOptions {
 /** Testable cache boundary; main owns the cache key and record mutations. */
 export interface CitationGraphCacheDataSource {
   getCached: (rawDoi: string) => Promise<CitationGraphCacheEntry | null>;
-  putCached: (doi: string, graph: CitationGraph) => Promise<boolean>;
+  putCached: (
+    doi: string,
+    graph: CitationGraph,
+    expectedCacheVersion?: number | null,
+  ) => Promise<boolean>;
 }
 
 export function isCitationGraph(value: unknown): value is CitationGraph {
@@ -97,8 +101,12 @@ const defaultCacheDataSource: CitationGraphCacheDataSource = {
     const result = await window.aura.data.command("citationGraph.getCached", { doi: rawDoi });
     return decodeCitationGraphGetCachedResult(result, rawDoi).entry;
   },
-  async putCached(doi, graph) {
-    const result = await window.aura.data.command("citationGraph.putCached", { doi, graph });
+  async putCached(doi, graph, expectedCacheVersion) {
+    const result = await window.aura.data.command("citationGraph.putCached", {
+      doi,
+      expectedCacheVersion: expectedCacheVersion ?? null,
+      graph,
+    });
     return decodeCitationGraphPutCachedResult(result).stored;
   },
 };
@@ -115,11 +123,13 @@ export async function loadCitationGraphByDoi(
   const cache = options.cache ?? defaultCacheDataSource;
   throwIfAborted(signal);
 
+  // Always take a cache snapshot, including force refreshes. Force refresh
+  // bypasses reuse, but the snapshot is still required to prevent a slow
+  // remote build from overwriting a newer result.
+  const entry = await cache.getCached(rawDoi);
+  throwIfAborted(signal);
+  const expectedCacheVersion = entry?.cacheVersion ?? null;
   if (!options.forceRefresh) {
-    // The raw value is intentional: main resolves the normalized key and its
-    // historical raw-key variant atomically before returning an entry.
-    const entry = await cache.getCached(rawDoi);
-    throwIfAborted(signal);
     if (
       entry &&
       isFreshCitationGraphCacheEntry(entry, now(), cacheTtlMs) &&
@@ -142,7 +152,7 @@ export async function loadCitationGraphByDoi(
   const centerDoi = citationGraphCenterDoi(graph);
   if (centerDoi !== null) {
     if (centerDoi !== doi) return null;
-    await cache.putCached(doi, graph);
+    await cache.putCached(doi, graph, expectedCacheVersion);
   }
   throwIfAborted(signal);
   return graph;

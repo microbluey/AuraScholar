@@ -16,6 +16,7 @@ import { attachments } from "./document-evidence-schema.js";
 
 export { libraries, works } from "./library-schema.js";
 export { projectWorks, researchProjects } from "./research-project-schema.js";
+export { graphCache } from "./schema-graph-cache.js";
 export {
   attachments,
   documentAssets,
@@ -289,12 +290,6 @@ export const citations = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.citingWorkId, t.citedWorkId] })],
 );
-
-export const graphCache = sqliteTable("graph_cache", {
-  workId: text("work_id").primaryKey(),
-  payloadJson: text("payload_json", { mode: "json" }).notNull(),
-  fetchedAt: integer("fetched_at").notNull(),
-});
 
 // ---------------------------------------------------------------------------
 // Spatial Canvas — workspace-owned snapshot records. Canvas node ids describe
