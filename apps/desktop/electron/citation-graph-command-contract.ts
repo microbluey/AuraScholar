@@ -1,10 +1,13 @@
 import type { CitationGraph } from "@aurascholar/core";
 
 /**
- * A validated graph-cache entry. Its timestamp is main-process-owned and is
- * returned only so the renderer can apply the product cache TTL policy.
+ * A validated graph-cache entry. Both the freshness timestamp and the
+ * compare-and-swap version are main-process-owned; the renderer uses the
+ * former for TTL decisions and the latter to guard a write after remote work.
  */
 export interface CitationGraphCacheEntry {
+  /** Monotonic compare-and-swap token owned by the main-process database. */
+  cacheVersion: number;
   fetchedAt: number;
   graph: CitationGraph;
 }
@@ -21,9 +24,16 @@ export interface CitationGraphGetCachedCommandResult {
   entry: CitationGraphCacheEntry | null;
 }
 
-/** The renderer may supply a graph, but never a cache key or cache timestamp. */
+/**
+ * The renderer may supply a graph and the cache version it observed before
+ * doing remote work. Main uses that observation as a compare-and-swap guard;
+ * it never accepts a renderer-generated cache version. Omitted values are
+ * treated as `null` for older renderers, which permits insertion only when no
+ * canonical row exists.
+ */
 export interface CitationGraphPutCachedCommandInput {
   doi: string;
+  expectedCacheVersion?: number | null;
   graph: CitationGraph;
 }
 

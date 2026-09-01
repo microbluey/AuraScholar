@@ -33,6 +33,7 @@ export function decodeCitationGraphGetCachedResult(
   if (result.entry === null) return { entry: null };
 
   const entry = requireExactCitationGraphObject(result.entry, "Citation graph cache entry", [
+    "cacheVersion",
     "fetchedAt",
     "graph",
   ]);
@@ -42,6 +43,7 @@ export function decodeCitationGraphGetCachedResult(
   }
   return {
     entry: {
+      cacheVersion: requirePositiveSafeInteger(entry.cacheVersion, "Citation graph cache version"),
       fetchedAt: requireNonnegativeSafeInteger(entry.fetchedAt, "Citation graph cache timestamp"),
       graph,
     },
@@ -327,6 +329,13 @@ function requireCitationGraphText(
 
 function requireNonnegativeSafeInteger(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value as number;
+}
+
+function requirePositiveSafeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
     throw new Error(`${label} is invalid`);
   }
   return value as number;

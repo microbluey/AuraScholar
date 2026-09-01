@@ -30,6 +30,19 @@ const GRAPH: CitationGraph = {
   edges: [{ source: "W-center", target: "W-reference" }],
 };
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function cache(
   entry: Awaited<ReturnType<CitationGraphCacheDataSource["getCached"]>> = null,
 ): CitationGraphCacheDataSource & {
@@ -44,7 +57,7 @@ function cache(
 
 describe("citation graph loading", () => {
   it("treats only finite, non-future timestamps inside the TTL as fresh", () => {
-    const entry = { fetchedAt: 1_000, graph: GRAPH };
+    const entry = { cacheVersion: 1, fetchedAt: 1_000, graph: GRAPH };
     expect(isFreshCitationGraphCacheEntry(entry, 1_000, 100)).toBe(true);
     expect(isFreshCitationGraphCacheEntry(entry, 1_099, 100)).toBe(true);
     expect(isFreshCitationGraphCacheEntry(entry, 1_100, 100)).toBe(false);
@@ -89,7 +102,7 @@ describe("citation graph loading", () => {
   });
 
   it("reuses a fresh cache entry without rebuilding and keeps the original raw DOI", async () => {
-    const source = cache({ graph: GRAPH, fetchedAt: 9_900 });
+    const source = cache({ cacheVersion: 1, graph: GRAPH, fetchedAt: 9_900 });
     const buildGraph = vi.fn();
     const rawDoi = " HTTPS://DOI.ORG/10.1000/CENTER ";
 
@@ -107,7 +120,7 @@ describe("citation graph loading", () => {
   });
 
   it("rebuilds an invalid cache entry and stores it under the normalized DOI", async () => {
-    const source = cache({ graph: {} as CitationGraph, fetchedAt: 9_900 });
+    const source = cache({ cacheVersion: 1, graph: {} as CitationGraph, fetchedAt: 9_900 });
     const buildGraph = vi.fn(async () => GRAPH);
 
     await expect(
@@ -119,11 +132,11 @@ describe("citation graph loading", () => {
     ).resolves.toEqual(GRAPH);
 
     expect(buildGraph).toHaveBeenCalledWith("10.1000/center", undefined);
-    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH, 1);
   });
 
   it("rebuilds a cache entry at the TTL boundary", async () => {
-    const source = cache({ graph: GRAPH, fetchedAt: 9_900 });
+    const source = cache({ cacheVersion: 2, graph: GRAPH, fetchedAt: 9_900 });
     const buildGraph = vi.fn(async () => GRAPH);
 
     await expect(
@@ -136,11 +149,11 @@ describe("citation graph loading", () => {
     ).resolves.toEqual(GRAPH);
 
     expect(buildGraph).toHaveBeenCalledOnce();
-    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH, 2);
   });
 
   it("rebuilds a future cache entry instead of treating it as permanently fresh", async () => {
-    const source = cache({ graph: GRAPH, fetchedAt: 10_001 });
+    const source = cache({ cacheVersion: 3, graph: GRAPH, fetchedAt: 10_001 });
     const buildGraph = vi.fn(async () => GRAPH);
 
     await expect(
@@ -153,7 +166,7 @@ describe("citation graph loading", () => {
     ).resolves.toEqual(GRAPH);
 
     expect(buildGraph).toHaveBeenCalledOnce();
-    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH, 3);
   });
 
   it("does not reuse a custom cache graph bound to another DOI", async () => {
@@ -163,7 +176,7 @@ describe("citation graph loading", () => {
         node.id === GRAPH.centerId ? { ...node, doi: "10.1000/other" } : node,
       ),
     };
-    const source = cache({ graph: mismatchedGraph, fetchedAt: 9_900 });
+    const source = cache({ cacheVersion: 4, graph: mismatchedGraph, fetchedAt: 9_900 });
     const buildGraph = vi.fn(async () => GRAPH);
 
     await expect(
@@ -175,7 +188,7 @@ describe("citation graph loading", () => {
     ).resolves.toEqual(GRAPH);
 
     expect(buildGraph).toHaveBeenCalledOnce();
-    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH, 4);
   });
 
   it("keeps an unbound build result visible without persisting it", async () => {
@@ -212,7 +225,7 @@ describe("citation graph loading", () => {
 
   it("delegates legacy raw-key migration to the main-process cache command", async () => {
     const legacyRawDoi = "HTTPS://DOI.ORG/10.1000/CENTER";
-    const source = cache({ graph: GRAPH, fetchedAt: 9_900 });
+    const source = cache({ cacheVersion: 5, graph: GRAPH, fetchedAt: 9_900 });
     const buildGraph = vi.fn();
 
     await expect(
@@ -228,8 +241,8 @@ describe("citation graph loading", () => {
     expect(source.putCached).not.toHaveBeenCalled();
   });
 
-  it("skips cache reads for force refreshes but stores the refreshed normalized graph", async () => {
-    const source = cache({ graph: GRAPH, fetchedAt: 9_900 });
+  it("snapshots the cache before force refresh and stores the refreshed normalized graph", async () => {
+    const source = cache({ cacheVersion: 6, graph: GRAPH, fetchedAt: 9_900 });
     const buildGraph = vi.fn(async () => GRAPH);
 
     await expect(
@@ -240,8 +253,71 @@ describe("citation graph loading", () => {
       }),
     ).resolves.toEqual(GRAPH);
 
-    expect(source.getCached).not.toHaveBeenCalled();
-    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+    expect(source.getCached).toHaveBeenCalledWith("HTTPS://DOI.ORG/10.1000/CENTER");
+    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH, 6);
+  });
+
+  it("uses the cache snapshot as a CAS token for concurrent force refreshes", async () => {
+    const slowGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, title: "Slow rebuild" } : node,
+      ),
+    };
+    const fastGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, title: "Fast refresh" } : node,
+      ),
+    };
+    let entry: Awaited<ReturnType<CitationGraphCacheDataSource["getCached"]>> = {
+      cacheVersion: 7,
+      fetchedAt: 100,
+      graph: GRAPH,
+    };
+    const source = {
+      getCached: vi.fn(async () => entry),
+      putCached: vi.fn(
+        async (_doi: string, graph: CitationGraph, expectedCacheVersion?: number | null) => {
+          const token = expectedCacheVersion ?? null;
+          if (!entry || entry.cacheVersion !== token) return false;
+          entry = { ...entry, cacheVersion: entry.cacheVersion + 1, graph };
+          return true;
+        },
+      ),
+    } satisfies CitationGraphCacheDataSource;
+    const builds: Array<Deferred<CitationGraph>> = [];
+    const buildsReady = deferred<void>();
+    const buildGraph = vi.fn(() => {
+      const build = deferred<CitationGraph>();
+      builds.push(build);
+      if (builds.length === 2) buildsReady.resolve();
+      return build.promise;
+    });
+
+    const slowRequest = loadCitationGraphByDoi("10.1000/center", {
+      buildGraph,
+      cache: source,
+      forceRefresh: true,
+      now: () => 10_000,
+    });
+    const fastRequest = loadCitationGraphByDoi("10.1000/center", {
+      buildGraph,
+      cache: source,
+      forceRefresh: true,
+      now: () => 10_000,
+    });
+    await buildsReady.promise;
+
+    expect(source.getCached).toHaveBeenCalledTimes(2);
+    builds[1]!.resolve(fastGraph);
+    await expect(fastRequest).resolves.toBe(fastGraph);
+    builds[0]!.resolve(slowGraph);
+    await expect(slowRequest).resolves.toBe(slowGraph);
+
+    expect(source.putCached).toHaveBeenNthCalledWith(1, "10.1000/center", fastGraph, 7);
+    expect(source.putCached).toHaveBeenNthCalledWith(2, "10.1000/center", slowGraph, 7);
+    expect(entry).toEqual({ cacheVersion: 8, fetchedAt: 100, graph: fastGraph });
   });
 
   it("uses typed cache commands by default", async () => {
@@ -263,6 +339,7 @@ describe("citation graph loading", () => {
     });
     expect(command).toHaveBeenNthCalledWith(2, "citationGraph.putCached", {
       doi: "10.1000/center",
+      expectedCacheVersion: null,
       graph: GRAPH,
     });
   });
@@ -285,7 +362,7 @@ describe("citation graph loading", () => {
 
   it("deep-clones a valid graph returned by the default cache command", async () => {
     const command = vi.fn().mockResolvedValue({
-      entry: { fetchedAt: 9_900, graph: GRAPH },
+      entry: { cacheVersion: 9, fetchedAt: 9_900, graph: GRAPH },
     });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -308,7 +385,10 @@ describe("citation graph loading", () => {
   });
 
   it("preserves the graph result when the default cache write reports stored false", async () => {
-    const command = vi.fn().mockResolvedValue({ stored: false });
+    const command = vi
+      .fn()
+      .mockResolvedValueOnce({ entry: null })
+      .mockResolvedValueOnce({ stored: false });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: { aura: { data: { command } } },
@@ -325,12 +405,16 @@ describe("citation graph loading", () => {
     expect(buildGraph).toHaveBeenCalledWith("10.1000/center", undefined);
     expect(command).toHaveBeenCalledWith("citationGraph.putCached", {
       doi: "10.1000/center",
+      expectedCacheVersion: null,
       graph: GRAPH,
     });
   });
 
   it("fails closed when the default cache write returns a malformed acknowledgement", async () => {
-    const command = vi.fn().mockResolvedValue({ stored: "true" });
+    const command = vi
+      .fn()
+      .mockResolvedValueOnce({ entry: null })
+      .mockResolvedValueOnce({ stored: "true" });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: { aura: { data: { command } } },
@@ -387,7 +471,7 @@ describe("citation graph loading", () => {
     const source = cache();
     source.getCached.mockImplementationOnce(async () => {
       controller.abort();
-      return { graph: GRAPH, fetchedAt: Date.now() };
+      return { cacheVersion: 10, graph: GRAPH, fetchedAt: Date.now() };
     });
 
     await expect(

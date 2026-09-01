@@ -46,14 +46,14 @@ export type CitationGraphCommandRequest = Extract<
 >;
 
 interface CachedCitationGraphRow {
+  cache_version: number;
   fetched_at: number;
   payload_json: string;
 }
 
 /**
- * Main-process boundary for graph cache state and active-Library DOI
- * membership. Cache rows are runtime-global DOI data, while the membership
- * query always resolves its Library identity inside the database lease.
+ * Main-process boundary for runtime-global graph-cache state and active-Library
+ * DOI membership (the latter resolves Library identity inside the lease).
  */
 export async function executeCitationGraphCommand(
   request: CitationGraphCommandRequest,
@@ -72,16 +72,33 @@ export async function executeCitationGraphCommand(
       const input = parseCitationGraphPutCachedInput(request.input);
       const doi = normalizeCitationGraphDoi(input.doi);
       if (!doi) return { stored: false };
-      // Do not place an unbound or differently-centered graph under this DOI.
-      // The freshly built graph can still be displayed by the caller.
+      // Do not place an unbound or differently-centered graph under this DOI;
+      // the freshly built graph can still be displayed by the caller.
       if (!citationGraphMatchesDoi(input.graph, doi)) return { stored: false };
       const payloadJson = serializeCitationGraph(input.graph);
       return executeCitationGraphCacheMutation(dependencies, request.name, async (database) => {
-        await database.run(
-          `INSERT OR REPLACE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
-          [doi, payloadJson, Date.now()],
+        const fetchedAt = Date.now();
+        if (!isValidCacheTimestamp(fetchedAt)) {
+          throw new Error("Citation graph cache clock is invalid");
+        }
+        if (input.expectedCacheVersion === null) {
+          const changed = await database.run(
+            `INSERT OR IGNORE INTO graph_cache
+             (work_id, payload_json, fetched_at, cache_version) VALUES (?, ?, ?, ?)`,
+            [doi, payloadJson, fetchedAt, 1],
+          );
+          return { stored: changed === 1 };
+        }
+
+        // Keep the CAS version separate from fetched_at: timestamps are
+        // freshness data and may repeat, while versions must advance.
+        const changed = await database.run(
+          `UPDATE graph_cache
+           SET payload_json = ?, fetched_at = ?, cache_version = cache_version + 1
+           WHERE work_id = ? AND cache_version = ? AND cache_version < ?`,
+          [payloadJson, fetchedAt, doi, input.expectedCacheVersion, Number.MAX_SAFE_INTEGER],
         );
-        return { stored: true };
+        return { stored: changed === 1 };
       });
     }
     case "citationGraph.getActiveLibraryDois": {
@@ -108,7 +125,7 @@ function executeCitationGraphQuery<K extends CitationGraphReadCommandName>(
 
 /**
  * Cache reads may delete malformed rows or migrate a legacy key, so both
- * cache commands intentionally run in a short main-process transaction.
+ * commands intentionally run in a short main-process transaction.
  */
 function executeCitationGraphCacheMutation<K extends CitationGraphCacheCommandName>(
   dependencies: DataCommandDependencies,
@@ -124,9 +141,17 @@ function parseCitationGraphGetCachedInput(value: unknown): CitationGraphGetCache
 }
 
 function parseCitationGraphPutCachedInput(value: unknown): CitationGraphPutCachedCommandInput {
-  const input = requireExactCitationGraphInput(value, "citationGraph.putCached", ["doi", "graph"]);
+  const input = requireExactCitationGraphInput(
+    value,
+    "citationGraph.putCached",
+    ["doi", "graph"],
+    ["expectedCacheVersion"],
+  );
   return {
     doi: requireCitationGraphDoi(input.doi, "DOI"),
+    expectedCacheVersion: Object.hasOwn(input, "expectedCacheVersion")
+      ? requireNullableCitationGraphCacheVersion(input.expectedCacheVersion)
+      : null,
     graph: requireCitationGraph(input.graph),
   };
 }
@@ -157,11 +182,12 @@ function requireExactCitationGraphInput(
   value: unknown,
   commandName: CitationGraphCommandName,
   fields: readonly string[],
+  optionalFields: readonly string[] = [],
 ): Record<string, unknown> {
+  const allowedFields = [...fields, ...optionalFields];
   if (
     !isRecord(value) ||
-    Object.keys(value).length !== fields.length ||
-    Object.keys(value).some((field) => !fields.includes(field)) ||
+    Object.keys(value).some((field) => !allowedFields.includes(field)) ||
     fields.some((field) => !Object.hasOwn(value, field))
   ) {
     throw new Error(`Invalid ${commandName} input`);
@@ -388,6 +414,18 @@ function isValidCacheTimestamp(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+function requireNullableCitationGraphCacheVersion(value: unknown): number | null {
+  if (value === null) return null;
+  if (!isValidCacheVersion(value)) {
+    throw new Error("Citation graph expected cache version is invalid");
+  }
+  return value;
+}
+
+function isValidCacheVersion(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1;
+}
+
 async function loadCachedCitationGraph(
   database: Database,
   doi: string,
@@ -397,23 +435,33 @@ async function loadCachedCitationGraph(
   const cacheKeys = legacyCacheKey !== doi ? [doi, legacyCacheKey] : [doi];
   for (const cacheKey of cacheKeys) {
     const rows = await database.query<CachedCitationGraphRow>(
-      `SELECT payload_json, fetched_at FROM graph_cache WHERE work_id = ?`,
+      `SELECT payload_json, fetched_at, cache_version FROM graph_cache WHERE work_id = ?`,
       [cacheKey],
     );
     const row = rows[0];
     if (!row) continue;
 
     const graph = parseCachedCitationGraph(row.payload_json);
-    if (!graph || !isValidCacheTimestamp(row.fetched_at) || !citationGraphMatchesDoi(graph, doi)) {
+    if (
+      !graph ||
+      !isValidCacheTimestamp(row.fetched_at) ||
+      !isValidCacheVersion(row.cache_version) ||
+      !citationGraphMatchesDoi(graph, doi)
+    ) {
       await database.run(`DELETE FROM graph_cache WHERE work_id = ?`, [cacheKey]);
       continue;
     }
 
-    const entry: CitationGraphCacheEntry = { fetchedAt: row.fetched_at, graph };
+    const entry: CitationGraphCacheEntry = {
+      cacheVersion: row.cache_version,
+      fetchedAt: row.fetched_at,
+      graph,
+    };
     if (cacheKey !== doi) {
       await database.run(
-        `INSERT OR IGNORE INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
-        [doi, row.payload_json, row.fetched_at],
+        `INSERT OR IGNORE INTO graph_cache
+         (work_id, payload_json, fetched_at, cache_version) VALUES (?, ?, ?, ?)`,
+        [doi, row.payload_json, row.fetched_at, row.cache_version],
       );
       await database.run(`DELETE FROM graph_cache WHERE work_id = ?`, [cacheKey]);
     } else if (legacyCacheKey !== doi) {

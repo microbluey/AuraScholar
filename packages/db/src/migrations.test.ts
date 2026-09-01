@@ -22,6 +22,11 @@ async function columnExists(table: string, column: string): Promise<boolean> {
   return rows.some((row) => row.name === column);
 }
 
+async function columnExistsOn(database: Database, table: string, column: string): Promise<boolean> {
+  const rows = await database.query<{ name: string }>(`PRAGMA table_info(${table})`);
+  return rows.some((row) => row.name === column);
+}
+
 async function indexExists(name: string): Promise<boolean> {
   const rows = await db.query<{ name: string }>(
     `SELECT name FROM sqlite_master WHERE type='index' AND name=?`,
@@ -71,6 +76,67 @@ describe("migrations", () => {
   it("creates the snippets and translation_cache tables", async () => {
     expect(await tableExists("snippets")).toBe(true);
     expect(await tableExists("translation_cache")).toBe(true);
+  });
+
+  it("adds the graph-cache CAS version with a safe default and invariant", async () => {
+    expect(await columnExists("graph_cache", "cache_version")).toBe(true);
+
+    const columns = await db.query<{
+      dflt_value: string | null;
+      name: string;
+      notnull: number;
+    }>(`PRAGMA table_info(graph_cache)`);
+    expect(columns.find((column) => column.name === "cache_version")).toMatchObject({
+      dflt_value: "1",
+      notnull: 1,
+    });
+
+    await db.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at)
+       VALUES (?, ?, ?)`,
+      ["migration-default-cache-version", "{}", 1],
+    );
+    await expect(
+      db.query<{ cache_version: number }>(
+        `SELECT cache_version FROM graph_cache WHERE work_id = ?`,
+        ["migration-default-cache-version"],
+      ),
+    ).resolves.toEqual([{ cache_version: 1 }]);
+
+    for (const [key, cacheVersion] of [
+      ["migration-invalid-cache-version-zero", 0],
+      ["migration-invalid-cache-version-fraction", 1.5],
+      ["migration-invalid-cache-version-unsafe", Number.MAX_SAFE_INTEGER + 1],
+    ] as const) {
+      await expect(
+        db.run(
+          `INSERT INTO graph_cache (work_id, payload_json, fetched_at, cache_version)
+           VALUES (?, ?, ?, ?)`,
+          [key, "{}", 1, cacheVersion],
+        ),
+      ).rejects.toThrow(/CHECK constraint failed/i);
+    }
+  });
+
+  it("backfills cache versions when upgrading an existing graph cache", async () => {
+    const legacy = await migrateThrough(25);
+    await expect(columnExistsOn(legacy, "graph_cache", "cache_version")).resolves.toBe(false);
+
+    await legacy.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at)
+       VALUES (?, ?, ?)`,
+      ["legacy-cache-version", '{"nodes":[]}', 42],
+    );
+
+    await runMigrations(legacy);
+
+    await expect(
+      legacy.query<{ cache_version: number; fetched_at: number; payload_json: string }>(
+        `SELECT cache_version, fetched_at, payload_json
+         FROM graph_cache WHERE work_id = ?`,
+        ["legacy-cache-version"],
+      ),
+    ).resolves.toEqual([{ cache_version: 1, fetched_at: 42, payload_json: '{"nodes":[]}' }]);
   });
 
   it("creates discovery_sites and seeds the built-in academic sites", async () => {
