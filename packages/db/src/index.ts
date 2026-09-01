@@ -93,6 +93,8 @@ export {
   KnowledgeChangesRepo,
   KnowledgeJobsRepo,
   appendKnowledgeChangeInTransaction,
+  appendContentUnitCanonicalVisibilityClause,
+  contentUnitCanonicalVisibilitySql,
   knowledgeJobRetryDelayMs,
   summarizeKnowledgeJobError,
 } from "./repos/knowledge.js";
@@ -117,6 +119,7 @@ export type {
   KnowledgeJobStatus,
   ReplaceContentUnitsInput,
   SearchContentUnitsInput,
+  ContentUnitVisibilityOptions,
 } from "./repos/knowledge.js";
 export {
   EMBEDDING_DISTANCE_METRICS,

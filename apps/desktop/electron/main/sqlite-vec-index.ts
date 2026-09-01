@@ -1,4 +1,5 @@
 import {
+  contentUnitCanonicalVisibilitySql,
   EmbeddingProfilesRepo,
   KnowledgeIndexesRepo,
   type EmbeddingProfileRow,
@@ -324,8 +325,10 @@ async function loadVectorMappings(
        JOIN knowledge_indexes index_generation
          ON index_generation.id = entry.index_id
         AND index_generation.library_id = ?
-       LEFT JOIN content_units unit ON unit.id = entry.content_unit_id
-       WHERE entry.index_id = ? AND entry.vector_ref IN (${placeholders})`,
+       JOIN content_units unit ON unit.id = entry.content_unit_id
+       WHERE entry.index_id = ?
+         AND entry.vector_ref IN (${placeholders})
+         AND ${contentUnitCanonicalVisibilitySql()}`,
       [libraryId, indexId, ...refs],
     );
     for (const row of rows) {

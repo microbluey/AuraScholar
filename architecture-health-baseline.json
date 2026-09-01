@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 88244,
+        ".ts": 88546,
         ".tsx": 35973
       },
       "files": {
@@ -146,7 +146,7 @@
         "apps/desktop/electron/main/sentinel-runner.ts": 468,
         "apps/desktop/electron/main/snippet-commands.ts": 277,
         "apps/desktop/electron/main/sqlite-vec-index-runtime.ts": 8,
-        "apps/desktop/electron/main/sqlite-vec-index.ts": 441,
+        "apps/desktop/electron/main/sqlite-vec-index.ts": 444,
         "apps/desktop/electron/main/sqlite-vec-runtime.ts": 60,
         "apps/desktop/electron/main/staged-pdf-verification.ts": 146,
         "apps/desktop/electron/main/sync-command-input.ts": 156,
@@ -498,15 +498,16 @@
         "packages/db/src/error-summary.ts": 7,
         "packages/db/src/fts.ts": 16,
         "packages/db/src/ids.ts": 76,
-        "packages/db/src/index.ts": 212,
+        "packages/db/src/index.ts": 215,
         "packages/db/src/knowledge-worker.ts": 165,
         "packages/db/src/library-schema.ts": 85,
         "packages/db/src/local-first.ts": 155,
-        "packages/db/src/migration-catalog.ts": 11,
+        "packages/db/src/migration-catalog.ts": 15,
         "packages/db/src/migration-document-evidence.ts": 425,
         "packages/db/src/migration-knowledge-fts.ts": 32,
         "packages/db/src/migration-knowledge-indexes.ts": 150,
-        "packages/db/src/migration-knowledge-registry.ts": 17,
+        "packages/db/src/migration-knowledge-registry.ts": 27,
+        "packages/db/src/migration-knowledge-source-visibility.ts": 76,
         "packages/db/src/migration-knowledge.ts": 115,
         "packages/db/src/migration-library-boundary-triggers.ts": 288,
         "packages/db/src/migration-library-maintenance.ts": 16,
@@ -522,9 +523,10 @@
         "packages/db/src/repos/canvas.ts": 629,
         "packages/db/src/repos/collection-membership.ts": 78,
         "packages/db/src/repos/collections.ts": 464,
-        "packages/db/src/repos/content-unit-search-repo.ts": 153,
+        "packages/db/src/repos/content-unit-search-repo.ts": 157,
         "packages/db/src/repos/content-unit-support.ts": 186,
-        "packages/db/src/repos/content-units-repo.ts": 294,
+        "packages/db/src/repos/content-unit-visibility.ts": 173,
+        "packages/db/src/repos/content-units-repo.ts": 313,
         "packages/db/src/repos/document-assets.ts": 437,
         "packages/db/src/repos/evidence-inbox.ts": 328,
         "packages/db/src/repos/evidence-validation.ts": 241,
@@ -533,11 +535,11 @@
         "packages/db/src/repos/knowledge-changes-repo.ts": 87,
         "packages/db/src/repos/knowledge-contract.ts": 279,
         "packages/db/src/repos/knowledge-index-support.ts": 475,
-        "packages/db/src/repos/knowledge-indexes.ts": 488,
+        "packages/db/src/repos/knowledge-indexes.ts": 493,
         "packages/db/src/repos/knowledge-jobs-repo.ts": 477,
         "packages/db/src/repos/knowledge-queue-support.ts": 195,
         "packages/db/src/repos/knowledge-utils.ts": 129,
-        "packages/db/src/repos/knowledge.ts": 9,
+        "packages/db/src/repos/knowledge.ts": 14,
         "packages/db/src/repos/project-work-lifecycle.ts": 85,
         "packages/db/src/repos/research-projects.ts": 492,
         "packages/db/src/repos/saved-searches.ts": 349,
@@ -625,11 +627,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 143538
+      "totalLines": 143840
     },
     "tests": {
       "byExtension": {
-        ".ts": 89718,
+        ".ts": 90103,
         ".tsx": 1035
       },
       "files": {
@@ -814,7 +816,7 @@
         "apps/desktop/electron/main/smoke/window-layout.ts": 13,
         "apps/desktop/electron/main/snippet-commands-architecture.test.ts": 57,
         "apps/desktop/electron/main/snippet-commands.test.ts": 220,
-        "apps/desktop/electron/main/sqlite-vec-index.test.ts": 226,
+        "apps/desktop/electron/main/sqlite-vec-index.test.ts": 316,
         "apps/desktop/electron/main/sqlite-vec-runtime.test.ts": 60,
         "apps/desktop/electron/main/staged-pdf-verification.test.ts": 173,
         "apps/desktop/electron/main/sync-command-input.test.ts": 88,
@@ -1011,6 +1013,7 @@
         "packages/db/src/repos/canvas.test.ts": 678,
         "packages/db/src/repos/child-library-scope.test.ts": 82,
         "packages/db/src/repos/collections-integrity.test.ts": 329,
+        "packages/db/src/repos/content-unit-visibility.test.ts": 295,
         "packages/db/src/repos/document-assets.test.ts": 550,
         "packages/db/src/repos/evidence-inbox.test.ts": 237,
         "packages/db/src/repos/evidence.test.ts": 485,
@@ -1058,7 +1061,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 90753
+      "totalLines": 91138
     }
   },
   "uiDatabaseBoundary": {}

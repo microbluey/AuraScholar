@@ -1,6 +1,7 @@
 import type { Database } from "../database.js";
 import { buildFtsPrefixQuery } from "../fts.js";
 import * as Content from "./content-unit-support.js";
+import { appendContentUnitCanonicalVisibilityClause } from "./content-unit-visibility.js";
 import * as Contract from "./knowledge-contract.js";
 import * as Utils from "./knowledge-utils.js";
 
@@ -27,6 +28,7 @@ export class ContentUnitSearchRepo {
     const limit = Utils.normalizeLimit(input.limit, 20, "ContentUnit search limit");
     const clauses = ["content_units_fts MATCH ?", "unit.library_id = ?", "unit.deleted_at IS NULL"];
     const params: unknown[] = [ftsQuery, this.libraryId];
+    appendContentUnitCanonicalVisibilityClause(clauses);
 
     if (!input.includeContextOnly) clauses.push("unit.state = 'ready'");
     if (input.sourceTypes !== undefined) {
@@ -90,6 +92,7 @@ export class ContentUnitSearchRepo {
   ): Promise<string[]> {
     const clauses = ["unit.library_id = ?", "unit.deleted_at IS NULL", "unit.state = 'ready'"];
     const params: unknown[] = [this.libraryId];
+    appendContentUnitCanonicalVisibilityClause(clauses);
     Content.appendContentUnitScopeClauses(clauses, params, input);
     const rows = await this.db.query<{ source_id: string }>(
       `SELECT DISTINCT unit.source_id
@@ -131,6 +134,7 @@ export class ContentUnitSearchRepo {
       `unit.id IN (${contentUnitIds.map(() => "?").join(", ")})`,
     ];
     const params: unknown[] = [this.libraryId, ...contentUnitIds];
+    appendContentUnitCanonicalVisibilityClause(clauses);
     Content.appendContentUnitScopeClauses(clauses, params, input);
     const rows = await this.db.query<Contract.ContentUnitSearchStorageRow>(
       `SELECT ${Content.CONTENT_UNIT_SELECT_COLUMNS},

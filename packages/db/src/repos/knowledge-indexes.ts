@@ -2,6 +2,7 @@ import type { Database } from "../database.js";
 import { newId } from "../ids.js";
 import { withDatabaseSavepoint } from "../savepoint.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
+import { contentUnitCanonicalVisibilitySql } from "./content-unit-visibility.js";
 import * as Support from "./knowledge-index-support.js";
 
 export * from "./knowledge-index-support.js";
@@ -98,10 +99,11 @@ export class KnowledgeIndexesRepo {
         await this.assertProfileForMode(normalized.mode, normalized.embeddingProfileId);
         const sourceChangeSeq = await this.resolveSourceChangeSeq(normalized.sourceChangeSeq);
         const units = await this.db.query<{ id: string; content_hash: string }>(
-          `SELECT id, content_hash
-           FROM content_units
-           WHERE library_id = ? AND state = 'ready' AND deleted_at IS NULL
-           ORDER BY id ASC`,
+          `SELECT unit.id, unit.content_hash
+           FROM content_units unit
+           WHERE unit.library_id = ? AND unit.state = 'ready' AND unit.deleted_at IS NULL
+             AND ${contentUnitCanonicalVisibilitySql()}
+           ORDER BY unit.id ASC`,
           [this.libraryId],
         );
         const generation = await this.nextGeneration();
@@ -185,6 +187,7 @@ export class KnowledgeIndexesRepo {
         AND unit.state = 'ready'
         AND unit.deleted_at IS NULL
        WHERE entry.index_id = ? AND entry.status = 'pending'
+         AND ${contentUnitCanonicalVisibilitySql()}
        ORDER BY entry.content_unit_id ASC
        LIMIT ?`,
       [this.libraryId, indexId, limit],
@@ -218,6 +221,7 @@ export class KnowledgeIndexesRepo {
        WHERE entry.index_id = ?
          AND entry.content_unit_id = ?
          AND entry.status = 'pending'
+         AND ${contentUnitCanonicalVisibilitySql()}
        LIMIT 1`,
       [this.libraryId, indexId, contentUnitId],
     );
@@ -322,6 +326,7 @@ export class KnowledgeIndexesRepo {
                OR unit.deleted_at IS NOT NULL
                OR unit.state <> 'ready'
                OR unit.content_hash <> entry.content_hash
+               OR (${contentUnitCanonicalVisibilitySql()}) IS NOT 1
                OR entry.status <> 'ready'
                OR ( ? = 'hybrid' AND (entry.vector_ref IS NULL OR length(trim(entry.vector_ref)) = 0) )
              )`,
