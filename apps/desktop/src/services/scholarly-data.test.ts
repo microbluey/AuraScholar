@@ -1,3 +1,4 @@
+import type { CitationGraph } from "@aurascholar/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildScholarlyCitationGraph,
@@ -7,6 +8,28 @@ import {
 } from "./scholarly-data";
 
 const command = vi.fn();
+
+const GRAPH: CitationGraph = {
+  centerId: "W-center",
+  truncated: false,
+  nodes: [
+    {
+      id: "W-center",
+      title: "Center",
+      citedByCount: 10,
+      doi: "10.1000/center",
+      relation: "center",
+    },
+    {
+      id: "W-reference",
+      title: "Reference",
+      citedByCount: 5,
+      doi: "10.1000/reference",
+      relation: "reference",
+    },
+  ],
+  edges: [{ source: "W-center", target: "W-reference" }],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,6 +88,26 @@ describe("scholarly typed command client", () => {
       "scholar.enrichByDoi",
       "library.resolveClue",
     ]);
+  });
+
+  it("deep-clones a valid graph returned by the default build command", async () => {
+    command.mockResolvedValueOnce({ graph: GRAPH });
+
+    const result = await buildScholarlyCitationGraph({ doi: "10.1000/graph" });
+
+    expect(result).toEqual({ graph: GRAPH });
+    expect(result.graph).not.toBe(GRAPH);
+    expect(result.graph?.nodes).not.toBe(GRAPH.nodes);
+    expect(result.graph?.nodes[0]).not.toBe(GRAPH.nodes[0]);
+    expect(result.graph?.edges).not.toBe(GRAPH.edges);
+  });
+
+  it("fails closed when the default build command returns a malformed acknowledgement", async () => {
+    command.mockResolvedValueOnce({ graph: null, unexpected: true });
+
+    await expect(buildScholarlyCitationGraph({ doi: "10.1000/malformed" })).rejects.toThrow(
+      "Citation graph build result is invalid",
+    );
   });
 
   it("cancels the matching main run and never projects a late response", async () => {

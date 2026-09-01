@@ -181,6 +181,83 @@ describe("citation graph loading", () => {
     });
   });
 
+  it("fails closed when the default cache read returns a malformed acknowledgement", async () => {
+    const command = vi.fn().mockResolvedValue({ entry: null, unexpected: true });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    const buildGraph = vi.fn(async () => GRAPH);
+
+    await expect(loadCitationGraphByDoi("10.1000/center", { buildGraph })).rejects.toThrow(
+      "Citation graph cache result is invalid",
+    );
+
+    expect(buildGraph).not.toHaveBeenCalled();
+    expect(command).toHaveBeenCalledTimes(1);
+  });
+
+  it("deep-clones a valid graph returned by the default cache command", async () => {
+    const command = vi.fn().mockResolvedValue({
+      entry: { fetchedAt: 9_900, graph: GRAPH },
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    const buildGraph = vi.fn();
+
+    const result = await loadCitationGraphByDoi("10.1000/center", {
+      buildGraph,
+      now: () => 10_000,
+    });
+
+    if (!result) throw new Error("expected a cached citation graph");
+    expect(result).toEqual(GRAPH);
+    expect(result).not.toBe(GRAPH);
+    expect(result.nodes).not.toBe(GRAPH.nodes);
+    expect(result.nodes[0]).not.toBe(GRAPH.nodes[0]);
+    expect(result.edges).not.toBe(GRAPH.edges);
+    expect(buildGraph).not.toHaveBeenCalled();
+  });
+
+  it("preserves the graph result when the default cache write reports stored false", async () => {
+    const command = vi.fn().mockResolvedValue({ stored: false });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    const buildGraph = vi.fn(async () => GRAPH);
+
+    await expect(
+      loadCitationGraphByDoi("10.1000/center", {
+        buildGraph,
+        forceRefresh: true,
+      }),
+    ).resolves.toBe(GRAPH);
+
+    expect(buildGraph).toHaveBeenCalledWith("10.1000/center", undefined);
+    expect(command).toHaveBeenCalledWith("citationGraph.putCached", {
+      doi: "10.1000/center",
+      graph: GRAPH,
+    });
+  });
+
+  it("fails closed when the default cache write returns a malformed acknowledgement", async () => {
+    const command = vi.fn().mockResolvedValue({ stored: "true" });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+
+    await expect(
+      loadCitationGraphByDoi("10.1000/center", {
+        buildGraph: vi.fn(async () => GRAPH),
+        forceRefresh: true,
+      }),
+    ).rejects.toThrow("Citation graph cache write result is invalid");
+  });
+
   it("builds uncached graphs through the semantic main command", async () => {
     const command = vi.fn();
     Object.defineProperty(globalThis, "window", {

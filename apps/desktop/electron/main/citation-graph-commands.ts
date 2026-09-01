@@ -2,6 +2,17 @@ import { Buffer } from "node:buffer";
 import type { CitationGraph, GraphEdge, GraphNode } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
+import {
+  citationGraphUtf8ByteLength,
+  MAX_CITATION_GRAPH_ACTIVE_LIBRARY_DOIS,
+  MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES,
+  MAX_CITATION_GRAPH_DOI_BYTES,
+  MAX_CITATION_GRAPH_EDGES,
+  MAX_CITATION_GRAPH_LIBRARY_ID_BYTES,
+  MAX_CITATION_GRAPH_NODE_ID_BYTES,
+  MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
+  MAX_CITATION_GRAPH_NODES,
+} from "../../src/shared/citation-graph-limits";
 import type {
   CitationGraphCacheEntry,
   CitationGraphGetActiveLibraryDoisCommandInput,
@@ -18,13 +29,10 @@ import {
   type DataCommandDependencies,
 } from "./data-command-runtime";
 
-const MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES = 2 * 1024 * 1024;
-const MAX_CITATION_GRAPH_DOI_LENGTH = 2_048;
-const MAX_CITATION_GRAPH_EDGES = 10_000;
-const MAX_CITATION_GRAPH_NODE_ID_LENGTH = 512;
-const MAX_CITATION_GRAPH_NODE_TEXT_LENGTH = 16_384;
-const MAX_CITATION_GRAPH_NODES = 100;
-const MAX_ACTIVE_LIBRARY_DOIS = 500;
+const MAX_CITATION_GRAPH_DOI_LENGTH = MAX_CITATION_GRAPH_DOI_BYTES;
+const MAX_CITATION_GRAPH_NODE_ID_LENGTH = MAX_CITATION_GRAPH_NODE_ID_BYTES;
+const MAX_CITATION_GRAPH_NODE_TEXT_LENGTH = MAX_CITATION_GRAPH_NODE_TEXT_BYTES;
+const MAX_ACTIVE_LIBRARY_DOIS = MAX_CITATION_GRAPH_ACTIVE_LIBRARY_DOIS;
 
 type CitationGraphReadCommandName = "citationGraph.getActiveLibraryDois";
 type CitationGraphCacheCommandName = "citationGraph.getCached" | "citationGraph.putCached";
@@ -127,6 +135,9 @@ function parseCitationGraphGetActiveLibraryDoisInput(
   if (!Array.isArray(input.dois) || input.dois.length > MAX_ACTIVE_LIBRARY_DOIS) {
     throw new Error(`Citation graph DOI lookups are limited to ${MAX_ACTIVE_LIBRARY_DOIS}`);
   }
+  if (!isDenseCitationGraphArray(input.dois)) {
+    throw new Error("Citation graph DOI lookups must be dense");
+  }
 
   const dois = input.dois.map((doi, index) =>
     canonicalCitationGraphDoi(requireCitationGraphDoi(doi, `DOI at index ${index}`)),
@@ -157,7 +168,9 @@ function requireCitationGraphDoi(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`${label} is invalid`);
   const doi = value.trim();
   if (!doi) throw new Error(`${label} is required`);
-  if (doi.length > MAX_CITATION_GRAPH_DOI_LENGTH) throw new Error(`${label} is too long`);
+  if (citationGraphUtf8ByteLength(doi) > MAX_CITATION_GRAPH_DOI_LENGTH) {
+    throw new Error(`${label} is too long`);
+  }
   return doi;
 }
 
@@ -188,11 +201,16 @@ function requireCitationGraph(value: unknown): CitationGraph {
   if (
     !Array.isArray(graph.nodes) ||
     graph.nodes.length === 0 ||
-    graph.nodes.length > MAX_CITATION_GRAPH_NODES
+    graph.nodes.length > MAX_CITATION_GRAPH_NODES ||
+    !isDenseCitationGraphArray(graph.nodes)
   ) {
     throw new Error(`Citation graph nodes are limited to ${MAX_CITATION_GRAPH_NODES}`);
   }
-  if (!Array.isArray(graph.edges) || graph.edges.length > MAX_CITATION_GRAPH_EDGES) {
+  if (
+    !Array.isArray(graph.edges) ||
+    graph.edges.length > MAX_CITATION_GRAPH_EDGES ||
+    !isDenseCitationGraphArray(graph.edges)
+  ) {
     throw new Error(`Citation graph edges are limited to ${MAX_CITATION_GRAPH_EDGES}`);
   }
 
@@ -205,7 +223,7 @@ function requireCitationGraph(value: unknown): CitationGraph {
   }
 
   const edges = graph.edges.map((edge, index) => requireCitationGraphEdge(edge, index, nodeIds));
-  const edgeKeys = edges.map((edge) => `${edge.source}\u0000${edge.target}`);
+  const edgeKeys = edges.map((edge) => JSON.stringify([edge.source, edge.target]));
   if (new Set(edgeKeys).size !== edgeKeys.length) {
     throw new Error("Citation graph edges must be unique");
   }
@@ -300,6 +318,13 @@ function requireExactCitationGraphRecord(
   return value;
 }
 
+function isDenseCitationGraphArray(value: readonly unknown[]): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) return false;
+  }
+  return true;
+}
+
 function requireCitationGraphNodeId(value: unknown, label: string): string {
   return requireCitationGraphText(value, label, MAX_CITATION_GRAPH_NODE_ID_LENGTH, true);
 }
@@ -310,7 +335,11 @@ function requireCitationGraphText(
   maximum: number,
   requireNonEmpty = false,
 ): string {
-  if (typeof value !== "string" || value.length > maximum || (requireNonEmpty && !value.trim())) {
+  if (
+    typeof value !== "string" ||
+    citationGraphUtf8ByteLength(value) > maximum ||
+    (requireNonEmpty && !value.trim())
+  ) {
     throw new Error(`${label} is invalid`);
   }
   return value;
@@ -398,6 +427,12 @@ async function loadActiveLibraryDois(
   libraryId: string,
   input: CitationGraphGetActiveLibraryDoisCommandInput,
 ): Promise<CitationGraphGetActiveLibraryDoisCommandResult> {
+  requireCitationGraphText(
+    libraryId,
+    "Citation graph active Library id",
+    MAX_CITATION_GRAPH_LIBRARY_ID_BYTES,
+    true,
+  );
   if (input.dois.length === 0) return { dois: [], libraryId };
   const placeholders = input.dois.map(() => "?").join(",");
   const rows = await database.query<{ doi: string }>(

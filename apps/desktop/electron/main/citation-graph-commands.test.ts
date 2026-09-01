@@ -93,8 +93,12 @@ describe("Citation Graph data commands", () => {
     ).resolves.toEqual([{ count: 1 }]);
   });
 
-  it("removes malformed cached JSON and migrates a legacy raw DOI key", async () => {
+  it("removes malformed and sparse-derived cached JSON and migrates a legacy raw DOI key", async () => {
     const legacyDoi = "HTTPS://DOI.ORG/10.1000/CENTER";
+    const sparseNodes = [GRAPH.nodes[0]!];
+    sparseNodes.length = 2;
+    const sparseEdges = [GRAPH.edges[0]!];
+    sparseEdges.length = 2;
     await database.run(
       `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
       ["10.1000/malformed", "{", 9_900],
@@ -102,6 +106,14 @@ describe("Citation Graph data commands", () => {
     await database.run(
       `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
       ["10.1000/oversized", "x".repeat(2 * 1024 * 1024 + 1), 9_900],
+    );
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
+      ["10.1000/sparse-nodes", JSON.stringify({ ...GRAPH, nodes: sparseNodes }), 9_900],
+    );
+    await database.run(
+      `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
+      ["10.1000/sparse-edges", JSON.stringify({ ...GRAPH, edges: sparseEdges }), 9_900],
     );
     await database.run(
       `INSERT INTO graph_cache (work_id, payload_json, fetched_at) VALUES (?, ?, ?)`,
@@ -118,6 +130,16 @@ describe("Citation Graph data commands", () => {
         entry: null,
       },
     );
+    await expect(
+      command("citationGraph.getCached", { doi: "10.1000/sparse-nodes" }),
+    ).resolves.toEqual({
+      entry: null,
+    });
+    await expect(
+      command("citationGraph.getCached", { doi: "10.1000/sparse-edges" }),
+    ).resolves.toEqual({
+      entry: null,
+    });
     await expect(command("citationGraph.getCached", { doi: legacyDoi })).resolves.toEqual({
       entry: { fetchedAt: 9_900, graph: GRAPH },
     });
@@ -149,6 +171,28 @@ describe("Citation Graph data commands", () => {
     expect(rows[0]?.fetched_at).toBeGreaterThanOrEqual(before);
   });
 
+  it("keeps distinct edges when node ids contain the legacy key delimiter", async () => {
+    const delimiterGraph: CitationGraph = {
+      centerId: "center",
+      edges: [
+        { source: "a", target: "b\u0000c" },
+        { source: "a\u0000b", target: "c" },
+      ],
+      nodes: [
+        { citedByCount: 0, id: "center", relation: "center", title: "Center" },
+        { citedByCount: 0, id: "a", relation: "reference", title: "A" },
+        { citedByCount: 0, id: "b\u0000c", relation: "reference", title: "B C" },
+        { citedByCount: 0, id: "a\u0000b", relation: "reference", title: "A B" },
+        { citedByCount: 0, id: "c", relation: "reference", title: "C" },
+      ],
+      truncated: false,
+    };
+
+    await expect(
+      command("citationGraph.putCached", { doi: "10.1000/delimiter", graph: delimiterGraph }),
+    ).resolves.toEqual({ stored: true });
+  });
+
   it("rejects malformed cache and membership input before obtaining a database lease", async () => {
     let executeCalls = 0;
     let transactionCalls = 0;
@@ -162,6 +206,11 @@ describe("Citation Graph data commands", () => {
         throw new Error("transaction reached");
       },
     };
+    const sparseNodes = [GRAPH.nodes[0]!];
+    sparseNodes.length = 2;
+    const sparseEdges = [GRAPH.edges[0]!];
+    sparseEdges.length = 2;
+    const sparseDois = new Array<string>(1);
     const invalidRequests = [
       { input: {}, name: "citationGraph.getCached" },
       {
@@ -187,6 +236,20 @@ describe("Citation Graph data commands", () => {
         name: "citationGraph.putCached",
       },
       {
+        input: {
+          doi: "10.1000/center",
+          graph: { ...GRAPH, nodes: sparseNodes },
+        },
+        name: "citationGraph.putCached",
+      },
+      {
+        input: {
+          doi: "10.1000/center",
+          graph: { ...GRAPH, edges: sparseEdges },
+        },
+        name: "citationGraph.putCached",
+      },
+      {
         input: { dois: ["10.1000/center"], libraryId: "library:foreign" },
         name: "citationGraph.getActiveLibraryDois",
       },
@@ -196,6 +259,10 @@ describe("Citation Graph data commands", () => {
       },
       {
         input: { dois: Array.from({ length: 501 }, (_, index) => `10.1000/${index}`) },
+        name: "citationGraph.getActiveLibraryDois",
+      },
+      {
+        input: { dois: sparseDois },
         name: "citationGraph.getActiveLibraryDois",
       },
     ];

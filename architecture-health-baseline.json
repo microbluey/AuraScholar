@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 85267,
+        ".ts": 85608,
         ".tsx": 35973
       },
       "files": {
@@ -35,7 +35,7 @@
         "apps/desktop/electron/main/canvas-workspace-commands.ts": 288,
         "apps/desktop/electron/main/canvas-workspace-document-input.ts": 7,
         "apps/desktop/electron/main/citation-bridge.ts": 108,
-        "apps/desktop/electron/main/citation-graph-commands.ts": 413,
+        "apps/desktop/electron/main/citation-graph-commands.ts": 448,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
         "apps/desktop/electron/main/data-command-envelope.ts": 167,
@@ -126,7 +126,7 @@
         "apps/desktop/electron/main/saved-search-commands.ts": 342,
         "apps/desktop/electron/main/saved-search-create-input.ts": 84,
         "apps/desktop/electron/main/scholarly-command-input.ts": 358,
-        "apps/desktop/electron/main/scholarly-command-output.ts": 455,
+        "apps/desktop/electron/main/scholarly-command-output.ts": 462,
         "apps/desktop/electron/main/scholarly-commands.ts": 196,
         "apps/desktop/electron/main/scholarly-http.ts": 378,
         "apps/desktop/electron/main/scholarly-run-registry.ts": 35,
@@ -363,8 +363,8 @@
         "apps/desktop/src/services/canvas-ai.ts": 38,
         "apps/desktop/src/services/canvas-page-data.ts": 91,
         "apps/desktop/src/services/canvas-workspace-data.ts": 56,
-        "apps/desktop/src/services/citation-graph-page-data.ts": 71,
-        "apps/desktop/src/services/citation-graph.ts": 212,
+        "apps/desktop/src/services/citation-graph-page-data.ts": 73,
+        "apps/desktop/src/services/citation-graph.ts": 116,
         "apps/desktop/src/services/cite.ts": 42,
         "apps/desktop/src/services/discovery-library-status.ts": 70,
         "apps/desktop/src/services/discovery-sites.ts": 182,
@@ -409,7 +409,7 @@
         "apps/desktop/src/services/saved-search-service-contract.ts": 71,
         "apps/desktop/src/services/saved-searches.ts": 402,
         "apps/desktop/src/services/scholar.ts": 15,
-        "apps/desktop/src/services/scholarly-data.ts": 96,
+        "apps/desktop/src/services/scholarly-data.ts": 99,
         "apps/desktop/src/services/sensitive-text.ts": 7,
         "apps/desktop/src/services/sentinel-page-data.ts": 161,
         "apps/desktop/src/services/sentinel.ts": 126,
@@ -424,6 +424,8 @@
         "apps/desktop/src/shared/canvas-workspace-document-limits.ts": 28,
         "apps/desktop/src/shared/canvas-workspace-document-node-data-codec.ts": 310,
         "apps/desktop/src/shared/canvas-workspace-summary-codec.ts": 137,
+        "apps/desktop/src/shared/citation-graph-command-result-codec.ts": 375,
+        "apps/desktop/src/shared/citation-graph-limits.ts": 15,
         "apps/desktop/src/shared/document-revision-sync-repair.ts": 41,
         "apps/desktop/src/shared/library-backup-config.ts": 243,
         "apps/desktop/src/shared/library-backup-evidence.ts": 347,
@@ -607,11 +609,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 140561
+      "totalLines": 140902
     },
     "tests": {
       "byExtension": {
-        ".ts": 86197,
+        ".ts": 86778,
         ".tsx": 1035
       },
       "files": {
@@ -625,7 +627,8 @@
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 425,
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 410,
         "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 135,
-        "apps/desktop/electron/main/citation-graph-commands.test.ts": 240,
+        "apps/desktop/electron/main/citation-graph-commands.test.ts": 307,
+        "apps/desktop/electron/main/citation-graph-payload-architecture.test.ts": 60,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
         "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
         "apps/desktop/electron/main/data-command-core-architecture.test.ts": 110,
@@ -899,8 +902,8 @@
         "apps/desktop/src/services/aura-platform.test.ts": 41,
         "apps/desktop/src/services/canvas-page-data.test.ts": 229,
         "apps/desktop/src/services/canvas-workspace-data.test.ts": 115,
-        "apps/desktop/src/services/citation-graph-page-data.test.ts": 211,
-        "apps/desktop/src/services/citation-graph.test.ts": 237,
+        "apps/desktop/src/services/citation-graph-page-data.test.ts": 254,
+        "apps/desktop/src/services/citation-graph.test.ts": 314,
         "apps/desktop/src/services/cite.test.ts": 48,
         "apps/desktop/src/services/discovery-library-status.test.ts": 83,
         "apps/desktop/src/services/discovery-sites.test.ts": 256,
@@ -939,7 +942,7 @@
         "apps/desktop/src/services/saved-search-structured-query.test.ts": 121,
         "apps/desktop/src/services/saved-searches.test.ts": 592,
         "apps/desktop/src/services/scholar.test.ts": 28,
-        "apps/desktop/src/services/scholarly-data.test.ts": 92,
+        "apps/desktop/src/services/scholarly-data.test.ts": 135,
         "apps/desktop/src/services/sentinel-page-data.test.ts": 288,
         "apps/desktop/src/services/sentinel.test.ts": 101,
         "apps/desktop/src/services/snippets.test.ts": 98,
@@ -951,6 +954,7 @@
         "apps/desktop/src/shared/canvas-workspace-command-result-codec.test.ts": 109,
         "apps/desktop/src/shared/canvas-workspace-document-codec.test.ts": 384,
         "apps/desktop/src/shared/canvas-workspace-summary-codec.test.ts": 167,
+        "apps/desktop/src/shared/citation-graph-command-result-codec.test.ts": 291,
         "apps/desktop/src/shared/document-revision-sync-repair.test.ts": 223,
         "apps/desktop/src/shared/reference-import.test.ts": 52,
         "apps/desktop/src/shared/saved-search-criteria.test.ts": 69,
@@ -1033,7 +1037,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 87232
+      "totalLines": 87813
     }
   },
   "uiDatabaseBoundary": {}

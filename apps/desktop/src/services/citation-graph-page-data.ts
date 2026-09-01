@@ -1,4 +1,5 @@
 import type { CitationGraph } from "@aurascholar/core";
+import { decodeCitationGraphGetActiveLibraryDoisResult } from "../shared/citation-graph-command-result-codec";
 import {
   loadCitationGraphByDoi,
   normalizeCitationGraphDoi,
@@ -23,7 +24,8 @@ export interface CitationGraphPageDataSource {
 
 const defaultDataSource: CitationGraphPageDataSource = {
   async getActiveLibraryDois(dois) {
-    return (await window.aura.data.command("citationGraph.getActiveLibraryDois", { dois })).dois;
+    const result = await window.aura.data.command("citationGraph.getActiveLibraryDois", { dois });
+    return decodeCitationGraphGetActiveLibraryDoisResult(result, dois).dois;
   },
   loadGraph: loadCitationGraphByDoi,
 };

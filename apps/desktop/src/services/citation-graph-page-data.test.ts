@@ -96,6 +96,49 @@ describe("citation graph page data gateway", () => {
     });
   });
 
+  it("fails closed when the default active-Library DOI command returns a malformed acknowledgement", async () => {
+    const command = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    command
+      .mockResolvedValueOnce({ entry: null })
+      .mockResolvedValueOnce({ stored: true })
+      .mockResolvedValueOnce({
+        dois: ["10.1000/reference"],
+        libraryId: "library:active",
+        unexpected: true,
+      });
+
+    await expect(
+      loadCitationGraphPageSnapshot("10.1000/center", {
+        buildGraph: vi.fn(async () => GRAPH),
+      }),
+    ).rejects.toThrow("Citation graph active Library DOI result is invalid");
+  });
+
+  it("rejects active-Library DOI membership outside the requested graph DOI set", async () => {
+    const command = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { aura: { data: { command } } },
+    });
+    command
+      .mockResolvedValueOnce({ entry: null })
+      .mockResolvedValueOnce({ stored: true })
+      .mockResolvedValueOnce({
+        dois: ["10.1000/not-requested"],
+        libraryId: "library:active",
+      });
+
+    await expect(
+      loadCitationGraphPageSnapshot("10.1000/center", {
+        buildGraph: vi.fn(async () => GRAPH),
+      }),
+    ).rejects.toThrow("outside the requested set");
+  });
+
   it("normalizes DOI variants for membership lookup and maps active results back to graph nodes", async () => {
     const graphWithVariants: CitationGraph = {
       ...GRAPH,
