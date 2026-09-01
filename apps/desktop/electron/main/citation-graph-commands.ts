@@ -3,6 +3,7 @@ import type { CitationGraph, GraphEdge, GraphNode } from "@aurascholar/core";
 import type { Database } from "@aurascholar/db";
 import { requireLocalLibraryId } from "@aurascholar/db/local-first";
 import {
+  citationGraphMatchesDoi,
   citationGraphUtf8ByteLength,
   MAX_CITATION_GRAPH_ACTIVE_LIBRARY_DOIS,
   MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES,
@@ -12,6 +13,7 @@ import {
   MAX_CITATION_GRAPH_NODE_ID_BYTES,
   MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
   MAX_CITATION_GRAPH_NODES,
+  normalizeCitationGraphDoi,
 } from "../../src/shared/citation-graph-limits";
 import type {
   CitationGraphCacheEntry,
@@ -70,6 +72,9 @@ export async function executeCitationGraphCommand(
       const input = parseCitationGraphPutCachedInput(request.input);
       const doi = normalizeCitationGraphDoi(input.doi);
       if (!doi) return { stored: false };
+      // Do not place an unbound or differently-centered graph under this DOI.
+      // The freshly built graph can still be displayed by the caller.
+      if (!citationGraphMatchesDoi(input.graph, doi)) return { stored: false };
       const payloadJson = serializeCitationGraph(input.graph);
       return executeCitationGraphCacheMutation(dependencies, request.name, async (database) => {
         await database.run(
@@ -176,15 +181,6 @@ function requireCitationGraphDoi(value: unknown, label: string): string {
 
 function canonicalCitationGraphDoi(doi: string): string {
   return normalizeCitationGraphDoi(doi) ?? doi.toLowerCase();
-}
-
-/** Same intentionally permissive normalization used by the legacy graph cache. */
-function normalizeCitationGraphDoi(value: string): string | null {
-  let normalized = value.trim();
-  normalized = normalized.replace(/^doi\s*:\s*/i, "");
-  normalized = normalized.replace(/^(?:https?:\/\/)?(?:dx\.)?doi\.org\//i, "");
-  normalized = normalized.trim().toLowerCase();
-  return normalized || null;
 }
 
 function requireCitationGraph(value: unknown): CitationGraph {
@@ -404,7 +400,7 @@ async function loadCachedCitationGraph(
     if (!row) continue;
 
     const graph = parseCachedCitationGraph(row.payload_json);
-    if (!graph || !isValidCacheTimestamp(row.fetched_at)) {
+    if (!graph || !isValidCacheTimestamp(row.fetched_at) || !citationGraphMatchesDoi(graph, doi)) {
       await database.run(`DELETE FROM graph_cache WHERE work_id = ?`, [cacheKey]);
       continue;
     }
@@ -416,6 +412,10 @@ async function loadCachedCitationGraph(
         [doi, row.payload_json, row.fetched_at],
       );
       await database.run(`DELETE FROM graph_cache WHERE work_id = ?`, [cacheKey]);
+    } else if (legacyCacheKey !== doi) {
+      // A valid canonical row wins over any conflicting legacy spelling.
+      // Retire that raw-key row atomically so it cannot linger indefinitely.
+      await database.run(`DELETE FROM graph_cache WHERE work_id = ?`, [legacyCacheKey]);
     }
     return { entry };
   }

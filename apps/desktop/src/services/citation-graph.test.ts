@@ -2,6 +2,7 @@ import type { CitationGraph } from "@aurascholar/core";
 import { describe, expect, it, vi } from "vitest";
 import {
   isCitationGraph,
+  isFreshCitationGraphCacheEntry,
   loadCitationGraphByDoi,
   parseCachedCitationGraph,
   type CitationGraphCacheDataSource,
@@ -42,6 +43,20 @@ function cache(
 }
 
 describe("citation graph loading", () => {
+  it("treats only finite, non-future timestamps inside the TTL as fresh", () => {
+    const entry = { fetchedAt: 1_000, graph: GRAPH };
+    expect(isFreshCitationGraphCacheEntry(entry, 1_000, 100)).toBe(true);
+    expect(isFreshCitationGraphCacheEntry(entry, 1_099, 100)).toBe(true);
+    expect(isFreshCitationGraphCacheEntry(entry, 1_100, 100)).toBe(false);
+    expect(isFreshCitationGraphCacheEntry({ ...entry, fetchedAt: 1_001 }, 1_000, 100)).toBe(false);
+    expect(
+      isFreshCitationGraphCacheEntry({ ...entry, fetchedAt: Number.MAX_SAFE_INTEGER }, 1_000, 100),
+    ).toBe(false);
+    expect(isFreshCitationGraphCacheEntry(entry, Number.NaN, 100)).toBe(false);
+    expect(isFreshCitationGraphCacheEntry(entry, 1_000, 0)).toBe(false);
+    expect(isFreshCitationGraphCacheEntry(entry, 1_000, Number.POSITIVE_INFINITY)).toBe(false);
+  });
+
   it("validates cached graph payloads defensively", () => {
     expect(isCitationGraph(GRAPH)).toBe(true);
     expect(parseCachedCitationGraph(JSON.stringify(GRAPH))).toEqual(GRAPH);
@@ -122,6 +137,77 @@ describe("citation graph loading", () => {
 
     expect(buildGraph).toHaveBeenCalledOnce();
     expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+  });
+
+  it("rebuilds a future cache entry instead of treating it as permanently fresh", async () => {
+    const source = cache({ graph: GRAPH, fetchedAt: 10_001 });
+    const buildGraph = vi.fn(async () => GRAPH);
+
+    await expect(
+      loadCitationGraphByDoi("10.1000/center", {
+        buildGraph,
+        cache: source,
+        cacheTtlMs: 100,
+        now: () => 10_000,
+      }),
+    ).resolves.toEqual(GRAPH);
+
+    expect(buildGraph).toHaveBeenCalledOnce();
+    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+  });
+
+  it("does not reuse a custom cache graph bound to another DOI", async () => {
+    const mismatchedGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: "10.1000/other" } : node,
+      ),
+    };
+    const source = cache({ graph: mismatchedGraph, fetchedAt: 9_900 });
+    const buildGraph = vi.fn(async () => GRAPH);
+
+    await expect(
+      loadCitationGraphByDoi("10.1000/center", {
+        buildGraph,
+        cache: source,
+        now: () => 10_000,
+      }),
+    ).resolves.toEqual(GRAPH);
+
+    expect(buildGraph).toHaveBeenCalledOnce();
+    expect(source.putCached).toHaveBeenCalledWith("10.1000/center", GRAPH);
+  });
+
+  it("keeps an unbound build result visible without persisting it", async () => {
+    const source = cache();
+    const unboundGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: undefined } : node,
+      ),
+    };
+    const buildGraph = vi.fn(async () => unboundGraph);
+
+    await expect(
+      loadCitationGraphByDoi("10.1000/center", { buildGraph, cache: source }),
+    ).resolves.toMatchObject({ centerId: GRAPH.centerId });
+    expect(source.putCached).not.toHaveBeenCalled();
+  });
+
+  it("rejects a build result whose explicit center DOI names another work", async () => {
+    const source = cache();
+    const mismatchedGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: "10.1000/other" } : node,
+      ),
+    };
+    const buildGraph = vi.fn(async () => mismatchedGraph);
+
+    await expect(
+      loadCitationGraphByDoi("10.1000/center", { buildGraph, cache: source }),
+    ).resolves.toBeNull();
+    expect(source.putCached).not.toHaveBeenCalled();
   });
 
   it("delegates legacy raw-key migration to the main-process cache command", async () => {

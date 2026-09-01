@@ -6,10 +6,15 @@ import {
   decodeCitationGraphPutCachedResult,
 } from "../shared/citation-graph-command-result-codec";
 import {
+  citationGraphCenterDoi,
+  citationGraphMatchesDoi,
   citationGraphUtf8ByteLength,
   MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES,
+  normalizeCitationGraphDoi,
 } from "../shared/citation-graph-limits";
 import { buildScholarlyCitationGraph } from "./scholarly-data";
+
+export { normalizeCitationGraphDoi } from "../shared/citation-graph-limits";
 
 export const CITATION_GRAPH_CACHE_TTL_MS = 7 * 86_400_000;
 
@@ -53,12 +58,27 @@ export function parseCachedCitationGraph(payload: string): CitationGraph | null 
   }
 }
 
-export function normalizeCitationGraphDoi(value: string): string | null {
-  let normalized = value.trim();
-  normalized = normalized.replace(/^doi\s*:\s*/i, "");
-  normalized = normalized.replace(/^(?:https?:\/\/)?(?:dx\.)?doi\.org\//i, "");
-  normalized = normalized.trim().toLowerCase();
-  return normalized || null;
+/**
+ * Applies the renderer-owned cache freshness policy. A future timestamp is
+ * never fresh: otherwise a negative age would satisfy the TTL indefinitely.
+ */
+export function isFreshCitationGraphCacheEntry(
+  entry: CitationGraphCacheEntry,
+  now: number,
+  cacheTtlMs: number,
+): boolean {
+  if (
+    !Number.isFinite(now) ||
+    now < 0 ||
+    !Number.isFinite(cacheTtlMs) ||
+    cacheTtlMs <= 0 ||
+    !Number.isSafeInteger(entry.fetchedAt) ||
+    entry.fetchedAt < 0
+  ) {
+    return false;
+  }
+  const age = now - entry.fetchedAt;
+  return Number.isFinite(age) && age >= 0 && age < cacheTtlMs;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -75,7 +95,7 @@ async function defaultBuildGraph(doi: string, signal?: AbortSignal): Promise<Cit
 const defaultCacheDataSource: CitationGraphCacheDataSource = {
   async getCached(rawDoi) {
     const result = await window.aura.data.command("citationGraph.getCached", { doi: rawDoi });
-    return decodeCitationGraphGetCachedResult(result).entry;
+    return decodeCitationGraphGetCachedResult(result, rawDoi).entry;
   },
   async putCached(doi, graph) {
     const result = await window.aura.data.command("citationGraph.putCached", { doi, graph });
@@ -100,7 +120,12 @@ export async function loadCitationGraphByDoi(
     // historical raw-key variant atomically before returning an entry.
     const entry = await cache.getCached(rawDoi);
     throwIfAborted(signal);
-    if (entry && now() - entry.fetchedAt < cacheTtlMs && isCitationGraph(entry.graph)) {
+    if (
+      entry &&
+      isFreshCitationGraphCacheEntry(entry, now(), cacheTtlMs) &&
+      isCitationGraph(entry.graph) &&
+      citationGraphMatchesDoi(entry.graph, doi)
+    ) {
       return entry.graph;
     }
   }
@@ -110,7 +135,15 @@ export async function loadCitationGraphByDoi(
     overriddenGraph === undefined ? await defaultBuildGraph(doi, signal) : overriddenGraph;
   throwIfAborted(signal);
   if (!isCitationGraph(graph)) return null;
-  await cache.putCached(doi, graph);
+
+  // A graph without a center DOI is still useful for the current view, but it
+  // is not safe to persist or reuse as a DOI-keyed cache entry. A present DOI
+  // that names a different work indicates a bad response and is rejected.
+  const centerDoi = citationGraphCenterDoi(graph);
+  if (centerDoi !== null) {
+    if (centerDoi !== doi) return null;
+    await cache.putCached(doi, graph);
+  }
   throwIfAborted(signal);
   return graph;
 }

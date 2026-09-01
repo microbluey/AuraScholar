@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19321,
-        ".ts": 86469,
+        ".ts": 86540,
         ".tsx": 35973
       },
       "files": {
@@ -364,7 +364,7 @@
         "apps/desktop/src/services/canvas-page-data.ts": 91,
         "apps/desktop/src/services/canvas-workspace-data.ts": 56,
         "apps/desktop/src/services/citation-graph-page-data.ts": 73,
-        "apps/desktop/src/services/citation-graph.ts": 116,
+        "apps/desktop/src/services/citation-graph.ts": 149,
         "apps/desktop/src/services/cite.ts": 42,
         "apps/desktop/src/services/discovery-library-status.ts": 70,
         "apps/desktop/src/services/discovery-sites.ts": 182,
@@ -424,8 +424,8 @@
         "apps/desktop/src/shared/canvas-workspace-document-limits.ts": 28,
         "apps/desktop/src/shared/canvas-workspace-document-node-data-codec.ts": 310,
         "apps/desktop/src/shared/canvas-workspace-summary-codec.ts": 137,
-        "apps/desktop/src/shared/citation-graph-command-result-codec.ts": 375,
-        "apps/desktop/src/shared/citation-graph-limits.ts": 15,
+        "apps/desktop/src/shared/citation-graph-command-result-codec.ts": 379,
+        "apps/desktop/src/shared/citation-graph-limits.ts": 49,
         "apps/desktop/src/shared/document-revision-sync-repair.ts": 41,
         "apps/desktop/src/shared/library-backup-config.ts": 243,
         "apps/desktop/src/shared/library-backup-evidence.ts": 347,
@@ -612,11 +612,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 141763
+      "totalLines": 141834
     },
     "tests": {
       "byExtension": {
-        ".ts": 87488,
+        ".ts": 87707,
         ".tsx": 1035
       },
       "files": {
@@ -630,7 +630,7 @@
         "apps/desktop/electron/main/canvas-page-commands.test.ts": 425,
         "apps/desktop/electron/main/canvas-workspace-commands.test.ts": 410,
         "apps/desktop/electron/main/canvas-workspace-read-payload-architecture.test.ts": 135,
-        "apps/desktop/electron/main/citation-graph-commands.test.ts": 307,
+        "apps/desktop/electron/main/citation-graph-commands.test.ts": 400,
         "apps/desktop/electron/main/citation-graph-payload-architecture.test.ts": 60,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
         "apps/desktop/electron/main/data-command-architecture.test.ts": 756,
@@ -906,7 +906,7 @@
         "apps/desktop/src/services/canvas-page-data.test.ts": 229,
         "apps/desktop/src/services/canvas-workspace-data.test.ts": 115,
         "apps/desktop/src/services/citation-graph-page-data.test.ts": 254,
-        "apps/desktop/src/services/citation-graph.test.ts": 314,
+        "apps/desktop/src/services/citation-graph.test.ts": 400,
         "apps/desktop/src/services/cite.test.ts": 48,
         "apps/desktop/src/services/discovery-library-status.test.ts": 83,
         "apps/desktop/src/services/discovery-sites.test.ts": 256,
@@ -957,7 +957,7 @@
         "apps/desktop/src/shared/canvas-workspace-command-result-codec.test.ts": 109,
         "apps/desktop/src/shared/canvas-workspace-document-codec.test.ts": 384,
         "apps/desktop/src/shared/canvas-workspace-summary-codec.test.ts": 167,
-        "apps/desktop/src/shared/citation-graph-command-result-codec.test.ts": 291,
+        "apps/desktop/src/shared/citation-graph-command-result-codec.test.ts": 331,
         "apps/desktop/src/shared/document-revision-sync-repair.test.ts": 223,
         "apps/desktop/src/shared/reference-import.test.ts": 52,
         "apps/desktop/src/shared/saved-search-criteria.test.ts": 69,
@@ -1042,7 +1042,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 88523
+      "totalLines": 88742
     }
   },
   "uiDatabaseBoundary": {}

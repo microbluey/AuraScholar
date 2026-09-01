@@ -247,6 +247,46 @@ describe("Citation Graph command-result codec", () => {
     }
   });
 
+  it("binds cache responses to the requested center DOI when one is supplied", () => {
+    expect(
+      decodeCitationGraphGetCachedResult(
+        { entry: validCacheEntry() },
+        "HTTPS://DOI.ORG/10.1000/CENTER",
+      ),
+    ).toEqual({ entry: validCacheEntry() });
+
+    const mismatchedGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: "10.1000/other" } : node,
+      ),
+    };
+    const unboundGraph: CitationGraph = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((node) =>
+        node.id === GRAPH.centerId ? { ...node, doi: undefined } : node,
+      ),
+    };
+    expectInvalid(() =>
+      decodeCitationGraphGetCachedResult(
+        { entry: { fetchedAt: 0, graph: mismatchedGraph } },
+        "10.1000/center",
+      ),
+    );
+    expectInvalid(() =>
+      decodeCitationGraphGetCachedResult(
+        { entry: { fetchedAt: 0, graph: unboundGraph } },
+        "10.1000/center",
+      ),
+    );
+    // The legacy one-argument decoder remains useful for generic graph reads.
+    expect(
+      decodeCitationGraphGetCachedResult({ entry: { fetchedAt: 0, graph: unboundGraph } }),
+    ).toEqual({
+      entry: { fetchedAt: 0, graph: unboundGraph },
+    });
+  });
+
   it("bounds and scopes active-Library DOI membership, then clones the response", () => {
     const requested = ["10.1000/center", "10.1000/reference"];
     const response: CitationGraphGetActiveLibraryDoisCommandResult = {

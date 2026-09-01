@@ -6,6 +6,7 @@ import type {
 } from "../../electron/citation-graph-command-contract";
 import type { CitationGraphBuildCommandResult } from "../../electron/scholarly-command-contract";
 import {
+  citationGraphMatchesDoi,
   citationGraphUtf8ByteLength,
   MAX_CITATION_GRAPH_ACTIVE_LIBRARY_DOIS,
   MAX_CITATION_GRAPH_CACHE_PAYLOAD_BYTES,
@@ -15,6 +16,7 @@ import {
   MAX_CITATION_GRAPH_NODE_ID_BYTES,
   MAX_CITATION_GRAPH_NODE_TEXT_BYTES,
   MAX_CITATION_GRAPH_NODES,
+  normalizeCitationGraphDoi as normalizeSharedCitationGraphDoi,
 } from "./citation-graph-limits";
 
 /** Validates and clones Citation Graph command responses received over IPC. */
@@ -25,6 +27,7 @@ export function decodeCitationGraphBuildResult(value: unknown): CitationGraphBui
 
 export function decodeCitationGraphGetCachedResult(
   value: unknown,
+  requestedDoi?: string,
 ): CitationGraphGetCachedCommandResult {
   const result = requireExactCitationGraphObject(value, "Citation graph cache result", ["entry"]);
   if (result.entry === null) return { entry: null };
@@ -33,10 +36,14 @@ export function decodeCitationGraphGetCachedResult(
     "fetchedAt",
     "graph",
   ]);
+  const graph = decodeCitationGraph(entry.graph);
+  if (requestedDoi !== undefined && !citationGraphMatchesDoi(graph, requestedDoi)) {
+    throw new Error("Citation graph cache center DOI does not match the requested DOI");
+  }
   return {
     entry: {
       fetchedAt: requireNonnegativeSafeInteger(entry.fetchedAt, "Citation graph cache timestamp"),
-      graph: decodeCitationGraph(entry.graph),
+      graph,
     },
   };
 }
@@ -289,10 +296,7 @@ function requireCitationGraphDoi(value: unknown, label: string): string {
 }
 
 function normalizeCitationGraphDoi(value: string): string {
-  let normalized = value.trim();
-  normalized = normalized.replace(/^doi\s*:\s*/iu, "");
-  normalized = normalized.replace(/^(?:https?:\/\/)?(?:dx\.)?doi\.org\//iu, "");
-  normalized = normalized.trim().toLowerCase();
+  const normalized = normalizeSharedCitationGraphDoi(value);
   if (!normalized) throw new Error("Citation graph DOI is required");
   return normalized;
 }
