@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19726,
-        ".ts": 94197,
+        ".ts": 94199,
         ".tsx": 36958
       },
       "files": {
@@ -55,7 +55,7 @@
         "apps/desktop/electron/main/embedding-artifact-commands.ts": 78,
         "apps/desktop/electron/main/evidence-commands.ts": 379,
         "apps/desktop/electron/main/evidence-inbox-commands.ts": 210,
-        "apps/desktop/electron/main/evidence-shelf-commands.ts": 467,
+        "apps/desktop/electron/main/evidence-shelf-commands.ts": 469,
         "apps/desktop/electron/main/evidence-shelf-promotion-command.ts": 126,
         "apps/desktop/electron/main/evidence-source-recovery.ts": 321,
         "apps/desktop/electron/main/ipc.ts": 37,
@@ -657,11 +657,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 150881
+      "totalLines": 150883
     },
     "tests": {
       "byExtension": {
-        ".ts": 94508,
+        ".ts": 94516,
         ".tsx": 1280
       },
       "files": {
@@ -690,7 +690,7 @@
         "apps/desktop/electron/main/embedding-artifact-commands.test.ts": 222,
         "apps/desktop/electron/main/evidence-commands.test.ts": 494,
         "apps/desktop/electron/main/evidence-inbox-commands.test.ts": 287,
-        "apps/desktop/electron/main/evidence-shelf-commands.test.ts": 504,
+        "apps/desktop/electron/main/evidence-shelf-commands.test.ts": 512,
         "apps/desktop/electron/main/evidence-source-recovery.test.ts": 305,
         "apps/desktop/electron/main/frame-isolation-architecture.test.ts": 27,
         "apps/desktop/electron/main/ipc.test.ts": 83,
@@ -1105,7 +1105,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 95788
+      "totalLines": 95796
     }
   },
   "uiDatabaseBoundary": {}

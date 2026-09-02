@@ -440,7 +440,9 @@ function parseHeadingPath(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length > MAX_PREVIEW_HEADINGS) {
     throw new Error("Preview heading path is invalid");
   }
-  return value.map((part) => boundedText(part, "Preview heading", MAX_PREVIEW_HEADING_LENGTH));
+  return Array.from(value, (part) =>
+    boundedText(part, "Preview heading", MAX_PREVIEW_HEADING_LENGTH),
+  );
 }
 
 function nullableInteger(value: unknown, label: string, minimum: number): number | null {
