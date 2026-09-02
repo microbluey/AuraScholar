@@ -75,6 +75,12 @@ export async function purgeWorkKnowledgeRecords(
   const projectAssets = await idsForParents(db, "project_assets", "asset_id", assets);
   const projectEvidence = await idsForParents(db, "project_evidence", "evidence_id", evidence);
 
+  // v29 adds an explicit shelf table. Keep this guarded because Work purge is
+  // also used by legacy databases that may not have run the latest migration;
+  // foreign-key cascades cover normal deletes, while this direct delete closes
+  // the permanent-purge boundary even when FK enforcement is temporarily off.
+  await purgeEvidenceShelfRows(db, libraryId, workId, assets, revisions);
+
   await deleteDerivedArtifacts(db, libraryId, "evidence_items", evidence);
   await deleteDerivedArtifacts(db, libraryId, "document_revisions", revisions);
   await deleteDerivedArtifacts(db, libraryId, "document_assets", assets);
@@ -93,6 +99,46 @@ export async function purgeWorkKnowledgeRecords(
     libraryId,
     workId,
   ]);
+}
+
+async function purgeEvidenceShelfRows(
+  db: Database,
+  libraryId: string,
+  workId: string,
+  assetIds: string[],
+  revisionIds: string[],
+): Promise<void> {
+  const table = await db.query<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'evidence_shelf_items' LIMIT 1`,
+  );
+  if (!table[0]) return;
+
+  const clauses = ["work_id = ?"];
+  const params: unknown[] = [libraryId, workId];
+  if (assetIds.length > 0) {
+    clauses.push(`asset_id IN (${assetIds.map(() => "?").join(",")})`);
+    params.push(...assetIds);
+  }
+  if (revisionIds.length > 0) {
+    clauses.push(`revision_id IN (${revisionIds.map(() => "?").join(",")})`);
+    params.push(...revisionIds);
+  }
+  const shelfRows = await db.query<{ id: string }>(
+    `SELECT id FROM evidence_shelf_items
+     WHERE library_id = ? AND (${clauses.join(" OR ")})`,
+    params,
+  );
+  if (shelfRows.length === 0) return;
+  await deleteRowClocks(
+    db,
+    "evidence_shelf_items",
+    shelfRows.map((row) => row.id),
+  );
+  const placeholders = shelfRows.map(() => "?").join(",");
+  await db.run(
+    `DELETE FROM evidence_shelf_items WHERE library_id = ? AND id IN (${placeholders})`,
+    [libraryId, ...shelfRows.map((row) => row.id)],
+  );
 }
 
 async function ids(db: Database, sql: string, params: unknown[]): Promise<string[]> {

@@ -12,6 +12,40 @@ const VERBATIM_EVIDENCE_FIELDS = new Set([
   "source_content_hash",
 ]);
 
+// Shelf rows carry durable graph identities plus an immutable source
+// anchor/hash. Those values must survive an import unchanged so the graph can
+// be remapped and stale detection remains trustworthy. Human-readable preview
+// text/metadata still goes through the normal credential redaction policy.
+const VERBATIM_EVIDENCE_SHELF_FIELDS = new Set([
+  "id",
+  "library_id",
+  "project_id",
+  "work_id",
+  "asset_id",
+  "revision_id",
+  "anchor_snapshot_json",
+  "source_content_hash",
+]);
+
+const VERBATIM_EVIDENCE_SHELF_PREVIEW_FIELDS = new Set([
+  "contentUnitId",
+  "content_unit_id",
+  "sourceType",
+  "source_type",
+  "sourceId",
+  "source_id",
+  "workId",
+  "work_id",
+  "assetId",
+  "asset_id",
+  "revisionId",
+  "revision_id",
+  "parentUnitId",
+  "parent_unit_id",
+  "sourceContentHash",
+  "source_content_hash",
+]);
+
 export function sanitizeBackupRows(
   table: UserBackupTable,
   rows: Record<string, unknown>[],
@@ -28,6 +62,7 @@ export function sanitizeBackupRow(
 ): Record<string, unknown> | null {
   if (table === "settings") return sanitizeSettingsBackupRow(row);
   if (table === "evidence_items") return sanitizeEvidenceBackupRow(row);
+  if (table === "evidence_shelf_items") return sanitizeEvidenceShelfBackupRow(row);
   return sanitizePortableBackupValue(row) as Record<string, unknown>;
 }
 
@@ -43,6 +78,46 @@ function sanitizeEvidenceBackupRow(row: Record<string, unknown>): Record<string,
       VERBATIM_EVIDENCE_FIELDS.has(field) ? value : sanitizePortableBackupValue(value, field),
     ]),
   );
+}
+
+function sanitizeEvidenceShelfBackupRow(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(row).map(([field, value]) => {
+      if (VERBATIM_EVIDENCE_SHELF_FIELDS.has(field)) return [field, value];
+      if (field === "preview_payload_json" && typeof value === "string") {
+        return [field, sanitizeEvidenceShelfPreviewJson(value)];
+      }
+      return [field, sanitizePortableBackupValue(value, field)];
+    }),
+  );
+}
+
+function sanitizeEvidenceShelfPreviewJson(valueJson: string): string {
+  try {
+    const parsed: unknown = JSON.parse(valueJson);
+    if (!isRecord(parsed)) return sanitizePortableJsonField(valueJson);
+    // Only the preview's own identity fields are authoritative graph
+    // references.  Everything below a metadata/container field must use the
+    // ordinary portable redaction path; otherwise a nested `sourceId` (or
+    // another identity-shaped key) could smuggle credential-shaped text past
+    // the sanitizer merely by reusing a trusted field name.
+    return JSON.stringify(
+      Object.fromEntries(
+        Object.entries(parsed).map(([field, nested]) => [
+          field,
+          isVerbatimEvidenceShelfPreviewField(field) && typeof nested === "string"
+            ? nested
+            : sanitizePortableBackupValue(nested, field),
+        ]),
+      ),
+    );
+  } catch {
+    return redactSensitiveText(valueJson);
+  }
+}
+
+function isVerbatimEvidenceShelfPreviewField(fieldName: string): boolean {
+  return VERBATIM_EVIDENCE_SHELF_PREVIEW_FIELDS.has(fieldName);
 }
 
 function sanitizePortableBackupValue(value: unknown, fieldName = ""): unknown {

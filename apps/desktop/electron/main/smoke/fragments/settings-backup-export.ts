@@ -185,12 +185,12 @@ export const smokeSettingsBackupExport = String.raw`        const backupExportBu
               bodyIncludes("已备份") &&
               bodyIncludes("恢复提醒") &&
               bodyIncludes("PDF 需重挂载") &&
-              bodyIncludes("格式 v4") &&
+              bodyIncludes("格式 v6") &&
               backupSafety?.filename === backupDownloadName &&
               typeof backupSafety?.exportedAt === "string" &&
               Number.isFinite(Date.parse(backupSafety.exportedAt)) &&
               backupSafety?.size > 0 &&
-              backupSafety?.version === 4;
+              backupSafety?.version === 6;
           } catch {
             settingsBackupExportRecencyVisible = false;
           }

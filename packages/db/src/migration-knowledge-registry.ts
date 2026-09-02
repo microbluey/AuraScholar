@@ -3,6 +3,7 @@ import { applyKnowledgeV20 } from "./migration-knowledge.js";
 import { applyKnowledgeContentUnitsFtsV21 } from "./migration-knowledge-fts.js";
 import { applyKnowledgeIndexesV22 } from "./migration-knowledge-indexes.js";
 import { applyKnowledgeSourceVisibilityV28 } from "./migration-knowledge-source-visibility.js";
+import { applyEvidenceShelfV29 } from "./migration-evidence-shelf.js";
 import { applyWorkPageIndexesV23 } from "./migration-work-page-indexes.js";
 
 export const knowledgeMigrations: Migration[] = [
@@ -23,5 +24,11 @@ export const knowledgePostRuntimeMigrations: Migration[] = [
     name: "knowledge_current_source_visibility",
     sql: "",
     apply: applyKnowledgeSourceVisibilityV28,
+  },
+  {
+    version: 29,
+    name: "evidence_shelf_items",
+    sql: "",
+    apply: applyEvidenceShelfV29,
   },
 ];

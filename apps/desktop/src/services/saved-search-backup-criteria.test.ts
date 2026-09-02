@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   exportLibraryBackupJsonFromDatabase,
   importParsedLibraryBackupIntoDatabase,
+  LIBRARY_BACKUP_VERSION,
   parseLibraryBackupJson,
 } from "../shared/library-backup";
 
@@ -28,7 +29,7 @@ async function importBackup(text: string, db: Database, libraryId: string): Prom
 }
 
 describe("saved-search backup criteria", () => {
-  it("round-trips structured conditions through the v5 backup format", async () => {
+  it("round-trips structured conditions through the current backup format", async () => {
     const source = await createNodeDatabase(":memory:");
     const target = await createNodeDatabase(":memory:");
     await runMigrations(source);
@@ -46,7 +47,7 @@ describe("saved-search backup criteria", () => {
     );
 
     const text = await exportLibraryBackupJsonFromDatabase(source, "source-library");
-    expect(JSON.parse(text)).toMatchObject({ version: 5 });
+    expect(JSON.parse(text)).toMatchObject({ version: LIBRARY_BACKUP_VERSION });
     await importBackup(text, target, "target-library");
 
     await expect(

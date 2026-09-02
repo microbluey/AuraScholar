@@ -4,9 +4,14 @@ import type { KnowledgeContentSearchResult } from "../../services/knowledge-sear
 import {
   KnowledgeSearchPanel,
   KnowledgeSearchResultCard,
+  knowledgeResultHasShelfMembership,
   knowledgeSearchRetrievalPresentation,
   sourceTypesForKnowledgeSearchFilter,
 } from "./KnowledgeSearchPanel";
+import {
+  evidenceShelfSourceIdentityKey,
+  evidenceShelfSourceKey,
+} from "../../services/evidence-shelf";
 import { knowledgeSearchScopeLabel } from "./knowledge-search-scope";
 
 function result(
@@ -49,15 +54,23 @@ describe("KnowledgeSearchPanel", () => {
     expect(markup).toContain("全部来源");
   });
 
-  it("renders a source-aware open action only when an exact PDF anchor is valid", () => {
+  it("keeps Shelf staging independent from the optional PDF Reader action", () => {
+    const onAddToShelf = vi.fn();
     const grounded = renderToStaticMarkup(
-      <KnowledgeSearchResultCard opening={false} result={result()} onOpen={vi.fn()} />,
+      <KnowledgeSearchResultCard
+        opening={false}
+        onAddToShelf={onAddToShelf}
+        result={result()}
+        onOpen={vi.fn()}
+      />,
     );
     const unanchored = renderToStaticMarkup(
       <KnowledgeSearchResultCard
         opening={false}
+        onAddToShelf={onAddToShelf}
         result={result({
-          anchor: { kind: "canvas", nodeId: "node:one", nodeRevision: 1, version: 1 },
+          anchor: { kind: "web", url: "https://example.test/source", version: 1 },
+          revisionId: null,
         })}
         onOpen={vi.fn()}
       />,
@@ -67,10 +80,56 @@ describe("KnowledgeSearchPanel", () => {
     expect(grounded).toContain("Evidence-backed result");
     expect(grounded).toContain("Results › Evaluation");
     expect(grounded).toContain("定位到第 4 页");
+    expect(grounded).toContain("加入 Shelf");
     expect(grounded).toContain('data-knowledge-search-result="content-unit:one"');
     expect(unanchored).toContain("原文定位不可用");
     expect(unanchored).toContain("此片段没有可用的 PDF 锚点。");
     expect(unanchored).not.toContain("定位到第 4 页");
+    expect(unanchored).toContain("加入 Shelf");
+  });
+
+  it("projects durable Shelf membership onto a disabled duplicate action", () => {
+    const markup = renderToStaticMarkup(
+      <KnowledgeSearchResultCard
+        opening={false}
+        onAddToShelf={vi.fn()}
+        onOpen={vi.fn()}
+        result={result()}
+        shelved
+      />,
+    );
+
+    expect(markup).toContain("已加入 Shelf");
+    expect(markup).toContain("disabled");
+  });
+
+  it("uses backup-safe source keys when ContentUnit ids were regenerated", () => {
+    const importedShelfResult = result({ id: "content-unit:old-after-backup" });
+    const currentSearchResult = result({ id: "content-unit:new-after-backup" });
+    const sourceKeys = new Set([evidenceShelfSourceKey(importedShelfResult)]);
+
+    expect(knowledgeResultHasShelfMembership(currentSearchResult, new Set(), sourceKeys)).toBe(
+      true,
+    );
+    expect(
+      knowledgeResultHasShelfMembership(
+        result({ text: "A different paragraph on the same page." }),
+        new Set(),
+        new Set([evidenceShelfSourceKey(importedShelfResult)]),
+      ),
+    ).toBe(false);
+    const redactedPreview = result({
+      excerpt: "A credential was [redacted] during backup export.",
+      text: "A credential was [redacted] during backup export.",
+    });
+    expect(
+      knowledgeResultHasShelfMembership(
+        result({ text: "The current paragraph after import." }),
+        new Set(),
+        new Set(),
+        new Set([evidenceShelfSourceIdentityKey(redactedPreview)]),
+      ),
+    ).toBe(true);
   });
 
   it("explains why the browser preview cannot query a local durable index", () => {

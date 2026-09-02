@@ -60,6 +60,10 @@
       "types": "./dist/repos/evidence-inbox.d.ts",
       "default": "./dist/repos/evidence-inbox.js"
     },
+    "./repos/evidence-shelf": {
+      "types": "./dist/repos/evidence-shelf.d.ts",
+      "default": "./dist/repos/evidence-shelf.js"
+    },
     "./repos/knowledge": {
       "types": "./dist/repos/knowledge.d.ts",
       "default": "./dist/repos/knowledge.js"

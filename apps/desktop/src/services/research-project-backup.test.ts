@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   exportLibraryBackupJsonFromDatabase,
   importParsedLibraryBackupIntoDatabase,
+  LIBRARY_BACKUP_VERSION,
   parseLibraryBackupJson,
 } from "../shared/library-backup";
 import { previewLibraryBackupJson } from "./sync";
@@ -104,7 +105,7 @@ function v3Backup(tables: Record<string, unknown[]>): string {
 }
 
 describe("Research Project Library backup", () => {
-  it("exports only the selected Library project graph in v5 dependency order", async () => {
+  it("exports only the selected Library project graph in the current dependency order", async () => {
     const db = await createNodeDatabase(":memory:");
     await runMigrations(db);
     await addLibrary(db, "library-a");
@@ -124,7 +125,7 @@ describe("Research Project Library backup", () => {
       tables: Record<string, Array<Record<string, unknown>>>;
     };
 
-    expect(backup.version).toBe(5);
+    expect(backup.version).toBe(LIBRARY_BACKUP_VERSION);
     expect(Object.keys(backup.tables).indexOf("works")).toBeLessThan(
       Object.keys(backup.tables).indexOf("research_projects"),
     );
@@ -145,7 +146,7 @@ describe("Research Project Library backup", () => {
     expect(backup.tables.canvas_workspaces).toEqual([
       expect.objectContaining({ id: "canvas-a", project_id: "project-a" }),
     ]);
-    expect(previewLibraryBackupJson(text).version).toBe(5);
+    expect(previewLibraryBackupJson(text).version).toBe(LIBRARY_BACKUP_VERSION);
   });
 
   it("strictly rejects invalid v3 Project ownership, memberships, and Canvas links", () => {

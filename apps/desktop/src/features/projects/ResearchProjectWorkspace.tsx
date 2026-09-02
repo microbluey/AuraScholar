@@ -1,11 +1,20 @@
 import { BookOpenText, FilePdf, MagnifyingGlass, Plus, Quotes, X } from "@phosphor-icons/react";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@aurascholar/ui";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 import { InlineNotice } from "../../components/InlineNotice";
 import type { KnowledgeContentSearchResult } from "../../services/knowledge-search";
 import type { KnowledgeSearchOpenOptions } from "../library/KnowledgeSearchPanel";
 import type { ResearchProjectService } from "../../services/research-project-service";
+import {
+  evidenceShelfService,
+  evidenceShelfPreviewHasRedaction,
+  evidenceShelfSourceIdentityKey,
+  evidenceShelfSourceKey,
+  previewEvidenceShelfService,
+  type EvidenceShelfItem,
+  type EvidenceShelfService,
+} from "../../services/evidence-shelf";
 import type {
   ResearchProjectBusyAction,
   ResearchProjectSource,
@@ -15,6 +24,9 @@ import { ProjectSourceList } from "./ProjectSourceList";
 import { ProjectSourcePicker } from "./ProjectSourcePicker";
 import { ResearchProjectSwitcher } from "./ResearchProjectSwitcher";
 import { KnowledgeSearchPanel } from "../library/KnowledgeSearchPanel";
+import { EvidenceShelfPanel } from "./EvidenceShelfPanel";
+
+const EMPTY_SHELF_IDS: ReadonlySet<string> = new Set();
 
 export interface ResearchProjectWorkspaceProps {
   busyAction: ResearchProjectBusyAction | null;
@@ -28,6 +40,7 @@ export interface ResearchProjectWorkspaceProps {
     result: KnowledgeContentSearchResult,
     options: KnowledgeSearchOpenOptions,
   ): Promise<void>;
+  shelfService?: EvidenceShelfService;
   onRemoveWork(workId: string): Promise<boolean>;
   onRename(name: string): Promise<boolean>;
   onSelect(projectId: string): void;
@@ -55,12 +68,31 @@ export function ResearchProjectWorkspace({
   projects,
   service,
   sources,
+  shelfService,
 }: ResearchProjectWorkspaceProps) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [shelfRefreshToken, setShelfRefreshToken] = useState(0);
+  const [shelfMembership, setShelfMembership] = useState<{
+    identityFallbackKeys: Set<string>;
+    ids: Set<string>;
+    sourceKeys: Set<string>;
+    projectId: string;
+  }>(() => ({
+    identityFallbackKeys: new Set(),
+    ids: new Set(),
+    projectId: project.id,
+    sourceKeys: new Set(),
+  }));
   const { confirm, confirmDialog } = useConfirmDialog();
   const busy = busyAction !== null;
+  // Keep the Shelf adapter aligned with the owning workspace mode when a
+  // caller does not inject one explicitly. This matters in browser preview
+  // where a test/app shell may still expose a partial `window.aura` bridge:
+  // preview must never accidentally reach the persistence IPC commands.
+  const activeShelfService =
+    shelfService ?? (previewMode ? previewEvidenceShelfService : evidenceShelfService);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleSources = useMemo(() => {
     if (!normalizedQuery) return sources;
@@ -85,6 +117,38 @@ export function ResearchProjectWorkspace({
     [sources],
   );
 
+  const shelvedContentUnitIds =
+    shelfMembership.projectId === project.id ? shelfMembership.ids : EMPTY_SHELF_IDS;
+  const shelvedSourceKeys =
+    shelfMembership.projectId === project.id ? shelfMembership.sourceKeys : EMPTY_SHELF_IDS;
+  const shelvedIdentityFallbackKeys =
+    shelfMembership.projectId === project.id
+      ? shelfMembership.identityFallbackKeys
+      : EMPTY_SHELF_IDS;
+
+  const handleShelfItemsChange = useCallback(
+    (items: readonly EvidenceShelfItem[]) => {
+      const sourceKeys = new Set<string>();
+      const identityFallbackKeys = new Set<string>();
+      for (const item of items) {
+        // The strict key distinguishes changed text. Only previews explicitly
+        // marked by backup redaction get the identity-only fallback, allowing
+        // regenerated ContentUnit ids without masking ordinary changes.
+        sourceKeys.add(evidenceShelfSourceKey(item));
+        if (evidenceShelfPreviewHasRedaction(item)) {
+          identityFallbackKeys.add(evidenceShelfSourceIdentityKey(item));
+        }
+      }
+      setShelfMembership({
+        identityFallbackKeys,
+        ids: new Set(items.map((item) => item.previewPayload.contentUnitId)),
+        projectId: project.id,
+        sourceKeys,
+      });
+    },
+    [project.id],
+  );
+
   const requestRemove = async (source: ResearchProjectSource) => {
     const approved = await confirm({
       title: `从项目移除“${source.title}”？`,
@@ -98,6 +162,18 @@ export function ResearchProjectWorkspace({
       cancelLabel: "保留来源",
     });
     if (approved) await onRemoveWork(source.workId);
+  };
+
+  const addKnowledgeResultToShelf = async (
+    result: KnowledgeContentSearchResult,
+    options: KnowledgeSearchOpenOptions,
+  ) => {
+    if (previewMode) throw new Error("浏览器预览不会保存 Evidence Shelf");
+    await activeShelfService.stage(project.id, result, options);
+    // The write may have succeeded just as the caller's signal was aborted.
+    // Refresh before rethrowing so a persisted row is not stranded in stale UI.
+    setShelfRefreshToken((current) => current + 1);
+    options.signal.throwIfAborted();
   };
 
   return (
@@ -167,9 +243,26 @@ export function ResearchProjectWorkspace({
         key={project.id}
         enabled={!previewMode}
         onOpenResult={onOpenKnowledgeResult}
+        onAddToShelf={
+          !previewMode && project.status === "active" ? addKnowledgeResultToShelf : undefined
+        }
         scope={knowledgeScope}
         scopeLabel={`项目 · ${project.name}`}
         scopeRevision={knowledgeScopeRevision}
+        shelvedContentUnitIds={shelvedContentUnitIds}
+        shelvedIdentityFallbackKeys={shelvedIdentityFallbackKeys}
+        shelvedSourceKeys={shelvedSourceKeys}
+      />
+
+      <EvidenceShelfPanel
+        key={`${project.id}:${previewMode ? "preview" : "desktop"}`}
+        enabled={!previewMode}
+        onOpenResult={onOpenKnowledgeResult}
+        projectId={project.id}
+        projectName={project.name}
+        refreshToken={shelfRefreshToken}
+        onItemsChange={handleShelfItemsChange}
+        service={activeShelfService}
       />
 
       <section
