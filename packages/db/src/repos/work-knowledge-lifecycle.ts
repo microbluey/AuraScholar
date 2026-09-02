@@ -1,5 +1,63 @@
 import type { Database } from "../database.js";
 
+/**
+ * Prevents a Work merge from silently invalidating Evidence Shelf snapshots.
+ *
+ * Shelf rows deliberately keep immutable source identity. Retargeting their
+ * Work/Asset/Revision columns during a merge would rewrite what the user
+ * staged, while leaving them in place would make the backup graph invalid.
+ * Active candidates therefore block the merge. Removed candidates are
+ * temporary tombstones (the Shelf API has no restore path for a merged Work),
+ * so they are compacted here before the merge proceeds.
+ */
+export async function assertEvidenceShelfClearForWorkMerge(
+  db: Database,
+  libraryId: string,
+  duplicateWorkId: string,
+): Promise<void> {
+  const table = await db.query<{ name: string }>(
+    `SELECT name FROM sqlite_master
+     WHERE type = 'table' AND name = 'evidence_shelf_items' LIMIT 1`,
+  );
+  if (!table[0]) return;
+
+  const rows = await db.query<{ id: string; deleted_at: number | null }>(
+    `SELECT DISTINCT shelf.id, shelf.deleted_at
+     FROM evidence_shelf_items shelf
+     LEFT JOIN document_assets asset
+       ON asset.id = shelf.asset_id
+      AND asset.library_id = shelf.library_id
+     LEFT JOIN document_revisions revision
+       ON revision.id = shelf.revision_id
+     LEFT JOIN document_assets revision_asset
+       ON revision_asset.id = revision.asset_id
+      AND revision_asset.library_id = shelf.library_id
+     WHERE shelf.library_id = ?
+       AND (
+         shelf.work_id = ?
+         OR asset.work_id = ?
+         OR revision_asset.work_id = ?
+       )`,
+    [libraryId, duplicateWorkId, duplicateWorkId, duplicateWorkId],
+  );
+  const active = rows.filter((row) => row.deleted_at === null);
+  if (active.length > 0) {
+    throw new Error(
+      `Cannot merge Work ${duplicateWorkId}: Evidence Shelf candidates must be cleared first`,
+    );
+  }
+
+  const tombstones = rows.filter((row) => row.deleted_at !== null).map((row) => row.id);
+  if (tombstones.length === 0) return;
+  await deleteRowClocks(db, libraryId, "evidence_shelf_items", tombstones);
+  const placeholders = tombstones.map(() => "?").join(",");
+  await db.run(
+    `DELETE FROM evidence_shelf_items
+     WHERE library_id = ? AND id IN (${placeholders})`,
+    [libraryId, ...tombstones],
+  );
+}
+
 /** Retargets Library-owned knowledge roots without changing revision identity. */
 export async function mergeWorkKnowledgeRecords(
   db: Database,
@@ -8,6 +66,7 @@ export async function mergeWorkKnowledgeRecords(
   duplicateWorkId: string,
   updatedAt: number,
 ): Promise<void> {
+  await assertEvidenceShelfClearForWorkMerge(db, libraryId, duplicateWorkId);
   await db.run(
     `UPDATE document_revisions AS revision
      SET attachment_id = NULL,
@@ -85,11 +144,11 @@ export async function purgeWorkKnowledgeRecords(
   await deleteDerivedArtifacts(db, libraryId, "document_revisions", revisions);
   await deleteDerivedArtifacts(db, libraryId, "document_assets", assets);
 
-  await deleteRowClocks(db, "project_evidence", projectEvidence);
-  await deleteRowClocks(db, "project_assets", projectAssets);
-  await deleteRowClocks(db, "evidence_items", evidence);
-  await deleteRowClocks(db, "document_revisions", revisions);
-  await deleteRowClocks(db, "document_assets", assets);
+  await deleteRowClocks(db, libraryId, "project_evidence", projectEvidence);
+  await deleteRowClocks(db, libraryId, "project_assets", projectAssets);
+  await deleteRowClocks(db, libraryId, "evidence_items", evidence);
+  await deleteRowClocks(db, libraryId, "document_revisions", revisions);
+  await deleteRowClocks(db, libraryId, "document_assets", assets);
 
   await db.run(`DELETE FROM evidence_items WHERE library_id = ? AND work_id = ?`, [
     libraryId,
@@ -131,6 +190,7 @@ async function purgeEvidenceShelfRows(
   if (shelfRows.length === 0) return;
   await deleteRowClocks(
     db,
+    libraryId,
     "evidence_shelf_items",
     shelfRows.map((row) => row.id),
   );
@@ -156,13 +216,19 @@ async function idsForParents(
   return ids(db, `SELECT id FROM ${table} WHERE ${column} IN (${placeholders})`, parentIds);
 }
 
-async function deleteRowClocks(db: Database, table: string, rowIds: string[]): Promise<void> {
+async function deleteRowClocks(
+  db: Database,
+  libraryId: string,
+  table: string,
+  rowIds: string[],
+): Promise<void> {
   if (rowIds.length === 0) return;
   const placeholders = rowIds.map(() => "?").join(",");
-  await db.run(`DELETE FROM sync_row_clocks WHERE table_name = ? AND row_id IN (${placeholders})`, [
-    table,
-    ...rowIds,
-  ]);
+  await db.run(
+    `DELETE FROM sync_row_clocks
+     WHERE library_id = ? AND table_name = ? AND row_id IN (${placeholders})`,
+    [libraryId, table, ...rowIds],
+  );
 }
 
 async function deleteDerivedArtifacts(

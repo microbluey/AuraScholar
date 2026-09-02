@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19566,
-        ".ts": 93068,
+        ".ts": 93134,
         ".tsx": 36563
       },
       "files": {
@@ -569,7 +569,7 @@
         "packages/db/src/repos/sentinel.ts": 496,
         "packages/db/src/repos/snippets.ts": 155,
         "packages/db/src/repos/tags.ts": 389,
-        "packages/db/src/repos/work-knowledge-lifecycle.ts": 190,
+        "packages/db/src/repos/work-knowledge-lifecycle.ts": 256,
         "packages/db/src/repos/works.ts": 1469,
         "packages/db/src/repos/write-lock.ts": 28,
         "packages/db/src/research-project-defaults.ts": 7,
@@ -650,11 +650,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 149197
+      "totalLines": 149263
     },
     "tests": {
       "byExtension": {
-        ".ts": 93216,
+        ".ts": 93342,
         ".tsx": 1176
       },
       "files": {
@@ -1060,7 +1060,7 @@
         "packages/db/src/repos/sentinel.test.ts": 578,
         "packages/db/src/repos/snippets.test.ts": 149,
         "packages/db/src/repos/tags.test.ts": 499,
-        "packages/db/src/repos/work-knowledge-lifecycle.test.ts": 142,
+        "packages/db/src/repos/work-knowledge-lifecycle.test.ts": 268,
         "packages/db/src/repos/works-integrity.test.ts": 68,
         "packages/db/src/research-project-migration.test.ts": 337,
         "packages/db/src/work-list.test.ts": 323,
@@ -1092,7 +1092,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 94392
+      "totalLines": 94518
     }
   },
   "uiDatabaseBoundary": {}
