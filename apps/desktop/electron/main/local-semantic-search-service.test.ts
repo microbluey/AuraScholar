@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LocalSemanticSearchService,
   type LocalSemanticSearchInput,
@@ -15,6 +15,8 @@ const input: LocalSemanticSearchInput = {
 };
 
 describe("LocalSemanticSearchService", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("uses full-text only until a hybrid generation is active", async () => {
     const getEmbeddingProvider = vi.fn();
     const service = new LocalSemanticSearchService({
@@ -26,8 +28,28 @@ describe("LocalSemanticSearchService", () => {
     await expect(service.search(input)).resolves.toMatchObject({
       candidates: [{ contentUnitId: "content-unit:fulltext" }],
       mode: "fulltext",
+      pinnedIndexId: null,
       semanticStatus: "not-configured",
     });
+    expect(getEmbeddingProvider).not.toHaveBeenCalled();
+  });
+
+  it("treats a blank active generation id as unavailable", async () => {
+    const getEmbeddingProvider = vi.fn();
+    const service = new LocalSemanticSearchService({
+      getActiveHybridIndexId: vi.fn().mockResolvedValue("   "),
+      getEmbeddingProvider,
+      vectorStore: { search: vi.fn() },
+    });
+
+    await expect(service.search(input)).resolves.toMatchObject({
+      mode: "fulltext",
+      pinnedIndexId: null,
+      semanticStatus: "not-configured",
+    });
+    expect(input.fullText.search).toHaveBeenCalledWith(
+      expect.not.objectContaining({ indexId: expect.anything() }),
+    );
     expect(getEmbeddingProvider).not.toHaveBeenCalled();
   });
 
@@ -45,15 +67,23 @@ describe("LocalSemanticSearchService", () => {
       getEmbeddingProvider: vi.fn().mockResolvedValue(embeddingProvider),
       vectorStore: {
         search: vi.fn().mockResolvedValue([
-          { contentUnitId: "content-unit:semantic", distance: 0.1, sourceId: "revision:semantic" },
+          {
+            contentUnitId: "content-unit:semantic",
+            distance: 0.1,
+            sourceId: "revision:semantic",
+          },
         ]),
       },
     });
 
     await expect(service.search(input)).resolves.toMatchObject({
       mode: "hybrid",
+      pinnedIndexId: "index:active",
       semanticStatus: "used",
     });
+    expect(input.fullText.search).toHaveBeenCalledWith(
+      expect.objectContaining({ indexId: "index:active" }),
+    );
   });
 
   it("falls back to full-text without surfacing a local model failure", async () => {
@@ -65,7 +95,36 @@ describe("LocalSemanticSearchService", () => {
 
     await expect(service.search(input)).resolves.toMatchObject({
       mode: "fulltext",
+      pinnedIndexId: "index:active",
       semanticStatus: "unavailable",
     });
+    expect(input.fullText.search).toHaveBeenCalledWith(
+      expect.objectContaining({ indexId: "index:active" }),
+    );
+  });
+
+  it("pins full-text when the active generation's vector search is unavailable", async () => {
+    const embeddingProvider = {
+      dimension: 2,
+      egressMode: "local" as const,
+      embedDocuments: vi.fn(),
+      embedQuery: vi.fn().mockResolvedValue(new Float32Array([1, 0])),
+      id: "local:test",
+      model: "test/local",
+    };
+    const service = new LocalSemanticSearchService({
+      getActiveHybridIndexId: vi.fn().mockResolvedValue("index:active"),
+      getEmbeddingProvider: vi.fn().mockResolvedValue(embeddingProvider),
+      vectorStore: { search: vi.fn().mockRejectedValue(new Error("vector unavailable")) },
+    });
+
+    await expect(service.search(input)).resolves.toMatchObject({
+      mode: "fulltext",
+      pinnedIndexId: "index:active",
+      semanticStatus: "unavailable",
+    });
+    expect(input.fullText.search).toHaveBeenCalledWith(
+      expect.objectContaining({ indexId: "index:active" }),
+    );
   });
 });

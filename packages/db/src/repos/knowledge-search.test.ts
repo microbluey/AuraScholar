@@ -3,6 +3,7 @@ import { createNodeDatabase, type Database } from "../database";
 import { requireLocalLibraryId } from "../local-first";
 import { MIGRATIONS, runMigrations } from "../migrations";
 import { type ContentUnit, ContentUnitSearchRepo, ContentUnitsRepo } from "./knowledge";
+import { KnowledgeIndexesRepo } from "./knowledge-indexes";
 import { WorksRepo } from "./works";
 
 const HASH_A = "a".repeat(64);
@@ -307,6 +308,114 @@ describe("ContentUnit full-text search", () => {
         contentUnitIds: [first.id, second.id],
       }),
     ).resolves.toMatchObject([{ id: first.id }]);
+  });
+
+  it("pins FTS and hydration to ready entries with matching ContentUnit hashes", async () => {
+    const indexed = contentUnit("content-unit:pinned-indexed", {
+      sourceId: "revision:pinned-indexed",
+      text: "Pinned generation marker remains searchable.",
+    });
+    const hashMismatch = contentUnit("content-unit:pinned-hash-mismatch", {
+      contentHash: "c".repeat(64),
+      sourceId: "revision:pinned-hash-mismatch",
+      text: "Hash matching marker must stay tied to its indexed payload.",
+    });
+    await units.upsertMany([indexed, hashMismatch]);
+
+    const indexes = new KnowledgeIndexesRepo(db, libraryId);
+    const generation = await indexes.begin({ mode: "fulltext", now: 1_000 });
+    await indexes.activate(generation.id, { now: 1_001 });
+
+    const fresh = contentUnit("content-unit:pinned-fresh", {
+      contentHash: HASH_B,
+      sourceId: "revision:pinned-fresh",
+      text: "Fresh generation marker is outside the pinned snapshot.",
+    });
+    await units.upsertMany([fresh]);
+
+    // Simulate a stale derived entry: the physical ContentUnit remains live,
+    // but its immutable hash no longer matches the generation mapping.
+    await db.run(`UPDATE content_units SET content_hash = ? WHERE id = ?`, [
+      HASH_B,
+      hashMismatch.id,
+    ]);
+
+    await expect(
+      search.search({ query: "generation marker", indexId: generation.id }),
+    ).resolves.toMatchObject([{ id: indexed.id }]);
+    await expect(
+      search.findReadyByIds({
+        contentUnitIds: [indexed.id, fresh.id, hashMismatch.id],
+        indexId: generation.id,
+      }),
+    ).resolves.toMatchObject([{ id: indexed.id }]);
+    await expect(
+      search.search({ query: "hash matching", indexId: generation.id }),
+    ).resolves.toEqual([]);
+    await expect(
+      search.findReadyByIds({ contentUnitIds: [hashMismatch.id], indexId: generation.id }),
+    ).resolves.toEqual([]);
+
+    // Omitting the pin preserves the existing live-corpus behavior.
+    await expect(search.search({ query: "fresh generation" })).resolves.toMatchObject([
+      { id: fresh.id },
+    ]);
+  });
+
+  it("fails closed for missing, foreign, or retired pinned generations", async () => {
+    const local = contentUnit("content-unit:pinned-local", {
+      sourceId: "revision:pinned-local",
+      text: "Pinned local generation remains available.",
+    });
+    await units.upsertMany([local]);
+
+    const localIndexes = new KnowledgeIndexesRepo(db, libraryId);
+    const firstGeneration = await localIndexes.begin({ mode: "fulltext", now: 2_000 });
+    await localIndexes.activate(firstGeneration.id, { now: 2_001 });
+
+    const foreignLibraryId = "library:pinned-foreign";
+    const now = Date.now();
+    await db.run(
+      `INSERT INTO libraries (id, name, kind, created_at, updated_at, deleted_at)
+       VALUES (?, ?, 'personal', ?, ?, NULL)`,
+      [foreignLibraryId, "Pinned foreign Library", now, now],
+    );
+    const foreign = contentUnit("content-unit:pinned-foreign", {
+      libraryId: foreignLibraryId,
+      sourceId: "revision:pinned-foreign",
+      text: "Foreign generation must never cross the Library boundary.",
+    });
+    await new ContentUnitsRepo(db, foreignLibraryId).upsertMany([foreign]);
+    const foreignIndexes = new KnowledgeIndexesRepo(db, foreignLibraryId);
+    const foreignGeneration = await foreignIndexes.begin({ mode: "fulltext", now: 2_002 });
+    await foreignIndexes.activate(foreignGeneration.id, { now: 2_003 });
+
+    await expect(
+      search.search({ query: "foreign generation", indexId: foreignGeneration.id }),
+    ).resolves.toEqual([]);
+    await expect(
+      search.findReadyByIds({ contentUnitIds: [foreign.id], indexId: foreignGeneration.id }),
+    ).resolves.toEqual([]);
+
+    // Activating a newer local generation retires the first one.
+    const secondGeneration = await localIndexes.begin({ mode: "fulltext", now: 2_004 });
+    await localIndexes.activate(secondGeneration.id, { now: 2_005 });
+    await expect(
+      search.search({ query: "local generation", indexId: firstGeneration.id }),
+    ).resolves.toEqual([]);
+    await expect(
+      search.findReadyByIds({ contentUnitIds: [local.id], indexId: firstGeneration.id }),
+    ).resolves.toEqual([]);
+
+    await expect(search.search({ query: "local generation", indexId: " " })).rejects.toThrow(
+      "Knowledge index id",
+    );
+    await expect(
+      search.findReadyByIds({ contentUnitIds: [local.id], indexId: " " }),
+    ).rejects.toThrow("Knowledge index id");
+    await expect(
+      search.search({ query: "local generation", indexId: "knowledge-index:missing" }),
+    ).resolves.toEqual([]);
   });
 
   it("resolves a ready-only vector allowlist and safely hydrates semantic candidates", async () => {

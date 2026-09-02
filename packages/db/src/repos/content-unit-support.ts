@@ -63,6 +63,38 @@ export function appendContentUnitScopeClauses(
 }
 
 /**
+ * Appends the generation joins shared by pinned FTS and hydration queries.
+ *
+ * The caller must place the returned joins after `content_units unit` has
+ * been introduced and must keep the returned parameters ahead of any
+ * placeholders that occur later in the query.  Binding the index identity in
+ * the JOIN (rather than interpolating it) makes a missing, retired, or
+ * cross-Library generation fail closed with an empty result set.
+ */
+export function appendContentUnitPinnedIndexJoins(
+  joins: string[],
+  params: unknown[],
+  indexId: string | undefined,
+  libraryId: string,
+): void {
+  if (indexId === undefined) return;
+  assertId(indexId, "Knowledge index id");
+  joins.push(`
+       JOIN knowledge_indexes pinned_index
+         ON pinned_index.id = ?
+        AND pinned_index.library_id = ?
+        AND pinned_index.library_id = unit.library_id
+        AND pinned_index.status = 'active'
+        AND pinned_index.mode IN ('fulltext', 'hybrid')
+       JOIN knowledge_index_entries pinned_entry
+         ON pinned_entry.index_id = pinned_index.id
+        AND pinned_entry.content_unit_id = unit.id
+        AND pinned_entry.status = 'ready'
+        AND pinned_entry.content_hash = unit.content_hash`);
+  params.push(indexId, libraryId);
+}
+
+/**
  * Applies a main-process-resolved source snapshot without expanding one SQL
  * bind parameter per source. SQLite's JSON1 table-valued function keeps the
  * query bounded even for a larger Library while the caller still owns the

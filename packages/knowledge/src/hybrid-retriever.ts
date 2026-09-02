@@ -15,6 +15,8 @@ export interface FullTextCandidateSearchInput {
   /** The immutable scope captured by the owning retrieval operation. */
   corpusScope?: CorpusScopeSnapshot;
   libraryId: string;
+  /** Optional semantic generation pin used to keep FTS/vector views aligned. */
+  indexId?: string;
   query: string;
   allowedSourceIds: readonly string[];
   limit: number;
@@ -25,7 +27,7 @@ export interface HybridSearchInput {
   libraryId: string;
   /** The immutable scope captured by the owning retrieval operation. */
   corpusScope?: CorpusScopeSnapshot;
-  /** A pinned vector generation. Omit it to explicitly remain full-text only. */
+  /** A pinned hybrid generation shared by FTS and vector retrieval. */
   semanticIndexId?: string;
   query: string;
   /** Resolved before either retrieval backend sees the query. */
@@ -68,8 +70,10 @@ export class HybridRetriever {
     assertCorpusScope(input.corpusScope, input.libraryId, allowedSourceIds);
     if (allowedSourceIds.length === 0) return fullTextOnly([]);
     throwIfAborted(input.signal);
+    const semanticIndexId = input.semanticIndexId?.trim() || undefined;
 
     const fullTextInput: FullTextCandidateSearchInput = {
+      ...(semanticIndexId ? { indexId: semanticIndexId } : {}),
       libraryId: input.libraryId,
       query,
       allowedSourceIds,

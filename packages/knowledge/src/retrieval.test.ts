@@ -185,11 +185,15 @@ describe("HybridRetriever", () => {
       libraryId: "library:one",
       limit: 10,
       query: "grounded retrieval",
-      semanticIndexId: "index:g1",
+      semanticIndexId: "  index:g1  ",
     });
 
     expect(fullText.search).toHaveBeenCalledWith(expect.objectContaining({ corpusScope }));
+    expect(fullText.search).toHaveBeenCalledWith(expect.objectContaining({ indexId: "index:g1" }));
     expect(vectorStore.search).toHaveBeenCalledWith(expect.objectContaining({ corpusScope }));
+    expect(vectorStore.search).toHaveBeenCalledWith(
+      expect.objectContaining({ indexId: "index:g1" }),
+    );
   });
 
   it("keeps full-text retrieval usable when semantic capability is not configured", async () => {
@@ -269,6 +273,7 @@ describe("HybridRetriever", () => {
       signal: undefined,
       vector: new Float32Array([1, 0]),
     });
+    expect(fullText.search).toHaveBeenCalledWith(expect.objectContaining({ indexId: "index:g1" }));
   });
 
   it("falls back without exposing semantic provider errors", async () => {
