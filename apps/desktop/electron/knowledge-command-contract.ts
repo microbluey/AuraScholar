@@ -1,12 +1,26 @@
 import type { ContentUnitSourceType } from "@aurascholar/db/repos/knowledge";
 
 /**
+ * User-selected corpus scope. The renderer may choose a scope, but it never
+ * submits the resolved source allowlist; the main process captures that list
+ * from canonical Library rows for this request.
+ */
+export type KnowledgeCorpusScope =
+  | { kind: "library" }
+  | { kind: "project"; projectId: string }
+  | { kind: "works"; workIds: string[] }
+  | { kind: "asset"; assetId: string };
+
+/**
  * Filters for grounded, source-anchored retrieval from the local Knowledge
- * Layer. Omitted filters leave that dimension unrestricted within libraryId.
+ * Layer. Omitted filters leave that dimension unrestricted within the selected
+ * corpus scope (or the whole Library when scope is omitted).
  */
 export interface SearchKnowledgeContentCommandInput {
   libraryId: string;
   query: string;
+  /** Defaults to the whole active Library for backwards compatibility. */
+  scope?: KnowledgeCorpusScope;
   limit?: number;
   sourceTypes?: ContentUnitSourceType[];
   sourceId?: string;

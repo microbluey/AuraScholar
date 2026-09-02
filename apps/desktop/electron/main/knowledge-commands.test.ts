@@ -1,4 +1,10 @@
-import { ContentUnitsRepo, type ContentUnit, type Database } from "@aurascholar/db";
+import {
+  ContentUnitsRepo,
+  ResearchProjectsRepo,
+  WorksRepo,
+  type ContentUnit,
+  type Database,
+} from "@aurascholar/db";
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
@@ -277,6 +283,13 @@ describe("Knowledge search data command", () => {
       { libraryId, query: "grounded", sourceId: " " },
       { libraryId, query: "grounded", includeContextOnly: "yes" },
       { libraryId, query: "x".repeat(1_025) },
+      { libraryId, query: "grounded", scope: { kind: "library", projectId: "unexpected" } },
+      {
+        libraryId,
+        query: "grounded",
+        scope: { kind: "works", workIds: ["work:one", "work:one"] },
+      },
+      { libraryId, query: "grounded", scope: { kind: "project", projectId: " " } },
     ];
 
     for (const input of invalidInputs) {
@@ -404,6 +417,59 @@ describe("Knowledge search data command", () => {
       results: [{ id: semanticOnly.id }, { id: lexical.id }],
       retrieval: { mode: "hybrid", semanticStatus: "used" },
     });
+  });
+
+  it("freezes a Project source allowlist before FTS and semantic retrieval", async () => {
+    const worksRepo = new WorksRepo(database, libraryId);
+    const projectsRepo = new ResearchProjectsRepo(database, libraryId);
+    const project = await projectsRepo.ensureDefault();
+    const member = await worksRepo.upsert({ title: "Project member" });
+    const outside = await worksRepo.upsert({ title: "Project outsider" });
+    await projectsRepo.addWorks(project.id, [member.id]);
+
+    const memberUnit = contentUnit("content-unit:project-member", {
+      sourceId: "revision:project-member",
+      workId: member.id,
+      text: "Project-scoped grounded retrieval",
+    });
+    const outsideUnit = contentUnit("content-unit:project-outside", {
+      contentHash: HASH_B,
+      sourceId: "revision:project-outside",
+      workId: outside.id,
+      text: "Outside project grounded retrieval",
+    });
+    await units.upsertMany([memberUnit, outsideUnit]);
+
+    const search = vi.fn().mockResolvedValue({
+      candidates: [{ contentUnitId: memberUnit.id, score: 0.1 }],
+      mode: "hybrid",
+      semanticStatus: "used",
+    });
+    const response = await executeKnowledgeCommand(
+      {
+        input: {
+          libraryId,
+          query: "grounded retrieval",
+          scope: { kind: "project", projectId: project.id },
+        },
+        name: "knowledge.searchContent",
+      },
+      dependencies,
+      { semanticSearch: { search } },
+    );
+
+    expect(search).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedSourceIds: [memberUnit.sourceId],
+        corpusScope: expect.objectContaining({
+          allowedSourceIds: [memberUnit.sourceId],
+          libraryId,
+          scope: { kind: "project", projectId: project.id },
+        }),
+      }),
+    );
+    expect(response.results.map(({ id }) => id)).toEqual([memberUnit.id]);
+    expect(response.results.map(({ id }) => id)).not.toContain(outsideUnit.id);
   });
 
   it("prioritizes explicitly requested material language without filtering other candidates", async () => {

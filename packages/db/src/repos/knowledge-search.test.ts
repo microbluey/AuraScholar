@@ -280,6 +280,35 @@ describe("ContentUnit full-text search", () => {
     expect(await search.search({ query: "separate Library" })).toEqual([]);
   });
 
+  it("applies a resolved source snapshot before FTS, ready-source listing, and hydration", async () => {
+    const first = contentUnit("content-unit:snapshot-first", {
+      sourceId: "revision:snapshot-first",
+      text: "Snapshot allowlists keep the first source visible.",
+    });
+    const second = contentUnit("content-unit:snapshot-second", {
+      contentHash: HASH_B,
+      sourceId: "revision:snapshot-second",
+      text: "Snapshot allowlists keep the second source visible.",
+    });
+    await units.upsertMany([first, second]);
+
+    await expect(
+      search.search({ query: "snapshot allowlists", allowedSourceIds: [first.sourceId] }),
+    ).resolves.toMatchObject([{ id: first.id }]);
+    await expect(
+      search.search({ query: "snapshot allowlists", allowedSourceIds: [] }),
+    ).resolves.toEqual([]);
+    await expect(
+      search.listReadySourceIds({ allowedSourceIds: [first.sourceId] }),
+    ).resolves.toEqual([first.sourceId]);
+    await expect(
+      search.findReadyByIds({
+        allowedSourceIds: [first.sourceId],
+        contentUnitIds: [first.id, second.id],
+      }),
+    ).resolves.toMatchObject([{ id: first.id }]);
+  });
+
   it("resolves a ready-only vector allowlist and safely hydrates semantic candidates", async () => {
     const readyPdf = contentUnit("content-unit:semantic-pdf", {
       sourceId: "revision:semantic-pdf",

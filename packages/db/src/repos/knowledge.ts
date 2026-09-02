@@ -7,6 +7,12 @@ export { KnowledgeJobsRepo } from "./knowledge-jobs-repo.js";
 export { knowledgeJobRetryDelayMs, summarizeKnowledgeJobError } from "./knowledge-queue-support.js";
 export { ContentUnitsRepo } from "./content-units-repo.js";
 export { ContentUnitSearchRepo } from "./content-unit-search-repo.js";
+export { KnowledgeCorpusScopeError, KnowledgeCorpusScopeRepo } from "./knowledge-corpus-scope.js";
+export type {
+  KnowledgeCorpusScope,
+  KnowledgeCorpusScopeResolution,
+  KnowledgeCorpusScopeSelection,
+} from "./knowledge-corpus-scope.js";
 export {
   appendContentUnitCanonicalVisibilityClause,
   contentUnitCanonicalVisibilitySql,

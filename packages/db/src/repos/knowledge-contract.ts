@@ -158,6 +158,8 @@ export interface ReplaceContentUnitsInput {
 export interface SearchContentUnitsInput {
   query: string;
   limit?: number;
+  /** Resolved once by the main process; never trusted from renderer input. */
+  allowedSourceIds?: readonly string[];
   sourceTypes?: readonly ContentUnitSourceType[];
   sourceId?: string;
   workId?: string;

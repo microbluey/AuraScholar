@@ -90,6 +90,8 @@ export {
   KNOWLEDGE_JOB_STATUSES,
   ContentUnitSearchRepo,
   ContentUnitsRepo,
+  KnowledgeCorpusScopeError,
+  KnowledgeCorpusScopeRepo,
   KnowledgeChangesRepo,
   KnowledgeJobsRepo,
   appendKnowledgeChangeInTransaction,
@@ -120,6 +122,9 @@ export type {
   ReplaceContentUnitsInput,
   SearchContentUnitsInput,
   ContentUnitVisibilityOptions,
+  KnowledgeCorpusScope,
+  KnowledgeCorpusScopeResolution,
+  KnowledgeCorpusScopeSelection,
 } from "./repos/knowledge.js";
 export {
   EMBEDDING_DISTANCE_METRICS,
