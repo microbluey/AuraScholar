@@ -22,12 +22,15 @@ export class ContentUnitSearchRepo {
     input: Contract.SearchContentUnitsInput,
   ): Promise<Contract.ContentUnitSearchResult[]> {
     if (typeof input.query !== "string") throw new Error("ContentUnit query must be a string");
+    const joins: string[] = [];
+    const params: unknown[] = [];
+    Content.appendContentUnitPinnedIndexJoins(joins, params, input.indexId, this.libraryId);
     const ftsQuery = buildFtsPrefixQuery(input.query, 24);
     if (!ftsQuery) return [];
 
     const limit = Utils.normalizeLimit(input.limit, 20, "ContentUnit search limit");
     const clauses = ["content_units_fts MATCH ?", "unit.library_id = ?", "unit.deleted_at IS NULL"];
-    const params: unknown[] = [ftsQuery, this.libraryId];
+    params.push(ftsQuery, this.libraryId);
     appendContentUnitCanonicalVisibilityClause(clauses);
     Content.appendContentUnitAllowedSourceIdsClause(clauses, params, input.allowedSourceIds);
 
@@ -71,6 +74,7 @@ export class ContentUnitSearchRepo {
               work.title AS work_title
        FROM content_units_fts
        JOIN content_units unit ON unit.rowid = content_units_fts.rowid
+       ${joins.join("\n")}
        LEFT JOIN works work
          ON work.id = unit.work_id
         AND work.library_id = unit.library_id
@@ -89,7 +93,7 @@ export class ContentUnitSearchRepo {
    * units never receive vectors in a hybrid generation.
    */
   async listReadySourceIds(
-    input: Omit<Contract.SearchContentUnitsInput, "limit" | "query"> = {},
+    input: Omit<Contract.SearchContentUnitsInput, "indexId" | "limit" | "query"> = {},
   ): Promise<string[]> {
     const clauses = ["unit.library_id = ?", "unit.deleted_at IS NULL", "unit.state = 'ready'"];
     const params: unknown[] = [this.libraryId];
@@ -112,6 +116,8 @@ export class ContentUnitSearchRepo {
    */
   async findReadyByIds(input: {
     contentUnitIds: readonly string[];
+    /** Optional active Knowledge index generation pin. */
+    indexId?: string;
     sourceTypes?: readonly Contract.ContentUnitSourceType[];
     allowedSourceIds?: readonly string[];
     sourceId?: string;
@@ -122,6 +128,9 @@ export class ContentUnitSearchRepo {
     if (!Array.isArray(input.contentUnitIds)) {
       throw new Error("ContentUnit lookup ids must be an array");
     }
+    const joins: string[] = [];
+    const params: unknown[] = [];
+    Content.appendContentUnitPinnedIndexJoins(joins, params, input.indexId, this.libraryId);
     const contentUnitIds = [...new Set(input.contentUnitIds)];
     if (contentUnitIds.length === 0) return [];
     if (contentUnitIds.length > 1_000) {
@@ -135,7 +144,7 @@ export class ContentUnitSearchRepo {
       "unit.state = 'ready'",
       `unit.id IN (${contentUnitIds.map(() => "?").join(", ")})`,
     ];
-    const params: unknown[] = [this.libraryId, ...contentUnitIds];
+    params.push(this.libraryId, ...contentUnitIds);
     appendContentUnitCanonicalVisibilityClause(clauses);
     Content.appendContentUnitScopeClauses(clauses, params, input);
     const rows = await this.db.query<Contract.ContentUnitSearchStorageRow>(
@@ -147,6 +156,7 @@ export class ContentUnitSearchRepo {
               END AS excerpt,
               work.title AS work_title
        FROM content_units unit
+       ${joins.join("\n")}
        LEFT JOIN works work
          ON work.id = unit.work_id
         AND work.library_id = unit.library_id

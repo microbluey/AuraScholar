@@ -160,6 +160,12 @@ export interface SearchContentUnitsInput {
   limit?: number;
   /** Resolved once by the main process; never trusted from renderer input. */
   allowedSourceIds?: readonly string[];
+  /**
+   * Optional active Knowledge index generation. When supplied, search is
+   * restricted to ready entries pinned by this generation and matching the
+   * current ContentUnit hash.
+   */
+  indexId?: string;
   sourceTypes?: readonly ContentUnitSourceType[];
   sourceId?: string;
   workId?: string;

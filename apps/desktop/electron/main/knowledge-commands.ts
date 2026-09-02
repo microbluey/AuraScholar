@@ -135,10 +135,13 @@ async function searchKnowledgeContent(
   const fullTextLimit = knowledgeSearchCandidateLimit(input.limit);
   const languageIntent = parseRetrievalLanguageIntent(input.query);
 
-  if (!semanticSearch) {
+  if (!semanticSearch || input.includeContextOnly) {
     // Resolve and query under one read lease for the common FTS-only path.
     // The scope and rows therefore share the same database view while keeping
     // the immutable allowlist available for later diagnostic consumers.
+    // Context-only units are intentionally absent from hybrid generations, so
+    // an explicit context request must remain live full-text rather than mix a
+    // pinned ready corpus with unpinned diagnostic rows.
     const { rows: fullText } = await resolveKnowledgeCorpusAndFullText(
       input,
       dependencies,
@@ -155,7 +158,7 @@ async function searchKnowledgeContent(
   }
 
   const corpusScope = await resolveKnowledgeCorpusScope(input, dependencies);
-  const fullTextResults = async (): Promise<ContentUnitSearchResult[]> => {
+  const fullTextResults = async (indexId: string | null): Promise<ContentUnitSearchResult[]> => {
     if (!dependencies.inspect) {
       throw new Error("Main-process database query execution is unavailable");
     }
@@ -165,6 +168,7 @@ async function searchKnowledgeContent(
         query: input.query,
         limit: fullTextLimit,
         allowedSourceIds: corpusScope.allowedSourceIds,
+        ...(indexId ? { indexId } : {}),
         sourceTypes: input.sourceTypes,
         sourceId: input.sourceId,
         workId: input.workId,
@@ -184,7 +188,7 @@ async function searchKnowledgeContent(
     corpusScope.allowedSourceIds,
   );
   if (readySourceIds.length === 0) {
-    const ranked = rerankFullTextResults(await fullTextResults(), languageIntent);
+    const ranked = rerankFullTextResults(await fullTextResults(null), languageIntent);
     return {
       results: ranked.rows.slice(0, input.limit).map(toKnowledgeContentSearchResult),
       retrieval: toKnowledgeContentSearchRetrieval(
@@ -194,9 +198,14 @@ async function searchKnowledgeContent(
     };
   }
 
+  let fullTextIndexId: string | null | undefined;
   let fullTextPromise: Promise<ContentUnitSearchResult[]> | undefined;
-  const retrieveFullText = (): Promise<ContentUnitSearchResult[]> => {
-    fullTextPromise ??= fullTextResults();
+  const retrieveFullText = (indexId: string | null): Promise<ContentUnitSearchResult[]> => {
+    if (fullTextIndexId !== undefined && fullTextIndexId !== indexId) {
+      throw new Error("Knowledge retrieval channels selected different index generations");
+    }
+    fullTextIndexId = indexId;
+    fullTextPromise ??= fullTextResults(indexId);
     return fullTextPromise;
   };
   const hybrid = await semanticSearch.search({
@@ -206,19 +215,33 @@ async function searchKnowledgeContent(
       // Scope and limit are captured from the validated command input. This
       // callback deliberately returns IDs only; presentation rows are loaded
       // after fusion through the same canonical filters.
-      search: async () => (await retrieveFullText()).map(({ id }) => ({ contentUnitId: id })),
+      search: async ({ indexId }) =>
+        (await retrieveFullText(normalizePinnedIndexId(indexId ?? null))).map(({ id }) => ({
+          contentUnitId: id,
+        })),
     },
     libraryId: input.libraryId,
     limit: fullTextLimit,
     query: input.query,
   });
-  const fullText = await retrieveFullText();
+  const pinnedIndexId = normalizePinnedIndexId(hybrid.pinnedIndexId);
+  if (hybrid.mode === "hybrid" && pinnedIndexId === null) {
+    throw new Error("Hybrid retrieval did not identify its pinned index generation");
+  }
+  const fullText = await retrieveFullText(pinnedIndexId);
+  if (pinnedIndexId === null) {
+    const fullTextIds = new Set(fullText.map(({ id }) => id));
+    if (hybrid.candidates.some(({ contentUnitId }) => !fullTextIds.has(contentUnitId))) {
+      throw new Error("Unpinned retrieval produced candidates outside full-text results");
+    }
+  }
   const hydrated = await hydrateSemanticCandidates(
     hybrid.candidates.map(({ contentUnitId }) => contentUnitId),
     fullText,
     input,
     dependencies,
     corpusScope.allowedSourceIds,
+    pinnedIndexId,
   );
   const resultById = new Map<string, ContentUnitSearchResult>();
   for (const row of fullText) resultById.set(row.id, row);
@@ -282,6 +305,23 @@ function knowledgeSearchCandidateLimit(limit: number): number {
   return Math.min(MAX_KNOWLEDGE_SEARCH_LIMIT, limit * KNOWLEDGE_SEARCH_CANDIDATE_MULTIPLIER);
 }
 
+function normalizePinnedIndexId(indexId: string | null): string | null {
+  if (indexId === null) return null;
+  const normalized = indexId.trim();
+  if (!normalized || normalized.length > 512 || containsControlCharacter(normalized)) {
+    throw new Error("Knowledge retrieval index generation is invalid");
+  }
+  return normalized;
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 async function listReadySourceIds(
   input: ParsedSearchKnowledgeContentInput,
   dependencies: DataCommandDependencies,
@@ -308,6 +348,7 @@ async function hydrateSemanticCandidates(
   input: ParsedSearchKnowledgeContentInput,
   dependencies: DataCommandDependencies,
   allowedSourceIds: readonly string[],
+  indexId: string | null,
 ): Promise<ContentUnitSearchResult[]> {
   const fullTextIds = new Set(fullText.map(({ id }) => id));
   const missingIds = [...new Set(candidateIds.filter((id) => !fullTextIds.has(id)))];
@@ -319,6 +360,7 @@ async function hydrateSemanticCandidates(
     return new ContentUnitSearchRepo(database, input.libraryId).findReadyByIds({
       contentUnitIds: missingIds,
       allowedSourceIds,
+      ...(indexId ? { indexId } : {}),
       sourceTypes: input.sourceTypes,
       sourceId: input.sourceId,
       workId: input.workId,

@@ -1,5 +1,6 @@
 import {
   ContentUnitsRepo,
+  KnowledgeIndexesRepo,
   ResearchProjectsRepo,
   WorksRepo,
   type ContentUnit,
@@ -13,6 +14,7 @@ import type { DataCommandInput, DataCommandOutput } from "../data-command-contra
 import { DatabaseCoordinator } from "./database-coordinator";
 import { type DataCommandDependencies } from "./data-command-runtime";
 import { executeKnowledgeCommand } from "./knowledge-commands";
+import type { LocalSemanticSearchInput } from "./local-semantic-search-service";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -79,6 +81,13 @@ function contentUnit(id: string, overrides: Partial<ContentUnit> = {}): ContentU
     state: "ready",
     ...overrides,
   };
+}
+
+async function activateFullTextGeneration(): Promise<string> {
+  const indexes = new KnowledgeIndexesRepo(database, libraryId);
+  const index = await indexes.begin({ mode: "fulltext" });
+  await indexes.activate(index.id);
+  return index.id;
 }
 
 describe("Knowledge search data command", () => {
@@ -378,6 +387,32 @@ describe("Knowledge search data command", () => {
     expect(executeCalls).toBe(0);
   });
 
+  it("keeps explicit context-only retrieval on one live full-text corpus", async () => {
+    const contextOnly = contentUnit("content-unit:context-only-fulltext", {
+      sourceId: "annotation:context-only-fulltext",
+      sourceType: "annotation",
+      state: "context-only",
+      text: "Diagnostic context remains outside semantic generations.",
+    });
+    await units.upsertMany([contextOnly]);
+    const search = vi.fn();
+
+    const response = await executeKnowledgeCommand(
+      {
+        input: { includeContextOnly: true, libraryId, query: "diagnostic context" },
+        name: "knowledge.searchContent",
+      },
+      dependencies,
+      { semanticSearch: { search } },
+    );
+
+    expect(search).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      results: [{ id: contextOnly.id, state: "context-only" }],
+      retrieval: { mode: "fulltext", semanticStatus: "not-configured" },
+    });
+  });
+
   it("fuses trusted semantic candidates with FTS and hydrates semantic-only rows", async () => {
     const lexical = contentUnit("content-unit:hybrid-lexical", {
       contentHash: HASH_A,
@@ -390,12 +425,20 @@ describe("Knowledge search data command", () => {
       text: "A meaning-equivalent passage has no literal query term.",
     });
     await units.upsertMany([lexical, semanticOnly]);
+    const indexId = await activateFullTextGeneration();
+    const outsideGeneration = contentUnit("content-unit:hybrid-outside-generation", {
+      sourceId: "revision:hybrid-z-outside-generation",
+      text: "Grounded retrieval was extracted after the pinned generation.",
+    });
+    await units.upsertMany([outsideGeneration]);
     const search = vi.fn().mockResolvedValue({
       candidates: [
+        { contentUnitId: outsideGeneration.id, score: 0.06 },
         { contentUnitId: semanticOnly.id, score: 0.05 },
         { contentUnitId: lexical.id, score: 0.04 },
       ],
       mode: "hybrid",
+      pinnedIndexId: indexId,
       semanticStatus: "used",
     });
 
@@ -407,7 +450,7 @@ describe("Knowledge search data command", () => {
 
     expect(search).toHaveBeenCalledWith(
       expect.objectContaining({
-        allowedSourceIds: [lexical.sourceId, semanticOnly.sourceId],
+        allowedSourceIds: [lexical.sourceId, semanticOnly.sourceId, outsideGeneration.sourceId],
         libraryId,
         limit: 80,
         query: "grounded retrieval",
@@ -417,6 +460,72 @@ describe("Knowledge search data command", () => {
       results: [{ id: semanticOnly.id }, { id: lexical.id }],
       retrieval: { mode: "hybrid", semanticStatus: "used" },
     });
+    expect(response.results.map(({ id }) => id)).not.toContain(outsideGeneration.id);
+  });
+
+  it("rejects a semantic service that changes generation after starting FTS", async () => {
+    const indexed = contentUnit("content-unit:generation-consistency", {
+      sourceId: "revision:generation-consistency",
+      text: "Generation consistency must survive concurrent retrieval.",
+    });
+    await units.upsertMany([indexed]);
+    const indexId = await activateFullTextGeneration();
+    const search = vi.fn(async (searchInput: LocalSemanticSearchInput) => {
+      await searchInput.fullText.search({
+        allowedSourceIds: searchInput.allowedSourceIds,
+        ...(searchInput.corpusScope ? { corpusScope: searchInput.corpusScope } : {}),
+        indexId,
+        libraryId: searchInput.libraryId,
+        limit: searchInput.limit,
+        query: searchInput.query,
+      });
+      return {
+        candidates: [],
+        mode: "fulltext" as const,
+        pinnedIndexId: "index:different",
+        semanticStatus: "unavailable" as const,
+      };
+    });
+
+    await expect(
+      executeKnowledgeCommand(
+        {
+          input: { libraryId, query: "generation consistency" },
+          name: "knowledge.searchContent",
+        },
+        dependencies,
+        { semanticSearch: { search } },
+      ),
+    ).rejects.toThrow("selected different index generations");
+  });
+
+  it("rejects semantic-only candidates when no generation is pinned", async () => {
+    const lexical = contentUnit("content-unit:unpinned-fulltext", {
+      sourceId: "revision:unpinned-fulltext",
+      text: "The unpinned contract anchor is visible to full-text search.",
+    });
+    const semanticOnly = contentUnit("content-unit:unpinned-semantic-only", {
+      sourceId: "revision:unpinned-semantic-only",
+      text: "A meaning-equivalent passage without the literal query terms.",
+    });
+    await units.upsertMany([lexical, semanticOnly]);
+    const search = vi.fn().mockResolvedValue({
+      candidates: [{ contentUnitId: semanticOnly.id, score: 0.1 }],
+      mode: "fulltext",
+      pinnedIndexId: null,
+      semanticStatus: "unavailable",
+    });
+
+    await expect(
+      executeKnowledgeCommand(
+        {
+          input: { libraryId, query: "unpinned contract anchor" },
+          name: "knowledge.searchContent",
+        },
+        dependencies,
+        { semanticSearch: { search } },
+      ),
+    ).rejects.toThrow("Unpinned retrieval produced candidates outside full-text results");
   });
 
   it("freezes a Project source allowlist before FTS and semantic retrieval", async () => {
@@ -439,10 +548,12 @@ describe("Knowledge search data command", () => {
       text: "Outside project grounded retrieval",
     });
     await units.upsertMany([memberUnit, outsideUnit]);
+    const indexId = await activateFullTextGeneration();
 
     const search = vi.fn().mockResolvedValue({
       candidates: [{ contentUnitId: memberUnit.id, score: 0.1 }],
       mode: "hybrid",
+      pinnedIndexId: indexId,
       semanticStatus: "used",
     });
     const response = await executeKnowledgeCommand(
@@ -486,6 +597,7 @@ describe("Knowledge search data command", () => {
       text: "A method passage in English explains cross-validation.",
     });
     await units.upsertMany([sourceLanguage, requestedLanguage]);
+    const indexId = await activateFullTextGeneration();
     const search = vi.fn().mockResolvedValue({
       candidates: [
         {
@@ -500,6 +612,7 @@ describe("Knowledge search data command", () => {
         },
       ],
       mode: "hybrid",
+      pinnedIndexId: indexId,
       semanticStatus: "used",
     });
 
