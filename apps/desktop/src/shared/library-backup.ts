@@ -74,7 +74,6 @@ export interface LibraryBackupImportSummary {
 // document/evidence backups remain importable.
 export const LIBRARY_BACKUP_VERSION = EVIDENCE_SHELF_BACKUP_VERSION;
 const EMPTY_BACKUP_ID_MAP = new Map<string, string>();
-
 // Keep the executable import loop honest when new backup tables are added.
 assertSpatialCanvasBackupOrder(USER_BACKUP_TABLES);
 assertDocumentEvidenceBackupOrder(USER_BACKUP_TABLES);
@@ -126,9 +125,6 @@ export async function exportLibraryBackupJsonFromDatabase(
     }
     dump[table] = sanitizeBackupRows(table, rows);
   }
-  // Validate the fully scoped/sanitized graph before serializing it. This
-  // keeps exports fail-closed when a legacy merge or sync left Shelf rows
-  // pointing at a foreign or otherwise contradictory source.
   validateEvidenceShelfBackupGraph(dump, LIBRARY_BACKUP_VERSION);
   return JSON.stringify(
     {
