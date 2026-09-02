@@ -6,10 +6,10 @@ import { previewLibraryBackupJson } from "./sync";
 import {
   exportLibraryBackupJsonFromDatabase,
   importParsedLibraryBackupIntoDatabase,
+  LIBRARY_BACKUP_VERSION,
   parseLibraryBackupJson,
 } from "../shared/library-backup";
 import { SqliteSyncStorage } from "../shared/sqlite-sync-storage";
-
 type TestDatabase = Awaited<ReturnType<typeof createNodeDatabase>>;
 
 async function importLibraryBackupJsonIntoDatabase(text: string, db: Database, libraryId: string) {
@@ -384,7 +384,7 @@ describe("Library-scoped sync storage", () => {
 });
 
 describe("Library backup ownership", () => {
-  it("exports v5 with only the selected Library graph and explicit app-global rows", async () => {
+  it("exports the current format with only the selected Library graph and explicit app-global rows", async () => {
     const db = await createNodeDatabase(":memory:");
     await runMigrations(db);
     await addLibrary(db, "library-a");
@@ -438,7 +438,7 @@ describe("Library backup ownership", () => {
       version: number;
     };
 
-    expect(backup.version).toBe(5);
+    expect(backup.version).toBe(LIBRARY_BACKUP_VERSION);
     expect(backup.sourceLibraryId).toBe("library-a");
     expect(backup.tables.libraries?.map((row) => row.id)).toEqual(["library-a"]);
     expect(backup.tables.works?.map((row) => row.id)).toEqual(["work-a"]);

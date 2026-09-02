@@ -9,21 +9,30 @@ import {
   DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL,
   searchKnowledgeContent,
 } from "../../services/knowledge-search";
-import { knowledgeSearchReaderTarget } from "../../services/knowledge-search-navigation";
 import { describeSafeError } from "../../services/sensitive-text";
 import { knowledgeSearchScopeKey, knowledgeSearchScopeLabel } from "./knowledge-search-scope";
+import { KnowledgeSearchResultCard, sourceTypeLabel } from "./KnowledgeSearchResultCard";
+import { knowledgeResultHasShelfMembership } from "./knowledge-search-membership";
+import {
+  SOURCE_FILTERS,
+  knowledgeSearchRetrievalPresentation,
+  sourceTypesForKnowledgeSearchFilter,
+  type KnowledgeSearchSourceFilter,
+} from "./knowledge-search-presentation";
+
+export {
+  knowledgeSearchRetrievalPresentation,
+  sourceTypesForKnowledgeSearchFilter,
+} from "./knowledge-search-presentation";
+export { knowledgeResultHasShelfMembership } from "./knowledge-search-membership";
+export type {
+  KnowledgeSearchRetrievalPresentation,
+  KnowledgeSearchSourceFilter,
+} from "./knowledge-search-presentation";
 
 const SEARCH_DEBOUNCE_MS = 220;
 
 type SearchState = "error" | "idle" | "loading" | "ready";
-export type KnowledgeSearchSourceFilter = "all" | KnowledgeContentSearchResult["sourceType"];
-
-const SOURCE_FILTERS: readonly KnowledgeSearchSourceFilter[] = [
-  "all",
-  "pdf",
-  "annotation",
-  "evidence",
-];
 
 export interface KnowledgeSearchPanelProps {
   /** User-selected corpus scope; the main process resolves its immutable source snapshot. */
@@ -37,62 +46,32 @@ export interface KnowledgeSearchPanelProps {
     result: KnowledgeContentSearchResult,
     options: KnowledgeSearchOpenOptions,
   ) => void | Promise<void>;
+  onAddToShelf?: (
+    result: KnowledgeContentSearchResult,
+    options: KnowledgeSearchOpenOptions,
+  ) => void | Promise<void>;
+  /** Durable Shelf ids loaded by the owning Project workspace. */
+  shelvedContentUnitIds?: ReadonlySet<string>;
+  /** Stable source keys used when a backup regenerated disposable ContentUnit ids. */
+  shelvedSourceKeys?: ReadonlySet<string>;
+  /** Identity-only keys for previews whose text was explicitly redacted in backup transport. */
+  shelvedIdentityFallbackKeys?: ReadonlySet<string>;
 }
 
 export interface KnowledgeSearchOpenOptions {
   signal: AbortSignal;
 }
 
-export interface KnowledgeSearchRetrievalPresentation {
-  detail: string;
-  label: string;
-}
-
-export function knowledgeSearchRetrievalPresentation(
-  retrieval: KnowledgeContentSearchRetrieval,
-): KnowledgeSearchRetrievalPresentation {
-  const languagePreference = retrieval.languagePreference;
-  const languageLabel = languagePreference
-    ? languagePreference.requestedLanguage === "zh"
-      ? "中文"
-      : "英文"
-    : null;
-  if (retrieval.mode === "hybrid" && retrieval.semanticStatus === "used") {
-    return {
-      detail: languagePreference
-        ? languagePreference.applied
-          ? `搜索已索引的 PDF、批注和 Evidence。当前为本地关键词与语义融合检索；已按明确的${languageLabel}资料请求优先显示已标注语种的来源，其他候选仍保留；资料不会上传。`
-          : `搜索已索引的 PDF、批注和 Evidence。当前为本地关键词与语义融合检索；未找到可用于${languageLabel}偏好的语种标记，保留通常排序；资料不会上传。`
-        : "搜索已索引的 PDF、批注和 Evidence。当前为本地关键词与语义融合检索；资料不会上传。",
-      label: languagePreference?.applied ? `混合检索 · ${languageLabel}优先` : "混合检索",
-    };
-  }
-  if (retrieval.semanticStatus === "unavailable") {
-    return {
-      detail: languagePreference
-        ? languagePreference.applied
-          ? `搜索已索引的 PDF、批注和 Evidence。本地语义检索暂不可用，已回退到关键词检索；同时按明确的${languageLabel}资料请求优先显示已标注语种的来源；资料不会上传。`
-          : `搜索已索引的 PDF、批注和 Evidence。本地语义检索暂不可用，已回退到关键词检索；未找到可用于${languageLabel}偏好的语种标记；资料不会上传。`
-        : "搜索已索引的 PDF、批注和 Evidence。本地语义检索暂不可用，已回退到关键词检索；资料不会上传。",
-      label: languagePreference?.applied ? `关键词检索 · ${languageLabel}优先` : "关键词检索",
-    };
-  }
-  return {
-    detail: languagePreference
-      ? languagePreference.applied
-        ? `搜索已索引的 PDF、批注和 Evidence。当前为本地关键词检索；已按明确的${languageLabel}资料请求优先显示已标注语种的来源；资料不会上传。`
-        : `搜索已索引的 PDF、批注和 Evidence。当前为本地关键词检索；未找到可用于${languageLabel}偏好的语种标记；资料不会上传。`
-      : "搜索已索引的 PDF、批注和 Evidence。当前为本地关键词检索；未配置语义模型时不会上传资料。",
-    label: languagePreference?.applied ? `关键词检索 · ${languageLabel}优先` : "关键词检索",
-  };
-}
-
 export function KnowledgeSearchPanel({
   enabled,
+  onAddToShelf,
   onOpenResult,
   scope,
   scopeLabel,
   scopeRevision = "",
+  shelvedContentUnitIds,
+  shelvedIdentityFallbackKeys,
+  shelvedSourceKeys,
 }: KnowledgeSearchPanelProps) {
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<KnowledgeSearchSourceFilter>("all");
@@ -107,12 +86,29 @@ export function KnowledgeSearchPanel({
     controller: AbortController;
     id: string;
   } | null>(null);
+  const [adding, setAdding] = useState<{
+    contextKey: string;
+    controller: AbortController;
+    id: string;
+  } | null>(null);
+  const [optimisticShelf, setOptimisticShelf] = useState<{
+    ids: Set<string>;
+    membershipKey: string;
+  }>(() => ({ ids: new Set(), membershipKey: "" }));
   const [renderedContextKey, setRenderedContextKey] = useState<string | null>(null);
   const requestIdRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
   const openingControllerRef = useRef<AbortController | null>(null);
+  const addingControllerRef = useRef<AbortController | null>(null);
   const normalizedQuery = query.trim();
   const scopeKey = knowledgeSearchScopeKey(scope);
+  const shelvedMembershipKey = JSON.stringify({
+    contentUnitIds: shelvedContentUnitIds ? [...shelvedContentUnitIds].sort() : [],
+    identityFallbackKeys: shelvedIdentityFallbackKeys
+      ? [...shelvedIdentityFallbackKeys].sort()
+      : [],
+    sourceKeys: shelvedSourceKeys ? [...shelvedSourceKeys].sort() : [],
+  });
   const contextKey = JSON.stringify([
     scopeKey,
     scopeRevision,
@@ -126,12 +122,14 @@ export function KnowledgeSearchPanel({
   const visibleSearchState = currentContext ? searchState : "idle";
   const visibleError = currentContext ? error : null;
   const corpusLabel = knowledgeSearchScopeLabel(scope, scopeLabel);
+  const canAddToShelf = scope?.kind === "project" && onAddToShelf !== undefined;
 
   useEffect(() => {
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
     controllerRef.current?.abort();
     controllerRef.current = null;
+    addingControllerRef.current?.abort();
 
     if (!enabled || !normalizedQuery) return;
 
@@ -169,6 +167,7 @@ export function KnowledgeSearchPanel({
       window.clearTimeout(timeoutId);
       controller.abort();
       openingControllerRef.current?.abort();
+      addingControllerRef.current?.abort();
     };
   }, [contextKey, enabled, normalizedQuery, scope, sourceFilter]);
 
@@ -188,13 +187,55 @@ export function KnowledgeSearchPanel({
       }
     } finally {
       if (openingControllerRef.current === controller) openingControllerRef.current = null;
-      setOpening((current) =>
-        current?.contextKey === contextKey &&
-        current.id === result.id &&
-        current.controller === controller
-          ? null
-          : current,
-      );
+      if (!controller.signal.aborted && requestId === requestIdRef.current) {
+        setOpening((current) =>
+          current?.contextKey === contextKey &&
+          current.id === result.id &&
+          current.controller === controller
+            ? null
+            : current,
+        );
+      }
+    }
+  };
+
+  const addResultToShelf = async (result: KnowledgeContentSearchResult) => {
+    if (!canAddToShelf || !onAddToShelf) return;
+    const requestId = requestIdRef.current;
+    const controller = new AbortController();
+    addingControllerRef.current?.abort();
+    addingControllerRef.current = controller;
+    setAdding({ contextKey, controller, id: result.id });
+    try {
+      await onAddToShelf(result, { signal: controller.signal });
+      controller.signal.throwIfAborted();
+      if (requestId === requestIdRef.current) {
+        setOptimisticShelf((current) => {
+          const ids =
+            current.membershipKey === shelvedMembershipKey
+              ? new Set(current.ids)
+              : new Set<string>();
+          ids.add(result.id);
+          return { ids, membershipKey: shelvedMembershipKey };
+        });
+        setError(null);
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted && requestId === requestIdRef.current) {
+        setError(`加入 Evidence Shelf 失败:${describeSafeError(cause)}`);
+        setSearchState("error");
+      }
+    } finally {
+      if (addingControllerRef.current === controller) addingControllerRef.current = null;
+      if (!controller.signal.aborted && requestId === requestIdRef.current) {
+        setAdding((current) =>
+          current?.contextKey === contextKey &&
+          current.id === result.id &&
+          current.controller === controller
+            ? null
+            : current,
+        );
+      }
     }
   };
 
@@ -309,7 +350,23 @@ export function KnowledgeSearchPanel({
                     opening.id === result.id &&
                     !opening.controller.signal.aborted
                   }
+                  adding={
+                    adding?.contextKey === contextKey &&
+                    adding.id === result.id &&
+                    !adding.controller.signal.aborted
+                  }
                   result={result}
+                  shelved={
+                    (optimisticShelf.membershipKey === shelvedMembershipKey &&
+                      optimisticShelf.ids.has(result.id)) ||
+                    knowledgeResultHasShelfMembership(
+                      result,
+                      shelvedContentUnitIds,
+                      shelvedSourceKeys,
+                      shelvedIdentityFallbackKeys,
+                    )
+                  }
+                  onAddToShelf={canAddToShelf ? () => void addResultToShelf(result) : undefined}
                   onOpen={() => void openResult(result)}
                 />
               ))}
@@ -325,70 +382,7 @@ export function KnowledgeSearchPanel({
   );
 }
 
-export function KnowledgeSearchResultCard({
-  opening,
-  onOpen,
-  result,
-}: {
-  opening: boolean;
-  onOpen: () => void;
-  result: KnowledgeContentSearchResult;
-}) {
-  const target = knowledgeSearchReaderTarget(result);
-  const headingPath = result.headingPath?.filter(Boolean).join(" › ");
-  const excerpt = result.excerpt.trim() || result.text.trim();
-  const workTitle = result.workTitle?.trim();
-
-  return (
-    <article className="knowledge-search-result" data-knowledge-search-result={result.id}>
-      <header>
-        <div>
-          <span className="knowledge-search-result__source">
-            {sourceTypeLabel(result.sourceType)}
-          </span>
-          {target ? <span>第 {target.pageIndex + 1} 页</span> : <span>原文定位不可用</span>}
-        </div>
-        {headingPath ? (
-          <span className="knowledge-search-result__heading">{headingPath}</span>
-        ) : null}
-      </header>
-      {workTitle ? <h3 title={workTitle}>{workTitle}</h3> : null}
-      <p>{excerpt}</p>
-      <footer>
-        {target ? (
-          <button
-            type="button"
-            onClick={onOpen}
-            disabled={opening}
-            aria-busy={opening ? "true" : undefined}
-          >
-            {opening ? "正在打开…" : `定位到第 ${target.pageIndex + 1} 页`}
-          </button>
-        ) : (
-          <span>此片段没有可用的 PDF 锚点。</span>
-        )}
-      </footer>
-    </article>
-  );
-}
-
-export function sourceTypesForKnowledgeSearchFilter(
-  sourceFilter: KnowledgeSearchSourceFilter,
-): KnowledgeContentSearchResult["sourceType"][] | undefined {
-  return sourceFilter === "all" ? undefined : [sourceFilter];
-}
-
+export { KnowledgeSearchResultCard } from "./KnowledgeSearchResultCard";
 function isKnowledgeSearchSourceFilter(value: string): value is KnowledgeSearchSourceFilter {
   return SOURCE_FILTERS.includes(value as KnowledgeSearchSourceFilter);
-}
-
-function sourceTypeLabel(sourceType: KnowledgeContentSearchResult["sourceType"]): string {
-  switch (sourceType) {
-    case "pdf":
-      return "PDF 正文";
-    case "annotation":
-      return "批注";
-    case "evidence":
-      return "Evidence";
-  }
 }

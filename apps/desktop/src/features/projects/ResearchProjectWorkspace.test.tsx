@@ -47,6 +47,8 @@ describe("ResearchProjectWorkspace knowledge search", () => {
     expect(markup).toContain("项目 · 可解释检索");
     expect(markup).toContain('aria-label="当前检索范围：项目 · 可解释检索"');
     expect(markup).toContain('id="knowledge-search-input"');
+    expect(markup).toContain("待核验证据");
+    expect(markup).toContain("项目 · 可解释检索 · 暂存检索结果");
   });
 
   it("keeps the Project scope visible but disables durable search in browser preview", () => {
@@ -55,5 +57,6 @@ describe("ResearchProjectWorkspace knowledge search", () => {
     expect(markup).toContain("项目 · 可解释检索");
     expect(markup).toContain("内容检索使用设备上的持久化索引");
     expect(markup).not.toContain('id="knowledge-search-input"');
+    expect(markup).toContain("浏览器预览不会写入或读取持久化 Evidence Shelf");
   });
 });

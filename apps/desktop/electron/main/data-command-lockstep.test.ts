@@ -19,6 +19,7 @@ describe("typed data command lockstep", () => {
     const discoverySiteContract = source("electron/discovery-site-command-contract.ts");
     const envelope = source("electron/main/data-command-envelope.ts");
     const evidenceContract = source("electron/evidence-command-contract.ts");
+    const evidenceShelfContract = source("electron/evidence-shelf-command-contract.ts");
     const libraryIngestContract = source("electron/library-ingest-command-contract.ts");
     const libraryOaContract = source("electron/library-oa-command-contract.ts");
     const libraryReadContract = source("electron/library-read-command-contract.ts");
@@ -45,6 +46,7 @@ describe("typed data command lockstep", () => {
       discoveryLibraryStatusContract,
       discoverySiteContract,
       evidenceContract,
+      evidenceShelfContract,
       libraryIngestContract,
       libraryOaContract,
       libraryReadContract,
@@ -73,7 +75,7 @@ describe("typed data command lockstep", () => {
 
     expect(new Set(contractNames).size).toBe(contractNames.length);
     expect(contract).toMatch(
-      /extends\s+AiDataCommandMap,\s+AnnotationRecoveryDataCommandMap,\s+CanvasDataCommandMap,\s+CitationGraphDataCommandMap,\s+DiscoveryLibraryStatusDataCommandMap,\s+DiscoverySiteDataCommandMap,\s+EvidenceDataCommandMap,\s+LibraryIngestDataCommandMap,\s+LibraryOaDataCommandMap,\s+LibraryReadDataCommandMap,\s+ReferenceImportDataCommandMap,\s+ReaderDataCommandMap,\s+SavedSearchDataCommandMap,\s+ScholarlyDataCommandMap,\s+SentinelReadDataCommandMap,\s+SentinelRunDataCommandMap,\s+SnippetDataCommandMap,\s+SyncDataCommandMap,\s+TranslationCacheDataCommandMap,\s+TranslationProviderDataCommandMap,\s+WorkMetadataDataCommandMap/,
+      /extends\s+AiDataCommandMap,\s+AnnotationRecoveryDataCommandMap,\s+CanvasDataCommandMap,\s+CitationGraphDataCommandMap,\s+DiscoveryLibraryStatusDataCommandMap,\s+DiscoverySiteDataCommandMap,\s+EvidenceDataCommandMap,\s+EvidenceShelfDataCommandMap,\s+LibraryIngestDataCommandMap,\s+LibraryOaDataCommandMap,\s+LibraryReadDataCommandMap,\s+ReferenceImportDataCommandMap,\s+ReaderDataCommandMap,\s+SavedSearchDataCommandMap,\s+ScholarlyDataCommandMap,\s+SentinelReadDataCommandMap,\s+SentinelRunDataCommandMap,\s+SnippetDataCommandMap,\s+SyncDataCommandMap,\s+TranslationCacheDataCommandMap,\s+TranslationProviderDataCommandMap,\s+WorkMetadataDataCommandMap/,
     );
     expect(dispatchedNames).toEqual(contractNames);
     expect(envelopeNames).toEqual(contractNames);

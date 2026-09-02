@@ -20,7 +20,7 @@ export const smokeSettingsBackupValidation = String.raw`          const invalidB
           const futureVersionBackupFile = new File(
             [
               JSON.stringify({
-                version: 5,
+                version: 7,
                 exportedAt: new Date(now).toISOString(),
                 tables: {
                   works: [
@@ -48,7 +48,7 @@ export const smokeSettingsBackupValidation = String.raw`          const invalidB
           await waitFor(
             () =>
               bodyIncludes("导入失败，当前库未写入任何备份数据，可重新导入") &&
-              bodyIncludes("备份文件版本 5 高于当前支持的版本 4") &&
+              bodyIncludes("备份文件版本 7 高于当前支持的版本 6") &&
               bodyIncludes("请先升级 AuraScholar 后再导入"),
             3_000
           );
@@ -58,7 +58,7 @@ export const smokeSettingsBackupValidation = String.raw`          const invalidB
           );
           settingsBackupImportRejectsFutureVersionVisible =
             Number(futureVersionRows[0]?.n ?? 0) === 0 &&
-            bodyIncludes("备份文件版本 5 高于当前支持的版本 4") &&
+            bodyIncludes("备份文件版本 7 高于当前支持的版本 6") &&
             bodyIncludes("请先升级 AuraScholar 后再导入");
 
           location.hash = "#/library";

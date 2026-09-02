@@ -25,10 +25,10 @@ export {
   projectAssets,
   projectEvidence,
 } from "./document-evidence-schema.js";
+export { evidenceShelfItems } from "./evidence-shelf-schema.js";
 export * from "./schema-knowledge.js";
 // Convention: UUIDv7 string PKs (time-ordered, sync-friendly); timestamps are epoch milliseconds.
 // deleted_at is a soft-delete tombstone required by the sync engine — hard deletes only happen during snapshot compaction.
-
 const id = () => text("id").primaryKey();
 const createdAt = () => integer("created_at").notNull();
 const updatedAt = () => integer("updated_at").notNull();

@@ -13,6 +13,7 @@ import type { CitationGraphDataCommandMap } from "./citation-graph-command-contr
 import type { DiscoveryLibraryStatusDataCommandMap } from "./discovery-library-status-command-contract";
 import type { DiscoverySiteDataCommandMap } from "./discovery-site-command-contract";
 import type { EvidenceDataCommandMap } from "./evidence-command-contract";
+import type { EvidenceShelfDataCommandMap } from "./evidence-shelf-command-contract";
 import type * as KnowledgeContract from "./knowledge-command-contract";
 import type { LibraryIngestDataCommandMap } from "./library-ingest-command-contract";
 import type { LibraryOaDataCommandMap } from "./library-oa-command-contract";
@@ -42,6 +43,7 @@ export type {
   SaveTextEvidenceCommandInput,
   SaveTextEvidenceCommandResult,
 } from "./evidence-command-contract";
+export type * from "./evidence-shelf-command-contract";
 
 export type * from "./annotation-recovery-command-contract";
 export type * from "./ai-command-contract";
@@ -287,6 +289,7 @@ export interface DataCommandMap
     DiscoveryLibraryStatusDataCommandMap,
     DiscoverySiteDataCommandMap,
     EvidenceDataCommandMap,
+    EvidenceShelfDataCommandMap,
     LibraryIngestDataCommandMap,
     LibraryOaDataCommandMap,
     LibraryReadDataCommandMap,

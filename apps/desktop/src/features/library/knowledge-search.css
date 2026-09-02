@@ -242,6 +242,26 @@
   cursor: pointer;
 }
 
+.knowledge-search-result__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.knowledge-search-result__shelf-action {
+  border-color: color-mix(in srgb, var(--color-text-muted) 34%, var(--color-border)) !important;
+  background: var(--color-surface-raised) !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.knowledge-search-result__shelf-action:hover:not(:disabled),
+.knowledge-search-result__shelf-action:focus-visible:not(:disabled) {
+  border-color: var(--color-accent) !important;
+  color: var(--color-accent-strong) !important;
+}
+
 .knowledge-search-result > footer button:hover:not(:disabled),
 .knowledge-search-result > footer button:focus-visible:not(:disabled) {
   border-color: var(--color-accent);

@@ -81,6 +81,26 @@ export type {
   SearchEvidenceInput,
   SearchEvidenceResult,
 } from "./repos/evidence-inbox.js";
+export { EvidenceShelfRepo, EvidenceShelfScopeError } from "./repos/evidence-shelf.js";
+export type {
+  EvidenceShelfItem,
+  EvidenceShelfListInput,
+  EvidenceShelfRemoveInput,
+  EvidenceShelfResolveForSaveInput,
+  EvidenceShelfResolveForSaveResult,
+  EvidenceShelfScope,
+  EvidenceShelfStageInput,
+  EvidenceShelfStageResult,
+  EvidenceShelfStatus,
+} from "./repos/evidence-shelf.js";
+export {
+  assertEvidenceShelfListBudget,
+  MAX_EVIDENCE_SHELF_LIST_BYTES,
+  MAX_EVIDENCE_SHELF_LIST_ROW_OVERHEAD_BYTES,
+  MAX_EVIDENCE_SHELF_LIST_ROWS,
+  readEvidenceShelfListBudget,
+} from "./repos/evidence-shelf-bounds.js";
+export type { EvidenceShelfListBudget } from "./repos/evidence-shelf-bounds.js";
 export {
   CONTENT_UNIT_SOURCE_TYPES,
   CONTENT_UNIT_STATES,

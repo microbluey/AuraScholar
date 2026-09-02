@@ -48,6 +48,7 @@ import { executeResearchProjectCommand } from "./research-project-commands";
 import { executeEvidenceCommand } from "./evidence-commands";
 import { executeEvidenceInboxCommand } from "./evidence-inbox-commands";
 import { executeKnowledgeCommand } from "./knowledge-commands";
+import { executeEvidenceShelfCommand } from "./evidence-shelf-commands";
 import { localSemanticIndexService } from "./local-semantic-index-runtime";
 import { localSemanticSearchService } from "./local-semantic-search-runtime";
 import { executeSavedSearchCommand } from "./saved-search-commands";
@@ -162,6 +163,12 @@ export async function executeDataCommand(
     case "evidence.softDelete":
     case "evidence.restore":
       return executeEvidenceInboxCommand(envelope, dependencies);
+    case "evidenceShelf.clear":
+    case "evidenceShelf.list":
+    case "evidenceShelf.remove":
+    case "evidenceShelf.resolveForSave":
+    case "evidenceShelf.stage":
+      return executeEvidenceShelfCommand(envelope, dependencies);
     case "knowledge.buildSemanticIndex":
     case "knowledge.getContentStats":
     case "knowledge.getSemanticIndexStatus":

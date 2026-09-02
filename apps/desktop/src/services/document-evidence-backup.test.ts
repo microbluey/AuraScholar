@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   exportLibraryBackupJsonFromDatabase,
   importParsedLibraryBackupIntoDatabase,
+  LIBRARY_BACKUP_VERSION,
   parseLibraryBackupJson,
 } from "../shared/library-backup";
 import { previewLibraryBackupJson } from "./sync";
@@ -333,7 +334,7 @@ describe("Document/Evidence Library backup", () => {
     const backup = JSON.parse(text) as { tables: BackupTables; version: number };
     const tableNames = Object.keys(backup.tables);
 
-    expect(backup.version).toBe(5);
+    expect(backup.version).toBe(LIBRARY_BACKUP_VERSION);
     for (let index = 1; index < KNOWLEDGE_TABLES.length; index += 1) {
       expect(tableNames.indexOf(KNOWLEDGE_TABLES[index - 1]!)).toBeLessThan(
         tableNames.indexOf(KNOWLEDGE_TABLES[index]!),
