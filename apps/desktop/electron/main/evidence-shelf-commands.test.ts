@@ -138,6 +138,50 @@ function stageInput(
   };
 }
 
+async function insertActiveShelfRows(count: number, previewText: string): Promise<void> {
+  if (!Number.isSafeInteger(count) || count < 1) throw new Error("invalid Shelf test row count");
+  await fixture.database.run(
+    `WITH RECURSIVE seq(n) AS (
+       SELECT 0
+       UNION ALL
+       SELECT n + 1 FROM seq WHERE n + 1 < ?
+     )
+     INSERT INTO evidence_shelf_items
+       (id, library_id, project_id, work_id, asset_id, revision_id,
+        anchor_snapshot_json, preview_payload_json, source_content_hash,
+        status, created_at, updated_at, deleted_at)
+     SELECT
+       'shelf:budget:' || printf('%04d', n), ?, ?, ?, ?, ?,
+       json_object('kind', 'pdf', 'pageIndex', n, 'revisionId', ?, 'version', 1),
+       json_object(
+         'contentUnitId', 'content-unit:budget:' || n,
+         'excerpt', ?,
+         'headingPath', 'Budget',
+         'language', 'en',
+         'ordinal', n,
+         'sourceId', ?,
+         'sourceType', 'pdf',
+         'text', ?,
+         'tokenCount', 1,
+         'workTitle', 'Budget fixture'
+       ),
+       printf('%064x', n + 1), 'staged', 10 + n, 10 + n, NULL
+     FROM seq`,
+    [
+      count,
+      fixture.libraryId,
+      fixture.projectId,
+      fixture.contentUnit.workId,
+      fixture.contentUnit.assetId,
+      fixture.contentUnit.revisionId,
+      fixture.contentUnit.revisionId,
+      previewText,
+      fixture.contentUnit.revisionId,
+      previewText,
+    ],
+  );
+}
+
 function command<K extends keyof import("../data-command-contract").DataCommandMap>(
   name: K,
   input: DataCommandInput<K>,
@@ -451,6 +495,52 @@ describe("Evidence Shelf main-process commands", () => {
       `Evidence shelf output is limited to ${MAX_EVIDENCE_SHELF_OUTPUT_BYTES} bytes`,
     );
     expect(shelfSelectCalls).toBe(0);
+  });
+
+  it("rolls back a stage that would exceed the active row budget", async () => {
+    await insertActiveShelfRows(MAX_EVIDENCE_SHELF_ROWS, "small preview");
+
+    await expect(command("evidenceShelf.stage", stageInput())).rejects.toThrow(
+      `Evidence shelf items are limited to ${MAX_EVIDENCE_SHELF_ROWS}`,
+    );
+
+    const activeRows = await fixture.database.query<{ count: number }>(
+      `SELECT COUNT(*) AS count
+         FROM evidence_shelf_items
+        WHERE library_id = ? AND project_id = ? AND deleted_at IS NULL`,
+      [fixture.libraryId, fixture.projectId],
+    );
+    expect(activeRows[0]?.count).toBe(MAX_EVIDENCE_SHELF_ROWS);
+    expect(
+      await fixture.database.query(
+        `SELECT id FROM evidence_shelf_items
+          WHERE library_id = ? AND project_id = ? AND source_content_hash = ?`,
+        [fixture.libraryId, fixture.projectId, HASH_A],
+      ),
+    ).toEqual([]);
+  });
+
+  it("rolls back a stage that would exceed the aggregate byte budget", async () => {
+    await insertActiveShelfRows(100, "x".repeat(80_000));
+
+    await expect(command("evidenceShelf.stage", stageInput())).rejects.toThrow(
+      `Evidence shelf output is limited to ${MAX_EVIDENCE_SHELF_OUTPUT_BYTES} bytes`,
+    );
+
+    const activeRows = await fixture.database.query<{ count: number }>(
+      `SELECT COUNT(*) AS count
+         FROM evidence_shelf_items
+        WHERE library_id = ? AND project_id = ? AND deleted_at IS NULL`,
+      [fixture.libraryId, fixture.projectId],
+    );
+    expect(activeRows[0]?.count).toBe(100);
+    expect(
+      await fixture.database.query(
+        `SELECT id FROM evidence_shelf_items
+          WHERE library_id = ? AND project_id = ? AND source_content_hash = ?`,
+        [fixture.libraryId, fixture.projectId, HASH_A],
+      ),
+    ).toEqual([]);
   });
 
   it("promotes a staged PDF through the typed command and consumes it", async () => {

@@ -39,6 +39,7 @@ import {
   prepareBackupRowForImport as prepareBackupRowForImportImpl,
   type BackupImportIdMaps,
 } from "./library-backup-import-row";
+import { createEvidenceShelfBudgetTracker } from "./library-backup-budget";
 
 export interface LibraryBackupTablePreview {
   name: string;
@@ -157,13 +158,7 @@ export function previewLibraryBackupJson(text: string): LibraryBackupPreview {
   return previewParsedLibraryBackup(parseLibraryBackupJson(text));
 }
 
-/**
- * Imports a payload that has already passed parse/graph validation.
- *
- * This is the transaction core: the caller must invoke it inside one exclusive
- * database transaction. Target validation, ID-map construction, conflict
- * checks, and every write occur here, without opening or closing a transaction.
- */
+/** Imports a parsed, graph-validated backup inside the caller's transaction. */
 export async function importParsedLibraryBackupIntoDatabase(
   db: Database,
   backup: LibraryBackupFile,
@@ -177,6 +172,7 @@ export async function importParsedLibraryBackupIntoDatabase(
   let redirectedRows = 0;
   let skipped = 0;
   let skippedRuntimeRows = 0;
+  const shelfBudget = createEvidenceShelfBudgetTracker();
 
   const idMaps = await buildBackupImportIdMaps(db, backup, libraryId);
   for (const table of USER_BACKUP_TABLES) {
@@ -197,6 +193,7 @@ export async function importParsedLibraryBackupIntoDatabase(
         if (skippedRuntimeRow) skippedRuntimeRows += 1;
         continue;
       }
+      if (table === "evidence_shelf_items") shelfBudget.add(importRow);
       const insertColumns = columns.filter((column) => Object.hasOwn(importRow, column));
       if (insertColumns.length === 0) {
         tableSkipped += 1;
@@ -235,6 +232,9 @@ export async function importParsedLibraryBackupIntoDatabase(
     maps: knowledgeIdMaps(idMaps.generated, idMaps.works),
     version: backup.version,
   });
+
+  // Keep an oversized Shelf import from making subsequent bounded reads fail.
+  await shelfBudget.assert(db, libraryId);
 
   return {
     deactivatedAttachments,
