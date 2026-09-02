@@ -105,7 +105,7 @@ export async function exportLibraryBackupJsonFromDatabase(
   db: Database,
   libraryId: string,
 ): Promise<string> {
-  const dump: Record<string, unknown[]> = {};
+  const dump: LibraryBackupFile["tables"] = {};
   for (const table of USER_BACKUP_TABLES) {
     let rows: Record<string, unknown>[];
     if (table === "libraries") {
@@ -126,6 +126,10 @@ export async function exportLibraryBackupJsonFromDatabase(
     }
     dump[table] = sanitizeBackupRows(table, rows);
   }
+  // Validate the fully scoped/sanitized graph before serializing it. This
+  // keeps exports fail-closed when a legacy merge or sync left Shelf rows
+  // pointing at a foreign or otherwise contradictory source.
+  validateEvidenceShelfBackupGraph(dump, LIBRARY_BACKUP_VERSION);
   return JSON.stringify(
     {
       version: LIBRARY_BACKUP_VERSION,
