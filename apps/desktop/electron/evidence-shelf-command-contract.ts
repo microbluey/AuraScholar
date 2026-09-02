@@ -1,4 +1,5 @@
 import type { ContentUnitSourceType } from "@aurascholar/db/repos/knowledge";
+import type { EvidenceKind, EvidenceRecord } from "@aurascholar/db/repos/evidence";
 
 /** A Shelf is deliberately Project-local; a Library-wide Shelf is not valid. */
 export interface EvidenceShelfScope {
@@ -103,6 +104,24 @@ export interface ResolveEvidenceShelfForSaveCommandResult {
   stale: boolean;
 }
 
+export interface PromoteEvidenceShelfCommandInput {
+  expectedUpdatedAt: number;
+  evidenceKind: EvidenceKind;
+  itemId: string;
+  libraryId: string;
+  noteMd?: string | null;
+  projectId: string;
+  tags?: string[];
+  title?: string | null;
+}
+
+export interface PromoteEvidenceShelfCommandResult {
+  created: boolean;
+  evidence: EvidenceRecord;
+  projectMembershipAdded: boolean;
+  removedFromShelf: true;
+}
+
 export interface EvidenceShelfDataCommandMap {
   "evidenceShelf.clear": {
     input: ClearEvidenceShelfCommandInput;
@@ -119,6 +138,10 @@ export interface EvidenceShelfDataCommandMap {
   "evidenceShelf.resolveForSave": {
     input: ResolveEvidenceShelfForSaveCommandInput;
     output: ResolveEvidenceShelfForSaveCommandResult;
+  };
+  "evidenceShelf.promote": {
+    input: PromoteEvidenceShelfCommandInput;
+    output: PromoteEvidenceShelfCommandResult;
   };
   "evidenceShelf.stage": {
     input: StageEvidenceShelfCommandInput;

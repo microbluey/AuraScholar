@@ -88,6 +88,15 @@
   color: var(--color-danger);
 }
 
+.evidence-shelf__inline-notice {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 0;
+  color: var(--color-success, var(--color-accent-strong));
+  font-size: 12px;
+}
+
 .evidence-shelf__spin {
   animation: research-project-spin 900ms linear infinite;
 }
@@ -183,6 +192,152 @@
   background: var(--color-surface-raised);
 }
 
+.evidence-shelf-promote-modal {
+  display: grid;
+  gap: 14px;
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+}
+
+.evidence-shelf-promote-modal__header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.evidence-shelf-promote-modal__header > span {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  border-radius: 9px;
+}
+
+.evidence-shelf-promote-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.evidence-shelf-promote-modal__header p {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-shelf-promote-modal__quote {
+  display: -webkit-box;
+  max-height: 92px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: hidden;
+  border-left: 3px solid color-mix(in srgb, var(--color-accent) 62%, transparent);
+  border-radius: 4px 10px 10px 4px;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  font:
+    12px/1.55 ui-serif,
+    Georgia,
+    serif;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.evidence-shelf-promote-modal__kinds {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.evidence-shelf-promote-modal__kinds legend,
+.evidence-shelf-promote-modal__field > span {
+  margin-bottom: 7px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.evidence-shelf-promote-modal__kinds > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.evidence-shelf-promote-modal__kinds button {
+  min-height: 28px;
+  padding: 0 9px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.evidence-shelf-promote-modal__kinds button:hover,
+.evidence-shelf-promote-modal__kinds button.is-selected {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-raised));
+  border-color: color-mix(in srgb, var(--color-accent) 48%, var(--color-border));
+}
+
+.evidence-shelf-promote-modal__field {
+  display: grid;
+}
+
+.evidence-shelf-promote-modal__field > span {
+  display: block;
+}
+
+.evidence-shelf-promote-modal__field small {
+  font-weight: 500;
+}
+
+.evidence-shelf-promote-modal__field input,
+.evidence-shelf-promote-modal__field textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: 9px;
+  resize: vertical;
+}
+
+.evidence-shelf-promote-modal__field input:focus,
+.evidence-shelf-promote-modal__field textarea:focus {
+  border-color: var(--color-accent);
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--color-accent-subtle);
+}
+
+.evidence-shelf-promote-modal__error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.evidence-shelf-promote-modal__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.evidence-shelf-promote-modal__spin {
+  animation: research-project-spin 900ms linear infinite;
+}
+
 @media (max-width: 640px) {
   .evidence-shelf__header,
   .evidence-shelf-item {
@@ -190,13 +345,18 @@
   }
 
   .evidence-shelf__clear,
-  .evidence-shelf-item__actions,
-  .evidence-shelf-item__actions button:first-child {
+  .evidence-shelf-item__actions {
     width: 100%;
   }
 
   .evidence-shelf-item__actions {
     justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .evidence-shelf-item__actions button:not(:last-child) {
+    min-width: 0;
+    flex: 1 1 140px;
   }
 
   .evidence-shelf-item__actions button:last-child {

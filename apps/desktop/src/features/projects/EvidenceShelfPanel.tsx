@@ -13,12 +13,21 @@ import {
   evidenceShelfService,
   knowledgeResultFromEvidenceShelfItem,
   type EvidenceShelfItem,
+  type EvidenceShelfPromotionDraft,
   type EvidenceShelfService,
 } from "../../services/evidence-shelf";
 import type { KnowledgeSearchOpenOptions } from "../library/KnowledgeSearchPanel";
 import { sourceTypeLabel } from "../library/KnowledgeSearchResultCard";
+import { EvidenceShelfPromoteDialog } from "./EvidenceShelfPromoteDialog";
 
 type ShelfPhase = "error" | "loading" | "ready";
+
+interface PromoteSelection {
+  item: EvidenceShelfItem;
+  projectId: string;
+  refreshToken: string | number;
+  service: EvidenceShelfService;
+}
 
 export interface EvidenceShelfPanelProps {
   enabled: boolean;
@@ -46,12 +55,23 @@ export function EvidenceShelfPanel({
   const [items, setItems] = useState<EvidenceShelfItem[]>([]);
   const [phase, setPhase] = useState<ShelfPhase>("loading");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [promoteSelection, setPromoteSelection] = useState<PromoteSelection | null>(null);
   const itemsRef = useRef<EvidenceShelfItem[]>([]);
   const listControllerRef = useRef<AbortController | null>(null);
   const actionControllerRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
   const clearing = busyId === "clear";
+  const activePromoteSelection =
+    promoteSelection &&
+    promoteSelection.projectId === projectId &&
+    Object.is(promoteSelection.refreshToken, refreshToken) &&
+    promoteSelection.service === service &&
+    enabled &&
+    service.mode === "desktop"
+      ? promoteSelection
+      : null;
   const updateItems = useCallback(
     (nextItems: EvidenceShelfItem[]) => {
       itemsRef.current = nextItems;
@@ -65,7 +85,7 @@ export function EvidenceShelfPanel({
     requestIdRef.current += 1;
     const requestId = requestIdRef.current;
     listControllerRef.current?.abort();
-    abortController(actionControllerRef);
+    abortController(actionControllerRef, setBusyId);
     const controller = new AbortController();
     listControllerRef.current = controller;
     if (!enabled || service.mode !== "desktop") {
@@ -83,19 +103,24 @@ export function EvidenceShelfPanel({
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted || requestId !== requestIdRef.current) return;
+        itemsRef.current = [];
         setItems([]);
+        onItemsChange?.([]);
         setError(describeShelfError(cause));
         setPhase("error");
       });
     return () => {
       controller.abort();
       if (listControllerRef.current === controller) listControllerRef.current = null;
-      if (requestId === requestIdRef.current) abortController(actionControllerRef);
+      if (requestId === requestIdRef.current) {
+        abortController(actionControllerRef, setBusyId);
+      }
     };
   }, [enabled, onItemsChange, projectId, refreshToken, service, updateItems]);
 
   const removeItem = async (item: EvidenceShelfItem) => {
     if (!enabled || service.mode !== "desktop") return;
+    setNotice(null);
     const controller = beginAction(setBusyId, item.id, actionControllerRef);
     try {
       const removed = await service.remove(projectId, item.id, item.updatedAt, {
@@ -112,8 +137,52 @@ export function EvidenceShelfPanel({
     }
   };
 
+  const promoteShelfItem = async (item: EvidenceShelfItem, draft: EvidenceShelfPromotionDraft) => {
+    if (!enabled || service.mode !== "desktop") return;
+    const controller = beginAction(setBusyId, item.id, actionControllerRef);
+    setError(null);
+    setNotice(null);
+    try {
+      // Resolve the immutable revision/hash immediately before promotion. The
+      // command repeats this check and uses updatedAt as its final CAS guard.
+      const resolved = await service.resolveForSave(projectId, item, {
+        signal: controller.signal,
+      });
+      controller.signal.throwIfAborted();
+      if (resolved.stale || !resolved.item) {
+        const staleItem = resolved.item ?? { ...item, isStale: true, status: "stale" as const };
+        updateItems(
+          itemsRef.current.map((candidate) =>
+            candidate.id === item.id ? { ...candidate, ...staleItem, status: "stale" } : candidate,
+          ),
+        );
+        setPromoteSelection((current) =>
+          current?.item.id === item.id && current.projectId === projectId ? null : current,
+        );
+        throw new Error("来源修订或内容已变化，请重新检索并加入 Shelf");
+      }
+      const promoted = await service.promote(projectId, resolved.item, draft, {
+        signal: controller.signal,
+      });
+      controller.signal.throwIfAborted();
+      if (promoted.removedFromShelf !== true)
+        throw new Error("Evidence 保存未完成，Shelf 项目已保留");
+      updateItems(itemsRef.current.filter((candidate) => candidate.id !== item.id));
+      setPromoteSelection((current) =>
+        current?.item.id === item.id && current.projectId === projectId ? null : current,
+      );
+      setNotice("已核验并保存为 Evidence");
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(describeShelfError(cause));
+      throw cause;
+    } finally {
+      finishAction(controller, setBusyId, actionControllerRef);
+    }
+  };
+
   const clearShelf = async () => {
     if (!enabled || service.mode !== "desktop" || clearing) return;
+    setNotice(null);
     const controller = beginAction(setBusyId, "clear", actionControllerRef);
     try {
       await service.clear(projectId, { signal: controller.signal });
@@ -201,6 +270,7 @@ export function EvidenceShelfPanel({
               key={item.id}
               busy={busyId === item.id}
               item={item}
+              onPromote={() => setPromoteSelection({ item, projectId, refreshToken, service })}
               onOpen={() => void openItem(item)}
               onRemove={() => void removeItem(item)}
             />
@@ -212,6 +282,20 @@ export function EvidenceShelfPanel({
           {error}
         </p>
       ) : null}
+      {notice ? (
+        <p className="evidence-shelf__inline-notice" role="status" aria-live="polite">
+          {notice}
+        </p>
+      ) : null}
+      {activePromoteSelection ? (
+        <EvidenceShelfPromoteDialog
+          item={activePromoteSelection.item}
+          onClose={() => {
+            if (busyId === null) setPromoteSelection(null);
+          }}
+          onSubmit={(draft) => promoteShelfItem(activePromoteSelection.item, draft)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -219,17 +303,19 @@ export function EvidenceShelfPanel({
 function ShelfItemCard({
   busy,
   item,
+  onPromote,
   onOpen,
   onRemove,
 }: {
   busy: boolean;
   item: EvidenceShelfItem;
+  onPromote: () => void;
   onOpen: () => void;
   onRemove: () => void;
 }) {
   const payload = item.previewPayload;
   const page = readPageIndex(item.anchorSnapshot);
-  const stale = item.status === "stale";
+  const stale = item.status === "stale" || item.isStale;
   return (
     <article className={`evidence-shelf-item${stale ? " evidence-shelf-item--stale" : ""}`}>
       <div className="evidence-shelf-item__copy">
@@ -248,6 +334,9 @@ function ShelfItemCard({
         <p>{payload.excerpt.trim() || payload.text.trim()}</p>
       </div>
       <div className="evidence-shelf-item__actions">
+        <button type="button" onClick={onPromote} disabled={busy || stale || page === null}>
+          {busy ? "处理中…" : page === null ? "无法定位原文" : "保存为 Evidence"}
+        </button>
         <button type="button" onClick={onOpen} disabled={busy || stale || page === null}>
           <ArrowUpRight size={14} /> {busy ? "正在核验…" : "打开上下文"}
         </button>
@@ -271,9 +360,18 @@ function beginAction(
   return controller;
 }
 
-function abortController(ref: { current: AbortController | null }): void {
-  ref.current?.abort();
-  ref.current = null;
+function abortController(
+  ref: { current: AbortController | null },
+  setBusyId: (id: string | null) => void,
+): void {
+  const controller = ref.current;
+  if (!controller) return;
+  controller.abort();
+  queueMicrotask(() => {
+    if (ref.current !== controller) return;
+    ref.current = null;
+    setBusyId(null);
+  });
 }
 
 function finishAction(

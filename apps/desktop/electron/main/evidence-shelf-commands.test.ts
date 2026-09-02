@@ -69,6 +69,11 @@ beforeEach(async () => {
       kind: "pdf",
       pageIndex: 2,
       position: { end: 72, start: 18 },
+      quote: {
+        exact: "The command preserves an exact source revision and page anchor.",
+        prefix: "Before ",
+        suffix: " After",
+      },
       revisionId: document.revision_id,
       version: 1,
     },
@@ -438,5 +443,62 @@ describe("Evidence Shelf main-process commands", () => {
       `Evidence shelf output is limited to ${MAX_EVIDENCE_SHELF_OUTPUT_BYTES} bytes`,
     );
     expect(shelfSelectCalls).toBe(0);
+  });
+
+  it("promotes a staged PDF through the typed command and consumes it", async () => {
+    const staged = await command("evidenceShelf.stage", stageInput());
+    const promoted = await command("evidenceShelf.promote", {
+      expectedUpdatedAt: staged.item.updatedAt,
+      evidenceKind: "method",
+      itemId: staged.item.id,
+      libraryId: fixture.libraryId,
+      noteMd: "保留这条方法证据。",
+      projectId: fixture.projectId,
+      tags: ["方法", "核验"],
+      title: "命令边界测试",
+    });
+
+    expect(promoted).toMatchObject({
+      created: true,
+      projectMembershipAdded: true,
+      removedFromShelf: true,
+      evidence: {
+        evidenceKind: "method",
+        noteMd: "保留这条方法证据。",
+        sourceKind: "document",
+        text: fixture.contentUnit.text,
+        title: "命令边界测试",
+      },
+    });
+    await expect(
+      command("evidenceShelf.list", {
+        libraryId: fixture.libraryId,
+        projectId: fixture.projectId,
+      }),
+    ).resolves.toEqual({ items: [] });
+  });
+
+  it("rejects an optimistic version mismatch before creating Evidence", async () => {
+    const staged = await command("evidenceShelf.stage", stageInput());
+    await expect(
+      command("evidenceShelf.promote", {
+        expectedUpdatedAt: staged.item.updatedAt - 1,
+        evidenceKind: "context",
+        itemId: staged.item.id,
+        libraryId: fixture.libraryId,
+        projectId: fixture.projectId,
+      }),
+    ).rejects.toThrow("changed; reload");
+    expect(
+      await fixture.database.query("SELECT id FROM evidence_items WHERE library_id = ?", [
+        fixture.libraryId,
+      ]),
+    ).toEqual([]);
+    await expect(
+      command("evidenceShelf.list", {
+        libraryId: fixture.libraryId,
+        projectId: fixture.projectId,
+      }),
+    ).resolves.toMatchObject({ items: [{ id: staged.item.id, status: "staged" }] });
   });
 });

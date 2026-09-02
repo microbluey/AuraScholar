@@ -4,9 +4,9 @@
   "source": {
     "production": {
       "byExtension": {
-        ".css": 19566,
-        ".ts": 93134,
-        ".tsx": 36563
+        ".css": 19726,
+        ".ts": 94016,
+        ".tsx": 36876
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
@@ -17,7 +17,7 @@
         "apps/desktop/electron/discovery-library-status-command-contract.ts": 42,
         "apps/desktop/electron/discovery-site-command-contract.ts": 111,
         "apps/desktop/electron/evidence-command-contract.ts": 139,
-        "apps/desktop/electron/evidence-shelf-command-contract.ts": 127,
+        "apps/desktop/electron/evidence-shelf-command-contract.ts": 150,
         "apps/desktop/electron/knowledge-command-contract.ts": 113,
         "apps/desktop/electron/library-ingest-command-contract.ts": 124,
         "apps/desktop/electron/library-oa-command-contract.ts": 20,
@@ -43,7 +43,7 @@
         "apps/desktop/electron/main/citation-graph-test-fixtures.ts": 44,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
-        "apps/desktop/electron/main/data-command-envelope.ts": 172,
+        "apps/desktop/electron/main/data-command-envelope.ts": 173,
         "apps/desktop/electron/main/data-command-runtime.ts": 110,
         "apps/desktop/electron/main/data-commands.ts": 500,
         "apps/desktop/electron/main/database-coordinator.ts": 78,
@@ -55,7 +55,8 @@
         "apps/desktop/electron/main/embedding-artifact-commands.ts": 78,
         "apps/desktop/electron/main/evidence-commands.ts": 379,
         "apps/desktop/electron/main/evidence-inbox-commands.ts": 210,
-        "apps/desktop/electron/main/evidence-shelf-commands.ts": 455,
+        "apps/desktop/electron/main/evidence-shelf-commands.ts": 467,
+        "apps/desktop/electron/main/evidence-shelf-promotion-command.ts": 126,
         "apps/desktop/electron/main/evidence-source-recovery.ts": 321,
         "apps/desktop/electron/main/ipc.ts": 37,
         "apps/desktop/electron/main/knowledge-command-input.ts": 178,
@@ -320,13 +321,14 @@
         "apps/desktop/src/features/library/useSelectedWorkDetail.ts": 216,
         "apps/desktop/src/features/library/useSelectedWorkRuntimeMeta.ts": 247,
         "apps/desktop/src/features/library/useTagManager.ts": 313,
-        "apps/desktop/src/features/projects/EvidenceShelfPanel.tsx": 297,
+        "apps/desktop/src/features/projects/EvidenceShelfPanel.tsx": 395,
+        "apps/desktop/src/features/projects/EvidenceShelfPromoteDialog.tsx": 215,
         "apps/desktop/src/features/projects/ProjectSourceList.tsx": 71,
         "apps/desktop/src/features/projects/ProjectSourcePicker.tsx": 209,
         "apps/desktop/src/features/projects/ProjectTargetPicker.tsx": 320,
         "apps/desktop/src/features/projects/ResearchProjectSwitcher.tsx": 346,
         "apps/desktop/src/features/projects/ResearchProjectWorkspace.tsx": 348,
-        "apps/desktop/src/features/projects/evidence-shelf.css": 205,
+        "apps/desktop/src/features/projects/evidence-shelf.css": 365,
         "apps/desktop/src/features/projects/model.ts": 106,
         "apps/desktop/src/features/projects/project-ingress-adapter.ts": 51,
         "apps/desktop/src/features/projects/project-ingress-controller.ts": 273,
@@ -385,7 +387,7 @@
         "apps/desktop/src/services/discovery-sites.ts": 182,
         "apps/desktop/src/services/discovery.ts": 263,
         "apps/desktop/src/services/document-evidence-sync-scope.ts": 474,
-        "apps/desktop/src/services/evidence-shelf.ts": 326,
+        "apps/desktop/src/services/evidence-shelf.ts": 362,
         "apps/desktop/src/services/exit-barriers.ts": 95,
         "apps/desktop/src/services/fulltext.ts": 222,
         "apps/desktop/src/services/import-refs.ts": 21,
@@ -515,7 +517,7 @@
         "packages/db/src/evidence-shelf-schema.ts": 79,
         "packages/db/src/fts.ts": 16,
         "packages/db/src/ids.ts": 76,
-        "packages/db/src/index.ts": 240,
+        "packages/db/src/index.ts": 245,
         "packages/db/src/knowledge-worker.ts": 165,
         "packages/db/src/library-schema.ts": 85,
         "packages/db/src/local-first.ts": 155,
@@ -548,10 +550,12 @@
         "packages/db/src/repos/document-assets.ts": 437,
         "packages/db/src/repos/evidence-inbox.ts": 328,
         "packages/db/src/repos/evidence-shelf-bounds.ts": 119,
+        "packages/db/src/repos/evidence-shelf-promotion-anchor.ts": 157,
+        "packages/db/src/repos/evidence-shelf-promotion.ts": 468,
         "packages/db/src/repos/evidence-shelf-support.ts": 500,
         "packages/db/src/repos/evidence-shelf.ts": 494,
         "packages/db/src/repos/evidence-validation.ts": 241,
-        "packages/db/src/repos/evidence.ts": 464,
+        "packages/db/src/repos/evidence.ts": 479,
         "packages/db/src/repos/flashcards.ts": 292,
         "packages/db/src/repos/knowledge-changes-repo.ts": 87,
         "packages/db/src/repos/knowledge-contract.ts": 287,
@@ -571,7 +575,7 @@
         "packages/db/src/repos/tags.ts": 389,
         "packages/db/src/repos/work-knowledge-lifecycle.ts": 256,
         "packages/db/src/repos/works.ts": 1469,
-        "packages/db/src/repos/write-lock.ts": 28,
+        "packages/db/src/repos/write-lock.ts": 67,
         "packages/db/src/research-project-defaults.ts": 7,
         "packages/db/src/research-project-schema.ts": 64,
         "packages/db/src/savepoint.ts": 24,
@@ -650,12 +654,12 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 149263
+      "totalLines": 150618
     },
     "tests": {
       "byExtension": {
-        ".ts": 93342,
-        ".tsx": 1176
+        ".ts": 93960,
+        ".tsx": 1280
       },
       "files": {
         "apps/desktop/electron/main/ai-commands-architecture.test.ts": 92,
@@ -683,7 +687,7 @@
         "apps/desktop/electron/main/embedding-artifact-commands.test.ts": 222,
         "apps/desktop/electron/main/evidence-commands.test.ts": 494,
         "apps/desktop/electron/main/evidence-inbox-commands.test.ts": 287,
-        "apps/desktop/electron/main/evidence-shelf-commands.test.ts": 442,
+        "apps/desktop/electron/main/evidence-shelf-commands.test.ts": 504,
         "apps/desktop/electron/main/evidence-source-recovery.test.ts": 305,
         "apps/desktop/electron/main/frame-isolation-architecture.test.ts": 27,
         "apps/desktop/electron/main/ipc.test.ts": 83,
@@ -921,6 +925,8 @@
         "apps/desktop/src/features/library/library-workspace-state.test.ts": 310,
         "apps/desktop/src/features/library/useSelectedWorkDetail.test.ts": 111,
         "apps/desktop/src/features/library/useSelectedWorkRuntimeMeta.test.ts": 212,
+        "apps/desktop/src/features/projects/EvidenceShelfPanel.test.tsx": 37,
+        "apps/desktop/src/features/projects/EvidenceShelfPromoteDialog.test.tsx": 67,
         "apps/desktop/src/features/projects/ProjectTargetPicker.test.tsx": 90,
         "apps/desktop/src/features/projects/ResearchProjectSwitcher.test.tsx": 72,
         "apps/desktop/src/features/projects/ResearchProjectWorkspace.test.tsx": 62,
@@ -957,7 +963,7 @@
         "apps/desktop/src/services/document-evidence-sync-snippets.test.ts": 138,
         "apps/desktop/src/services/document-evidence-sync.test.ts": 777,
         "apps/desktop/src/services/evidence-shelf-backup.test.ts": 788,
-        "apps/desktop/src/services/evidence-shelf.test.ts": 242,
+        "apps/desktop/src/services/evidence-shelf.test.ts": 306,
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
         "apps/desktop/src/services/fulltext.test.ts": 171,
         "apps/desktop/src/services/import-refs.test.ts": 60,
@@ -1044,6 +1050,7 @@
         "packages/db/src/repos/document-assets.test.ts": 550,
         "packages/db/src/repos/evidence-inbox.test.ts": 237,
         "packages/db/src/repos/evidence-shelf-bounds.test.ts": 65,
+        "packages/db/src/repos/evidence-shelf-promotion.test.ts": 492,
         "packages/db/src/repos/evidence-shelf.test.ts": 706,
         "packages/db/src/repos/evidence.test.ts": 485,
         "packages/db/src/repos/flashcards.test.ts": 304,
@@ -1092,7 +1099,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 94518
+      "totalLines": 95240
     }
   },
   "uiDatabaseBoundary": {}

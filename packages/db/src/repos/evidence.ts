@@ -10,7 +10,7 @@ import {
   sourceAuthorityFor,
   type NormalizedCreateTextEvidenceInput,
 } from "./evidence-validation.js";
-import { withDatabaseWriteLock } from "./write-lock.js";
+import { withDatabaseWriteLock, type DatabaseWriteLockToken } from "./write-lock.js";
 
 export type EvidenceKind = "method" | "data" | "limitation" | "definition" | "context";
 
@@ -122,95 +122,99 @@ export class EvidenceRepo {
 
   async createText(
     input: CreateTextEvidenceInput,
+    lockToken?: DatabaseWriteLockToken,
   ): Promise<{ evidence: EvidenceRecord; created: boolean }> {
     const normalized = normalizeCreateInput(input);
     const contentHash = await sha256Text(normalized.text);
     const id = normalized.id ?? newId();
     assertId(id, "Evidence id");
-    return withDatabaseWriteLock(this.db, () =>
-      withDatabaseSavepoint(this.db, "evidence_create", async () => {
-        const existing = await this.storageRow(id);
-        if (existing) {
-          if (existing.library_id !== this.libraryId)
-            throw new EvidenceScopeError(id, this.libraryId);
-          const retryAnchorJson = JSON.stringify({
-            ...normalized.anchor,
-            revisionId: existing.revision_id,
-          });
-          const retryMatches =
-            existing.deleted_at === null &&
-            existing.work_id === normalized.workId &&
-            existing.revision_attachment_id === normalized.attachmentId &&
-            existing.revision_blob_sha256 === normalized.expectedBlobSha256 &&
-            existing.source_kind ===
-              (normalized.captureMethod === "annotation" ? "annotation" : "document") &&
-            existing.evidence_kind === normalized.evidenceKind &&
-            existing.anchor_json === retryAnchorJson &&
-            existing.payload_json === JSON.stringify({ kind: "text", text: normalized.text }) &&
-            existing.source_content_hash === contentHash &&
-            existing.title === normalized.title &&
-            existing.note_md === normalized.noteMd &&
-            existing.tags_json === JSON.stringify(normalized.tags) &&
-            matchesProvenance(existing.provenance_json, normalized);
-          if (!retryMatches) {
-            throw new Error(`Evidence ${id} already exists with different content`);
+    return withDatabaseWriteLock(
+      this.db,
+      () =>
+        withDatabaseSavepoint(this.db, "evidence_create", async () => {
+          const existing = await this.storageRow(id);
+          if (existing) {
+            if (existing.library_id !== this.libraryId)
+              throw new EvidenceScopeError(id, this.libraryId);
+            const retryAnchorJson = JSON.stringify({
+              ...normalized.anchor,
+              revisionId: existing.revision_id,
+            });
+            const retryMatches =
+              existing.deleted_at === null &&
+              existing.work_id === normalized.workId &&
+              existing.revision_attachment_id === normalized.attachmentId &&
+              existing.revision_blob_sha256 === normalized.expectedBlobSha256 &&
+              existing.source_kind ===
+                (normalized.captureMethod === "annotation" ? "annotation" : "document") &&
+              existing.evidence_kind === normalized.evidenceKind &&
+              existing.anchor_json === retryAnchorJson &&
+              existing.payload_json === JSON.stringify({ kind: "text", text: normalized.text }) &&
+              existing.source_content_hash === contentHash &&
+              existing.title === normalized.title &&
+              existing.note_md === normalized.noteMd &&
+              existing.tags_json === JSON.stringify(normalized.tags) &&
+              matchesProvenance(existing.provenance_json, normalized);
+            if (!retryMatches) {
+              throw new Error(`Evidence ${id} already exists with different content`);
+            }
+            return { evidence: toEvidenceRecord(existing), created: false };
           }
-          return { evidence: toEvidenceRecord(existing), created: false };
-        }
 
-        const source = await this.resolveCurrentSource(normalized);
-        await assertAnnotationEvidenceSource(this.db, this.libraryId, normalized);
-        const anchor = { ...normalized.anchor, revisionId: source.revision_id };
-        const anchorJson = JSON.stringify(anchor);
-        const payloadJson = JSON.stringify({ kind: "text", text: normalized.text });
-        const tagsJson = JSON.stringify(normalized.tags);
-        const provenanceJson = JSON.stringify({
-          capturedAt: Date.now(),
-          capturedBy: "user",
-          sourceAuthority: sourceAuthorityFor(normalized),
-          captureMethod: normalized.captureMethod,
-          ...(normalized.annotationId ? { annotationId: normalized.annotationId } : {}),
-        });
+          const source = await this.resolveCurrentSource(normalized);
+          await assertAnnotationEvidenceSource(this.db, this.libraryId, normalized);
+          const anchor = { ...normalized.anchor, revisionId: source.revision_id };
+          const anchorJson = JSON.stringify(anchor);
+          const payloadJson = JSON.stringify({ kind: "text", text: normalized.text });
+          const tagsJson = JSON.stringify(normalized.tags);
+          const provenanceJson = JSON.stringify({
+            capturedAt: Date.now(),
+            capturedBy: "user",
+            sourceAuthority: sourceAuthorityFor(normalized),
+            captureMethod: normalized.captureMethod,
+            ...(normalized.annotationId ? { annotationId: normalized.annotationId } : {}),
+          });
 
-        const now = Date.now();
-        await this.db.run(
-          `INSERT INTO evidence_items
+          const now = Date.now();
+          await this.db.run(
+            `INSERT INTO evidence_items
              (id, library_id, work_id, asset_id, revision_id, source_kind,
               evidence_kind, anchor_json, payload_kind, payload_json, title,
               note_md, tags_json, source_content_hash, provenance_json,
               created_at, updated_at, deleted_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'text', ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-          [
-            id,
-            this.libraryId,
-            normalized.workId,
-            source.asset_id,
-            source.revision_id,
-            normalized.captureMethod === "annotation" ? "annotation" : "document",
-            normalized.evidenceKind,
-            anchorJson,
-            payloadJson,
-            normalized.title,
-            normalized.noteMd,
-            tagsJson,
-            contentHash,
-            provenanceJson,
-            now,
-            now,
-          ],
-        );
-        await appendKnowledgeChangeInTransaction(this.db, {
-          libraryId: this.libraryId,
-          sourceType: "evidence",
-          sourceId: id,
-          changeKind: "upsert",
-          expectedRevisionId: source.revision_id,
-          expectedContentHash: contentHash,
-        });
-        const evidence = await this.get(id);
-        if (!evidence) throw new Error(`Evidence ${id} was not readable after creation`);
-        return { evidence, created: true };
-      }),
+            [
+              id,
+              this.libraryId,
+              normalized.workId,
+              source.asset_id,
+              source.revision_id,
+              normalized.captureMethod === "annotation" ? "annotation" : "document",
+              normalized.evidenceKind,
+              anchorJson,
+              payloadJson,
+              normalized.title,
+              normalized.noteMd,
+              tagsJson,
+              contentHash,
+              provenanceJson,
+              now,
+              now,
+            ],
+          );
+          await appendKnowledgeChangeInTransaction(this.db, {
+            libraryId: this.libraryId,
+            sourceType: "evidence",
+            sourceId: id,
+            changeKind: "upsert",
+            expectedRevisionId: source.revision_id,
+            expectedContentHash: contentHash,
+          });
+          const evidence = await this.get(id);
+          if (!evidence) throw new Error(`Evidence ${id} was not readable after creation`);
+          return { evidence, created: true };
+        }),
+      lockToken,
     );
   }
 
@@ -262,27 +266,35 @@ export class EvidenceRepo {
     return rows.map(toEvidenceRecord);
   }
 
-  async addToProject(projectId: string, evidenceId: string): Promise<boolean> {
+  async addToProject(
+    projectId: string,
+    evidenceId: string,
+    lockToken?: DatabaseWriteLockToken,
+  ): Promise<boolean> {
     assertId(projectId, "Research project id");
     assertId(evidenceId, "Evidence id");
-    return withDatabaseWriteLock(this.db, async () => {
-      await this.requireActiveProject(projectId);
-      const evidence = await this.get(evidenceId);
-      if (!evidence) throw new Error(`Evidence ${evidenceId} is missing or removed`);
-      await this.requireProjectSource(projectId, evidence);
-      const now = Date.now();
-      const changed = await this.db.run(
-        `INSERT INTO project_evidence
+    return withDatabaseWriteLock(
+      this.db,
+      async () => {
+        await this.requireActiveProject(projectId);
+        const evidence = await this.get(evidenceId);
+        if (!evidence) throw new Error(`Evidence ${evidenceId} is missing or removed`);
+        await this.requireProjectSource(projectId, evidence);
+        const now = Date.now();
+        const changed = await this.db.run(
+          `INSERT INTO project_evidence
            (id, project_id, evidence_id, role, created_at, updated_at, deleted_at)
          VALUES (?, ?, ?, 'evidence', ?, ?, NULL)
          ON CONFLICT(project_id, evidence_id) DO UPDATE SET
            role = excluded.role, deleted_at = NULL,
            updated_at = MAX(project_evidence.updated_at + 1, excluded.updated_at)
          WHERE project_evidence.deleted_at IS NOT NULL`,
-        [projectEvidenceMembershipId(projectId, evidenceId), projectId, evidenceId, now, now],
-      );
-      return changed === 1;
-    });
+          [projectEvidenceMembershipId(projectId, evidenceId), projectId, evidenceId, now, now],
+        );
+        return changed === 1;
+      },
+      lockToken,
+    );
   }
 
   async removeFromProject(projectId: string, evidenceId: string): Promise<boolean> {
@@ -407,9 +419,12 @@ export class EvidenceRepo {
        ) OR EXISTS (
          SELECT 1 FROM project_assets
          WHERE project_id = ? AND asset_id = ? AND deleted_at IS NULL
+       ) OR EXISTS (
+         SELECT 1 FROM project_evidence
+         WHERE project_id = ? AND evidence_id = ? AND deleted_at IS NULL
        )
        LIMIT 1`,
-      [projectId, evidence.workId, projectId, evidence.assetId],
+      [projectId, evidence.workId, projectId, evidence.assetId, projectId, evidence.id],
     );
     if (!rows[0]) throw new Error("Evidence source is not a member of the target Research Project");
   }

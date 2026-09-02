@@ -166,6 +166,7 @@ export async function executeDataCommand(
     case "evidenceShelf.clear":
     case "evidenceShelf.list":
     case "evidenceShelf.remove":
+    case "evidenceShelf.promote":
     case "evidenceShelf.resolveForSave":
     case "evidenceShelf.stage":
       return executeEvidenceShelfCommand(envelope, dependencies);
@@ -477,7 +478,6 @@ async function assertActiveWorksBelongToLibrary(
     throw new Error("Every work must be active and belong to the active Library");
   }
 }
-
 async function assertActiveMergeWorksBelongToLibrary(
   database: Database,
   libraryId: string,

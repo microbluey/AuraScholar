@@ -64,6 +64,10 @@
       "types": "./dist/repos/evidence-shelf.d.ts",
       "default": "./dist/repos/evidence-shelf.js"
     },
+    "./repos/evidence-shelf-promotion": {
+      "types": "./dist/repos/evidence-shelf-promotion.d.ts",
+      "default": "./dist/repos/evidence-shelf-promotion.js"
+    },
     "./repos/knowledge": {
       "types": "./dist/repos/knowledge.d.ts",
       "default": "./dist/repos/knowledge.js"

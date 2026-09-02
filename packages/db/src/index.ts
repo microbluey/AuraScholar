@@ -93,6 +93,11 @@ export type {
   EvidenceShelfStageResult,
   EvidenceShelfStatus,
 } from "./repos/evidence-shelf.js";
+export { promoteEvidenceShelfItem } from "./repos/evidence-shelf-promotion.js";
+export type {
+  PromoteEvidenceShelfInput,
+  PromoteEvidenceShelfResult,
+} from "./repos/evidence-shelf-promotion.js";
 export {
   assertEvidenceShelfListBudget,
   MAX_EVIDENCE_SHELF_LIST_BYTES,
