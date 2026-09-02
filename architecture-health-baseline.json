@@ -5,8 +5,8 @@
     "production": {
       "byExtension": {
         ".css": 19726,
-        ".ts": 94016,
-        ".tsx": 36876
+        ".ts": 94197,
+        ".tsx": 36958
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
@@ -321,13 +321,16 @@
         "apps/desktop/src/features/library/useSelectedWorkDetail.ts": 216,
         "apps/desktop/src/features/library/useSelectedWorkRuntimeMeta.ts": 247,
         "apps/desktop/src/features/library/useTagManager.ts": 313,
-        "apps/desktop/src/features/projects/EvidenceShelfPanel.tsx": 395,
+        "apps/desktop/src/features/projects/EvidenceShelfItemCard.tsx": 57,
+        "apps/desktop/src/features/projects/EvidenceShelfPanel.tsx": 389,
         "apps/desktop/src/features/projects/EvidenceShelfPromoteDialog.tsx": 215,
         "apps/desktop/src/features/projects/ProjectSourceList.tsx": 71,
         "apps/desktop/src/features/projects/ProjectSourcePicker.tsx": 209,
         "apps/desktop/src/features/projects/ProjectTargetPicker.tsx": 320,
         "apps/desktop/src/features/projects/ResearchProjectSwitcher.tsx": 346,
-        "apps/desktop/src/features/projects/ResearchProjectWorkspace.tsx": 348,
+        "apps/desktop/src/features/projects/ResearchProjectWorkspace.tsx": 379,
+        "apps/desktop/src/features/projects/evidence-shelf-promotion-reconcile.ts": 113,
+        "apps/desktop/src/features/projects/evidence-shelf-stage-refresh.ts": 68,
         "apps/desktop/src/features/projects/evidence-shelf.css": 365,
         "apps/desktop/src/features/projects/model.ts": 106,
         "apps/desktop/src/features/projects/project-ingress-adapter.ts": 51,
@@ -654,11 +657,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 150618
+      "totalLines": 150881
     },
     "tests": {
       "byExtension": {
-        ".ts": 94124,
+        ".ts": 94508,
         ".tsx": 1280
       },
       "files": {
@@ -930,6 +933,8 @@
         "apps/desktop/src/features/projects/ProjectTargetPicker.test.tsx": 90,
         "apps/desktop/src/features/projects/ResearchProjectSwitcher.test.tsx": 72,
         "apps/desktop/src/features/projects/ResearchProjectWorkspace.test.tsx": 62,
+        "apps/desktop/src/features/projects/evidence-shelf-promotion-reconcile.test.ts": 221,
+        "apps/desktop/src/features/projects/evidence-shelf-stage-refresh.test.ts": 163,
         "apps/desktop/src/features/projects/model.test.ts": 37,
         "apps/desktop/src/features/projects/project-ingress-adapter.test.ts": 81,
         "apps/desktop/src/features/projects/project-ingress-controller.test.ts": 238,
@@ -1100,7 +1105,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 95404
+      "totalLines": 95788
     }
   },
   "uiDatabaseBoundary": {}
