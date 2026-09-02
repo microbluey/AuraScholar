@@ -9,6 +9,7 @@ import {
 } from "@aurascholar/db";
 import {
   assertEmbeddingVector,
+  type CorpusScopeSnapshot,
   type VectorSearchHit,
   type VectorSearchInput,
   type VectorStore,
@@ -136,6 +137,7 @@ export class SqliteVecIndexStore implements VectorStore {
     throwIfAborted(input.signal);
 
     const allowedSourceIds = normalizeSourceIds(input.allowedSourceIds);
+    assertCorpusScope(input.corpusScope, libraryId, allowedSourceIds);
     if (allowedSourceIds.length === 0) return [];
 
     return this.dependencies.inspect(async (database) => {
@@ -395,6 +397,21 @@ function normalizeSourceIds(sourceIds: readonly string[]): string[] {
     ...new Set(sourceIds.map((sourceId) => normalizeId(sourceId, "Allowed vector source id"))),
   ];
   return normalized;
+}
+
+function assertCorpusScope(
+  scope: CorpusScopeSnapshot | undefined,
+  libraryId: string,
+  allowedSourceIds: readonly string[],
+): void {
+  if (!scope) return;
+  if (scope.libraryId !== libraryId) {
+    throw new Error("Corpus scope belongs to a different Library");
+  }
+  const snapshotSources = new Set(scope.allowedSourceIds);
+  if (allowedSourceIds.some((sourceId) => !snapshotSources.has(sourceId))) {
+    throw new Error("Vector source is outside the captured corpus scope");
+  }
 }
 
 function normalizeId(value: string, label: string): string {

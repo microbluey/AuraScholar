@@ -3,6 +3,7 @@ import {
   ExactVectorStore,
   HybridRetriever,
   assertEmbeddingVector,
+  createCorpusScopeSnapshot,
   reciprocalRankFusion,
   type EmbeddingProvider,
   type FullTextCandidateRetriever,
@@ -156,6 +157,41 @@ describe("reciprocalRankFusion", () => {
 });
 
 describe("HybridRetriever", () => {
+  it("passes one immutable corpus snapshot to full-text and vector channels", async () => {
+    const corpusScope = await createCorpusScopeSnapshot({
+      allowedSourceIds: ["source:one"],
+      capturedAt: 1,
+      libraryId: "library:one",
+      scope: { kind: "library" },
+    });
+    const fullText: FullTextCandidateRetriever = {
+      search: vi.fn().mockResolvedValue([{ contentUnitId: "content-unit:fts" }]),
+    };
+    const embeddingProvider: EmbeddingProvider = {
+      dimension: 2,
+      egressMode: "local",
+      embedDocuments: vi.fn(),
+      embedQuery: vi.fn().mockResolvedValue(new Float32Array([1, 0])),
+      id: "local-test",
+      model: "test-model",
+    };
+    const vectorStore: VectorStore = {
+      search: vi.fn().mockResolvedValue([]),
+    };
+
+    await new HybridRetriever({ embeddingProvider, fullText, vectorStore }).search({
+      allowedSourceIds: ["source:one"],
+      corpusScope,
+      libraryId: "library:one",
+      limit: 10,
+      query: "grounded retrieval",
+      semanticIndexId: "index:g1",
+    });
+
+    expect(fullText.search).toHaveBeenCalledWith(expect.objectContaining({ corpusScope }));
+    expect(vectorStore.search).toHaveBeenCalledWith(expect.objectContaining({ corpusScope }));
+  });
+
   it("keeps full-text retrieval usable when semantic capability is not configured", async () => {
     const fullText: FullTextCandidateRetriever = {
       search: vi.fn().mockResolvedValue([{ contentUnitId: "content-unit:fts" }]),

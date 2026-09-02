@@ -32,6 +32,7 @@ export function appendContentUnitScopeClauses(
   clauses: string[],
   params: unknown[],
   input: {
+    allowedSourceIds?: readonly string[];
     sourceTypes?: readonly ContentUnitSourceType[];
     sourceId?: string;
     workId?: string;
@@ -39,6 +40,7 @@ export function appendContentUnitScopeClauses(
     revisionId?: string;
   },
 ): void {
+  appendContentUnitAllowedSourceIdsClause(clauses, params, input.allowedSourceIds);
   if (input.sourceTypes !== undefined) {
     if (input.sourceTypes.length === 0) {
       clauses.push("0 = 1");
@@ -58,6 +60,46 @@ export function appendContentUnitScopeClauses(
     input.revisionId,
     "revision id",
   );
+}
+
+/**
+ * Applies a main-process-resolved source snapshot without expanding one SQL
+ * bind parameter per source. SQLite's JSON1 table-valued function keeps the
+ * query bounded even for a larger Library while the caller still owns the
+ * immutable allowlist captured for this operation.
+ */
+export function appendContentUnitAllowedSourceIdsClause(
+  clauses: string[],
+  params: unknown[],
+  sourceIds: readonly string[] | undefined,
+): void {
+  if (sourceIds === undefined) return;
+  if (!Array.isArray(sourceIds)) throw new Error("ContentUnit source snapshot must be an array");
+  const normalized = [...new Set(sourceIds)];
+  for (const sourceId of normalized) {
+    assertId(sourceId, "ContentUnit allowed source id");
+    if (sourceId.length > 512 || containsControlCharacter(sourceId)) {
+      throw new Error("ContentUnit allowed source id is invalid");
+    }
+  }
+  if (normalized.length === 0) {
+    clauses.push("0 = 1");
+    return;
+  }
+  const encoded = JSON.stringify(normalized);
+  if (encoded.length > 8 * 1024 * 1024) {
+    throw new Error("ContentUnit source snapshot is too large");
+  }
+  clauses.push("unit.source_id IN (SELECT value FROM json_each(?))");
+  params.push(encoded);
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 export function toContentUnitCount(value: number | bigint, label: string): number {

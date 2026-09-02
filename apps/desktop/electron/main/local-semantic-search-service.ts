@@ -3,11 +3,13 @@ import {
   type EmbeddingProvider,
   type FullTextCandidateRetriever,
   type HybridSearchResult,
+  type CorpusScopeSnapshot,
   type VectorStore,
 } from "@aurascholar/knowledge";
 
 export interface LocalSemanticSearchInput {
   readonly allowedSourceIds: readonly string[];
+  readonly corpusScope?: CorpusScopeSnapshot;
   readonly fullText: FullTextCandidateRetriever;
   readonly libraryId: string;
   readonly limit: number;
@@ -52,6 +54,7 @@ export class LocalSemanticSearchService {
       vectorStore: this.dependencies.vectorStore,
     }).search({
       allowedSourceIds: input.allowedSourceIds,
+      ...(input.corpusScope ? { corpusScope: input.corpusScope } : {}),
       libraryId: input.libraryId,
       limit: input.limit,
       query: input.query,
@@ -66,6 +69,7 @@ export class LocalSemanticSearchService {
   ): Promise<HybridSearchResult> {
     const result = await new HybridRetriever({ fullText: input.fullText }).search({
       allowedSourceIds: input.allowedSourceIds,
+      ...(input.corpusScope ? { corpusScope: input.corpusScope } : {}),
       libraryId: input.libraryId,
       limit: input.limit,
       query: input.query,

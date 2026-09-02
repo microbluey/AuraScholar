@@ -29,6 +29,7 @@ export class ContentUnitSearchRepo {
     const clauses = ["content_units_fts MATCH ?", "unit.library_id = ?", "unit.deleted_at IS NULL"];
     const params: unknown[] = [ftsQuery, this.libraryId];
     appendContentUnitCanonicalVisibilityClause(clauses);
+    Content.appendContentUnitAllowedSourceIdsClause(clauses, params, input.allowedSourceIds);
 
     if (!input.includeContextOnly) clauses.push("unit.state = 'ready'");
     if (input.sourceTypes !== undefined) {
@@ -112,6 +113,7 @@ export class ContentUnitSearchRepo {
   async findReadyByIds(input: {
     contentUnitIds: readonly string[];
     sourceTypes?: readonly Contract.ContentUnitSourceType[];
+    allowedSourceIds?: readonly string[];
     sourceId?: string;
     workId?: string;
     assetId?: string;

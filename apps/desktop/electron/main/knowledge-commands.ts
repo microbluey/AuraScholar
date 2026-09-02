@@ -26,6 +26,10 @@ import type {
 } from "./local-semantic-index-service";
 import type { LocalSemanticSearchService } from "./local-semantic-search-service";
 import {
+  resolveKnowledgeCorpusAndFullText,
+  resolveKnowledgeCorpusScope,
+} from "./knowledge-corpus-scope";
+import {
   MAX_KNOWLEDGE_SEARCH_LIMIT,
   parseContentStatsInput,
   parseLibraryInput,
@@ -130,6 +134,27 @@ async function searchKnowledgeContent(
 ): Promise<DataCommandOutput<"knowledge.searchContent">> {
   const fullTextLimit = knowledgeSearchCandidateLimit(input.limit);
   const languageIntent = parseRetrievalLanguageIntent(input.query);
+
+  if (!semanticSearch) {
+    // Resolve and query under one read lease for the common FTS-only path.
+    // The scope and rows therefore share the same database view while keeping
+    // the immutable allowlist available for later diagnostic consumers.
+    const { rows: fullText } = await resolveKnowledgeCorpusAndFullText(
+      input,
+      dependencies,
+      fullTextLimit,
+    );
+    const ranked = rerankFullTextResults(fullText, languageIntent);
+    return {
+      results: ranked.rows.slice(0, input.limit).map(toKnowledgeContentSearchResult),
+      retrieval: toKnowledgeContentSearchRetrieval(
+        { mode: "fulltext", semanticStatus: "not-configured" },
+        languagePreferenceForResponse(languageIntent, ranked.applied),
+      ),
+    };
+  }
+
+  const corpusScope = await resolveKnowledgeCorpusScope(input, dependencies);
   const fullTextResults = async (): Promise<ContentUnitSearchResult[]> => {
     if (!dependencies.inspect) {
       throw new Error("Main-process database query execution is unavailable");
@@ -139,6 +164,7 @@ async function searchKnowledgeContent(
       return new ContentUnitSearchRepo(database, input.libraryId).search({
         query: input.query,
         limit: fullTextLimit,
+        allowedSourceIds: corpusScope.allowedSourceIds,
         sourceTypes: input.sourceTypes,
         sourceId: input.sourceId,
         workId: input.workId,
@@ -149,22 +175,15 @@ async function searchKnowledgeContent(
     });
   };
 
-  if (!semanticSearch) {
-    const ranked = rerankFullTextResults(await fullTextResults(), languageIntent);
-    return {
-      results: ranked.rows.slice(0, input.limit).map(toKnowledgeContentSearchResult),
-      retrieval: toKnowledgeContentSearchRetrieval(
-        { mode: "fulltext", semanticStatus: "not-configured" },
-        languagePreferenceForResponse(languageIntent, ranked.applied),
-      ),
-    };
-  }
-
   // Resolve the vector-store allowlist before the query reaches the optional
   // embedding runtime. Keep this database lease separate from the full-text
   // callback below: HybridRetriever runs FTS and vector lookup concurrently.
-  const allowedSourceIds = await listReadySourceIds(input, dependencies);
-  if (allowedSourceIds.length === 0) {
+  const readySourceIds = await listReadySourceIds(
+    input,
+    dependencies,
+    corpusScope.allowedSourceIds,
+  );
+  if (readySourceIds.length === 0) {
     const ranked = rerankFullTextResults(await fullTextResults(), languageIntent);
     return {
       results: ranked.rows.slice(0, input.limit).map(toKnowledgeContentSearchResult),
@@ -181,7 +200,8 @@ async function searchKnowledgeContent(
     return fullTextPromise;
   };
   const hybrid = await semanticSearch.search({
-    allowedSourceIds,
+    allowedSourceIds: readySourceIds,
+    corpusScope,
     fullText: {
       // Scope and limit are captured from the validated command input. This
       // callback deliberately returns IDs only; presentation rows are loaded
@@ -198,6 +218,7 @@ async function searchKnowledgeContent(
     fullText,
     input,
     dependencies,
+    corpusScope.allowedSourceIds,
   );
   const resultById = new Map<string, ContentUnitSearchResult>();
   for (const row of fullText) resultById.set(row.id, row);
@@ -264,12 +285,14 @@ function knowledgeSearchCandidateLimit(limit: number): number {
 async function listReadySourceIds(
   input: ParsedSearchKnowledgeContentInput,
   dependencies: DataCommandDependencies,
+  allowedSourceIds: readonly string[],
 ): Promise<string[]> {
   if (!dependencies.inspect)
     throw new Error("Main-process database query execution is unavailable");
   return dependencies.inspect(async (database) => {
     await assertActiveLocalLibrary(database, input.libraryId);
     return new ContentUnitSearchRepo(database, input.libraryId).listReadySourceIds({
+      allowedSourceIds,
       sourceTypes: input.sourceTypes,
       sourceId: input.sourceId,
       workId: input.workId,
@@ -284,6 +307,7 @@ async function hydrateSemanticCandidates(
   fullText: readonly ContentUnitSearchResult[],
   input: ParsedSearchKnowledgeContentInput,
   dependencies: DataCommandDependencies,
+  allowedSourceIds: readonly string[],
 ): Promise<ContentUnitSearchResult[]> {
   const fullTextIds = new Set(fullText.map(({ id }) => id));
   const missingIds = [...new Set(candidateIds.filter((id) => !fullTextIds.has(id)))];
@@ -294,6 +318,7 @@ async function hydrateSemanticCandidates(
     await assertActiveLocalLibrary(database, input.libraryId);
     return new ContentUnitSearchRepo(database, input.libraryId).findReadyByIds({
       contentUnitIds: missingIds,
+      allowedSourceIds,
       sourceTypes: input.sourceTypes,
       sourceId: input.sourceId,
       workId: input.workId,

@@ -13,6 +13,19 @@ export type {
 } from "./content-unit.js";
 export { canonicalJson, isSha256, sha256Text } from "./hash.js";
 export {
+  CORPUS_SCOPE_KINDS,
+  CORPUS_SCOPE_SNAPSHOT_VERSION,
+  MAX_CORPUS_SCOPE_ID_LENGTH,
+  MAX_CORPUS_SCOPE_WORK_IDS,
+  createCorpusScopeSnapshot,
+} from "./corpus-scope.js";
+export type {
+  CorpusScopeKind,
+  CorpusScopeSelection,
+  CorpusScopeSnapshot,
+  CorpusScopeSnapshotInput,
+} from "./corpus-scope.js";
+export {
   ANNOTATION_CHUNK_PROFILE_V1,
   ANNOTATION_EXTRACTOR_PROFILE_V1,
   CONTENT_UNIT_CONTEXT_CHARS,

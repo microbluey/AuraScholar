@@ -4,13 +4,16 @@ import {
   type FusedRetrievalRank,
   type ReciprocalRankFusionOptions,
 } from "./hybrid-ranking.js";
-import type { VectorStore } from "./vector-store.js";
+import type { CorpusScopeSnapshot } from "./corpus-scope.js";
+import type { VectorSearchInput, VectorStore } from "./vector-store.js";
 
 export interface FullTextCandidateRetriever {
   search(input: FullTextCandidateSearchInput): Promise<readonly { contentUnitId: string }[]>;
 }
 
 export interface FullTextCandidateSearchInput {
+  /** The immutable scope captured by the owning retrieval operation. */
+  corpusScope?: CorpusScopeSnapshot;
   libraryId: string;
   query: string;
   allowedSourceIds: readonly string[];
@@ -20,6 +23,8 @@ export interface FullTextCandidateSearchInput {
 
 export interface HybridSearchInput {
   libraryId: string;
+  /** The immutable scope captured by the owning retrieval operation. */
+  corpusScope?: CorpusScopeSnapshot;
   /** A pinned vector generation. Omit it to explicitly remain full-text only. */
   semanticIndexId?: string;
   query: string;
@@ -60,16 +65,19 @@ export class HybridRetriever {
     const allowedSourceIds = [...new Set(input.allowedSourceIds)];
     for (const sourceId of allowedSourceIds)
       assertNonEmpty(sourceId, "Allowed retrieval source id");
+    assertCorpusScope(input.corpusScope, input.libraryId, allowedSourceIds);
     if (allowedSourceIds.length === 0) return fullTextOnly([]);
     throwIfAborted(input.signal);
 
-    const fullTextPromise = this.dependencies.fullText.search({
+    const fullTextInput: FullTextCandidateSearchInput = {
       libraryId: input.libraryId,
       query,
       allowedSourceIds,
       limit: input.limit,
       signal: input.signal,
-    });
+    };
+    if (input.corpusScope) fullTextInput.corpusScope = input.corpusScope;
+    const fullTextPromise = this.dependencies.fullText.search(fullTextInput);
 
     const semantic = this.semanticSearch(input, query, allowedSourceIds);
     const [fullTextCandidates, semanticResult] = await Promise.all([fullTextPromise, semantic]);
@@ -108,14 +116,16 @@ export class HybridRetriever {
     try {
       const vector = await provider.embedQuery(query, { signal: input.signal });
       assertEmbeddingVector(vector, provider.dimension, "Embedding provider result");
-      const hits = await vectorStore.search({
+      const vectorInput: VectorSearchInput = {
         allowedSourceIds,
         indexId,
         libraryId: input.libraryId,
         limit: input.limit,
         signal: input.signal,
         vector,
-      });
+      };
+      if (input.corpusScope) vectorInput.corpusScope = input.corpusScope;
+      const hits = await vectorStore.search(vectorInput);
       return { status: "used", hits };
     } catch (error) {
       if (isAbort(error) || input.signal?.aborted) throw error;
@@ -146,4 +156,19 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 
 function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function assertCorpusScope(
+  scope: CorpusScopeSnapshot | undefined,
+  libraryId: string,
+  allowedSourceIds: readonly string[],
+): void {
+  if (!scope) return;
+  if (scope.libraryId !== libraryId) {
+    throw new Error("Corpus scope belongs to a different Library");
+  }
+  const snapshotSources = new Set(scope.allowedSourceIds);
+  if (allowedSourceIds.some((sourceId) => !snapshotSources.has(sourceId))) {
+    throw new Error("Retrieval source is outside the captured corpus scope");
+  }
 }

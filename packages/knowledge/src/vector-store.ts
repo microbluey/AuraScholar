@@ -1,4 +1,5 @@
 import { assertEmbeddingVector } from "./embedding.js";
+import type { CorpusScopeSnapshot } from "./corpus-scope.js";
 
 /** A vector entry is always pinned to one Library and one index generation. */
 export interface VectorIndexEntry {
@@ -19,6 +20,8 @@ export interface VectorEntrySource {
 }
 
 export interface VectorEntrySelection {
+  /** The immutable scope captured by the owning retrieval operation. */
+  corpusScope?: CorpusScopeSnapshot;
   libraryId: string;
   indexId: string;
   allowedSourceIds: readonly string[];
@@ -58,6 +61,7 @@ export class ExactVectorStore implements VectorStore {
 
     const allowedSourceIds = [...new Set(input.allowedSourceIds)];
     for (const sourceId of allowedSourceIds) assertNonEmpty(sourceId, "Allowed vector source id");
+    assertCorpusScope(input.corpusScope, input.libraryId, allowedSourceIds);
     if (allowedSourceIds.length === 0) return [];
 
     const entries = await this.entries.listEntries({
@@ -65,6 +69,7 @@ export class ExactVectorStore implements VectorStore {
       indexId: input.indexId,
       allowedSourceIds,
       signal: input.signal,
+      ...(input.corpusScope ? { corpusScope: input.corpusScope } : {}),
     });
     throwIfAborted(input.signal);
 
@@ -145,4 +150,19 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 function compareText(left: string, right: string): number {
   if (left === right) return 0;
   return left < right ? -1 : 1;
+}
+
+function assertCorpusScope(
+  scope: CorpusScopeSnapshot | undefined,
+  libraryId: string,
+  allowedSourceIds: readonly string[],
+): void {
+  if (!scope) return;
+  if (scope.libraryId !== libraryId) {
+    throw new Error("Corpus scope belongs to a different Library");
+  }
+  const snapshotSources = new Set(scope.allowedSourceIds);
+  if (allowedSourceIds.some((sourceId) => !snapshotSources.has(sourceId))) {
+    throw new Error("Vector source is outside the captured corpus scope");
+  }
 }
