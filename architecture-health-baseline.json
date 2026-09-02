@@ -658,7 +658,7 @@
     },
     "tests": {
       "byExtension": {
-        ".ts": 93960,
+        ".ts": 94124,
         ".tsx": 1280
       },
       "files": {
@@ -973,6 +973,7 @@
         "apps/desktop/src/services/knowledge-semantic-index.test.ts": 88,
         "apps/desktop/src/services/library-actions.test.ts": 207,
         "apps/desktop/src/services/library-annotation-recovery.test.ts": 33,
+        "apps/desktop/src/services/library-backup-export-integrity.test.ts": 164,
         "apps/desktop/src/services/library-command-scope.test.ts": 55,
         "apps/desktop/src/services/library-list.test.ts": 71,
         "apps/desktop/src/services/library-organization.test.ts": 135,
@@ -1099,7 +1100,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 95240
+      "totalLines": 95404
     }
   },
   "uiDatabaseBoundary": {}

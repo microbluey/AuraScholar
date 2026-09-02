@@ -74,7 +74,6 @@ export interface LibraryBackupImportSummary {
 // document/evidence backups remain importable.
 export const LIBRARY_BACKUP_VERSION = EVIDENCE_SHELF_BACKUP_VERSION;
 const EMPTY_BACKUP_ID_MAP = new Map<string, string>();
-
 // Keep the executable import loop honest when new backup tables are added.
 assertSpatialCanvasBackupOrder(USER_BACKUP_TABLES);
 assertDocumentEvidenceBackupOrder(USER_BACKUP_TABLES);
@@ -105,7 +104,7 @@ export async function exportLibraryBackupJsonFromDatabase(
   db: Database,
   libraryId: string,
 ): Promise<string> {
-  const dump: Record<string, unknown[]> = {};
+  const dump: LibraryBackupFile["tables"] = {};
   for (const table of USER_BACKUP_TABLES) {
     let rows: Record<string, unknown>[];
     if (table === "libraries") {
@@ -126,6 +125,7 @@ export async function exportLibraryBackupJsonFromDatabase(
     }
     dump[table] = sanitizeBackupRows(table, rows);
   }
+  validateEvidenceShelfBackupGraph(dump, LIBRARY_BACKUP_VERSION);
   return JSON.stringify(
     {
       version: LIBRARY_BACKUP_VERSION,
