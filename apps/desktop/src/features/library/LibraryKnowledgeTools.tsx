@@ -4,7 +4,7 @@ import type { KnowledgeContentSearchResult } from "../../services/knowledge-sear
 import { resolveKnowledgeSearchReaderPath } from "../../services/knowledge-search-navigation";
 import { describeSafeError } from "../../services/sensitive-text";
 import { KnowledgeIndexPlanner } from "./KnowledgeIndexPlanner";
-import { KnowledgeSearchPanel } from "./KnowledgeSearchPanel";
+import { KnowledgeSearchPanel, type KnowledgeSearchOpenOptions } from "./KnowledgeSearchPanel";
 import { LocalSemanticIndexControl } from "./LocalSemanticIndexControl";
 
 export interface LibraryKnowledgeToolsProps {
@@ -21,22 +21,26 @@ export function LibraryKnowledgeTools({
 }: LibraryKnowledgeToolsProps) {
   const navigate = useNavigate();
   const openKnowledgeSearchResult = useCallback(
-    async (result: KnowledgeContentSearchResult) => {
+    async (result: KnowledgeContentSearchResult, { signal }: KnowledgeSearchOpenOptions) => {
+      if (signal.aborted) return;
       const workId = result.workId?.trim();
       if (!workId) {
-        onMessage("该检索结果没有可打开的文献来源。");
+        if (!signal.aborted) onMessage("该检索结果没有可打开的文献来源。");
         return;
       }
       try {
-        const readerPath = await resolveKnowledgeSearchReaderPath(result);
+        const readerPath = await resolveKnowledgeSearchReaderPath(result, { signal });
         if (!readerPath) {
-          onMessage("该检索结果的原始 PDF 修订不可用，未跳转到其他版本。");
+          if (!signal.aborted) {
+            onMessage("该检索结果的原始 PDF 修订不可用，未跳转到其他版本。");
+          }
           return;
         }
+        signal.throwIfAborted();
         onSelectWork(workId);
         navigate(readerPath);
       } catch (cause) {
-        onMessage(`打开检索来源失败:${describeSafeError(cause)}`);
+        if (!signal.aborted) onMessage(`打开检索来源失败:${describeSafeError(cause)}`);
       }
     },
     [navigate, onMessage, onSelectWork],

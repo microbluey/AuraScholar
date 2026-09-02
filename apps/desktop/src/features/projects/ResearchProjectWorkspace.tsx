@@ -3,6 +3,8 @@ import { useMemo, useRef, useState } from "react";
 import { Button } from "@aurascholar/ui";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 import { InlineNotice } from "../../components/InlineNotice";
+import type { KnowledgeContentSearchResult } from "../../services/knowledge-search";
+import type { KnowledgeSearchOpenOptions } from "../library/KnowledgeSearchPanel";
 import type { ResearchProjectService } from "../../services/research-project-service";
 import type {
   ResearchProjectBusyAction,
@@ -12,6 +14,7 @@ import type {
 import { ProjectSourceList } from "./ProjectSourceList";
 import { ProjectSourcePicker } from "./ProjectSourcePicker";
 import { ResearchProjectSwitcher } from "./ResearchProjectSwitcher";
+import { KnowledgeSearchPanel } from "../library/KnowledgeSearchPanel";
 
 export interface ResearchProjectWorkspaceProps {
   busyAction: ResearchProjectBusyAction | null;
@@ -21,6 +24,10 @@ export interface ResearchProjectWorkspaceProps {
   onCreate(name: string): Promise<boolean>;
   onDismissFeedback(): void;
   onOpenSource(workId: string): void;
+  onOpenKnowledgeResult(
+    result: KnowledgeContentSearchResult,
+    options: KnowledgeSearchOpenOptions,
+  ): Promise<void>;
   onRemoveWork(workId: string): Promise<boolean>;
   onRename(name: string): Promise<boolean>;
   onSelect(projectId: string): void;
@@ -39,6 +46,7 @@ export function ResearchProjectWorkspace({
   onCreate,
   onDismissFeedback,
   onOpenSource,
+  onOpenKnowledgeResult,
   onRemoveWork,
   onRename,
   onSelect,
@@ -64,6 +72,18 @@ export function ResearchProjectWorkspace({
   }, [normalizedQuery, sources]);
   const pdfCount = sources.filter((source) => source.pdfCount > 0).length;
   const annotatedCount = sources.filter((source) => source.annotationCount > 0).length;
+  const knowledgeScope = useMemo(
+    () => ({ kind: "project" as const, projectId: project.id }),
+    [project.id],
+  );
+  const knowledgeScopeRevision = useMemo(
+    () =>
+      [...sources]
+        .map((source) => source.workId)
+        .sort()
+        .join("\u0000"),
+    [sources],
+  );
 
   const requestRemove = async (source: ResearchProjectSource) => {
     const approved = await confirm({
@@ -142,6 +162,15 @@ export function ResearchProjectWorkspace({
           </span>
         </div>
       </section>
+
+      <KnowledgeSearchPanel
+        key={project.id}
+        enabled={!previewMode}
+        onOpenResult={onOpenKnowledgeResult}
+        scope={knowledgeScope}
+        scopeLabel={`项目 · ${project.name}`}
+        scopeRevision={knowledgeScopeRevision}
+      />
 
       <section
         className="research-project-sources"

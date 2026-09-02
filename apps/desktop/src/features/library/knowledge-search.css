@@ -45,6 +45,7 @@
 }
 
 .knowledge-search__scope,
+.knowledge-search__corpus-scope,
 .knowledge-search-result__source {
   display: inline-flex;
   flex: 0 0 auto;
@@ -58,6 +59,20 @@
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.knowledge-search__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.knowledge-search__corpus-scope {
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
 }
 
 .knowledge-search__query {
@@ -248,6 +263,10 @@
   .knowledge-search-result > header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .knowledge-search__badges {
+    justify-content: flex-start;
   }
 
   .knowledge-search-result__heading {

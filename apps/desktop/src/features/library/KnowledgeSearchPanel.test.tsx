@@ -7,6 +7,7 @@ import {
   knowledgeSearchRetrievalPresentation,
   sourceTypesForKnowledgeSearchFilter,
 } from "./KnowledgeSearchPanel";
+import { knowledgeSearchScopeLabel } from "./knowledge-search-scope";
 
 function result(
   overrides: Partial<KnowledgeContentSearchResult> = {},
@@ -40,6 +41,8 @@ describe("KnowledgeSearchPanel", () => {
     expect(markup).toContain("内容检索");
     expect(markup).toContain("PDF、批注和 Evidence");
     expect(markup).toContain("当前为本地关键词检索");
+    expect(markup).toContain("整个资料库");
+    expect(markup).toContain('aria-label="当前检索范围：整个资料库"');
     expect(markup).toContain('aria-label="当前检索模式：关键词检索"');
     expect(markup).toContain('placeholder="搜索已索引内容，例如研究方法或关键结论"');
     expect(markup).toContain('aria-label="按来源筛选已索引内容"');
@@ -122,5 +125,22 @@ describe("KnowledgeSearchPanel", () => {
       detail: expect.stringContaining("未找到可用于中文偏好的语种标记"),
       label: "关键词检索",
     });
+  });
+
+  it("keeps the visible project label separate from the strict command scope", () => {
+    const markup = renderToStaticMarkup(
+      <KnowledgeSearchPanel
+        enabled
+        onOpenResult={vi.fn()}
+        scope={{ kind: "project", projectId: "project:one" }}
+        scopeLabel="项目 · 设计研究"
+      />,
+    );
+
+    expect(markup).toContain("项目 · 设计研究");
+    expect(markup).toContain('aria-label="当前检索范围：项目 · 设计研究"');
+    expect(knowledgeSearchScopeLabel({ kind: "project", projectId: "project:one" })).toBe(
+      "当前项目",
+    );
   });
 });
