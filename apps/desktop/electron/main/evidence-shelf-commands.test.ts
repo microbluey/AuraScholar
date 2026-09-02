@@ -159,6 +159,9 @@ describe("Evidence Shelf main-process commands", () => {
         throw new Error("transaction lease acquired");
       },
     };
+    const sparseHeadingPath = [] as string[];
+    sparseHeadingPath.length = 2;
+    sparseHeadingPath[1] = "Sampling";
     const invalidInputs: unknown[] = [
       { libraryId: " ", projectId: fixture.projectId },
       { ...stageInput(), extra: true },
@@ -173,6 +176,10 @@ describe("Evidence Shelf main-process commands", () => {
       { ...stageInput(), anchorSnapshot: [] },
       { ...stageInput(), previewPayload: { ...previewFor(fixture.contentUnit), text: "" } },
       {
+        ...stageInput(),
+        previewPayload: { ...previewFor(fixture.contentUnit), headingPath: sparseHeadingPath },
+      },
+      {
         expectedRevisionId: fixture.contentUnit.revisionId,
         expectedSourceContentHash: "short",
         itemId: "shelf:item",
@@ -182,6 +189,7 @@ describe("Evidence Shelf main-process commands", () => {
     ];
     const names = [
       "evidenceShelf.list",
+      "evidenceShelf.stage",
       "evidenceShelf.stage",
       "evidenceShelf.stage",
       "evidenceShelf.stage",
