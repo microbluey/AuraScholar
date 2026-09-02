@@ -1,5 +1,5 @@
 import { BookOpenText, FilePdf, MagnifyingGlass, Plus, Quotes, X } from "@phosphor-icons/react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@aurascholar/ui";
 import { useConfirmDialog } from "../../components/ConfirmDialog";
 import { InlineNotice } from "../../components/InlineNotice";
@@ -25,6 +25,11 @@ import { ProjectSourcePicker } from "./ProjectSourcePicker";
 import { ResearchProjectSwitcher } from "./ResearchProjectSwitcher";
 import { KnowledgeSearchPanel } from "../library/KnowledgeSearchPanel";
 import { EvidenceShelfPanel } from "./EvidenceShelfPanel";
+import {
+  isEvidenceShelfStageScopeCurrent,
+  stageEvidenceShelfWithAbortRefresh,
+  type EvidenceShelfStageScope,
+} from "./evidence-shelf-stage-refresh";
 
 const EMPTY_SHELF_IDS: ReadonlySet<string> = new Set();
 
@@ -93,6 +98,19 @@ export function ResearchProjectWorkspace({
   // preview must never accidentally reach the persistence IPC commands.
   const activeShelfService =
     shelfService ?? (previewMode ? previewEvidenceShelfService : evidenceShelfService);
+  const shelfStageScope = useMemo<EvidenceShelfStageScope<EvidenceShelfService>>(
+    () => ({ previewMode, projectId: project.id, service: activeShelfService }),
+    [activeShelfService, previewMode, project.id],
+  );
+  const shelfStageScopeRef = useRef<EvidenceShelfStageScope<EvidenceShelfService> | null>(
+    shelfStageScope,
+  );
+  useLayoutEffect(() => {
+    shelfStageScopeRef.current = shelfStageScope;
+    return () => {
+      if (shelfStageScopeRef.current === shelfStageScope) shelfStageScopeRef.current = null;
+    };
+  }, [shelfStageScope]);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleSources = useMemo(() => {
     if (!normalizedQuery) return sources;
@@ -169,11 +187,24 @@ export function ResearchProjectWorkspace({
     options: KnowledgeSearchOpenOptions,
   ) => {
     if (previewMode) throw new Error("浏览器预览不会保存 Evidence Shelf");
-    await activeShelfService.stage(project.id, result, options);
-    // The write may have succeeded just as the caller's signal was aborted.
-    // Refresh before rethrowing so a persisted row is not stranded in stale UI.
-    setShelfRefreshToken((current) => current + 1);
-    options.signal.throwIfAborted();
+    const expectedScope = shelfStageScopeRef.current;
+    if (!expectedScope) {
+      options.signal.throwIfAborted();
+      throw new Error("Evidence Shelf scope is no longer active");
+    }
+    await stageEvidenceShelfWithAbortRefresh({
+      currentScope: () => shelfStageScopeRef.current,
+      expectedScope,
+      refresh: () => {
+        setShelfRefreshToken((current) =>
+          isEvidenceShelfStageScopeCurrent(expectedScope, shelfStageScopeRef.current)
+            ? current + 1
+            : current,
+        );
+      },
+      signal: options.signal,
+      stage: () => expectedScope.service.stage(expectedScope.projectId, result, options),
+    });
   };
 
   return (

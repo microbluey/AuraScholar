@@ -1,12 +1,5 @@
-import {
-  ArrowUpRight,
-  Check,
-  CircleNotch,
-  Trash,
-  Tray,
-  WarningCircle,
-} from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { CircleNotch, Tray, WarningCircle } from "@phosphor-icons/react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import "./evidence-shelf.css";
 import type { KnowledgeContentSearchResult } from "../../services/knowledge-search";
 import {
@@ -17,8 +10,12 @@ import {
   type EvidenceShelfService,
 } from "../../services/evidence-shelf";
 import type { KnowledgeSearchOpenOptions } from "../library/KnowledgeSearchPanel";
-import { sourceTypeLabel } from "../library/KnowledgeSearchResultCard";
 import { EvidenceShelfPromoteDialog } from "./EvidenceShelfPromoteDialog";
+import { EvidenceShelfItemCard } from "./EvidenceShelfItemCard";
+import {
+  isEvidenceShelfPromotionReconcileCurrent,
+  reconcileEvidenceShelfPromotionAfterAbort,
+} from "./evidence-shelf-promotion-reconcile";
 
 type ShelfPhase = "error" | "loading" | "ready";
 
@@ -61,6 +58,8 @@ export function EvidenceShelfPanel({
   const itemsRef = useRef<EvidenceShelfItem[]>([]);
   const listControllerRef = useRef<AbortController | null>(null);
   const actionControllerRef = useRef<AbortController | null>(null);
+  const actionGenerationRef = useRef(0);
+  const committedScopeRef = useRef({ enabled, projectId, refreshToken, service });
   const requestIdRef = useRef(0);
   const clearing = busyId === "clear";
   const activePromoteSelection =
@@ -80,6 +79,11 @@ export function EvidenceShelfPanel({
     },
     [onItemsChange],
   );
+
+  useLayoutEffect(() => {
+    committedScopeRef.current = { enabled, projectId, refreshToken, service };
+    actionGenerationRef.current += 1;
+  }, [enabled, projectId, refreshToken, service]);
 
   useEffect(() => {
     requestIdRef.current += 1;
@@ -110,6 +114,7 @@ export function EvidenceShelfPanel({
         setPhase("error");
       });
     return () => {
+      actionGenerationRef.current += 1;
       controller.abort();
       if (listControllerRef.current === controller) listControllerRef.current = null;
       if (requestId === requestIdRef.current) {
@@ -120,6 +125,7 @@ export function EvidenceShelfPanel({
 
   const removeItem = async (item: EvidenceShelfItem) => {
     if (!enabled || service.mode !== "desktop") return;
+    actionGenerationRef.current += 1;
     setNotice(null);
     const controller = beginAction(setBusyId, item.id, actionControllerRef);
     try {
@@ -139,7 +145,16 @@ export function EvidenceShelfPanel({
 
   const promoteShelfItem = async (item: EvidenceShelfItem, draft: EvidenceShelfPromotionDraft) => {
     if (!enabled || service.mode !== "desktop") return;
+    const actionGeneration = ++actionGenerationRef.current;
+    const promotionScope = {
+      enabled: true,
+      generation: actionGeneration,
+      projectId,
+      refreshToken,
+      service,
+    };
     const controller = beginAction(setBusyId, item.id, actionControllerRef);
+    let promotionDispatched = false;
     setError(null);
     setNotice(null);
     try {
@@ -161,6 +176,16 @@ export function EvidenceShelfPanel({
         );
         throw new Error("来源修订或内容已变化，请重新检索并加入 Shelf");
       }
+      if (
+        !isEvidenceShelfPromotionReconcileCurrent(promotionScope, {
+          ...committedScopeRef.current,
+          generation: actionGenerationRef.current,
+        })
+      ) {
+        controller.abort();
+        controller.signal.throwIfAborted();
+      }
+      promotionDispatched = true;
       const promoted = await service.promote(projectId, resolved.item, draft, {
         signal: controller.signal,
       });
@@ -173,7 +198,28 @@ export function EvidenceShelfPanel({
       );
       setNotice("已核验并保存为 Evidence");
     } catch (cause) {
-      if (!controller.signal.aborted) setError(describeShelfError(cause));
+      if (controller.signal.aborted && promotionDispatched) {
+        void reconcileEvidenceShelfPromotionAfterAbort({
+          expectedScope: {
+            enabled: true,
+            generation: actionGeneration,
+            projectId,
+            refreshToken,
+            service,
+          },
+          currentScope: () => ({
+            generation: actionGenerationRef.current,
+            ...committedScopeRef.current,
+          }),
+          itemId: item.id,
+          list: () => service.list(projectId),
+          selectionScope: { projectId, refreshToken, service },
+          setError,
+          setNotice,
+          setSelection: setPromoteSelection,
+          updateItems,
+        });
+      } else if (!controller.signal.aborted) setError(describeShelfError(cause));
       throw cause;
     } finally {
       finishAction(controller, setBusyId, actionControllerRef);
@@ -182,6 +228,7 @@ export function EvidenceShelfPanel({
 
   const clearShelf = async () => {
     if (!enabled || service.mode !== "desktop" || clearing) return;
+    actionGenerationRef.current += 1;
     setNotice(null);
     const controller = beginAction(setBusyId, "clear", actionControllerRef);
     try {
@@ -199,6 +246,7 @@ export function EvidenceShelfPanel({
 
   const openItem = async (item: EvidenceShelfItem) => {
     if (!enabled || service.mode !== "desktop") return;
+    actionGenerationRef.current += 1;
     const controller = beginAction(setBusyId, item.id, actionControllerRef);
     try {
       const resolved = await service.resolveForSave(projectId, item, { signal: controller.signal });
@@ -266,7 +314,7 @@ export function EvidenceShelfPanel({
       ) : (
         <div className="evidence-shelf__items" aria-label="项目 Evidence Shelf">
           {items.map((item) => (
-            <ShelfItemCard
+            <EvidenceShelfItemCard
               key={item.id}
               busy={busyId === item.id}
               item={item}
@@ -297,54 +345,6 @@ export function EvidenceShelfPanel({
         />
       ) : null}
     </section>
-  );
-}
-
-function ShelfItemCard({
-  busy,
-  item,
-  onPromote,
-  onOpen,
-  onRemove,
-}: {
-  busy: boolean;
-  item: EvidenceShelfItem;
-  onPromote: () => void;
-  onOpen: () => void;
-  onRemove: () => void;
-}) {
-  const payload = item.previewPayload;
-  const page = readPageIndex(item.anchorSnapshot);
-  const stale = item.status === "stale" || item.isStale;
-  return (
-    <article className={`evidence-shelf-item${stale ? " evidence-shelf-item--stale" : ""}`}>
-      <div className="evidence-shelf-item__copy">
-        <div className="evidence-shelf-item__meta">
-          <span>{sourceTypeLabel(payload.sourceType)}</span>
-          {page === null ? <span>原文定位不可用</span> : <span>第 {page + 1} 页</span>}
-          {stale ? (
-            <b>需要重新核验</b>
-          ) : (
-            <b>
-              <Check size={12} /> 已暂存
-            </b>
-          )}
-        </div>
-        {payload.workTitle ? <h3>{payload.workTitle}</h3> : null}
-        <p>{payload.excerpt.trim() || payload.text.trim()}</p>
-      </div>
-      <div className="evidence-shelf-item__actions">
-        <button type="button" onClick={onPromote} disabled={busy || stale || page === null}>
-          {busy ? "处理中…" : page === null ? "无法定位原文" : "保存为 Evidence"}
-        </button>
-        <button type="button" onClick={onOpen} disabled={busy || stale || page === null}>
-          <ArrowUpRight size={14} /> {busy ? "正在核验…" : "打开上下文"}
-        </button>
-        <button type="button" onClick={onRemove} disabled={busy} aria-label="移除 Shelf 项目">
-          <Trash size={14} />
-        </button>
-      </div>
-    </article>
   );
 }
 
@@ -382,12 +382,6 @@ function finishAction(
   if (ref.current !== controller) return;
   ref.current = null;
   setBusyId(null);
-}
-
-function readPageIndex(anchor: unknown): number | null {
-  if (!anchor || typeof anchor !== "object" || Array.isArray(anchor)) return null;
-  const value = (anchor as Record<string, unknown>).pageIndex;
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 function describeShelfError(cause: unknown): string {
