@@ -115,6 +115,15 @@ export async function executeEvidenceShelfCommand(
           // state before the repository persists the snapshot.
           previewPayload: await canonicalPreviewPayload(database, canonical),
         });
+        // The list budget is also a write admission limit. Keep this check in
+        // the same transaction as stage so an insert or deleted-row restore
+        // that would strand the Shelf over its IPC contract is rolled back.
+        const budget = await readEvidenceShelfListBudget(
+          database,
+          input.libraryId,
+          input.projectId,
+        );
+        assertEvidenceShelfListBudget(budget);
         return { created: staged.created, item: toShelfItem(staged.item) };
       });
     }
