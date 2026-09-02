@@ -21,6 +21,7 @@
 
 .research-project-header,
 .research-project-summary,
+.research-project-page > .knowledge-search,
 .research-project-sources {
   width: min(1120px, 100%);
   margin-inline: auto;

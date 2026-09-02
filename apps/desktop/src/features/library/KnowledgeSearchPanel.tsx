@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./knowledge-search.css";
 import type {
+  KnowledgeCorpusScope,
   KnowledgeContentSearchRetrieval,
   KnowledgeContentSearchResult,
 } from "../../services/knowledge-search";
@@ -10,6 +11,7 @@ import {
 } from "../../services/knowledge-search";
 import { knowledgeSearchReaderTarget } from "../../services/knowledge-search-navigation";
 import { describeSafeError } from "../../services/sensitive-text";
+import { knowledgeSearchScopeKey, knowledgeSearchScopeLabel } from "./knowledge-search-scope";
 
 const SEARCH_DEBOUNCE_MS = 220;
 
@@ -24,8 +26,21 @@ const SOURCE_FILTERS: readonly KnowledgeSearchSourceFilter[] = [
 ];
 
 export interface KnowledgeSearchPanelProps {
+  /** User-selected corpus scope; the main process resolves its immutable source snapshot. */
+  scope?: KnowledgeCorpusScope;
+  /** Human-readable scope label kept separate from the command payload. */
+  scopeLabel?: string;
+  /** Changes when the owning scope membership changes, so stale results are hidden immediately. */
+  scopeRevision?: string;
   enabled: boolean;
-  onOpenResult: (result: KnowledgeContentSearchResult) => void | Promise<void>;
+  onOpenResult: (
+    result: KnowledgeContentSearchResult,
+    options: KnowledgeSearchOpenOptions,
+  ) => void | Promise<void>;
+}
+
+export interface KnowledgeSearchOpenOptions {
+  signal: AbortSignal;
 }
 
 export interface KnowledgeSearchRetrievalPresentation {
@@ -72,7 +87,13 @@ export function knowledgeSearchRetrievalPresentation(
   };
 }
 
-export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchPanelProps) {
+export function KnowledgeSearchPanel({
+  enabled,
+  onOpenResult,
+  scope,
+  scopeLabel,
+  scopeRevision = "",
+}: KnowledgeSearchPanelProps) {
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<KnowledgeSearchSourceFilter>("all");
   const [results, setResults] = useState<KnowledgeContentSearchResult[]>([]);
@@ -81,10 +102,30 @@ export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchP
   );
   const [searchState, setSearchState] = useState<SearchState>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [opening, setOpening] = useState<{
+    contextKey: string;
+    controller: AbortController;
+    id: string;
+  } | null>(null);
+  const [renderedContextKey, setRenderedContextKey] = useState<string | null>(null);
   const requestIdRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const openingControllerRef = useRef<AbortController | null>(null);
   const normalizedQuery = query.trim();
+  const scopeKey = knowledgeSearchScopeKey(scope);
+  const contextKey = JSON.stringify([
+    scopeKey,
+    scopeRevision,
+    sourceFilter,
+    normalizedQuery,
+    enabled,
+  ]);
+  const currentContext = renderedContextKey === contextKey;
+  const visibleResults = currentContext ? results : [];
+  const visibleRetrieval = currentContext ? retrieval : DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL;
+  const visibleSearchState = currentContext ? searchState : "idle";
+  const visibleError = currentContext ? error : null;
+  const corpusLabel = knowledgeSearchScopeLabel(scope, scopeLabel);
 
   useEffect(() => {
     requestIdRef.current += 1;
@@ -98,13 +139,16 @@ export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchP
     const sourceTypes = sourceTypesForKnowledgeSearchFilter(sourceFilter);
     controllerRef.current = controller;
     const timeoutId = window.setTimeout(() => {
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return;
       setResults([]);
       setRetrieval(DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL);
       setError(null);
       setSearchState("loading");
+      setRenderedContextKey(contextKey);
       void searchKnowledgeContent(normalizedQuery, {
         limit: 20,
         signal: controller.signal,
+        ...(scope ? { scope } : {}),
         ...(sourceTypes ? { sourceTypes } : {}),
       })
         .then((response) => {
@@ -124,21 +168,37 @@ export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchP
     return () => {
       window.clearTimeout(timeoutId);
       controller.abort();
+      openingControllerRef.current?.abort();
     };
-  }, [enabled, normalizedQuery, sourceFilter]);
+  }, [contextKey, enabled, normalizedQuery, scope, sourceFilter]);
 
   const openResult = async (result: KnowledgeContentSearchResult) => {
-    setOpeningId(result.id);
+    const requestId = requestIdRef.current;
+    const controller = new AbortController();
+    openingControllerRef.current?.abort();
+    openingControllerRef.current = controller;
+    setOpening({ contextKey, controller, id: result.id });
     try {
-      await onOpenResult(result);
+      await onOpenResult(result, { signal: controller.signal });
+      controller.signal.throwIfAborted();
     } catch (cause) {
-      setError(`打开检索来源失败:${describeSafeError(cause)}`);
+      if (!controller.signal.aborted && requestId === requestIdRef.current) {
+        setError(`打开检索来源失败:${describeSafeError(cause)}`);
+        setSearchState("error");
+      }
     } finally {
-      setOpeningId((current) => (current === result.id ? null : current));
+      if (openingControllerRef.current === controller) openingControllerRef.current = null;
+      setOpening((current) =>
+        current?.contextKey === contextKey &&
+        current.id === result.id &&
+        current.controller === controller
+          ? null
+          : current,
+      );
     }
   };
 
-  const retrievalPresentation = knowledgeSearchRetrievalPresentation(retrieval);
+  const retrievalPresentation = knowledgeSearchRetrievalPresentation(visibleRetrieval);
 
   return (
     <section
@@ -151,12 +211,21 @@ export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchP
           <h2 id="knowledge-search-title">内容检索</h2>
           <span>{retrievalPresentation.detail}</span>
         </div>
-        <span
-          className="knowledge-search__scope"
-          aria-label={`当前检索模式：${retrievalPresentation.label}`}
-        >
-          {retrievalPresentation.label}
-        </span>
+        <div className="knowledge-search__badges">
+          <span
+            className="knowledge-search__corpus-scope"
+            aria-label={`当前检索范围：${corpusLabel}`}
+            title={corpusLabel}
+          >
+            {corpusLabel}
+          </span>
+          <span
+            className="knowledge-search__scope"
+            aria-label={`当前检索模式：${retrievalPresentation.label}`}
+          >
+            {retrievalPresentation.label}
+          </span>
+        </div>
       </div>
 
       {enabled ? (
@@ -211,27 +280,35 @@ export function KnowledgeSearchPanel({ enabled, onOpenResult }: KnowledgeSearchP
           </div>
 
           <div className="knowledge-search__feedback" aria-live="polite">
-            {searchState === "loading" ? <span role="status">正在检索本地索引…</span> : null}
-            {searchState === "error" && error ? <span role="alert">{error}</span> : null}
-            {searchState === "ready" && normalizedQuery ? (
+            {visibleSearchState === "loading" ? <span role="status">正在检索本地索引…</span> : null}
+            {visibleSearchState === "error" && visibleError ? (
+              <span role="alert">{visibleError}</span>
+            ) : null}
+            {visibleSearchState === "ready" && normalizedQuery ? (
               <span>
-                {results.length > 0 ? `找到 ${results.length} 条来源片段` : "没有找到已索引内容"}
+                {visibleResults.length > 0
+                  ? `找到 ${visibleResults.length} 条来源片段`
+                  : "没有找到已索引内容"}
               </span>
             ) : null}
           </div>
 
-          {searchState === "ready" && normalizedQuery && results.length === 0 ? (
+          {visibleSearchState === "ready" && normalizedQuery && visibleResults.length === 0 ? (
             <p className="knowledge-search__empty">
               可尝试更短的关键词；新导入的 PDF 会在完成本地索引后出现在这里。
             </p>
           ) : null}
 
-          {normalizedQuery && results.length > 0 ? (
+          {normalizedQuery && visibleResults.length > 0 ? (
             <div className="knowledge-search__results" aria-label="内容检索结果">
-              {results.map((result) => (
+              {visibleResults.map((result) => (
                 <KnowledgeSearchResultCard
                   key={result.id}
-                  opening={openingId === result.id}
+                  opening={
+                    opening?.contextKey === contextKey &&
+                    opening.id === result.id &&
+                    !opening.controller.signal.aborted
+                  }
                   result={result}
                   onOpen={() => void openResult(result)}
                 />

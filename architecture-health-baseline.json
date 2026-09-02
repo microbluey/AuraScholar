@@ -4,9 +4,9 @@
   "source": {
     "production": {
       "byExtension": {
-        ".css": 19321,
-        ".ts": 89563,
-        ".tsx": 35973
+        ".css": 19341,
+        ".ts": 89583,
+        ".tsx": 36097
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 196,
@@ -282,13 +282,13 @@
         "apps/desktop/src/features/evidence/useEvidenceInboxController.ts": 459,
         "apps/desktop/src/features/library/CollectionManager.tsx": 243,
         "apps/desktop/src/features/library/KnowledgeIndexPlanner.tsx": 283,
-        "apps/desktop/src/features/library/KnowledgeSearchPanel.tsx": 317,
+        "apps/desktop/src/features/library/KnowledgeSearchPanel.tsx": 394,
         "apps/desktop/src/features/library/LibraryActionIconButton.tsx": 56,
         "apps/desktop/src/features/library/LibraryBulkActionBar.tsx": 277,
         "apps/desktop/src/features/library/LibraryCollectionManagement.tsx": 66,
         "apps/desktop/src/features/library/LibraryInlineSearch.css": 7,
         "apps/desktop/src/features/library/LibraryInlineSearch.tsx": 68,
-        "apps/desktop/src/features/library/LibraryKnowledgeTools.tsx": 52,
+        "apps/desktop/src/features/library/LibraryKnowledgeTools.tsx": 56,
         "apps/desktop/src/features/library/LibrarySelectedWorkPanel.tsx": 399,
         "apps/desktop/src/features/library/LibrarySelectedWorkSections.tsx": 365,
         "apps/desktop/src/features/library/LibraryUtilityControls.tsx": 68,
@@ -296,7 +296,8 @@
         "apps/desktop/src/features/library/TagManager.tsx": 166,
         "apps/desktop/src/features/library/TextPromptDialog.tsx": 189,
         "apps/desktop/src/features/library/knowledge-index-controls.css": 278,
-        "apps/desktop/src/features/library/knowledge-search.css": 265,
+        "apps/desktop/src/features/library/knowledge-search-scope.ts": 19,
+        "apps/desktop/src/features/library/knowledge-search.css": 284,
         "apps/desktop/src/features/library/library-collection-events.ts": 36,
         "apps/desktop/src/features/library/library-collection-model.ts": 78,
         "apps/desktop/src/features/library/library-import-files.ts": 18,
@@ -318,7 +319,7 @@
         "apps/desktop/src/features/projects/ProjectSourcePicker.tsx": 209,
         "apps/desktop/src/features/projects/ProjectTargetPicker.tsx": 320,
         "apps/desktop/src/features/projects/ResearchProjectSwitcher.tsx": 346,
-        "apps/desktop/src/features/projects/ResearchProjectWorkspace.tsx": 226,
+        "apps/desktop/src/features/projects/ResearchProjectWorkspace.tsx": 255,
         "apps/desktop/src/features/projects/model.ts": 106,
         "apps/desktop/src/features/projects/project-ingress-adapter.ts": 51,
         "apps/desktop/src/features/projects/project-ingress-controller.ts": 273,
@@ -328,7 +329,7 @@
         "apps/desktop/src/features/projects/projects.css": 372,
         "apps/desktop/src/features/projects/research-project-controller.ts": 305,
         "apps/desktop/src/features/projects/research-project-dialog.css": 305,
-        "apps/desktop/src/features/projects/research-project-workspace.css": 492,
+        "apps/desktop/src/features/projects/research-project-workspace.css": 493,
         "apps/desktop/src/features/projects/routes.ts": 34,
         "apps/desktop/src/features/projects/useProjectIngress.tsx": 133,
         "apps/desktop/src/features/projects/useProjectSourceSearch.ts": 28,
@@ -358,7 +359,7 @@
         "apps/desktop/src/pages/HomepagePage.tsx": 1113,
         "apps/desktop/src/pages/LibraryPage.tsx": 3952,
         "apps/desktop/src/pages/ReaderPage.tsx": 2060,
-        "apps/desktop/src/pages/ResearchProjectPage.tsx": 262,
+        "apps/desktop/src/pages/ResearchProjectPage.tsx": 276,
         "apps/desktop/src/pages/SentinelPage.tsx": 1202,
         "apps/desktop/src/pages/SettingsPage.tsx": 1970,
         "apps/desktop/src/pages/SnippetsPage.tsx": 1130,
@@ -382,7 +383,7 @@
         "apps/desktop/src/services/import-refs.ts": 21,
         "apps/desktop/src/services/knowledge-index-stats.ts": 19,
         "apps/desktop/src/services/knowledge-search-navigation.ts": 120,
-        "apps/desktop/src/services/knowledge-search.ts": 59,
+        "apps/desktop/src/services/knowledge-search.ts": 60,
         "apps/desktop/src/services/knowledge-semantic-index.ts": 34,
         "apps/desktop/src/services/library-actions.ts": 110,
         "apps/desktop/src/services/library-annotation-recovery.ts": 20,
@@ -630,12 +631,12 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 144857
+      "totalLines": 145021
     },
     "tests": {
       "byExtension": {
-        ".ts": 90966,
-        ".tsx": 1035
+        ".ts": 90968,
+        ".tsx": 1114
       },
       "files": {
         "apps/desktop/electron/main/ai-commands-architecture.test.ts": 92,
@@ -889,7 +890,7 @@
         "apps/desktop/src/features/evidence/reader-evidence-capture.test.ts": 106,
         "apps/desktop/src/features/evidence/useEvidenceInboxController.test.ts": 162,
         "apps/desktop/src/features/library/KnowledgeIndexPlanner.test.tsx": 52,
-        "apps/desktop/src/features/library/KnowledgeSearchPanel.test.tsx": 126,
+        "apps/desktop/src/features/library/KnowledgeSearchPanel.test.tsx": 146,
         "apps/desktop/src/features/library/LibraryBulkActionBar.test.tsx": 55,
         "apps/desktop/src/features/library/LibraryInlineSearch.test.tsx": 38,
         "apps/desktop/src/features/library/LocalSemanticIndexControl.test.tsx": 21,
@@ -902,6 +903,7 @@
         "apps/desktop/src/features/library/useSelectedWorkRuntimeMeta.test.ts": 212,
         "apps/desktop/src/features/projects/ProjectTargetPicker.test.tsx": 90,
         "apps/desktop/src/features/projects/ResearchProjectSwitcher.test.tsx": 72,
+        "apps/desktop/src/features/projects/ResearchProjectWorkspace.test.tsx": 59,
         "apps/desktop/src/features/projects/model.test.ts": 37,
         "apps/desktop/src/features/projects/project-ingress-adapter.test.ts": 81,
         "apps/desktop/src/features/projects/project-ingress-controller.test.ts": 238,
@@ -939,7 +941,7 @@
         "apps/desktop/src/services/import-refs.test.ts": 60,
         "apps/desktop/src/services/knowledge-index-stats.test.ts": 59,
         "apps/desktop/src/services/knowledge-search-navigation.test.ts": 168,
-        "apps/desktop/src/services/knowledge-search.test.ts": 100,
+        "apps/desktop/src/services/knowledge-search.test.ts": 102,
         "apps/desktop/src/services/knowledge-semantic-index.test.ts": 88,
         "apps/desktop/src/services/library-actions.test.ts": 207,
         "apps/desktop/src/services/library-annotation-recovery.test.ts": 33,
@@ -1066,7 +1068,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 92001
+      "totalLines": 92082
     }
   },
   "uiDatabaseBoundary": {}

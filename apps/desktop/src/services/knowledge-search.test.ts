@@ -50,6 +50,7 @@ describe("Knowledge search desktop gateway", () => {
       searchKnowledgeContent("  grounded anchor  ", {
         includeContextOnly: false,
         limit: 12,
+        scope: { kind: "project", projectId: "project:service" },
         sourceTypes: ["pdf"],
         workId: "work:service",
       }),
@@ -63,6 +64,7 @@ describe("Knowledge search desktop gateway", () => {
       libraryId: "library:service",
       limit: 12,
       query: "grounded anchor",
+      scope: { kind: "project", projectId: "project:service" },
       sourceTypes: ["pdf"],
       workId: "work:service",
     });

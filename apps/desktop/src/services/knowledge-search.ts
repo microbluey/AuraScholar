@@ -6,6 +6,7 @@ import type {
 import { getActiveLibraryCommandScope } from "./library-command-scope";
 
 export type {
+  KnowledgeCorpusScope,
   KnowledgeContentSearchRetrieval,
   KnowledgeContentSearchResult,
 } from "../../electron/data-command-contract";

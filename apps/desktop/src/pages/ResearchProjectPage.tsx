@@ -3,6 +3,9 @@ import { Button } from "@aurascholar/ui";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ResearchProjectWorkspace } from "../features/projects/ResearchProjectWorkspace";
+import type { KnowledgeSearchOpenOptions } from "../features/library/KnowledgeSearchPanel";
+import type { KnowledgeContentSearchResult } from "../services/knowledge-search";
+import { resolveKnowledgeSearchReaderPath } from "../services/knowledge-search-navigation";
 import {
   readLastResearchProjectId,
   rememberLastResearchProjectId,
@@ -210,6 +213,17 @@ export function ResearchProjectPage({
       }}
       onDismissFeedback={dismissFeedback}
       onOpenSource={(workId) => navigate(`/reader?work=${encodeURIComponent(workId)}`)}
+      onOpenKnowledgeResult={async (
+        result: KnowledgeContentSearchResult,
+        { signal }: KnowledgeSearchOpenOptions,
+      ) => {
+        const readerPath = await resolveKnowledgeSearchReaderPath(result, { signal });
+        if (!readerPath) {
+          throw new Error("该检索结果的原始 PDF 修订不可用");
+        }
+        signal.throwIfAborted();
+        navigate(readerPath);
+      }}
       onRemoveWork={async (workId) => (await removeWork(workId)).status === "completed"}
       onRename={async (name) => (await renameProject(name)).status === "completed"}
       onSelect={(nextProjectId) => navigate(researchProjectPath(nextProjectId))}
