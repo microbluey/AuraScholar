@@ -9,6 +9,7 @@ import {
   knowledgeResultFromEvidenceShelfItem,
   previewEvidenceShelfService,
   toPreviewPayload,
+  type EvidenceShelfPromotionDraft,
   type EvidenceShelfItem,
 } from "./evidence-shelf";
 
@@ -134,6 +135,37 @@ describe("Evidence Shelf renderer gateway", () => {
     });
   });
 
+  it("maps a promotion draft to the project-local command with an optimistic CAS version", async () => {
+    const promoted = {
+      created: true,
+      evidence: { id: "evidence:shelf", libraryId: "library:shelf" },
+      projectMembershipAdded: true,
+      removedFromShelf: true,
+    };
+    command.mockResolvedValue(promoted);
+    const draft: EvidenceShelfPromotionDraft = {
+      evidenceKind: "method",
+      noteMd: "核验后保留这条方法证据",
+      tags: ["方法", "核验"],
+      title: "实验方法",
+    };
+
+    await expect(
+      createDesktopEvidenceShelfService().promote("project:shelf", item(), draft),
+    ).resolves.toEqual(promoted);
+
+    expect(command).toHaveBeenCalledWith("evidenceShelf.promote", {
+      expectedUpdatedAt: 1,
+      evidenceKind: "method",
+      itemId: "shelf:item",
+      libraryId: "library:shelf",
+      noteMd: "核验后保留这条方法证据",
+      projectId: "project:shelf",
+      tags: ["方法", "核验"],
+      title: "实验方法",
+    });
+  });
+
   it("fails closed in browser preview and never calls the IPC bridge", async () => {
     const candidate = result();
     await expect(previewEvidenceShelfService.list("project:shelf")).resolves.toEqual([]);
@@ -149,6 +181,9 @@ describe("Evidence Shelf renderer gateway", () => {
     await expect(previewEvidenceShelfService.clear("project:shelf")).rejects.toThrow(
       "仅在桌面应用中可保存",
     );
+    await expect(
+      previewEvidenceShelfService.promote("project:shelf", item(), { evidenceKind: "context" }),
+    ).rejects.toThrow("仅在桌面应用中可保存");
     expect(command).not.toHaveBeenCalled();
   });
 
@@ -183,6 +218,35 @@ describe("Evidence Shelf renderer gateway", () => {
     });
     late.abort();
     resolveCommand({ items: [item()] });
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("drops a late promotion response after its action is cancelled", async () => {
+    let resolveCommand!: (value: {
+      created: boolean;
+      evidence: { id: string; libraryId: string };
+      projectMembershipAdded: boolean;
+      removedFromShelf: true;
+    }) => void;
+    command.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCommand = resolve;
+      }),
+    );
+    const controller = new AbortController();
+    const pending = createDesktopEvidenceShelfService().promote(
+      "project:shelf",
+      item(),
+      { evidenceKind: "context" },
+      { signal: controller.signal },
+    );
+    controller.abort();
+    resolveCommand({
+      created: true,
+      evidence: { id: "evidence:shelf", libraryId: "library:shelf" },
+      projectMembershipAdded: true,
+      removedFromShelf: true,
+    });
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 

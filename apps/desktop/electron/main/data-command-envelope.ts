@@ -54,6 +54,7 @@ const SUPPORTED_DATA_COMMAND_NAMES = new Set<DataCommandName>([
   "evidenceShelf.clear",
   "evidenceShelf.list",
   "evidenceShelf.remove",
+  "evidenceShelf.promote",
   "evidenceShelf.resolveForSave",
   "evidenceShelf.stage",
   "knowledge.buildSemanticIndex",

@@ -29,15 +29,25 @@ import {
   requireRecordId,
   type DataCommandDependencies,
 } from "./data-command-runtime";
+import {
+  executeEvidenceShelfPromotionCommand,
+  type EvidenceShelfPromotionCommandRequest,
+} from "./evidence-shelf-promotion-command";
 
 type EvidenceShelfCommandName =
   | "evidenceShelf.clear"
   | "evidenceShelf.list"
   | "evidenceShelf.remove"
   | "evidenceShelf.resolveForSave"
-  | "evidenceShelf.stage";
+  | "evidenceShelf.stage"
+  | "evidenceShelf.promote";
 
-type EvidenceShelfCommandRequest = Extract<DataCommandRequest, { name: EvidenceShelfCommandName }>;
+type EvidenceShelfCommandRequest =
+  | Extract<
+      DataCommandRequest,
+      { name: Exclude<EvidenceShelfCommandName, "evidenceShelf.promote"> }
+    >
+  | EvidenceShelfPromotionCommandRequest;
 
 const MAX_PREVIEW_TEXT_LENGTH = 256 * 1024;
 const MAX_PREVIEW_HEADING_LENGTH = 256;
@@ -63,6 +73,8 @@ export async function executeEvidenceShelfCommand(
   dependencies: DataCommandDependencies,
 ): Promise<DataCommandOutput<EvidenceShelfCommandName>> {
   switch (request.name) {
+    case "evidenceShelf.promote":
+      return executeEvidenceShelfPromotionCommand(request, dependencies);
     case "evidenceShelf.list": {
       const input = parseListInput(request.input);
       return executeShelfQuery(dependencies, request.name, async (database) => {

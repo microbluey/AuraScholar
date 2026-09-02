@@ -3,6 +3,8 @@ import type {
   EvidenceShelfItem,
   EvidenceShelfPreviewPayload,
   ListEvidenceShelfCommandInput,
+  PromoteEvidenceShelfCommandInput,
+  PromoteEvidenceShelfCommandResult,
   RemoveEvidenceShelfCommandInput,
   ResolveEvidenceShelfForSaveCommandInput,
   StageEvidenceShelfCommandInput,
@@ -21,6 +23,12 @@ export interface EvidenceShelfServiceOptions {
   signal?: AbortSignal;
 }
 
+/** User-editable fields for promoting one staged snapshot into Evidence. */
+export type EvidenceShelfPromotionDraft = Pick<
+  PromoteEvidenceShelfCommandInput,
+  "evidenceKind" | "noteMd" | "tags" | "title"
+>;
+
 export interface EvidenceShelfService {
   readonly mode: "desktop" | "preview";
   clear(projectId: string, options?: EvidenceShelfServiceOptions): Promise<number>;
@@ -31,6 +39,12 @@ export interface EvidenceShelfService {
     expectedUpdatedAt: number,
     options?: EvidenceShelfServiceOptions,
   ): Promise<boolean>;
+  promote(
+    projectId: string,
+    item: Pick<EvidenceShelfItem, "id" | "updatedAt">,
+    draft: EvidenceShelfPromotionDraft,
+    options?: EvidenceShelfServiceOptions,
+  ): Promise<PromoteEvidenceShelfCommandResult>;
   resolveForSave(
     projectId: string,
     item: Pick<EvidenceShelfItem, "id" | "revisionId" | "sourceContentHash">,
@@ -86,6 +100,25 @@ export function createDesktopEvidenceShelfService(): EvidenceShelfService {
       throwIfAborted(signal);
       return result.removed;
     },
+    async promote(projectId, item, draft, options) {
+      const signal = options?.signal;
+      throwIfAborted(signal);
+      const libraryId = await getActiveLibraryCommandScope();
+      throwIfAborted(signal);
+      const input: PromoteEvidenceShelfCommandInput = {
+        expectedUpdatedAt: item.updatedAt,
+        evidenceKind: draft.evidenceKind,
+        itemId: item.id,
+        libraryId,
+        projectId,
+        ...(draft.noteMd !== undefined ? { noteMd: draft.noteMd } : {}),
+        ...(draft.tags !== undefined ? { tags: draft.tags } : {}),
+        ...(draft.title !== undefined ? { title: draft.title } : {}),
+      };
+      const result = await window.aura.data.command("evidenceShelf.promote", input);
+      throwIfAborted(signal);
+      return result;
+    },
     async resolveForSave(projectId, item, options) {
       const signal = options?.signal;
       throwIfAborted(signal);
@@ -132,6 +165,9 @@ export const previewEvidenceShelfService: EvidenceShelfService = {
     return [];
   },
   async remove(_projectId, _itemId, _expectedUpdatedAt, options) {
+    throwPreviewWrite(options?.signal);
+  },
+  async promote(_projectId, _item, _draft, options) {
     throwPreviewWrite(options?.signal);
   },
   async resolveForSave(_projectId, _item, options) {
