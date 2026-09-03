@@ -161,6 +161,7 @@ async function evaluateProvider(
   );
 
   const indexService = new LocalSemanticIndexService({
+    assertJobLease: async () => {},
     ensureVectorRuntime: vi.fn().mockResolvedValue(undefined),
     getEmbeddingProvider: vi.fn().mockResolvedValue(candidateProvider),
     inspect: (operation) => coordinator.execute(operation),

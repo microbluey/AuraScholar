@@ -5,6 +5,8 @@ import {
   EmbeddingProfilesRepo,
   KnowledgeChangesRepo,
   KnowledgeIndexesRepo,
+  KnowledgeJobLeaseLostError,
+  KnowledgeJobsRepo,
   WorksRepo,
   type ContentUnit,
   type Database,
@@ -192,6 +194,109 @@ describe("SqliteVecIndexStore", () => {
     await expect(indexes.listEntries(index.id)).resolves.toEqual([
       expect.objectContaining({ contentUnitId: unit.id, status: "pending", vectorRef: null }),
     ]);
+  });
+
+  it("rejects a vector batch after its worker lease is reclaimed", async () => {
+    const unit = contentUnit("content-unit:lease-fence", { sourceId: "revision:lease-fence" });
+    await units.upsertMany([unit]);
+    const index = await beginHybridIndex();
+    const jobs = new KnowledgeJobsRepo(database, libraryId);
+    const queued = await jobs.enqueue({
+      availableAt: 0,
+      indexId: index.id,
+      kind: "embed",
+      sourceId: libraryId,
+      sourceType: "library",
+    });
+    const base = Date.now();
+    await jobs.claimNext("worker-a", { now: base, leaseMs: 1_000 });
+    const running = await jobs.start(queued.job.id, "worker-a", { now: base, leaseMs: 1_000 });
+    if (!running) throw new Error("test lease did not start");
+    expect(await jobs.recoverExpiredLeases(base + 1_001)).toBe(1);
+    expect(await jobs.claimNext("worker-b", { now: base + 1_001, leaseMs: 1_000 })).not.toBeNull();
+
+    await expect(
+      store.persist({
+        entries: [{ contentUnitId: unit.id, vector: new Float32Array([1, 0]) }],
+        indexId: index.id,
+        job: running,
+        libraryId,
+        sourceChangeSeq: index.sourceChangeSeq,
+      }),
+    ).rejects.toThrow("Knowledge job lease is no longer owned");
+    await expect(nativeTableExists()).resolves.toBe(false);
+    await expect(indexes.listEntries(index.id)).resolves.toEqual([
+      expect.objectContaining({ contentUnitId: unit.id, status: "pending", vectorRef: null }),
+    ]);
+  });
+
+  it("rejects a vector batch when its lease belongs to another Library", async () => {
+    const unit = contentUnit("content-unit:foreign-lease");
+    await units.upsertMany([unit]);
+    const index = await beginHybridIndex();
+    const queued = await new KnowledgeJobsRepo(database, libraryId).enqueue({
+      availableAt: 0,
+      indexId: index.id,
+      kind: "embed",
+      sourceId: libraryId,
+      sourceType: "library",
+    });
+    const foreignJob = {
+      ...queued.job,
+      libraryId: "library:foreign",
+      leaseOwner: "worker:foreign",
+      leaseExpiresAt: Date.now() + 60_000,
+    };
+
+    await expect(
+      store.persist({
+        entries: [{ contentUnitId: unit.id, vector: new Float32Array([1, 0]) }],
+        indexId: index.id,
+        job: foreignJob,
+        libraryId,
+        sourceChangeSeq: index.sourceChangeSeq,
+      }),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
+    await expect(nativeTableExists()).resolves.toBe(false);
+  });
+
+  it("rejects a vector batch when its live lease targets another index", async () => {
+    const unit = contentUnit("content-unit:wrong-index");
+    await units.upsertMany([unit]);
+    const sourceIndex = await beginHybridIndex();
+    const otherIndex = await beginHybridIndex();
+    const jobs = new KnowledgeJobsRepo(database, libraryId);
+    const queued = await jobs.enqueue({
+      availableAt: 0,
+      indexId: sourceIndex.id,
+      kind: "embed",
+      sourceId: libraryId,
+      sourceType: "library",
+    });
+    const base = Date.now();
+    await jobs.claimNext("worker-target", { now: base, leaseMs: 1_000 });
+    const running = await jobs.start(queued.job.id, "worker-target", {
+      now: base,
+      leaseMs: 1_000,
+    });
+    if (!running) throw new Error("test lease did not start");
+
+    await expect(
+      store.persist({
+        entries: [{ contentUnitId: unit.id, vector: new Float32Array([1, 0]) }],
+        indexId: otherIndex.id,
+        job: running,
+        libraryId,
+        sourceChangeSeq: otherIndex.sourceChangeSeq,
+      }),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
+    await expect(nativeTableExists()).resolves.toBe(false);
+    await expect(indexes.get(otherIndex.id)).resolves.toMatchObject({ status: "building" });
+
+    await indexes.fail(otherIndex.id, new Error("cleanup target"), { now: base + 1 });
+    await expect(
+      store.discardPhysicalRows({ indexId: otherIndex.id, job: running, libraryId }),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
   });
 
   it("discards failed physical rows without hiding failure metadata", async () => {

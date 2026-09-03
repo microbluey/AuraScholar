@@ -111,7 +111,7 @@ class MainProcessKnowledgeQueue implements KnowledgeJobQueue {
   async complete(
     jobId: string,
     owner: string,
-    options?: { now?: number; progress?: unknown | null },
+    options?: { now?: number; progress?: unknown | null; expectedAttempts?: number },
   ): Promise<KnowledgeJobRow | null> {
     return this.withRepo((jobs) => jobs.complete(jobId, owner, options));
   }

@@ -16,6 +16,8 @@ import * as Support from "./knowledge-executor-support.js";
 export * from "./knowledge-executor-support.js";
 
 export interface KnowledgeExecutorDependencies {
+  /** Fences every executor-owned durable write to the current queue claim. */
+  assertJobLease(database: Database, job: KnowledgeJobRow): Promise<void>;
   inspect<T>(operation: (database: Database) => T | Promise<T>): Promise<T>;
   materializeSemanticIndex?(
     job: KnowledgeJobRow,
@@ -77,6 +79,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
     const prepared = await this.dependencies.transaction(
       "knowledge.extract.prepare",
       async (database) => {
+        await this.dependencies.assertJobLease(database, job);
         if (await Support.isJobSuperseded(database, job))
           return { kind: "Support.skipped", reason: "superseded" } as const;
         const source = await Support.revisionSource(database, job.libraryId, job.sourceId);
@@ -119,6 +122,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
       const persisted = await this.dependencies.transaction(
         "knowledge.extract.persist",
         async (database) => {
+          await this.dependencies.assertJobLease(database, job);
           if (await Support.isJobSuperseded(database, job)) return false;
           const current = await Support.revisionSource(database, job.libraryId, job.sourceId);
           if (
@@ -162,6 +166,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
   ): Promise<void> {
     try {
       await this.dependencies.transaction("knowledge.extract.failed", async (database) => {
+        await this.dependencies.assertJobLease(database, job);
         if (await Support.isJobSuperseded(database, job)) return;
         const current = await Support.revisionSource(database, job.libraryId, job.sourceId);
         if (
@@ -208,6 +213,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
     const persisted = await this.dependencies.transaction(
       "knowledge.annotation.persist",
       async (database) => {
+        await this.dependencies.assertJobLease(database, job);
         if (await Support.isJobSuperseded(database, job)) return false;
         const current = await Support.annotationSource(database, job.libraryId, job.sourceId);
         if (
@@ -262,6 +268,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
     const persisted = await this.dependencies.transaction(
       "knowledge.evidence.persist",
       async (database) => {
+        await this.dependencies.assertJobLease(database, job);
         if (await Support.isJobSuperseded(database, job)) return false;
         const current = await Support.evidenceSource(database, job.libraryId, job.sourceId);
         if (
@@ -319,6 +326,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
     const retired = await this.dependencies.transaction(
       "knowledge.content.retire",
       async (database) => {
+        await this.dependencies.assertJobLease(database, job);
         if (await Support.isJobSuperseded(database, job)) return null;
         return new ContentUnitsRepo(database, job.libraryId).retireSource({ sourceType, sourceId });
       },
@@ -333,6 +341,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
       throw new Error(`Knowledge reindex job cannot process ${job.sourceType} sources`);
     }
     return this.dependencies.transaction("knowledge.reindex", async (database) => {
+      await this.dependencies.assertJobLease(database, job);
       if (await Support.isJobSuperseded(database, job)) return Support.skipped("superseded");
       if (!(await Support.hasActiveLibrary(database, job.libraryId)))
         return Support.skipped("library-missing");
@@ -356,6 +365,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
         [job.libraryId],
       );
       for (const source of revisionRows) {
+        await this.dependencies.assertJobLease(database, job);
         await appendKnowledgeChangeInTransaction(database, {
           libraryId: job.libraryId,
           sourceType: "revision",
@@ -382,6 +392,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
         [job.libraryId],
       );
       for (const row of annotationIds) {
+        await this.dependencies.assertJobLease(database, job);
         const source = await Support.annotationSource(database, job.libraryId, row.id);
         if (!source || !Support.isActiveAnnotation(source)) continue;
         await appendKnowledgeChangeInTransaction(database, {
@@ -406,6 +417,7 @@ export class DesktopKnowledgeJobExecutor implements KnowledgeJobExecutor {
       for (const row of evidenceIds) {
         const source = await Support.evidenceSource(database, job.libraryId, row.id);
         if (!source || !Support.isActiveEvidence(source)) continue;
+        await this.dependencies.assertJobLease(database, job);
         await appendKnowledgeChangeInTransaction(database, {
           libraryId: job.libraryId,
           sourceType: "evidence",

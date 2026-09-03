@@ -4,6 +4,8 @@ import {
   AttachmentsRepo,
   ContentUnitSearchRepo,
   ContentUnitsRepo,
+  KnowledgeJobsRepo,
+  assertKnowledgeJobLease,
   EvidenceRepo,
   WorksRepo,
   appendKnowledgeChangeInTransaction,
@@ -39,6 +41,7 @@ beforeEach(async () => {
   }));
   coordinator = new DatabaseCoordinator(database);
   const dependencies: KnowledgeExecutorDependencies = {
+    assertJobLease: async () => {},
     inspect: (operation) => coordinator.execute(operation),
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
     async readBlob() {
@@ -85,6 +88,63 @@ describe("DesktopKnowledgeJobExecutor", () => {
     await expect(revisionStatus(fixture.revision.id)).resolves.toMatchObject({
       extraction_status: "ready",
       extractor_profile: "pdf-text-v1",
+    });
+  });
+
+  it("rejects a PDF result when its lease is reclaimed while the blob is loading", async () => {
+    const fixture = await seedDocument();
+    const jobs = new KnowledgeJobsRepo(database, libraryId);
+    const queued = await jobs.enqueue({
+      availableAt: 0,
+      expectedContentHash: PDF_SHA,
+      expectedRevisionId: fixture.revision.id,
+      kind: "extract",
+      sourceId: fixture.revision.id,
+      sourceType: "revision",
+    });
+    const base = Date.now();
+    const leased = await jobs.claimNext("worker-a", { now: base, leaseMs: 1_000 });
+    if (!leased) throw new Error("test lease was not created");
+    const running = await jobs.start(queued.job.id, "worker-a", {
+      now: base,
+      leaseMs: 1_000,
+    });
+    if (!running) throw new Error("test lease did not start");
+
+    let releaseBlob!: () => void;
+    const blobReleased = new Promise<void>((resolve) => {
+      releaseBlob = resolve;
+    });
+    let blobStarted!: () => void;
+    const blobLoading = new Promise<void>((resolve) => {
+      blobStarted = resolve;
+    });
+    const fenced = new DesktopKnowledgeJobExecutor({
+      assertJobLease: assertKnowledgeJobLease,
+      inspect: (operation) => coordinator.execute(operation),
+      transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
+      async readBlob() {
+        blobStarted();
+        await blobReleased;
+        return new Uint8Array(PDF_BYTES);
+      },
+      async openPdf() {
+        return fakePdfDocument();
+      },
+    });
+    const execution = fenced.execute(running, new AbortController().signal);
+
+    await blobLoading;
+    expect(await jobs.recoverExpiredLeases(base + 1_001)).toBe(1);
+    expect(await jobs.claimNext("worker-b", { now: base + 1_001, leaseMs: 1_000 })).not.toBeNull();
+    releaseBlob();
+
+    await expect(execution).rejects.toThrow("Knowledge job lease is no longer owned");
+    await expect(
+      new ContentUnitsRepo(database, libraryId).listForSource("pdf", fixture.revision.id),
+    ).resolves.toEqual([]);
+    await expect(revisionStatus(fixture.revision.id)).resolves.toMatchObject({
+      extraction_status: "running",
     });
   });
 
@@ -269,6 +329,7 @@ describe("DesktopKnowledgeJobExecutor", () => {
       progress: { embedded: 2, status: "active" },
     });
     const delegated = new DesktopKnowledgeJobExecutor({
+      assertJobLease: async () => {},
       inspect: (operation) => coordinator.execute(operation),
       materializeSemanticIndex,
       async openPdf() {

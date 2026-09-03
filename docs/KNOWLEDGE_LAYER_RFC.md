@@ -601,6 +601,25 @@ canonical source itself is Project-owned. The state machine defines queued,
 leased/running, retry-wait, completed, cancelled, and terminal-failed states.
 An active-job uniqueness constraint enforces the dedupe key.
 
+Each worker-owned durable write is fenced by the job's `lease_owner`, monotonic
+`attempts` claim epoch, and live `lease_expires_at` value. When the worker has a
+full job row, the immutable target tuple (`kind`, `source_type`, `source_id`,
+and `index_id`) is checked against that same durable row; the native semantic
+index boundary additionally binds the requested Library and generation. The
+executor repeats these comparisons inside every ContentUnit, outbox, generation,
+and vector write transaction; a reclaimed, cancelled, or expired claim therefore
+rolls back any late result. A queue finalization that no longer matches the
+claim is reported as a lost lease, leaving recovery to the newer owner.
+The worker supplies that claim epoch to each post-claim lease transition and finalizer;
+cooperative cancellation may supply the same epoch when it has an owner.
+
+The main-process database coordinator uses a serialized `BEGIN IMMEDIATE`
+boundary, so lease recovery and heartbeat updates cannot interleave with a
+bounded write transaction. Long provider work must remain outside those
+transactions; a transaction that runs through its wall-clock expiry is
+revalidated at its next durable boundary and should be split into smaller
+batches when its workload can exceed the lease window.
+
 The current renderer IPC cannot safely implement a multi-call
 `BEGIN -> mutation -> outbox -> COMMIT` sequence. Gate 0 therefore adds a
 main-process UnitOfWork/command boundary that performs canonical mutation and

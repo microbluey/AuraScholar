@@ -2,6 +2,7 @@ import {
   ContentUnitsRepo,
   KnowledgeChangesRepo,
   KnowledgeIndexesRepo,
+  KnowledgeJobLeaseLostError,
   type ContentUnit,
   type Database,
 } from "@aurascholar/db";
@@ -211,6 +212,47 @@ describe("LocalSemanticIndexService", () => {
     });
   });
 
+  it("rejects a vector batch when its worker lease is lost while the provider is awaiting", async () => {
+    await new ContentUnitsRepo(database, libraryId).upsertMany([
+      contentUnit("content-unit:await-lease", "The lease changes during embedding.", HASH_A),
+    ]);
+    let leaseLost = false;
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let releaseEmbedding!: () => void;
+    const embeddingReleased = new Promise<void>((resolve) => {
+      releaseEmbedding = resolve;
+    });
+    const delayedProvider = {
+      ...provider,
+      embedDocuments: vi.fn(async (texts: readonly string[]) => {
+        signalStarted();
+        await embeddingReleased;
+        return texts.map(() => new Float32Array([1, 0]));
+      }),
+    };
+    const persist = vi.fn().mockResolvedValue([]);
+    const assertJobLease = vi.fn(async () => {
+      if (leaseLost) throw new KnowledgeJobLeaseLostError("job:lease-lost");
+    });
+    const service = serviceWith({
+      assertJobLease,
+      getEmbeddingProvider: vi.fn().mockResolvedValue(delayedProvider),
+      persist,
+    });
+    const queued = await service.enqueueBuild(libraryId);
+    const running = service.materialize(queued.job, new AbortController().signal);
+
+    await started;
+    leaseLost = true;
+    releaseEmbedding();
+
+    await expect(running).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("cleans already-written vectors when a snapshot changes before activation", async () => {
     const unit = contentUnit("content-unit:late-stale", "A late vector must be discarded.", HASH_A);
     await new ContentUnitsRepo(database, libraryId).upsertMany([unit]);
@@ -287,17 +329,23 @@ describe("LocalSemanticIndexService", () => {
 });
 
 function serviceWith({
+  assertJobLease = async () => {},
   discardPhysicalRows,
   ensureVectorRuntime,
   getEmbeddingProvider = vi.fn().mockImplementation(async () => provider),
   persist,
 }: {
+  assertJobLease?: (
+    database: Database,
+    job: import("@aurascholar/db").KnowledgeJobRow,
+  ) => Promise<void>;
   discardPhysicalRows?: ReturnType<typeof vi.fn>;
   ensureVectorRuntime?: ReturnType<typeof vi.fn>;
   getEmbeddingProvider?: ReturnType<typeof vi.fn>;
   persist: ReturnType<typeof vi.fn>;
 }) {
   return new LocalSemanticIndexService({
+    assertJobLease,
     ensureVectorRuntime,
     getEmbeddingProvider,
     inspect: (operation) => coordinator.execute(operation),

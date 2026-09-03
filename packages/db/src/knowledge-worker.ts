@@ -1,5 +1,6 @@
 import { newId } from "./ids.js";
 import type {
+  ClaimKnowledgeJobOptions,
   FailKnowledgeJobOptions,
   KnowledgeJobLeaseOptions,
   KnowledgeJobRow,
@@ -8,7 +9,7 @@ import type {
 /** The durable queue surface a worker needs; easy to exercise with a fake in tests. */
 export interface KnowledgeJobQueue {
   dispatchPendingChanges(limit?: number): Promise<readonly KnowledgeJobRow[]>;
-  claimNext(owner: string, options?: KnowledgeJobLeaseOptions): Promise<KnowledgeJobRow | null>;
+  claimNext(owner: string, options?: ClaimKnowledgeJobOptions): Promise<KnowledgeJobRow | null>;
   start(
     jobId: string,
     owner: string,
@@ -22,7 +23,7 @@ export interface KnowledgeJobQueue {
   complete(
     jobId: string,
     owner: string,
-    options?: { now?: number; progress?: unknown | null },
+    options?: { now?: number; progress?: unknown | null; expectedAttempts?: number },
   ): Promise<KnowledgeJobRow | null>;
   fail(
     jobId: string,
@@ -93,7 +94,10 @@ export class KnowledgeJobWorker {
     const claimed = await this.queue.claimNext(this.owner, { leaseMs: this.leaseMs });
     if (!claimed) return { kind: "idle" };
 
-    const running = await this.queue.start(claimed.id, this.owner, { leaseMs: this.leaseMs });
+    const running = await this.queue.start(claimed.id, this.owner, {
+      leaseMs: this.leaseMs,
+      expectedAttempts: claimed.attempts,
+    });
     if (!running) return { kind: "lost-lease", job: claimed };
 
     const controller = new AbortController();
@@ -105,6 +109,7 @@ export class KnowledgeJobWorker {
       try {
         const renewed = await this.queue.renewLease(running.id, this.owner, {
           leaseMs: this.leaseMs,
+          expectedAttempts: running.attempts,
         });
         if (!renewed) {
           leaseLost = true;
@@ -126,14 +131,17 @@ export class KnowledgeJobWorker {
       if (leaseLost) return { kind: "lost-lease", job: running };
       const completed = await this.queue.complete(running.id, this.owner, {
         progress: execution?.progress ?? null,
+        expectedAttempts: running.attempts,
       });
       return completed
         ? { kind: "completed", job: completed }
         : { kind: "lost-lease", job: running };
     } catch (error) {
       if (leaseLost) return { kind: "lost-lease", job: running };
-      const failed = await this.queue.fail(running.id, this.owner, error);
-      return { kind: "failed", job: failed };
+      const failed = await this.queue.fail(running.id, this.owner, error, {
+        expectedAttempts: running.attempts,
+      });
+      return failed ? { kind: "failed", job: failed } : { kind: "lost-lease", job: running };
     } finally {
       clearInterval(timer);
     }

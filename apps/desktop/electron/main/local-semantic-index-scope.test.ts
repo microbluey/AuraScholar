@@ -194,6 +194,7 @@ function serviceWith(
   } = {},
 ): LocalSemanticIndexService {
   return new LocalSemanticIndexService({
+    assertJobLease: async () => {},
     assertScope: options.assertScope ?? assertActiveLibraryScopeToken,
     ensureVectorRuntime: vi.fn().mockResolvedValue(undefined),
     getEmbeddingProvider: options.getEmbeddingProvider ?? vi.fn().mockResolvedValue(provider),

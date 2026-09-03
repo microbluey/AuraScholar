@@ -3,6 +3,7 @@ import { newId } from "../ids.js";
 import { withDatabaseSavepoint } from "../savepoint.js";
 import { withDatabaseWriteLock } from "./write-lock.js";
 import * as Contract from "./knowledge-contract.js";
+import { failKnowledgeJob } from "./knowledge-job-failure.js";
 import * as Queue from "./knowledge-queue-support.js";
 import * as Utils from "./knowledge-utils.js";
 
@@ -179,14 +180,24 @@ export class KnowledgeJobsRepo {
     Utils.assertOwner(owner);
     const now = Utils.normalizeNow(options.now);
     const leaseMs = Utils.normalizeLeaseMs(options.leaseMs);
+    const expectedAttempts = Utils.normalizeExpectedAttempts(options.expectedAttempts);
+    const attemptsClause = expectedAttempts === undefined ? "" : " AND attempts = ?";
     return withDatabaseWriteLock(this.db, async () => {
       const changed = await this.db.run(
         `UPDATE knowledge_jobs
          SET status = 'running', lease_expires_at = ?,
              updated_at = MAX(updated_at + 1, ?)
          WHERE id = ? AND library_id = ?
-           AND status = 'leased' AND lease_owner = ? AND lease_expires_at > ?`,
-        [now + leaseMs, now, jobId, this.libraryId, owner, now],
+           AND status = 'leased' AND lease_owner = ? AND lease_expires_at > ?${attemptsClause}`,
+        [
+          now + leaseMs,
+          now,
+          jobId,
+          this.libraryId,
+          owner,
+          now,
+          ...(expectedAttempts === undefined ? [] : [expectedAttempts]),
+        ],
       );
       return changed === 1 ? this.getInLibrary(jobId) : null;
     });
@@ -202,14 +213,24 @@ export class KnowledgeJobsRepo {
     Utils.assertOwner(owner);
     const now = Utils.normalizeNow(options.now);
     const leaseMs = Utils.normalizeLeaseMs(options.leaseMs);
+    const expectedAttempts = Utils.normalizeExpectedAttempts(options.expectedAttempts);
+    const attemptsClause = expectedAttempts === undefined ? "" : " AND attempts = ?";
     return withDatabaseWriteLock(this.db, async () => {
       const changed = await this.db.run(
         `UPDATE knowledge_jobs
          SET lease_expires_at = ?, updated_at = MAX(updated_at + 1, ?)
          WHERE id = ? AND library_id = ?
            AND status IN ('leased', 'running')
-           AND lease_owner = ? AND lease_expires_at > ?`,
-        [now + leaseMs, now, jobId, this.libraryId, owner, now],
+           AND lease_owner = ? AND lease_expires_at > ?${attemptsClause}`,
+        [
+          now + leaseMs,
+          now,
+          jobId,
+          this.libraryId,
+          owner,
+          now,
+          ...(expectedAttempts === undefined ? [] : [expectedAttempts]),
+        ],
       );
       return changed === 1 ? this.getInLibrary(jobId) : null;
     });
@@ -219,11 +240,13 @@ export class KnowledgeJobsRepo {
   async complete(
     jobId: string,
     owner: string,
-    options: { now?: number; progress?: unknown | null } = {},
+    options: { now?: number; progress?: unknown | null; expectedAttempts?: number } = {},
   ): Promise<Contract.KnowledgeJobRow | null> {
     Utils.assertId(jobId, "Knowledge job id");
     Utils.assertOwner(owner);
     const now = Utils.normalizeNow(options.now);
+    const expectedAttempts = Utils.normalizeExpectedAttempts(options.expectedAttempts);
+    const attemptsClause = expectedAttempts === undefined ? "" : " AND attempts = ?";
     const progressJson = Utils.serializeJson(options.progress, "Knowledge job progress");
     return withDatabaseWriteLock(this.db, async () => {
       const changed = await this.db.run(
@@ -231,8 +254,16 @@ export class KnowledgeJobsRepo {
          SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
              progress_json = ?, error = NULL, updated_at = MAX(updated_at + 1, ?)
          WHERE id = ? AND library_id = ?
-           AND status = 'running' AND lease_owner = ? AND lease_expires_at > ?`,
-        [progressJson, now, jobId, this.libraryId, owner, now],
+           AND status = 'running' AND lease_owner = ? AND lease_expires_at > ?${attemptsClause}`,
+        [
+          progressJson,
+          now,
+          jobId,
+          this.libraryId,
+          owner,
+          now,
+          ...(expectedAttempts === undefined ? [] : [expectedAttempts]),
+        ],
       );
       return changed === 1 ? this.getInLibrary(jobId) : null;
     });
@@ -248,55 +279,7 @@ export class KnowledgeJobsRepo {
     error: unknown,
     options: Contract.FailKnowledgeJobOptions = {},
   ): Promise<Contract.KnowledgeJobRow | null> {
-    Utils.assertId(jobId, "Knowledge job id");
-    Utils.assertOwner(owner);
-    const now = Utils.normalizeNow(options.now);
-    const message = Queue.summarizeKnowledgeJobError(error);
-    const requestedDelay = options.retryDelayMs;
-    if (
-      requestedDelay !== undefined &&
-      (!Number.isSafeInteger(requestedDelay) || requestedDelay < 0)
-    ) {
-      throw new Error("retryDelayMs must be a non-negative integer");
-    }
-    return withDatabaseWriteLock(this.db, () =>
-      withDatabaseSavepoint(this.db, "knowledge_job_fail", async () => {
-        const jobs = await this.db.query<
-          Pick<Contract.KnowledgeJobStorageRow, "attempts" | "max_attempts">
-        >(
-          `SELECT attempts, max_attempts
-           FROM knowledge_jobs
-           WHERE id = ? AND library_id = ?
-             AND status IN ('leased', 'running')
-             AND lease_owner = ? AND lease_expires_at > ?
-           LIMIT 1`,
-          [jobId, this.libraryId, owner, now],
-        );
-        const job = jobs[0];
-        if (!job) return null;
-        const terminal = job.attempts >= job.max_attempts;
-        const retryDelay = requestedDelay ?? Queue.knowledgeJobRetryDelayMs(job.attempts);
-        const changed = await this.db.run(
-          `UPDATE knowledge_jobs
-           SET status = ?, available_at = ?, lease_owner = NULL, lease_expires_at = NULL,
-               error = ?, updated_at = MAX(updated_at + 1, ?)
-           WHERE id = ? AND library_id = ?
-             AND status IN ('leased', 'running')
-             AND lease_owner = ? AND lease_expires_at > ?`,
-          [
-            terminal ? "terminal-failed" : "retry-wait",
-            terminal ? now : now + retryDelay,
-            message,
-            now,
-            jobId,
-            this.libraryId,
-            owner,
-            now,
-          ],
-        );
-        return changed === 1 ? this.getInLibrary(jobId) : null;
-      }),
-    );
+    return failKnowledgeJob(this.db, this.libraryId, jobId, owner, error, options);
   }
 
   /** Cancels an active job. Supplying owner prevents another worker from cancelling it. */
@@ -306,18 +289,24 @@ export class KnowledgeJobsRepo {
   ): Promise<Contract.KnowledgeJobRow | null> {
     Utils.assertId(jobId, "Knowledge job id");
     if (options.owner !== undefined) Utils.assertOwner(options.owner);
+    if (options.expectedAttempts !== undefined && options.owner === undefined) {
+      throw new Error("expectedAttempts requires an owner");
+    }
     const now = Utils.normalizeNow(options.now);
     const ownerClause =
       options.owner === undefined ? "" : " AND lease_owner = ? AND lease_expires_at > ?";
+    const expectedAttempts = Utils.normalizeExpectedAttempts(options.expectedAttempts);
+    const attemptsClause = expectedAttempts === undefined ? "" : " AND attempts = ?";
     const params: unknown[] = [now, jobId, this.libraryId];
     if (options.owner !== undefined) params.push(options.owner, now);
+    if (expectedAttempts !== undefined) params.push(expectedAttempts);
     return withDatabaseWriteLock(this.db, async () => {
       const changed = await this.db.run(
         `UPDATE knowledge_jobs
          SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
              updated_at = MAX(updated_at + 1, ?)
          WHERE id = ? AND library_id = ?
-           AND status IN ('queued', 'leased', 'running', 'retry-wait')${ownerClause}`,
+           AND status IN ('queued', 'leased', 'running', 'retry-wait')${ownerClause}${attemptsClause}`,
         params,
       );
       return changed === 1 ? this.getInLibrary(jobId) : null;

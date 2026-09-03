@@ -1,10 +1,12 @@
 import {
   contentUnitCanonicalVisibilitySql,
+  assertKnowledgeJobLeaseForIndex,
   EmbeddingProfilesRepo,
   KnowledgeIndexesRepo,
   type EmbeddingProfileRow,
   type KnowledgeIndexEntryRow,
   type KnowledgeIndexRow,
+  type KnowledgeJobRow,
   type Database,
 } from "@aurascholar/db";
 import {
@@ -23,7 +25,6 @@ import {
 
 const MAX_SOURCE_IDS_PER_KNN_QUERY = 250;
 const MAX_VECTOR_WRITE_BATCH_SIZE = 1_000;
-
 export type SqliteVecDatabaseOperation<T> = (database: Database) => Promise<T> | T;
 
 /**
@@ -40,6 +41,7 @@ export interface PersistSqliteVecEntriesInput {
   indexId: string;
   sourceChangeSeq: number;
   expectedScope?: LibraryScopeToken;
+  job?: KnowledgeJobRow;
   entries: readonly {
     contentUnitId: string;
     vector: Float32Array;
@@ -102,6 +104,7 @@ export class SqliteVecIndexStore implements VectorStore {
     const now = normalizeNow(input.now);
 
     return this.dependencies.transaction("knowledge.vector.persist", async (database) => {
+      if (input.job) await assertKnowledgeJobLeaseForIndex(database, input.job, libraryId, indexId);
       await assertLibraryScope(database, libraryId, input.expectedScope);
       const context = await loadIndexContext(database, libraryId, indexId, ["building"]);
       await assertKnowledgeIndexSnapshot(
@@ -225,10 +228,12 @@ export class SqliteVecIndexStore implements VectorStore {
     libraryId: string;
     indexId: string;
     expectedScope?: LibraryScopeToken;
+    job?: KnowledgeJobRow;
   }): Promise<number> {
     const libraryId = normalizeId(input.libraryId, "Vector cleanup Library id");
     const indexId = normalizeId(input.indexId, "Vector cleanup index id");
     return this.dependencies.transaction("knowledge.vector.discard", async (database) => {
+      if (input.job) await assertKnowledgeJobLeaseForIndex(database, input.job, libraryId, indexId);
       await assertLibraryScope(database, libraryId, input.expectedScope);
       const context = await loadIndexContext(database, libraryId, indexId, ["failed", "retired"]);
       if (!(await sqliteVecTableExists(database, context.tableName))) return 0;
@@ -490,8 +495,6 @@ function chunk<T>(values: readonly T[], size: number): T[][] {
 function throwIfAborted(signal: AbortSignal | undefined): void {
   signal?.throwIfAborted();
 }
-
 function compareText(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
+  return left === right ? 0 : left < right ? -1 : 1;
 }
