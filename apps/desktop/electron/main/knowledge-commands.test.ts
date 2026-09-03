@@ -11,16 +11,19 @@ import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DataCommandInput, DataCommandOutput } from "../data-command-contract";
+import type { LibraryScopeToken } from "../library-read-command-contract";
 import { DatabaseCoordinator } from "./database-coordinator";
 import { type DataCommandDependencies } from "./data-command-runtime";
 import { executeKnowledgeCommand } from "./knowledge-commands";
 import type { LocalSemanticSearchInput } from "./local-semantic-search-service";
+import { getActiveLibraryScopeToken } from "./library-scope-token";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 
 let database: Database;
 let libraryId: string;
+let expectedScope: LibraryScopeToken;
 let dependencies: DataCommandDependencies;
 let units: ContentUnitsRepo;
 
@@ -32,6 +35,7 @@ beforeEach(async () => {
     deviceName: "Knowledge commands",
     platform: "test",
   }));
+  expectedScope = await getActiveLibraryScopeToken(database);
   const coordinator = new DatabaseCoordinator(database);
   dependencies = {
     inspect: (operation) => coordinator.execute(operation),
@@ -45,6 +49,10 @@ function command(
   input: DataCommandInput<"knowledge.searchContent">,
 ): Promise<DataCommandOutput<"knowledge.searchContent">> {
   return executeKnowledgeCommand({ input, name: "knowledge.searchContent" }, dependencies);
+}
+
+function knowledgeScope(): LibraryScopeToken {
+  return { ...expectedScope };
 }
 
 function statsCommand(
@@ -102,6 +110,7 @@ describe("Knowledge search data command", () => {
         status: "building",
       },
       job: { id: "job:semantic-build", status: "queued" },
+      scope: expectedScope,
     });
     const getStatus = vi.fn();
     const executeNames: string[] = [];
@@ -121,7 +130,7 @@ describe("Knowledge search data command", () => {
 
     await expect(
       executeKnowledgeCommand(
-        { input: { libraryId }, name: "knowledge.buildSemanticIndex" },
+        { input: { expectedScope: knowledgeScope() }, name: "knowledge.buildSemanticIndex" },
         scopedDependencies,
         { semanticIndex: { enqueueBuild, getStatus } },
       ),
@@ -135,10 +144,11 @@ describe("Knowledge search data command", () => {
         status: "building",
       },
       job: { id: "job:semantic-build", status: "queued" },
+      scope: expectedScope,
     });
     expect(executeNames).toEqual([]);
-    expect(inspectCalls).toBe(1);
-    expect(enqueueBuild).toHaveBeenCalledWith(libraryId);
+    expect(inspectCalls).toBe(2);
+    expect(enqueueBuild).toHaveBeenCalledWith(libraryId, expectedScope);
     expect(getStatus).not.toHaveBeenCalled();
   });
 
@@ -170,7 +180,7 @@ describe("Knowledge search data command", () => {
 
     await expect(
       executeKnowledgeCommand(
-        { input: { libraryId }, name: "knowledge.getSemanticIndexStatus" },
+        { input: { expectedScope: knowledgeScope() }, name: "knowledge.getSemanticIndexStatus" },
         dependencies,
         { semanticIndex: { enqueueBuild, getStatus } },
       ),
@@ -198,8 +208,9 @@ describe("Knowledge search data command", () => {
           status: "failed",
         },
       },
+      scope: expectedScope,
     });
-    expect(getStatus).toHaveBeenCalledWith(libraryId);
+    expect(getStatus).toHaveBeenCalledWith(libraryId, expectedScope);
   });
 
   it("does not resolve a model capability for a foreign semantic-index scope", async () => {
@@ -208,7 +219,12 @@ describe("Knowledge search data command", () => {
 
     await expect(
       executeKnowledgeCommand(
-        { input: { libraryId: "library:foreign" }, name: "knowledge.buildSemanticIndex" },
+        {
+          input: {
+            expectedScope: { libraryId: "library:foreign", scopeToken: expectedScope.scopeToken },
+          },
+          name: "knowledge.buildSemanticIndex",
+        },
         dependencies,
         { semanticIndex: { enqueueBuild, getStatus } },
       ),
@@ -236,7 +252,7 @@ describe("Knowledge search data command", () => {
       transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
     };
 
-    await expect(statsCommand({ libraryId })).resolves.toEqual({
+    await expect(statsCommand({ expectedScope: knowledgeScope() })).resolves.toEqual({
       stats: {
         totalContentUnits: 2,
         readyContentUnits: 1,
@@ -244,11 +260,14 @@ describe("Knowledge search data command", () => {
         sourceCounts: { pdf: 1, annotation: 1, evidence: 0 },
         languageCoverage: { zh: 0, en: 1, other: 0, missing: 0 },
       },
+      scope: expectedScope,
     });
     expect(executeNames).toEqual(["knowledge.getContentStats"]);
-    await expect(statsCommand({ libraryId: "library:foreign" })).rejects.toThrow(
-      "Rejected stale or foreign Library scope",
-    );
+    await expect(
+      statsCommand({
+        expectedScope: { libraryId: "library:foreign", scopeToken: expectedScope.scopeToken },
+      }),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
   });
 
   it("rejects malformed statistics input before acquiring a database query lease", async () => {
@@ -265,10 +284,13 @@ describe("Knowledge search data command", () => {
 
     await expect(
       executeKnowledgeCommand(
-        { input: { libraryId: " " }, name: "knowledge.getContentStats" } as never,
+        {
+          input: { expectedScope: { libraryId: " ", scopeToken: "scope" } },
+          name: "knowledge.getContentStats",
+        } as never,
         rejectingDependencies,
       ),
-    ).rejects.toThrow("Library id");
+    ).rejects.toThrow("Knowledge Library scope is invalid");
     expect(executeCalls).toBe(0);
   });
 
@@ -285,20 +307,28 @@ describe("Knowledge search data command", () => {
       },
     };
     const invalidInputs = [
-      { libraryId, query: 42 },
-      { libraryId, query: "grounded", limit: 0 },
-      { libraryId, query: "grounded", sourceTypes: ["pdf", "pdf"] },
-      { libraryId, query: "grounded", sourceTypes: ["unknown"] },
-      { libraryId, query: "grounded", sourceId: " " },
-      { libraryId, query: "grounded", includeContextOnly: "yes" },
-      { libraryId, query: "x".repeat(1_025) },
-      { libraryId, query: "grounded", scope: { kind: "library", projectId: "unexpected" } },
+      { expectedScope: knowledgeScope(), query: 42 },
+      { expectedScope: knowledgeScope(), query: "grounded", limit: 0 },
+      { expectedScope: knowledgeScope(), query: "grounded", sourceTypes: ["pdf", "pdf"] },
+      { expectedScope: knowledgeScope(), query: "grounded", sourceTypes: ["unknown"] },
+      { expectedScope: knowledgeScope(), query: "grounded", sourceId: " " },
+      { expectedScope: knowledgeScope(), query: "grounded", includeContextOnly: "yes" },
+      { expectedScope: knowledgeScope(), query: "x".repeat(1_025) },
       {
-        libraryId,
+        expectedScope: knowledgeScope(),
+        query: "grounded",
+        scope: { kind: "library", projectId: "unexpected" },
+      },
+      {
+        expectedScope: knowledgeScope(),
         query: "grounded",
         scope: { kind: "works", workIds: ["work:one", "work:one"] },
       },
-      { libraryId, query: "grounded", scope: { kind: "project", projectId: " " } },
+      {
+        expectedScope: knowledgeScope(),
+        query: "grounded",
+        scope: { kind: "project", projectId: " " },
+      },
     ];
 
     for (const input of invalidInputs) {
@@ -342,14 +372,14 @@ describe("Knowledge search data command", () => {
     };
 
     const response = await command({
-      libraryId,
+      expectedScope: knowledgeScope(),
       query: "grounded anchor",
       sourceId: ready.sourceId,
       sourceTypes: ["pdf"],
     });
 
     expect(executeNames).toEqual([]);
-    expect(inspectCalls).toBe(1);
+    expect(inspectCalls).toBe(3);
     expect(transactionCalls).toBe(0);
     expect(response.results).toMatchObject([
       {
@@ -364,13 +394,23 @@ describe("Knowledge search data command", () => {
     expect(response.results[0]).not.toHaveProperty("contentHash");
     expect(response.retrieval).toEqual({ mode: "fulltext", semanticStatus: "not-configured" });
     await expect(
-      command({ libraryId, query: "direct citation", includeContextOnly: true }),
+      command({
+        expectedScope: knowledgeScope(),
+        query: "direct citation",
+        includeContextOnly: true,
+      }),
     ).resolves.toMatchObject({ results: [{ id: contextOnly.id, state: "context-only" }] });
   });
 
-  it("returns no result for an empty query without taking a query lease", async () => {
+  it("returns no result for an empty query after validating its Library scope", async () => {
     let executeCalls = 0;
+    let inspectCalls = 0;
+    const coordinator = new DatabaseCoordinator(database);
     dependencies = {
+      inspect(operation) {
+        inspectCalls += 1;
+        return coordinator.execute(operation);
+      },
       async execute() {
         executeCalls += 1;
         throw new Error("execute reached");
@@ -380,11 +420,13 @@ describe("Knowledge search data command", () => {
       },
     };
 
-    await expect(command({ libraryId, query: "  " })).resolves.toEqual({
+    await expect(command({ expectedScope: knowledgeScope(), query: "  " })).resolves.toEqual({
       results: [],
       retrieval: { mode: "fulltext", semanticStatus: "not-configured" },
+      scope: expectedScope,
     });
     expect(executeCalls).toBe(0);
+    expect(inspectCalls).toBe(1);
   });
 
   it("keeps explicit context-only retrieval on one live full-text corpus", async () => {
@@ -399,7 +441,11 @@ describe("Knowledge search data command", () => {
 
     const response = await executeKnowledgeCommand(
       {
-        input: { includeContextOnly: true, libraryId, query: "diagnostic context" },
+        input: {
+          expectedScope: knowledgeScope(),
+          includeContextOnly: true,
+          query: "diagnostic context",
+        },
         name: "knowledge.searchContent",
       },
       dependencies,
@@ -443,7 +489,10 @@ describe("Knowledge search data command", () => {
     });
 
     const response = await executeKnowledgeCommand(
-      { input: { libraryId, query: "grounded retrieval" }, name: "knowledge.searchContent" },
+      {
+        input: { expectedScope: knowledgeScope(), query: "grounded retrieval" },
+        name: "knowledge.searchContent",
+      },
       dependencies,
       { semanticSearch: { search } },
     );
@@ -490,7 +539,7 @@ describe("Knowledge search data command", () => {
     await expect(
       executeKnowledgeCommand(
         {
-          input: { libraryId, query: "generation consistency" },
+          input: { expectedScope: knowledgeScope(), query: "generation consistency" },
           name: "knowledge.searchContent",
         },
         dependencies,
@@ -519,7 +568,7 @@ describe("Knowledge search data command", () => {
     await expect(
       executeKnowledgeCommand(
         {
-          input: { libraryId, query: "unpinned contract anchor" },
+          input: { expectedScope: knowledgeScope(), query: "unpinned contract anchor" },
           name: "knowledge.searchContent",
         },
         dependencies,
@@ -559,7 +608,7 @@ describe("Knowledge search data command", () => {
     const response = await executeKnowledgeCommand(
       {
         input: {
-          libraryId,
+          expectedScope: knowledgeScope(),
           query: "grounded retrieval",
           scope: { kind: "project", projectId: project.id },
         },
@@ -618,7 +667,7 @@ describe("Knowledge search data command", () => {
 
     const response = await executeKnowledgeCommand(
       {
-        input: { libraryId, query: "英文方法材料中的交叉验证" },
+        input: { expectedScope: knowledgeScope(), query: "英文方法材料中的交叉验证" },
         name: "knowledge.searchContent",
       },
       dependencies,
@@ -640,7 +689,10 @@ describe("Knowledge search data command", () => {
 
   it("rejects stale or foreign Library scopes", async () => {
     await expect(
-      command({ libraryId: "library:foreign", query: "grounded retrieval" }),
+      command({
+        expectedScope: { libraryId: "library:foreign", scopeToken: expectedScope.scopeToken },
+        query: "grounded retrieval",
+      }),
     ).rejects.toThrow("Rejected stale or foreign Library scope");
   });
 });

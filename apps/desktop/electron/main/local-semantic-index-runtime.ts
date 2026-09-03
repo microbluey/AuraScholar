@@ -7,17 +7,16 @@ import {
 } from "./local-embedding-provider";
 import { TransformersJsLocalEmbeddingRuntime } from "./local-embedding-transformers-runtime";
 import { LocalSemanticIndexService } from "./local-semantic-index-service";
+import { assertActiveLibraryScopeToken } from "./library-scope-token";
 import { sqliteVecIndexStore } from "./sqlite-vec-index-runtime";
 
 const selectedModel = LOCAL_EMBEDDING_MODEL_PRESETS.multilingualE5Small;
 const transformersRuntime = new TransformersJsLocalEmbeddingRuntime();
 
-let cachedProvider:
-  | {
-      artifactIdentity: string;
-      provider: LocalEmbeddingProvider;
-    }
-  | null = null;
+let cachedProvider: {
+  artifactIdentity: string;
+  provider: LocalEmbeddingProvider;
+} | null = null;
 
 /**
  * Resolves only an installer-verified artifact from the trusted main process.
@@ -43,6 +42,7 @@ export async function getInstalledLocalEmbeddingProvider(): Promise<LocalEmbeddi
 
 /** Production bridge for durable `embed` jobs and explicit semantic-index creation. */
 export const localSemanticIndexService = new LocalSemanticIndexService({
+  assertScope: assertActiveLibraryScopeToken,
   async ensureVectorRuntime() {
     const status = await getSqliteVecRuntimeStatus();
     if (status.state !== "available") {

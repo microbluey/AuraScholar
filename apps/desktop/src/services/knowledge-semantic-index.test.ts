@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getActiveLibraryCommandScope } from "./library-command-scope";
+import { getActiveLibraryCommandScopeToken } from "./library-command-scope";
 import {
   buildKnowledgeSemanticIndex,
   getKnowledgeSemanticIndexStatus,
 } from "./knowledge-semantic-index";
 
-vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScope: vi.fn() }));
+vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScopeToken: vi.fn() }));
+
+const SCOPE = { libraryId: "library:semantic", scopeToken: "scope:semantic" } as const;
 
 describe("Knowledge semantic-index desktop gateway", () => {
   const command = vi.fn();
@@ -16,7 +18,7 @@ describe("Knowledge semantic-index desktop gateway", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    vi.mocked(getActiveLibraryCommandScope).mockResolvedValue("library:semantic");
+    vi.mocked(getActiveLibraryCommandScopeToken).mockResolvedValue(SCOPE);
   });
 
   it("starts only the fixed local semantic-index command for the active Library", async () => {
@@ -30,6 +32,7 @@ describe("Knowledge semantic-index desktop gateway", () => {
         status: "building",
       },
       job: { id: "job:build", status: "queued" },
+      scope: SCOPE,
     });
 
     await expect(buildKnowledgeSemanticIndex()).resolves.toMatchObject({
@@ -37,7 +40,7 @@ describe("Knowledge semantic-index desktop gateway", () => {
       job: { status: "queued" },
     });
     expect(command).toHaveBeenCalledWith("knowledge.buildSemanticIndex", {
-      libraryId: "library:semantic",
+      expectedScope: SCOPE,
     });
   });
 
@@ -53,11 +56,11 @@ describe("Knowledge semantic-index desktop gateway", () => {
       building: null,
       failed: null,
     } as const;
-    command.mockResolvedValue({ status });
+    command.mockResolvedValue({ status, scope: SCOPE });
 
     await expect(getKnowledgeSemanticIndexStatus()).resolves.toEqual(status);
     expect(command).toHaveBeenCalledWith("knowledge.getSemanticIndexStatus", {
-      libraryId: "library:semantic",
+      expectedScope: SCOPE,
     });
   });
 
@@ -70,13 +73,13 @@ describe("Knowledge semantic-index desktop gateway", () => {
         name: "AbortError",
       },
     );
-    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScopeToken).not.toHaveBeenCalled();
     expect(command).not.toHaveBeenCalled();
 
     const afterScope = new AbortController();
-    vi.mocked(getActiveLibraryCommandScope).mockImplementationOnce(async () => {
+    vi.mocked(getActiveLibraryCommandScopeToken).mockImplementationOnce(async () => {
       afterScope.abort();
-      return "library:semantic";
+      return SCOPE;
     });
     await expect(
       getKnowledgeSemanticIndexStatus({ signal: afterScope.signal }),
@@ -84,5 +87,16 @@ describe("Knowledge semantic-index desktop gateway", () => {
       name: "AbortError",
     });
     expect(command).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the main process acknowledges a different Library generation", async () => {
+    command.mockResolvedValue({
+      status: { active: null, building: null, failed: null },
+      scope: { ...SCOPE, scopeToken: "scope:stale" },
+    });
+
+    await expect(getKnowledgeSemanticIndexStatus()).rejects.toThrow(
+      "Knowledge Library scope does not match the request",
+    );
   });
 });

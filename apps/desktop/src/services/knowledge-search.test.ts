@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeContentSearchResult } from "../../electron/data-command-contract";
-import { getActiveLibraryCommandScope } from "./library-command-scope";
+import { getActiveLibraryCommandScopeToken } from "./library-command-scope";
 import {
   DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL,
   searchKnowledgeContent,
 } from "./knowledge-search";
 
-vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScope: vi.fn() }));
+vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScopeToken: vi.fn() }));
+
+const SCOPE = { libraryId: "library:service", scopeToken: "scope:service" } as const;
 
 const result: KnowledgeContentSearchResult = {
   id: "content-unit:service",
@@ -37,13 +39,14 @@ describe("Knowledge search desktop gateway", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    vi.mocked(getActiveLibraryCommandScope).mockResolvedValue("library:service");
+    vi.mocked(getActiveLibraryCommandScopeToken).mockResolvedValue(SCOPE);
   });
 
   it("obtains local scope and forwards only typed search filters to the command", async () => {
     command.mockResolvedValue({
       results: [result],
       retrieval: { mode: "hybrid", semanticStatus: "used" },
+      scope: SCOPE,
     });
 
     await expect(
@@ -61,7 +64,7 @@ describe("Knowledge search desktop gateway", () => {
 
     expect(command).toHaveBeenCalledWith("knowledge.searchContent", {
       includeContextOnly: false,
-      libraryId: "library:service",
+      expectedScope: SCOPE,
       limit: 12,
       query: "grounded anchor",
       scope: { kind: "project", projectId: "project:service" },
@@ -75,7 +78,7 @@ describe("Knowledge search desktop gateway", () => {
       results: [],
       retrieval: DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL,
     });
-    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScopeToken).not.toHaveBeenCalled();
     expect(command).not.toHaveBeenCalled();
 
     const beforeScope = new AbortController();
@@ -85,12 +88,12 @@ describe("Knowledge search desktop gateway", () => {
     ).rejects.toMatchObject({
       name: "AbortError",
     });
-    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScopeToken).not.toHaveBeenCalled();
 
     const afterScope = new AbortController();
-    vi.mocked(getActiveLibraryCommandScope).mockImplementationOnce(async () => {
+    vi.mocked(getActiveLibraryCommandScopeToken).mockImplementationOnce(async () => {
       afterScope.abort();
-      return "library:service";
+      return SCOPE;
     });
     await expect(
       searchKnowledgeContent("grounded", { signal: afterScope.signal }),
@@ -98,5 +101,17 @@ describe("Knowledge search desktop gateway", () => {
       name: "AbortError",
     });
     expect(command).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the search acknowledgement belongs to another Library generation", async () => {
+    command.mockResolvedValue({
+      results: [result],
+      retrieval: { mode: "fulltext", semanticStatus: "not-configured" },
+      scope: { ...SCOPE, scopeToken: "scope:stale" },
+    });
+
+    await expect(searchKnowledgeContent("grounded")).rejects.toThrow(
+      "Knowledge Library scope does not match the request",
+    );
   });
 });

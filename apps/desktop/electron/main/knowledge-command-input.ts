@@ -3,6 +3,12 @@ import {
   type ContentUnitSourceType,
 } from "@aurascholar/db/repos/knowledge";
 import type { KnowledgeCorpusScope } from "../knowledge-command-contract";
+import type { LibraryScopeToken } from "../library-read-command-contract";
+import {
+  MAX_LIBRARY_SCOPE_ID_BYTES,
+  MAX_LIBRARY_SCOPE_TOKEN_BYTES,
+  libraryScopeUtf8ByteLength,
+} from "../../src/shared/library-scope-limits";
 import { isRecord, requireRecordId } from "./data-command-runtime";
 
 export const MAX_KNOWLEDGE_SEARCH_LIMIT = 100;
@@ -10,6 +16,7 @@ export const MAX_KNOWLEDGE_SCOPE_WORKS = 500;
 const MAX_KNOWLEDGE_SEARCH_QUERY_LENGTH = 1_024;
 
 export interface ParsedSearchKnowledgeContentInput {
+  expectedScope: LibraryScopeToken;
   libraryId: string;
   query: string;
   scope: KnowledgeCorpusScope;
@@ -23,42 +30,95 @@ export interface ParsedSearchKnowledgeContentInput {
 }
 
 export interface ParsedKnowledgeContentStatsInput {
+  expectedScope: LibraryScopeToken;
   libraryId: string;
 }
 
 export function parseContentStatsInput(value: unknown): ParsedKnowledgeContentStatsInput {
-  if (!isRecord(value)) throw new Error("Invalid knowledge.getContentStats input");
-  return { libraryId: requireRecordId(value.libraryId, "Library id") };
+  return parseLibraryInput(value, "knowledge.getContentStats");
 }
 
 export function parseLibraryInput(
   value: unknown,
   commandName: string,
 ): ParsedKnowledgeContentStatsInput {
-  if (!isRecord(value)) throw new Error(`Invalid ${commandName} input`);
-  return { libraryId: requireRecordId(value.libraryId, "Library id") };
+  const input = requireExactInput(value, commandName, ["expectedScope"]);
+  const expectedScope = requireKnowledgeLibraryScopeToken(input.expectedScope);
+  return { expectedScope, libraryId: expectedScope.libraryId };
 }
 
 export function parseSearchContentInput(value: unknown): ParsedSearchKnowledgeContentInput {
-  if (!isRecord(value)) throw new Error("Invalid knowledge.searchContent input");
+  const input = requireExactInput(
+    value,
+    "knowledge.searchContent",
+    ["expectedScope", "query"],
+    [
+      "scope",
+      "limit",
+      "sourceTypes",
+      "sourceId",
+      "workId",
+      "assetId",
+      "revisionId",
+      "includeContextOnly",
+    ],
+  );
+  const expectedScope = requireKnowledgeLibraryScopeToken(input.expectedScope);
   return {
-    libraryId: requireRecordId(value.libraryId, "Library id"),
-    query: requireSearchQuery(value.query),
-    scope: requireKnowledgeCorpusScope(value.scope),
+    expectedScope,
+    libraryId: expectedScope.libraryId,
+    query: requireSearchQuery(input.query),
+    scope: requireKnowledgeCorpusScope(input.scope),
     limit: requireOptionalInteger(
-      value.limit,
+      input.limit,
       "Knowledge search limit",
       1,
       MAX_KNOWLEDGE_SEARCH_LIMIT,
       20,
     ),
-    sourceTypes: requireSourceTypes(value.sourceTypes),
-    sourceId: requireOptionalRecordId(value.sourceId, "ContentUnit source id"),
-    workId: requireOptionalRecordId(value.workId, "Work id"),
-    assetId: requireOptionalRecordId(value.assetId, "Document asset id"),
-    revisionId: requireOptionalRecordId(value.revisionId, "Document revision id"),
-    includeContextOnly: requireOptionalBoolean(value.includeContextOnly, "includeContextOnly"),
+    sourceTypes: requireSourceTypes(input.sourceTypes),
+    sourceId: requireOptionalRecordId(input.sourceId, "ContentUnit source id"),
+    workId: requireOptionalRecordId(input.workId, "Work id"),
+    assetId: requireOptionalRecordId(input.assetId, "Document asset id"),
+    revisionId: requireOptionalRecordId(input.revisionId, "Document revision id"),
+    includeContextOnly: requireOptionalBoolean(input.includeContextOnly, "includeContextOnly"),
   };
+}
+
+function requireExactInput(
+  value: unknown,
+  commandName: string,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`Invalid ${commandName} input`);
+  const allowed = new Set([...requiredKeys, ...optionalKeys]);
+  const keys = Object.keys(value);
+  if (
+    keys.some((key) => !allowed.has(key)) ||
+    requiredKeys.some((key) => !Object.hasOwn(value, key))
+  ) {
+    throw new Error(`Invalid ${commandName} input`);
+  }
+  return value;
+}
+
+function requireKnowledgeLibraryScopeToken(value: unknown): LibraryScopeToken {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 2 ||
+    typeof value.libraryId !== "string" ||
+    !value.libraryId.trim() ||
+    libraryScopeUtf8ByteLength(value.libraryId) > MAX_LIBRARY_SCOPE_ID_BYTES ||
+    containsControlCharacter(value.libraryId) ||
+    typeof value.scopeToken !== "string" ||
+    !value.scopeToken.trim() ||
+    libraryScopeUtf8ByteLength(value.scopeToken) > MAX_LIBRARY_SCOPE_TOKEN_BYTES ||
+    containsControlCharacter(value.scopeToken)
+  ) {
+    throw new Error("Knowledge Library scope is invalid");
+  }
+  return { libraryId: value.libraryId, scopeToken: value.scopeToken };
 }
 
 function requireKnowledgeCorpusScope(value: unknown): KnowledgeCorpusScope {

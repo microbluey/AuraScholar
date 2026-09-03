@@ -20,6 +20,7 @@ import {
 } from "./local-semantic-index-service";
 import { LocalSemanticSearchService } from "./local-semantic-search-service";
 import { SqliteVecIndexStore } from "./sqlite-vec-index";
+import { getActiveLibraryScopeToken } from "./library-scope-token";
 
 const requireFromTest = createRequire(import.meta.url);
 const sqliteVecLoadablePath = resolveSqliteVecLoadablePath();
@@ -402,9 +403,21 @@ async function searchCorpus(
   semanticSearch: LocalSemanticSearchService,
   input: { libraryId: string; query: string; sourceId?: string },
 ): Promise<DataCommandOutput<"knowledge.searchContent">> {
-  return executeKnowledgeCommand({ input, name: "knowledge.searchContent" }, dependencies, {
-    semanticSearch,
-  });
+  const expectedScope = await getActiveLibraryScopeToken(database);
+  return executeKnowledgeCommand(
+    {
+      input: {
+        expectedScope,
+        query: input.query,
+        ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+      },
+      name: "knowledge.searchContent",
+    },
+    dependencies,
+    {
+      semanticSearch,
+    },
+  );
 }
 
 function percentile(values: readonly number[], fraction: number): number {
