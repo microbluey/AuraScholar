@@ -1,4 +1,4 @@
-import type { Database } from "@aurascholar/db";
+import { ContentUnitsRepo, type Database } from "@aurascholar/db";
 import { ensureLocalFirstState } from "@aurascholar/db/local-first";
 import { runMigrations } from "@aurascholar/db/migrations";
 import { createNodeDatabase } from "@aurascholar/db/node";
@@ -134,6 +134,49 @@ describe("LocalSemanticIndexService Library scope boundaries", () => {
       "Rejected stale or foreign Library scope",
     );
   });
+
+  it("rejects a worker result after switching Libraries during embedding", async () => {
+    await new ContentUnitsRepo(database, libraryId).upsertMany([
+      {
+        id: "content-unit:worker-scope",
+        libraryId,
+        sourceType: "pdf",
+        sourceId: "revision:worker-scope",
+        workId: null,
+        assetId: null,
+        revisionId: null,
+        parentUnitId: null,
+        ordinal: 0,
+        headingPath: null,
+        anchor: { kind: "pdf", pageIndex: 0, version: 1 },
+        text: "Worker scope guard",
+        language: "en",
+        tokenCount: 3,
+        contentHash: "f".repeat(64),
+        extractorProfile: "test-extractor-v1",
+        chunkProfile: "test-chunk-v1",
+        state: "ready",
+      },
+    ]);
+    const delayed = deferredProvider(provider);
+    const persist = vi.fn().mockResolvedValue([]);
+    const service = serviceWith({
+      getEmbeddingProvider: vi.fn().mockResolvedValue(delayed.provider),
+      persist,
+    });
+    const queued = await service.enqueueBuild(libraryId);
+    const running = service.materialize(queued.job, new AbortController().signal);
+
+    await delayed.started;
+    await switchLocalLibrary("library:semantic-worker-switched");
+    delayed.release();
+
+    await expect(running).rejects.toThrow("Rejected stale or foreign Library scope");
+    expect(persist).not.toHaveBeenCalled();
+    await expect(indexRows(libraryId)).resolves.toEqual([
+      expect.objectContaining({ id: queued.index.id, status: "building" }),
+    ]);
+  });
 });
 
 function serviceWith(
@@ -143,6 +186,7 @@ function serviceWith(
       expectedScope: LibraryScopeToken,
     ) => Promise<LibraryScopeToken>;
     getEmbeddingProvider?: ReturnType<typeof vi.fn>;
+    persist?: ReturnType<typeof vi.fn>;
     transaction?: <T>(
       commandName: string,
       operation: (database: Database) => T | Promise<T>,
@@ -159,9 +203,30 @@ function serviceWith(
       options.transaction ??
       ((commandName, operation) => coordinator.transaction(commandName, operation)),
     vectorWriter: {
-      persist: vi.fn().mockResolvedValue([]),
+      persist: options.persist ?? vi.fn().mockResolvedValue([]),
     },
   });
+}
+
+function deferredProvider(base: LocalSemanticEmbeddingProvider): {
+  provider: LocalSemanticEmbeddingProvider;
+  release: () => void;
+  started: Promise<void>;
+} {
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
+  let releaseEmbedding!: () => void;
+  const released = new Promise<void>((resolve) => {
+    releaseEmbedding = resolve;
+  });
+  const embedDocuments = vi.fn(async (texts: readonly string[]) => {
+    signalStarted();
+    await released;
+    return texts.map(() => new Float32Array([1, 0]));
+  });
+  return { provider: { ...base, embedDocuments }, release: releaseEmbedding, started };
 }
 
 async function switchLocalLibrary(nextLibraryId: string): Promise<void> {
