@@ -1,5 +1,6 @@
 import { newId } from "./ids.js";
 import type {
+  ClaimKnowledgeJobOptions,
   FailKnowledgeJobOptions,
   KnowledgeJobLeaseOptions,
   KnowledgeJobRow,
@@ -8,7 +9,7 @@ import type {
 /** The durable queue surface a worker needs; easy to exercise with a fake in tests. */
 export interface KnowledgeJobQueue {
   dispatchPendingChanges(limit?: number): Promise<readonly KnowledgeJobRow[]>;
-  claimNext(owner: string, options?: KnowledgeJobLeaseOptions): Promise<KnowledgeJobRow | null>;
+  claimNext(owner: string, options?: ClaimKnowledgeJobOptions): Promise<KnowledgeJobRow | null>;
   start(
     jobId: string,
     owner: string,

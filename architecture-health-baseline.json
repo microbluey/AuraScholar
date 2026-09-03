@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19726,
-        ".ts": 95275,
+        ".ts": 95378,
         ".tsx": 36958
       },
       "files": {
@@ -525,8 +525,8 @@
         "packages/db/src/evidence-shelf-schema.ts": 79,
         "packages/db/src/fts.ts": 16,
         "packages/db/src/ids.ts": 76,
-        "packages/db/src/index.ts": 250,
-        "packages/db/src/knowledge-worker.ts": 172,
+        "packages/db/src/index.ts": 253,
+        "packages/db/src/knowledge-worker.ts": 173,
         "packages/db/src/library-schema.ts": 85,
         "packages/db/src/local-first.ts": 155,
         "packages/db/src/migration-catalog.ts": 15,
@@ -571,11 +571,11 @@
         "packages/db/src/repos/knowledge-index-support.ts": 475,
         "packages/db/src/repos/knowledge-indexes.ts": 493,
         "packages/db/src/repos/knowledge-job-failure.ts": 90,
-        "packages/db/src/repos/knowledge-job-lease.ts": 73,
+        "packages/db/src/repos/knowledge-job-lease.ts": 170,
         "packages/db/src/repos/knowledge-jobs-repo.ts": 466,
         "packages/db/src/repos/knowledge-queue-support.ts": 195,
         "packages/db/src/repos/knowledge-utils.ts": 137,
-        "packages/db/src/repos/knowledge.ts": 27,
+        "packages/db/src/repos/knowledge.ts": 29,
         "packages/db/src/repos/project-work-lifecycle.ts": 85,
         "packages/db/src/repos/research-projects.ts": 492,
         "packages/db/src/repos/saved-searches.ts": 349,
@@ -664,11 +664,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 151959
+      "totalLines": 152062
     },
     "tests": {
       "byExtension": {
-        ".ts": 96104,
+        ".ts": 96194,
         ".tsx": 1280
       },
       "files": {
@@ -855,7 +855,7 @@
         "apps/desktop/electron/main/smoke/window-layout.ts": 13,
         "apps/desktop/electron/main/snippet-commands-architecture.test.ts": 57,
         "apps/desktop/electron/main/snippet-commands.test.ts": 220,
-        "apps/desktop/electron/main/sqlite-vec-index.test.ts": 457,
+        "apps/desktop/electron/main/sqlite-vec-index.test.ts": 496,
         "apps/desktop/electron/main/sqlite-vec-runtime.test.ts": 60,
         "apps/desktop/electron/main/staged-pdf-verification.test.ts": 173,
         "apps/desktop/electron/main/sync-command-input.test.ts": 88,
@@ -1073,7 +1073,7 @@
         "packages/db/src/repos/graph-cache-lifecycle.test.ts": 75,
         "packages/db/src/repos/knowledge-corpus-scope.test.ts": 343,
         "packages/db/src/repos/knowledge-indexes.test.ts": 314,
-        "packages/db/src/repos/knowledge-job-lease.test.ts": 93,
+        "packages/db/src/repos/knowledge-job-lease.test.ts": 144,
         "packages/db/src/repos/knowledge-search.test.ts": 475,
         "packages/db/src/repos/knowledge.test.ts": 512,
         "packages/db/src/repos/project-work-lifecycle.test.ts": 113,
@@ -1116,7 +1116,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 97384
+      "totalLines": 97474
     }
   },
   "uiDatabaseBoundary": {}

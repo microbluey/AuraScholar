@@ -1,6 +1,6 @@
 import {
   contentUnitCanonicalVisibilitySql,
-  assertKnowledgeJobLeaseForLibrary,
+  assertKnowledgeJobLeaseForIndex,
   EmbeddingProfilesRepo,
   KnowledgeIndexesRepo,
   type EmbeddingProfileRow,
@@ -104,7 +104,7 @@ export class SqliteVecIndexStore implements VectorStore {
     const now = normalizeNow(input.now);
 
     return this.dependencies.transaction("knowledge.vector.persist", async (database) => {
-      if (input.job) await assertKnowledgeJobLeaseForLibrary(database, input.job, libraryId);
+      if (input.job) await assertKnowledgeJobLeaseForIndex(database, input.job, libraryId, indexId);
       await assertLibraryScope(database, libraryId, input.expectedScope);
       const context = await loadIndexContext(database, libraryId, indexId, ["building"]);
       await assertKnowledgeIndexSnapshot(
@@ -233,7 +233,7 @@ export class SqliteVecIndexStore implements VectorStore {
     const libraryId = normalizeId(input.libraryId, "Vector cleanup Library id");
     const indexId = normalizeId(input.indexId, "Vector cleanup index id");
     return this.dependencies.transaction("knowledge.vector.discard", async (database) => {
-      if (input.job) await assertKnowledgeJobLeaseForLibrary(database, input.job, libraryId);
+      if (input.job) await assertKnowledgeJobLeaseForIndex(database, input.job, libraryId, indexId);
       await assertLibraryScope(database, libraryId, input.expectedScope);
       const context = await loadIndexContext(database, libraryId, indexId, ["failed", "retired"]);
       if (!(await sqliteVecTableExists(database, context.tableName))) return 0;

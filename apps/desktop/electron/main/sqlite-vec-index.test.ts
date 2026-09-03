@@ -260,6 +260,45 @@ describe("SqliteVecIndexStore", () => {
     await expect(nativeTableExists()).resolves.toBe(false);
   });
 
+  it("rejects a vector batch when its live lease targets another index", async () => {
+    const unit = contentUnit("content-unit:wrong-index");
+    await units.upsertMany([unit]);
+    const sourceIndex = await beginHybridIndex();
+    const otherIndex = await beginHybridIndex();
+    const jobs = new KnowledgeJobsRepo(database, libraryId);
+    const queued = await jobs.enqueue({
+      availableAt: 0,
+      indexId: sourceIndex.id,
+      kind: "embed",
+      sourceId: libraryId,
+      sourceType: "library",
+    });
+    const base = Date.now();
+    await jobs.claimNext("worker-target", { now: base, leaseMs: 1_000 });
+    const running = await jobs.start(queued.job.id, "worker-target", {
+      now: base,
+      leaseMs: 1_000,
+    });
+    if (!running) throw new Error("test lease did not start");
+
+    await expect(
+      store.persist({
+        entries: [{ contentUnitId: unit.id, vector: new Float32Array([1, 0]) }],
+        indexId: otherIndex.id,
+        job: running,
+        libraryId,
+        sourceChangeSeq: otherIndex.sourceChangeSeq,
+      }),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
+    await expect(nativeTableExists()).resolves.toBe(false);
+    await expect(indexes.get(otherIndex.id)).resolves.toMatchObject({ status: "building" });
+
+    await indexes.fail(otherIndex.id, new Error("cleanup target"), { now: base + 1 });
+    await expect(
+      store.discardPhysicalRows({ indexId: otherIndex.id, job: running, libraryId }),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
+  });
+
   it("discards failed physical rows without hiding failure metadata", async () => {
     const unit = contentUnit("content-unit:discard", { sourceId: "revision:discard" });
     await units.upsertMany([unit]);

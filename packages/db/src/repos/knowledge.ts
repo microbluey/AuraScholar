@@ -6,11 +6,13 @@ export {
 export { KnowledgeJobsRepo } from "./knowledge-jobs-repo.js";
 export {
   assertKnowledgeJobLease,
+  assertKnowledgeJobLeaseForIndex,
   assertKnowledgeJobLeaseForLibrary,
+  assertKnowledgeJobLeaseForTarget,
   isKnowledgeJobLeaseLostError,
   KnowledgeJobLeaseLostError,
 } from "./knowledge-job-lease.js";
-export type { KnowledgeJobLeaseSnapshot } from "./knowledge-job-lease.js";
+export type { KnowledgeJobLeaseSnapshot, KnowledgeJobLeaseTarget } from "./knowledge-job-lease.js";
 export { knowledgeJobRetryDelayMs, summarizeKnowledgeJobError } from "./knowledge-queue-support.js";
 export { ContentUnitsRepo } from "./content-units-repo.js";
 export { ContentUnitSearchRepo } from "./content-unit-search-repo.js";

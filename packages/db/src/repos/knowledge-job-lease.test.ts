@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { KnowledgeJobsRepo } from "./knowledge-jobs-repo";
 import {
   assertKnowledgeJobLease,
+  assertKnowledgeJobLeaseForIndex,
+  assertKnowledgeJobLeaseForTarget,
   isKnowledgeJobLeaseLostError,
   KnowledgeJobLeaseLostError,
 } from "./knowledge-job-lease";
@@ -72,6 +74,55 @@ describe("assertKnowledgeJobLease", () => {
     );
     expect(await jobs.cancel(queued.job.id, { owner: "worker-b", now: 2_002 })).not.toBeNull();
     await expect(assertKnowledgeJobLease(database, running, 2_003)).rejects.toBeInstanceOf(Error);
+  });
+
+  it("binds a live lease to its immutable job and index target", async () => {
+    const queued = await jobs.enqueue({
+      availableAt: 4_000,
+      indexId: "index:one",
+      kind: "embed",
+      sourceId: libraryId,
+      sourceType: "library",
+    });
+    await jobs.claimNext("worker-target", { now: 4_000, leaseMs: 1_000 });
+    const running = await jobs.start(queued.job.id, "worker-target", {
+      now: 4_001,
+      leaseMs: 1_000,
+    });
+    if (!running) throw new Error("target lease did not start");
+
+    await expect(
+      assertKnowledgeJobLeaseForTarget(
+        database,
+        running,
+        {
+          indexId: "index:one",
+          kind: "embed",
+          sourceId: libraryId,
+          sourceType: "library",
+        },
+        4_001,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertKnowledgeJobLeaseForIndex(database, running, libraryId, "index:two", 4_001),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
+    await expect(
+      assertKnowledgeJobLeaseForTarget(
+        database,
+        running,
+        {
+          indexId: "index:one",
+          kind: "extract",
+          sourceId: libraryId,
+          sourceType: "library",
+        },
+        4_001,
+      ),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
+    await expect(
+      assertKnowledgeJobLease(database, { ...running, indexId: "index:two" }, 4_001),
+    ).rejects.toBeInstanceOf(KnowledgeJobLeaseLostError);
   });
 
   it("fails closed when a worker supplies no lease snapshot", async () => {
