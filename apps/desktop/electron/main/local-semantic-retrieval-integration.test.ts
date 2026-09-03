@@ -62,6 +62,7 @@ describe("local semantic retrieval integration", () => {
     await new ContentUnitsRepo(database, libraryId).upsertMany([lexical, semanticOnly]);
 
     const indexService = new LocalSemanticIndexService({
+      assertJobLease: async () => {},
       ensureVectorRuntime: vi.fn().mockResolvedValue(undefined),
       getEmbeddingProvider: vi.fn().mockResolvedValue(provider),
       inspect: (operation) => coordinator.execute(operation),
@@ -84,9 +85,11 @@ describe("local semantic retrieval integration", () => {
       allowedSourceIds: [lexical.sourceId, semanticOnly.sourceId],
       fullText: {
         search: async ({ query, limit }) =>
-          (await new ContentUnitSearchRepo(database, libraryId).search({ limit, query })).map((row) => ({
-            contentUnitId: row.id,
-          })),
+          (await new ContentUnitSearchRepo(database, libraryId).search({ limit, query })).map(
+            (row) => ({
+              contentUnitId: row.id,
+            }),
+          ),
       },
       libraryId,
       limit: 10,
@@ -99,7 +102,9 @@ describe("local semantic retrieval integration", () => {
     );
     expect(provider.embedDocuments).toHaveBeenCalledTimes(1);
     expect(provider.embedQuery).toHaveBeenCalledWith("grounded retrieval", { signal: undefined });
-    await expect(new KnowledgeIndexesRepo(database, libraryId).get(queued.index.id)).resolves.toMatchObject({
+    await expect(
+      new KnowledgeIndexesRepo(database, libraryId).get(queued.index.id),
+    ).resolves.toMatchObject({
       indexedCount: 2,
       status: "active",
     });

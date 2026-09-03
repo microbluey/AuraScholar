@@ -74,6 +74,14 @@ export function normalizeLeaseMs(value: number | undefined): number {
   return leaseMs;
 }
 
+export function normalizeExpectedAttempts(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("expectedAttempts must be a positive integer");
+  }
+  return value;
+}
+
 export function normalizeLimit(value: number | undefined, fallback: number, label: string): number {
   const limit = value ?? fallback;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {

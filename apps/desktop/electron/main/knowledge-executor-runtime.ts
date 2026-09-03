@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { app } from "electron";
+import { assertKnowledgeJobLease } from "@aurascholar/db";
 import { withMainDatabase, withMainDatabaseTransaction } from "./db";
 import { localSemanticIndexService } from "./local-semantic-index-runtime";
 import {
@@ -12,6 +13,7 @@ import {
 const CANONICAL_SHA256 = /^[0-9a-f]{64}$/;
 
 const dependencies: KnowledgeExecutorDependencies = {
+  assertJobLease: assertKnowledgeJobLease,
   inspect: withMainDatabase,
   materializeSemanticIndex: (job, signal) => localSemanticIndexService.materialize(job, signal),
   transaction: withMainDatabaseTransaction,

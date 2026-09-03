@@ -261,6 +261,133 @@ describe("Knowledge Layer durable state", () => {
     });
   });
 
+  it("fences a reused owner with the monotonic claim epoch", async () => {
+    const queued = await jobs.enqueue({
+      kind: "reindex",
+      sourceType: "library",
+      sourceId: libraryId,
+      availableAt: 12_000,
+      maxAttempts: 3,
+    });
+    const first = await jobs.claimNext("worker-a", { now: 12_000, leaseMs: 1_000 });
+    expect(first).toMatchObject({ attempts: 1, leaseOwner: "worker-a" });
+
+    expect(await jobs.recoverExpiredLeases(13_000)).toBe(1);
+    const second = await jobs.claimNext("worker-a", { now: 13_000, leaseMs: 1_000 });
+    expect(second).toMatchObject({ attempts: 2, leaseOwner: "worker-a" });
+
+    expect(
+      await jobs.start(queued.job.id, "worker-a", {
+        now: 13_001,
+        leaseMs: 1_000,
+        expectedAttempts: first?.attempts,
+      }),
+    ).toBeNull();
+    const running = await jobs.start(queued.job.id, "worker-a", {
+      now: 13_001,
+      leaseMs: 1_000,
+      expectedAttempts: second?.attempts,
+    });
+    expect(running).toMatchObject({ status: "running", attempts: 2 });
+
+    expect(
+      await jobs.renewLease(queued.job.id, "worker-a", {
+        now: 13_002,
+        expectedAttempts: first?.attempts,
+      }),
+    ).toBeNull();
+    expect(
+      await jobs.complete(queued.job.id, "worker-a", {
+        now: 13_002,
+        expectedAttempts: first?.attempts,
+      }),
+    ).toBeNull();
+    expect(
+      await jobs.fail(queued.job.id, "worker-a", new Error("stale failure"), {
+        now: 13_002,
+        expectedAttempts: first?.attempts,
+      }),
+    ).toBeNull();
+    expect(
+      await jobs.cancel(queued.job.id, {
+        owner: "worker-a",
+        now: 13_002,
+        expectedAttempts: first?.attempts,
+      }),
+    ).toBeNull();
+
+    expect(
+      await jobs.complete(queued.job.id, "worker-a", {
+        now: 13_003,
+        expectedAttempts: second?.attempts,
+      }),
+    ).toMatchObject({ status: "completed", attempts: 2 });
+  });
+
+  it("accepts a matching claim epoch for renewal, failure, and cancellation", async () => {
+    const failedJob = await jobs.enqueue({
+      kind: "extract",
+      sourceType: "revision",
+      sourceId: "revision:epoch-fail",
+      availableAt: 14_000,
+    });
+    const failedClaim = await jobs.claimNext("worker-a", { now: 14_000, leaseMs: 1_000 });
+    if (!failedClaim) throw new Error("expected failure job claim");
+    const failedRunning = await jobs.start(failedJob.job.id, "worker-a", {
+      now: 14_001,
+      leaseMs: 1_000,
+      expectedAttempts: failedClaim.attempts,
+    });
+    expect(failedRunning).toMatchObject({ attempts: failedClaim.attempts });
+    expect(
+      await jobs.renewLease(failedJob.job.id, "worker-a", {
+        now: 14_002,
+        leaseMs: 1_000,
+        expectedAttempts: failedClaim.attempts,
+      }),
+    ).toMatchObject({ attempts: failedClaim.attempts, leaseExpiresAt: 15_002 });
+    expect(
+      await jobs.fail(failedJob.job.id, "worker-a", "expected failure", {
+        now: 14_003,
+        retryDelayMs: 1,
+        expectedAttempts: failedClaim.attempts,
+      }),
+    ).toMatchObject({ status: "retry-wait", attempts: failedClaim.attempts });
+
+    const cancelledJob = await jobs.enqueue({
+      kind: "reindex",
+      sourceType: "library",
+      sourceId: libraryId,
+      dedupeKey: "epoch-cancel",
+      availableAt: 14_000,
+    });
+    const cancelledClaim = await jobs.claimNext("worker-b", { now: 14_004, leaseMs: 1_000 });
+    if (!cancelledClaim) throw new Error("expected cancellation job claim");
+    expect(
+      await jobs.cancel(cancelledJob.job.id, {
+        owner: "worker-b",
+        now: 14_005,
+        expectedAttempts: cancelledClaim.attempts,
+      }),
+    ).toMatchObject({ status: "cancelled", attempts: cancelledClaim.attempts });
+  });
+
+  it("rejects malformed claim epochs and ownerless epoch cancellation", async () => {
+    const queued = await jobs.enqueue({
+      kind: "reindex",
+      sourceType: "library",
+      sourceId: libraryId,
+      dedupeKey: "epoch-validation",
+      availableAt: 15_000,
+    });
+    await expect(
+      jobs.start(queued.job.id, "worker-a", { now: 15_000, expectedAttempts: 0 }),
+    ).rejects.toThrow("expectedAttempts must be a positive integer");
+    await expect(jobs.cancel(queued.job.id, { now: 15_000, expectedAttempts: 1 })).rejects.toThrow(
+      "expectedAttempts requires an owner",
+    );
+  });
+
   it("dedupes only active jobs and keeps ContentUnit writes immutable", async () => {
     const first = await jobs.enqueue({
       kind: "reindex",

@@ -132,18 +132,24 @@ export interface ClaimKnowledgeJobOptions {
 export interface KnowledgeJobLeaseOptions {
   now?: number;
   leaseMs?: number;
+  /** Monotonic claim epoch used to fence a reused owner string. */
+  expectedAttempts?: number;
 }
 
 export interface FailKnowledgeJobOptions {
   now?: number;
   /** Useful for deterministic tests; production callers normally omit it. */
   retryDelayMs?: number;
+  /** Monotonic claim epoch used to fence a reused owner string. */
+  expectedAttempts?: number;
 }
 
 export interface CancelKnowledgeJobOptions {
   now?: number;
   /** Optional worker ownership guard for a cooperative cancellation. */
   owner?: string;
+  /** Optional claim epoch paired with `owner`. */
+  expectedAttempts?: number;
 }
 
 export interface ReplaceContentUnitsInput {

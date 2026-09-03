@@ -2,6 +2,7 @@ import {
   EmbeddingProfilesRepo,
   KnowledgeIndexesRepo,
   KnowledgeJobsRepo,
+  isKnowledgeJobLeaseLostError,
   type Database,
   type KnowledgeIndexEntryRow,
   type KnowledgeIndexRow,
@@ -10,6 +11,7 @@ import {
 import type { EmbeddingProvider } from "@aurascholar/knowledge";
 import type { LibraryScopeToken } from "../library-read-command-contract";
 import type { LocalEmbeddingProfileDescriptor } from "./local-embedding-provider";
+import { sameProfile, toProfileInput } from "./local-semantic-index-profile";
 import { assertActiveLibraryScopeToken, getActiveLibraryScopeToken } from "./library-scope-token";
 import {
   assertEmbedJob,
@@ -38,16 +40,20 @@ export interface LocalSemanticVectorWriter {
     indexId: string;
     sourceChangeSeq: number;
     expectedScope?: LibraryScopeToken;
+    job?: KnowledgeJobRow;
     entries: readonly { contentUnitId: string; vector: Float32Array }[];
   }): Promise<readonly KnowledgeIndexEntryRow[]>;
   discardPhysicalRows?(input: {
     libraryId: string;
     indexId: string;
     expectedScope?: LibraryScopeToken;
+    job?: KnowledgeJobRow;
   }): Promise<number>;
 }
 
 export interface LocalSemanticIndexServiceDependencies {
+  /** Fences every worker-owned index mutation to its current queue claim. */
+  assertJobLease(database: Database, job: KnowledgeJobRow): Promise<void>;
   /** Revalidates the active Library generation inside a serialized DB lease. */
   assertScope?(database: Database, expectedScope: LibraryScopeToken): Promise<LibraryScopeToken>;
   ensureVectorRuntime?(): Promise<void>;
@@ -183,6 +189,7 @@ export class LocalSemanticIndexService {
     try {
       workerScope = await this.captureWorkerScope(job.libraryId);
       const snapshot = await this.dependencies.inspect(async (database) => {
+        await this.dependencies.assertJobLease(database, job);
         await this.assertScopeInLease(database, job.libraryId, workerScope);
         const indexes = new KnowledgeIndexesRepo(database, job.libraryId);
         return {
@@ -196,7 +203,13 @@ export class LocalSemanticIndexService {
         return { progress: { reason: `index-${index.status}`, status: "skipped" } };
       }
       if (index.sourceChangeSeq !== snapshot.latestSourceChangeSeq) {
-        await this.failAndDiscard(job.libraryId, indexId, staleIndexSnapshotError(), workerScope);
+        await this.failAndDiscard(
+          job.libraryId,
+          indexId,
+          staleIndexSnapshotError(),
+          workerScope,
+          job,
+        );
         return { progress: { reason: "stale-snapshot", status: "skipped" } };
       }
       if (index.mode !== "hybrid" || !index.embeddingProfileId) {
@@ -205,12 +218,13 @@ export class LocalSemanticIndexService {
 
       const provider = await this.dependencies.getEmbeddingProvider();
       const descriptor = assertLocalProvider(provider);
-      await this.assertProfileMatches(job.libraryId, index, descriptor, workerScope);
+      await this.assertProfileMatches(job, index, descriptor, workerScope);
 
       let embedded = 0;
       while (true) {
         throwIfAborted(signal);
         const pending = await this.dependencies.inspect(async (database) => {
+          await this.dependencies.assertJobLease(database, job);
           await this.assertScopeInLease(database, job.libraryId, workerScope);
           await assertKnowledgeIndexSnapshot(
             database,
@@ -243,6 +257,7 @@ export class LocalSemanticIndexService {
           indexId,
           index.sourceChangeSeq,
           workerScope,
+          job,
         );
         const persisted = await this.dependencies.vectorWriter.persist({
           entries: pending.map((entry, position) => {
@@ -255,6 +270,7 @@ export class LocalSemanticIndexService {
           libraryId: job.libraryId,
           sourceChangeSeq: index.sourceChangeSeq,
           expectedScope: workerScope,
+          ...(hasLeaseSnapshot(job) ? { job } : {}),
         });
         if (!Array.isArray(persisted) || persisted.length !== pending.length) {
           throw new Error("Local vector store did not persist every document vector");
@@ -265,6 +281,7 @@ export class LocalSemanticIndexService {
       const active = await this.dependencies.transaction(
         "knowledge.semanticIndex.activate",
         async (database) => {
+          await this.dependencies.assertJobLease(database, job);
           await this.assertScopeInLease(database, job.libraryId, workerScope);
           await assertKnowledgeIndexSnapshot(
             database,
@@ -295,14 +312,15 @@ export class LocalSemanticIndexService {
         // will be reclaimed when the active Library changes again or expires.
         throw error;
       }
+      if (!isAbort(error, signal) && isKnowledgeJobLeaseLostError(error)) throw error;
       if (!isAbort(error, signal) && isStaleIndexSnapshotError(error)) {
         if (!workerScope) throw error;
-        await this.failAndDiscard(job.libraryId, indexId, error, workerScope);
+        await this.failAndDiscard(job.libraryId, indexId, error, workerScope, job);
         return { progress: { reason: "stale-snapshot", status: "skipped" } };
       }
       if (!isAbort(error, signal) && job.attempts >= job.maxAttempts && workerScope) {
         try {
-          await this.failAndDiscard(job.libraryId, indexId, error, workerScope);
+          await this.failAndDiscard(job.libraryId, indexId, error, workerScope, job);
         } catch (cleanupError) {
           if (isScopeRejection(cleanupError)) throw cleanupError;
           // Preserve the original provider/storage error. The queue lease
@@ -314,23 +332,23 @@ export class LocalSemanticIndexService {
   }
 
   private async assertProfileMatches(
-    libraryId: string,
+    job: KnowledgeJobRow,
     index: KnowledgeIndexRow,
     descriptor: LocalEmbeddingProfileDescriptor,
     expectedScope?: LibraryScopeToken,
   ): Promise<void> {
     const expected = toProfileInput(descriptor);
     const profile = await this.dependencies.inspect(async (database) => {
-      await this.assertScopeInLease(database, libraryId, expectedScope);
+      await this.dependencies.assertJobLease(database, job);
+      await this.assertScopeInLease(database, job.libraryId, expectedScope);
       return new EmbeddingProfilesRepo(database).get(index.embeddingProfileId!);
     });
     if (!profile || !sameProfile(profile, expected)) {
       throw new Error("Local embedding artifact does not match this semantic index generation");
     }
-    // Keep `libraryId` in the method signature deliberately: matching a global
-    // immutable profile is not enough unless its generation was fetched from
-    // the same Library in `materialize`.
-    assertId(libraryId, "Semantic index Library id");
+    // Matching a global immutable profile is not enough unless its generation
+    // was fetched from the same Library in `materialize`.
+    assertId(job.libraryId, "Semantic index Library id");
   }
 
   private async captureWorkerScope(libraryId: string): Promise<LibraryScopeToken> {
@@ -346,8 +364,10 @@ export class LocalSemanticIndexService {
     indexId: string,
     sourceChangeSeq: number,
     expectedScope: LibraryScopeToken,
+    job: KnowledgeJobRow,
   ): Promise<void> {
     await this.dependencies.inspect(async (database) => {
+      await this.dependencies.assertJobLease(database, job);
       await this.assertScopeInLease(database, libraryId, expectedScope);
       const index = await new KnowledgeIndexesRepo(database, libraryId).get(indexId);
       if (!index) throw staleIndexSnapshotError();
@@ -365,13 +385,15 @@ export class LocalSemanticIndexService {
     indexId: string,
     error: unknown,
     expectedScope?: LibraryScopeToken,
+    job?: KnowledgeJobRow,
   ): Promise<void> {
-    await this.failIndex(libraryId, indexId, error, expectedScope);
+    await this.failIndex(libraryId, indexId, error, expectedScope, job);
     try {
       await this.dependencies.vectorWriter.discardPhysicalRows?.({
         libraryId,
         indexId,
         expectedScope,
+        ...(job && hasLeaseSnapshot(job) ? { job } : {}),
       });
     } catch (cleanupError) {
       if (isScopeRejection(cleanupError)) throw cleanupError;
@@ -385,8 +407,10 @@ export class LocalSemanticIndexService {
     indexId: string,
     error: unknown,
     expectedScope?: LibraryScopeToken,
+    job?: KnowledgeJobRow,
   ): Promise<boolean> {
     return this.dependencies.transaction("knowledge.semanticIndex.fail", async (database) => {
+      if (job) await this.dependencies.assertJobLease(database, job);
       await this.assertScopeInLease(database, libraryId, expectedScope);
       return new KnowledgeIndexesRepo(database, libraryId).fail(indexId, error, {
         now: currentTime(this.dependencies.now),
@@ -420,6 +444,10 @@ export class LocalSemanticIndexService {
   }
 }
 
+function hasLeaseSnapshot(job: KnowledgeJobRow): boolean {
+  return job.leaseOwner !== null && job.leaseExpiresAt !== null;
+}
+
 function assertLocalProvider(
   provider: LocalSemanticEmbeddingProvider,
 ): LocalEmbeddingProfileDescriptor {
@@ -434,47 +462,6 @@ function assertLocalProvider(
     throw new Error("Local embedding provider has an incompatible retrieval profile");
   }
   return descriptor;
-}
-
-function toProfileInput(descriptor: LocalEmbeddingProfileDescriptor): {
-  chunkProfileVersion: string;
-  dimension: number;
-  distanceMetric: "cosine";
-  egressMode: "local";
-  fingerprint: string;
-  modelId: string;
-  modelRevision: string;
-  normalization: "l2";
-  providerKind: string;
-} {
-  return { ...descriptor };
-}
-
-function sameProfile(
-  stored: {
-    chunkProfileVersion: string;
-    dimension: number;
-    distanceMetric: string;
-    egressMode: string;
-    fingerprint: string;
-    modelId: string;
-    modelRevision: string | null;
-    normalization: string;
-    providerKind: string;
-  },
-  expected: ReturnType<typeof toProfileInput>,
-): boolean {
-  return (
-    stored.chunkProfileVersion === expected.chunkProfileVersion &&
-    stored.dimension === expected.dimension &&
-    stored.distanceMetric === expected.distanceMetric &&
-    stored.egressMode === expected.egressMode &&
-    stored.fingerprint === expected.fingerprint &&
-    stored.modelId === expected.modelId &&
-    stored.modelRevision === expected.modelRevision &&
-    stored.normalization === expected.normalization &&
-    stored.providerKind === expected.providerKind
-  );
 }
 
 function summarizeIndex(

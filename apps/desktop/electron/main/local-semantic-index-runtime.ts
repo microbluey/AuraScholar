@@ -1,3 +1,4 @@
+import { assertKnowledgeJobLease } from "@aurascholar/db";
 import { withMainDatabase, withMainDatabaseTransaction, getSqliteVecRuntimeStatus } from "./db";
 import { getLocalEmbeddingArtifactInstaller } from "./embedding-artifact-commands";
 import {
@@ -42,6 +43,7 @@ export async function getInstalledLocalEmbeddingProvider(): Promise<LocalEmbeddi
 
 /** Production bridge for durable `embed` jobs and explicit semantic-index creation. */
 export const localSemanticIndexService = new LocalSemanticIndexService({
+  assertJobLease: assertKnowledgeJobLease,
   assertScope: assertActiveLibraryScopeToken,
   async ensureVectorRuntime() {
     const status = await getSqliteVecRuntimeStatus();

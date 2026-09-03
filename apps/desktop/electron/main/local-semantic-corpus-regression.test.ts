@@ -79,6 +79,7 @@ describe("local semantic corpus-shaped regression", () => {
 
     const indexStartedAt = performance.now();
     const indexService = new LocalSemanticIndexService({
+      assertJobLease: async () => {},
       ensureVectorRuntime: vi.fn().mockResolvedValue(undefined),
       getEmbeddingProvider: vi.fn().mockResolvedValue(provider),
       inspect: (operation) => coordinator.execute(operation),

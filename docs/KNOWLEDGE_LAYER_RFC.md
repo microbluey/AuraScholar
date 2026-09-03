@@ -601,6 +601,15 @@ canonical source itself is Project-owned. The state machine defines queued,
 leased/running, retry-wait, completed, cancelled, and terminal-failed states.
 An active-job uniqueness constraint enforces the dedupe key.
 
+Each worker-owned durable write is fenced by the job's `lease_owner`, monotonic
+`attempts` claim epoch, and live `lease_expires_at` value. The executor repeats
+that comparison inside every ContentUnit, outbox, generation, and vector write
+transaction; a reclaimed, cancelled, or expired claim therefore rolls back any
+late result. A queue finalization that no longer matches the claim is reported
+as a lost lease, leaving recovery to the newer owner.
+The worker supplies that claim epoch to each post-claim lease transition and finalizer;
+cooperative cancellation may supply the same epoch when it has an owner.
+
 The current renderer IPC cannot safely implement a multi-call
 `BEGIN -> mutation -> outbox -> COMMIT` sequence. Gate 0 therefore adds a
 main-process UnitOfWork/command boundary that performs canonical mutation and
