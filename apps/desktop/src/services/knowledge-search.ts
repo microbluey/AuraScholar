@@ -3,7 +3,8 @@ import type {
   KnowledgeContentSearchResult,
   SearchKnowledgeContentCommandInput,
 } from "../../electron/data-command-contract";
-import { getActiveLibraryCommandScope } from "./library-command-scope";
+import { decodeKnowledgeSearchContentResult } from "../shared/knowledge-command-result-codec";
+import { getActiveLibraryCommandScopeToken } from "./library-command-scope";
 
 export type {
   KnowledgeCorpusScope,
@@ -23,7 +24,7 @@ export interface KnowledgeContentSearchResponse {
 
 export type KnowledgeSearchOptions = Omit<
   SearchKnowledgeContentCommandInput,
-  "libraryId" | "query"
+  "expectedScope" | "query"
 > & {
   signal?: AbortSignal;
 };
@@ -44,15 +45,16 @@ export async function searchKnowledgeContent(
     return { results: [], retrieval: DEFAULT_KNOWLEDGE_CONTENT_SEARCH_RETRIEVAL };
   }
 
-  const libraryId = await getActiveLibraryCommandScope();
+  const expectedScope = await getActiveLibraryCommandScopeToken();
   throwIfAborted(signal);
   const response = await window.aura.data.command("knowledge.searchContent", {
     ...filters,
-    libraryId,
+    expectedScope,
     query: normalizedQuery,
   });
   throwIfAborted(signal);
-  return response;
+  const decoded = decodeKnowledgeSearchContentResult(response, expectedScope);
+  return { results: decoded.results, retrieval: decoded.retrieval };
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

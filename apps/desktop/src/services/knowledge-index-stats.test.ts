@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeContentIndexStats } from "../../electron/data-command-contract";
-import { getActiveLibraryCommandScope } from "./library-command-scope";
+import { getActiveLibraryCommandScopeToken } from "./library-command-scope";
 import { getKnowledgeContentIndexStats } from "./knowledge-index-stats";
 
-vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScope: vi.fn() }));
+vi.mock("./library-command-scope", () => ({ getActiveLibraryCommandScopeToken: vi.fn() }));
+
+const SCOPE = { libraryId: "library:service", scopeToken: "scope:service" } as const;
 
 const stats: KnowledgeContentIndexStats = {
   totalContentUnits: 16,
@@ -22,15 +24,15 @@ describe("Knowledge index statistics desktop gateway", () => {
       configurable: true,
       value: { aura: { data: { command } } },
     });
-    vi.mocked(getActiveLibraryCommandScope).mockResolvedValue("library:service");
+    vi.mocked(getActiveLibraryCommandScopeToken).mockResolvedValue(SCOPE);
   });
 
   it("obtains the local scope before requesting active corpus counts", async () => {
-    command.mockResolvedValue({ stats });
+    command.mockResolvedValue({ stats, scope: SCOPE });
 
     await expect(getKnowledgeContentIndexStats()).resolves.toEqual(stats);
     expect(command).toHaveBeenCalledWith("knowledge.getContentStats", {
-      libraryId: "library:service",
+      expectedScope: SCOPE,
     });
   });
 
@@ -43,17 +45,25 @@ describe("Knowledge index statistics desktop gateway", () => {
     ).rejects.toMatchObject({
       name: "AbortError",
     });
-    expect(getActiveLibraryCommandScope).not.toHaveBeenCalled();
+    expect(getActiveLibraryCommandScopeToken).not.toHaveBeenCalled();
     expect(command).not.toHaveBeenCalled();
 
     const afterScope = new AbortController();
-    vi.mocked(getActiveLibraryCommandScope).mockImplementationOnce(async () => {
+    vi.mocked(getActiveLibraryCommandScopeToken).mockImplementationOnce(async () => {
       afterScope.abort();
-      return "library:service";
+      return SCOPE;
     });
     await expect(
       getKnowledgeContentIndexStats({ signal: afterScope.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(command).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the main process acknowledges a different Library generation", async () => {
+    command.mockResolvedValue({ stats, scope: { ...SCOPE, libraryId: "library:other" } });
+
+    await expect(getKnowledgeContentIndexStats()).rejects.toThrow(
+      "Knowledge Library scope does not match the request",
+    );
   });
 });

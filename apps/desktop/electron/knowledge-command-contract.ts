@@ -1,4 +1,10 @@
 import type { ContentUnitSourceType } from "@aurascholar/db/repos/knowledge";
+import type { LibraryScopeToken } from "./library-read-command-contract";
+
+/** Every Knowledge command is bound to the active Library generation. */
+export interface KnowledgeLibraryScopeCommandInput {
+  expectedScope: LibraryScopeToken;
+}
 
 /**
  * User-selected corpus scope. The renderer may choose a scope, but it never
@@ -16,8 +22,7 @@ export type KnowledgeCorpusScope =
  * Layer. Omitted filters leave that dimension unrestricted within the selected
  * corpus scope (or the whole Library when scope is omitted).
  */
-export interface SearchKnowledgeContentCommandInput {
-  libraryId: string;
+export interface SearchKnowledgeContentCommandInput extends KnowledgeLibraryScopeCommandInput {
   query: string;
   /** Defaults to the whole active Library for backwards compatibility. */
   scope?: KnowledgeCorpusScope;
@@ -110,4 +115,21 @@ export interface BuildKnowledgeSemanticIndexResult {
   created: boolean;
   index: KnowledgeSemanticIndexSummary;
   job: { id: string; status: "queued" | "leased" | "running" | "retry-wait" };
+  scope: LibraryScopeToken;
+}
+
+export interface KnowledgeContentStatsCommandResult {
+  stats: KnowledgeContentIndexStats;
+  scope: LibraryScopeToken;
+}
+
+export interface KnowledgeSemanticIndexStatusCommandResult {
+  status: KnowledgeSemanticIndexStatus;
+  scope: LibraryScopeToken;
+}
+
+export interface SearchKnowledgeContentCommandResult {
+  results: KnowledgeContentSearchResult[];
+  retrieval: KnowledgeContentSearchRetrieval;
+  scope: LibraryScopeToken;
 }

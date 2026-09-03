@@ -1,7 +1,6 @@
 import {
   ContentUnitSearchRepo,
   ContentUnitsRepo,
-  type ContentUnitIndexStats,
   type ContentUnitSearchResult,
 } from "@aurascholar/db/repos/knowledge";
 import {
@@ -11,19 +10,12 @@ import {
   type RetrievalLanguageIntent,
 } from "@aurascholar/knowledge";
 import type {
-  BuildKnowledgeSemanticIndexResult,
   DataCommandOutput,
   DataCommandRequest,
-  KnowledgeContentIndexStats,
   KnowledgeContentSearchRetrieval,
-  KnowledgeContentSearchResult,
-  KnowledgeSemanticIndexStatus,
-  KnowledgeSemanticIndexSummary,
 } from "../data-command-contract";
-import type {
-  EnqueueLocalSemanticIndexBuildResult,
-  LocalSemanticIndexService,
-} from "./local-semantic-index-service";
+import type { LibraryScopeToken } from "../library-read-command-contract";
+import type { LocalSemanticIndexService } from "./local-semantic-index-service";
 import type { LocalSemanticSearchService } from "./local-semantic-search-service";
 import {
   resolveKnowledgeCorpusAndFullText,
@@ -36,7 +28,14 @@ import {
   parseSearchContentInput,
   type ParsedSearchKnowledgeContentInput,
 } from "./knowledge-command-input";
-import { assertActiveLocalLibrary, type DataCommandDependencies } from "./data-command-runtime";
+import { type DataCommandDependencies } from "./data-command-runtime";
+import { assertActiveLibraryScopeToken } from "./library-scope-token";
+import {
+  toBuildSemanticIndexResult,
+  toKnowledgeContentIndexStats,
+  toKnowledgeContentSearchResult,
+  toKnowledgeSemanticIndexStatus,
+} from "./knowledge-command-projection";
 
 const KNOWLEDGE_SEARCH_CANDIDATE_MULTIPLIER = 4;
 
@@ -86,9 +85,11 @@ export async function executeKnowledgeCommand(
   switch (request.name) {
     case "knowledge.buildSemanticIndex": {
       const input = parseLibraryInput(request.input, "knowledge.buildSemanticIndex");
-      await assertActiveScope(dependencies, input.libraryId);
+      await assertActiveScope(dependencies, input.expectedScope);
       const semanticIndex = requireSemanticIndexCapability(capabilities);
-      return toBuildSemanticIndexResult(await semanticIndex.enqueueBuild(input.libraryId));
+      const result = await semanticIndex.enqueueBuild(input.libraryId, input.expectedScope);
+      const scope = await assertActiveScope(dependencies, input.expectedScope);
+      return toBuildSemanticIndexResult(result, scope);
     }
     case "knowledge.getContentStats": {
       const input = parseContentStatsInput(request.input);
@@ -96,27 +97,32 @@ export async function executeKnowledgeCommand(
         throw new Error("Main-process database query execution is unavailable");
       }
       return dependencies.execute(request.name, async (database) => {
-        await assertActiveLocalLibrary(database, input.libraryId);
+        const scope = await assertActiveLibraryScopeToken(database, input.expectedScope);
         const stats = await new ContentUnitsRepo(database, input.libraryId).getIndexStats();
-        return { stats: toKnowledgeContentIndexStats(stats) };
+        return { scope, stats: toKnowledgeContentIndexStats(stats) };
       });
     }
     case "knowledge.getSemanticIndexStatus": {
       const input = parseLibraryInput(request.input, "knowledge.getSemanticIndexStatus");
-      await assertActiveScope(dependencies, input.libraryId);
+      await assertActiveScope(dependencies, input.expectedScope);
       const semanticIndex = requireSemanticIndexCapability(capabilities);
+      const status = await semanticIndex.getStatus(input.libraryId, input.expectedScope);
+      const scope = await assertActiveScope(dependencies, input.expectedScope);
       return {
-        status: toKnowledgeSemanticIndexStatus(await semanticIndex.getStatus(input.libraryId)),
+        scope,
+        status: toKnowledgeSemanticIndexStatus(status),
       };
     }
     case "knowledge.searchContent": {
       const input = parseSearchContentInput(request.input);
-      // Empty controls in the future UI should not acquire a database lease or
-      // accidentally turn into an unbounded corpus listing.
+      const scope = await assertActiveScope(dependencies, input.expectedScope);
+      // Empty controls should validate the Library generation, but never
+      // acquire a corpus/search lease or turn into an unbounded listing.
       if (!input.query) {
         return {
           results: [],
           retrieval: { mode: "fulltext", semanticStatus: "not-configured" },
+          scope,
         };
       }
       if (!dependencies.inspect) {
@@ -148,12 +154,14 @@ async function searchKnowledgeContent(
       fullTextLimit,
     );
     const ranked = rerankFullTextResults(fullText, languageIntent);
+    const scope = await assertActiveScope(dependencies, input.expectedScope);
     return {
       results: ranked.rows.slice(0, input.limit).map(toKnowledgeContentSearchResult),
       retrieval: toKnowledgeContentSearchRetrieval(
         { mode: "fulltext", semanticStatus: "not-configured" },
         languagePreferenceForResponse(languageIntent, ranked.applied),
       ),
+      scope,
     };
   }
 
@@ -163,7 +171,7 @@ async function searchKnowledgeContent(
       throw new Error("Main-process database query execution is unavailable");
     }
     return dependencies.inspect(async (database) => {
-      await assertActiveLocalLibrary(database, input.libraryId);
+      await assertActiveLibraryScopeToken(database, input.expectedScope);
       return new ContentUnitSearchRepo(database, input.libraryId).search({
         query: input.query,
         limit: fullTextLimit,
@@ -189,12 +197,14 @@ async function searchKnowledgeContent(
   );
   if (readySourceIds.length === 0) {
     const ranked = rerankFullTextResults(await fullTextResults(null), languageIntent);
+    const scope = await assertActiveScope(dependencies, input.expectedScope);
     return {
       results: ranked.rows.slice(0, input.limit).map(toKnowledgeContentSearchResult),
       retrieval: toKnowledgeContentSearchRetrieval(
         { mode: "fulltext", semanticStatus: "not-configured" },
         languagePreferenceForResponse(languageIntent, ranked.applied),
       ),
+      scope,
     };
   }
 
@@ -256,6 +266,7 @@ async function searchKnowledgeContent(
       })
     : null;
   const candidates = languagePreference?.candidates ?? hybrid.candidates;
+  const scope = await assertActiveScope(dependencies, input.expectedScope);
 
   return {
     results: candidates
@@ -267,6 +278,7 @@ async function searchKnowledgeContent(
       hybrid,
       languagePreferenceForResponse(languageIntent, languagePreference?.applied ?? false),
     ),
+    scope,
   };
 }
 
@@ -330,7 +342,7 @@ async function listReadySourceIds(
   if (!dependencies.inspect)
     throw new Error("Main-process database query execution is unavailable");
   return dependencies.inspect(async (database) => {
-    await assertActiveLocalLibrary(database, input.libraryId);
+    await assertActiveLibraryScopeToken(database, input.expectedScope);
     return new ContentUnitSearchRepo(database, input.libraryId).listReadySourceIds({
       allowedSourceIds,
       sourceTypes: input.sourceTypes,
@@ -356,7 +368,7 @@ async function hydrateSemanticCandidates(
   if (!dependencies.inspect)
     throw new Error("Main-process database query execution is unavailable");
   return dependencies.inspect(async (database) => {
-    await assertActiveLocalLibrary(database, input.libraryId);
+    await assertActiveLibraryScopeToken(database, input.expectedScope);
     return new ContentUnitSearchRepo(database, input.libraryId).findReadyByIds({
       contentUnitIds: missingIds,
       allowedSourceIds,
@@ -393,11 +405,11 @@ function languagePreferenceForResponse(
 
 async function assertActiveScope(
   dependencies: DataCommandDependencies,
-  libraryId: string,
-): Promise<void> {
+  expectedScope: LibraryScopeToken,
+): Promise<LibraryScopeToken> {
   if (!dependencies.inspect)
     throw new Error("Main-process database query execution is unavailable");
-  await dependencies.inspect((database) => assertActiveLocalLibrary(database, libraryId));
+  return dependencies.inspect((database) => assertActiveLibraryScopeToken(database, expectedScope));
 }
 
 function requireSemanticIndexCapability(
@@ -405,92 +417,4 @@ function requireSemanticIndexCapability(
 ): NonNullable<KnowledgeCommandCapabilities["semanticIndex"]> {
   if (!capabilities.semanticIndex) throw new Error("Local semantic indexing is unavailable");
   return capabilities.semanticIndex;
-}
-
-function toKnowledgeContentSearchResult(
-  row: ContentUnitSearchResult,
-): KnowledgeContentSearchResult {
-  return {
-    id: row.id,
-    sourceType: row.sourceType,
-    sourceId: row.sourceId,
-    workId: row.workId,
-    workTitle: row.workTitle,
-    assetId: row.assetId,
-    revisionId: row.revisionId,
-    parentUnitId: row.parentUnitId,
-    ordinal: row.ordinal,
-    headingPath: row.headingPath,
-    anchor: row.anchor,
-    text: row.text,
-    language: row.language,
-    tokenCount: row.tokenCount,
-    state: row.state,
-    score: row.score,
-    excerpt: row.excerpt,
-  };
-}
-
-function toKnowledgeContentIndexStats(stats: ContentUnitIndexStats): KnowledgeContentIndexStats {
-  return {
-    totalContentUnits: stats.total,
-    readyContentUnits: stats.ready,
-    contextOnlyContentUnits: stats.contextOnly,
-    sourceCounts: stats.sourceCounts,
-    languageCoverage: stats.languageCoverage,
-  };
-}
-
-function toBuildSemanticIndexResult(
-  result: EnqueueLocalSemanticIndexBuildResult,
-): BuildKnowledgeSemanticIndexResult {
-  const status = result.job.status;
-  if (
-    status !== "queued" &&
-    status !== "leased" &&
-    status !== "running" &&
-    status !== "retry-wait"
-  ) {
-    throw new Error("Semantic index job cannot be presented safely");
-  }
-  const indexStatus = requirePresentableSemanticIndexStatus(result.index.status);
-  return {
-    created: result.created,
-    index: toKnowledgeSemanticIndexSummary({
-      ...result.index,
-      // A newly captured generation uses the current change high-water mark.
-      stale: false,
-      status: indexStatus,
-    }),
-    job: { id: result.job.id, status },
-  };
-}
-
-function requirePresentableSemanticIndexStatus(
-  status: string,
-): KnowledgeSemanticIndexSummary["status"] {
-  if (status === "active" || status === "building" || status === "failed") return status;
-  throw new Error("Semantic index is not in a presentable state");
-}
-
-function toKnowledgeSemanticIndexStatus(
-  status: Awaited<
-    ReturnType<NonNullable<KnowledgeCommandCapabilities["semanticIndex"]>["getStatus"]>
-  >,
-): KnowledgeSemanticIndexStatus {
-  return {
-    active: status.active ? toKnowledgeSemanticIndexSummary(status.active) : null,
-    building: status.building ? toKnowledgeSemanticIndexSummary(status.building) : null,
-    failed: status.failed ? toKnowledgeSemanticIndexSummary(status.failed) : null,
-  };
-}
-
-function toKnowledgeSemanticIndexSummary(summary: {
-  expectedCount: number;
-  id: string;
-  indexedCount: number;
-  stale: boolean;
-  status: "active" | "building" | "failed";
-}): KnowledgeSemanticIndexSummary {
-  return { ...summary };
 }

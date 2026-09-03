@@ -305,23 +305,20 @@ export interface DataCommandMap
     TranslationProviderDataCommandMap,
     WorkMetadataDataCommandMap {
   "knowledge.buildSemanticIndex": {
-    input: LibraryScopedCommandInput;
+    input: KnowledgeContract.KnowledgeLibraryScopeCommandInput;
     output: KnowledgeContract.BuildKnowledgeSemanticIndexResult;
   };
   "knowledge.getContentStats": {
-    input: LibraryScopedCommandInput;
-    output: { stats: KnowledgeContract.KnowledgeContentIndexStats };
+    input: KnowledgeContract.KnowledgeLibraryScopeCommandInput;
+    output: KnowledgeContract.KnowledgeContentStatsCommandResult;
   };
   "knowledge.getSemanticIndexStatus": {
-    input: LibraryScopedCommandInput;
-    output: { status: KnowledgeContract.KnowledgeSemanticIndexStatus };
+    input: KnowledgeContract.KnowledgeLibraryScopeCommandInput;
+    output: KnowledgeContract.KnowledgeSemanticIndexStatusCommandResult;
   };
   "knowledge.searchContent": {
     input: KnowledgeContract.SearchKnowledgeContentCommandInput;
-    output: {
-      results: KnowledgeContract.KnowledgeContentSearchResult[];
-      retrieval: KnowledgeContract.KnowledgeContentSearchRetrieval;
-    };
+    output: KnowledgeContract.SearchKnowledgeContentCommandResult;
   };
   "library.addTagToWorks": {
     input: AddTagToWorksCommandInput;

@@ -2,7 +2,11 @@ import type {
   BuildKnowledgeSemanticIndexResult,
   KnowledgeSemanticIndexStatus,
 } from "../../electron/data-command-contract";
-import { getActiveLibraryCommandScope } from "./library-command-scope";
+import {
+  decodeKnowledgeBuildSemanticIndexResult,
+  decodeKnowledgeGetSemanticIndexStatusResult,
+} from "../shared/knowledge-command-result-codec";
+import { getActiveLibraryCommandScopeToken } from "./library-command-scope";
 
 export type {
   BuildKnowledgeSemanticIndexResult,
@@ -14,11 +18,11 @@ export async function buildKnowledgeSemanticIndex(
   options: { signal?: AbortSignal } = {},
 ): Promise<BuildKnowledgeSemanticIndexResult> {
   options.signal?.throwIfAborted();
-  const libraryId = await getActiveLibraryCommandScope();
+  const expectedScope = await getActiveLibraryCommandScopeToken();
   options.signal?.throwIfAborted();
-  const result = await window.aura.data.command("knowledge.buildSemanticIndex", { libraryId });
+  const result = await window.aura.data.command("knowledge.buildSemanticIndex", { expectedScope });
   options.signal?.throwIfAborted();
-  return result;
+  return decodeKnowledgeBuildSemanticIndexResult(result, expectedScope);
 }
 
 /** Reads safe generation counts only; it never loads a model or embeds text. */
@@ -26,9 +30,11 @@ export async function getKnowledgeSemanticIndexStatus(
   options: { signal?: AbortSignal } = {},
 ): Promise<KnowledgeSemanticIndexStatus> {
   options.signal?.throwIfAborted();
-  const libraryId = await getActiveLibraryCommandScope();
+  const expectedScope = await getActiveLibraryCommandScopeToken();
   options.signal?.throwIfAborted();
-  const result = await window.aura.data.command("knowledge.getSemanticIndexStatus", { libraryId });
+  const result = await window.aura.data.command("knowledge.getSemanticIndexStatus", {
+    expectedScope,
+  });
   options.signal?.throwIfAborted();
-  return result.status;
+  return decodeKnowledgeGetSemanticIndexStatusResult(result, expectedScope).status;
 }

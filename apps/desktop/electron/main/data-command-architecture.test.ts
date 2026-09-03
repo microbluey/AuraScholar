@@ -21,12 +21,14 @@ function assertCompileTimeDataCommandOutputContract(dependencies: DataCommandDep
       sourceCounts: { pdf: 0, annotation: 0, evidence: 0 },
       languageCoverage: { zh: 0, en: 0, other: 0, missing: 0 },
     },
+    scope: { libraryId: "library-id", scopeToken: "scope-token" },
   }));
   // @ts-expect-error knowledge.getContentStats must return its declared result envelope.
   void dependencies.execute?.("knowledge.getContentStats", async () => ({ stats: [] }));
   void dependencies.execute?.("knowledge.searchContent", async () => ({
     results: [],
     retrieval: { mode: "fulltext", semanticStatus: "not-configured" },
+    scope: { libraryId: "library-id", scopeToken: "scope-token" },
   }));
   // @ts-expect-error knowledge.searchContent must return its declared result envelope.
   void dependencies.execute?.("knowledge.searchContent", async () => ({ results: 1 }));
@@ -555,7 +557,7 @@ describe("main-process data command architecture", () => {
     expect(gateway).not.toContain("ContentUnitSearchRepo");
     expect(gateway).not.toContain("window.aura.db");
     expect(gateway).not.toMatch(/\.\s*(?:query|run|exec|queryScalar)\s*\(/);
-    expect(commands).toContain("assertActiveLocalLibrary");
+    expect(commands).toContain("assertActiveLibraryScopeToken");
     expect(commands).toContain("new ContentUnitSearchRepo");
     expect(commands).toContain("toKnowledgeContentSearchResult");
   });

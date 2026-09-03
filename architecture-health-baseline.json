@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19726,
-        ".ts": 94234,
+        ".ts": 94844,
         ".tsx": 36958
       },
       "files": {
@@ -13,12 +13,12 @@
         "apps/desktop/electron/annotation-recovery-command-contract.ts": 20,
         "apps/desktop/electron/canvas-command-contract.ts": 258,
         "apps/desktop/electron/citation-graph-command-contract.ts": 85,
-        "apps/desktop/electron/data-command-contract.ts": 477,
+        "apps/desktop/electron/data-command-contract.ts": 474,
         "apps/desktop/electron/discovery-library-status-command-contract.ts": 42,
         "apps/desktop/electron/discovery-site-command-contract.ts": 111,
         "apps/desktop/electron/evidence-command-contract.ts": 139,
         "apps/desktop/electron/evidence-shelf-command-contract.ts": 150,
-        "apps/desktop/electron/knowledge-command-contract.ts": 113,
+        "apps/desktop/electron/knowledge-command-contract.ts": 135,
         "apps/desktop/electron/library-ingest-command-contract.ts": 124,
         "apps/desktop/electron/library-oa-command-contract.ts": 20,
         "apps/desktop/electron/library-page-command-contract.ts": 105,
@@ -59,9 +59,10 @@
         "apps/desktop/electron/main/evidence-shelf-promotion-command.ts": 126,
         "apps/desktop/electron/main/evidence-source-recovery.ts": 321,
         "apps/desktop/electron/main/ipc.ts": 37,
-        "apps/desktop/electron/main/knowledge-command-input.ts": 178,
-        "apps/desktop/electron/main/knowledge-commands.ts": 496,
-        "apps/desktop/electron/main/knowledge-corpus-scope.ts": 75,
+        "apps/desktop/electron/main/knowledge-command-input.ts": 238,
+        "apps/desktop/electron/main/knowledge-command-projection.ts": 105,
+        "apps/desktop/electron/main/knowledge-commands.ts": 420,
+        "apps/desktop/electron/main/knowledge-corpus-scope.ts": 76,
         "apps/desktop/electron/main/knowledge-executor-runtime.ts": 55,
         "apps/desktop/electron/main/knowledge-executor-support.ts": 329,
         "apps/desktop/electron/main/knowledge-executor.ts": 422,
@@ -94,7 +95,7 @@
         "apps/desktop/electron/main/local-embedding-provider.ts": 470,
         "apps/desktop/electron/main/local-embedding-transformers-runtime.ts": 322,
         "apps/desktop/electron/main/local-semantic-index-runtime.ts": 66,
-        "apps/desktop/electron/main/local-semantic-index-service.ts": 359,
+        "apps/desktop/electron/main/local-semantic-index-service.ts": 412,
         "apps/desktop/electron/main/local-semantic-search-runtime.ts": 17,
         "apps/desktop/electron/main/local-semantic-search-service.ts": 94,
         "apps/desktop/electron/main/main-ai-http.ts": 106,
@@ -394,10 +395,10 @@
         "apps/desktop/src/services/exit-barriers.ts": 95,
         "apps/desktop/src/services/fulltext.ts": 222,
         "apps/desktop/src/services/import-refs.ts": 21,
-        "apps/desktop/src/services/knowledge-index-stats.ts": 19,
+        "apps/desktop/src/services/knowledge-index-stats.ts": 20,
         "apps/desktop/src/services/knowledge-search-navigation.ts": 120,
-        "apps/desktop/src/services/knowledge-search.ts": 60,
-        "apps/desktop/src/services/knowledge-semantic-index.ts": 34,
+        "apps/desktop/src/services/knowledge-search.ts": 62,
+        "apps/desktop/src/services/knowledge-semantic-index.ts": 40,
         "apps/desktop/src/services/library-actions.ts": 110,
         "apps/desktop/src/services/library-annotation-recovery.ts": 20,
         "apps/desktop/src/services/library-backup-evidence.ts": 128,
@@ -450,6 +451,7 @@
         "apps/desktop/src/shared/citation-graph-provenance-codec.ts": 159,
         "apps/desktop/src/shared/citation-graph-provenance.ts": 211,
         "apps/desktop/src/shared/document-revision-sync-repair.ts": 41,
+        "apps/desktop/src/shared/knowledge-command-result-codec.ts": 439,
         "apps/desktop/src/shared/library-backup-budget.ts": 26,
         "apps/desktop/src/shared/library-backup-config.ts": 251,
         "apps/desktop/src/shared/library-backup-evidence.ts": 347,
@@ -658,11 +660,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 150918
+      "totalLines": 151528
     },
     "tests": {
       "byExtension": {
-        ".ts": 94786,
+        ".ts": 95334,
         ".tsx": 1280
       },
       "files": {
@@ -679,7 +681,7 @@
         "apps/desktop/electron/main/citation-graph-commands.test.ts": 800,
         "apps/desktop/electron/main/citation-graph-payload-architecture.test.ts": 85,
         "apps/desktop/electron/main/close-lifecycle-state.test.ts": 147,
-        "apps/desktop/electron/main/data-command-architecture.test.ts": 766,
+        "apps/desktop/electron/main/data-command-architecture.test.ts": 768,
         "apps/desktop/electron/main/data-command-core-architecture.test.ts": 111,
         "apps/desktop/electron/main/data-command-lockstep.test.ts": 84,
         "apps/desktop/electron/main/data-commands.test.ts": 1025,
@@ -695,8 +697,8 @@
         "apps/desktop/electron/main/evidence-source-recovery.test.ts": 305,
         "apps/desktop/electron/main/frame-isolation-architecture.test.ts": 27,
         "apps/desktop/electron/main/ipc.test.ts": 83,
-        "apps/desktop/electron/main/knowledge-command-scope-architecture.test.ts": 34,
-        "apps/desktop/electron/main/knowledge-commands.test.ts": 646,
+        "apps/desktop/electron/main/knowledge-command-scope-architecture.test.ts": 39,
+        "apps/desktop/electron/main/knowledge-commands.test.ts": 698,
         "apps/desktop/electron/main/knowledge-executor.test.ts": 381,
         "apps/desktop/electron/main/legacy-transaction-debt.test.ts": 258,
         "apps/desktop/electron/main/library-backup-commands.test.ts": 19,
@@ -725,7 +727,8 @@
         "apps/desktop/electron/main/local-embedding-artifact-network-smoke.test.ts": 58,
         "apps/desktop/electron/main/local-embedding-provider.test.ts": 162,
         "apps/desktop/electron/main/local-embedding-transformers-runtime.test.ts": 179,
-        "apps/desktop/electron/main/local-semantic-corpus-regression.test.ts": 428,
+        "apps/desktop/electron/main/local-semantic-corpus-regression.test.ts": 441,
+        "apps/desktop/electron/main/local-semantic-index-scope.test.ts": 243,
         "apps/desktop/electron/main/local-semantic-index-service.test.ts": 240,
         "apps/desktop/electron/main/local-semantic-retrieval-evaluation-integration.test.ts": 355,
         "apps/desktop/electron/main/local-semantic-retrieval-integration.test.ts": 166,
@@ -974,10 +977,10 @@
         "apps/desktop/src/services/exit-barriers.test.ts": 190,
         "apps/desktop/src/services/fulltext.test.ts": 171,
         "apps/desktop/src/services/import-refs.test.ts": 60,
-        "apps/desktop/src/services/knowledge-index-stats.test.ts": 59,
+        "apps/desktop/src/services/knowledge-index-stats.test.ts": 69,
         "apps/desktop/src/services/knowledge-search-navigation.test.ts": 168,
-        "apps/desktop/src/services/knowledge-search.test.ts": 102,
-        "apps/desktop/src/services/knowledge-semantic-index.test.ts": 88,
+        "apps/desktop/src/services/knowledge-search.test.ts": 117,
+        "apps/desktop/src/services/knowledge-semantic-index.test.ts": 102,
         "apps/desktop/src/services/library-actions.test.ts": 207,
         "apps/desktop/src/services/library-annotation-recovery.test.ts": 33,
         "apps/desktop/src/services/library-backup-export-integrity.test.ts": 164,
@@ -1018,6 +1021,7 @@
         "apps/desktop/src/shared/citation-graph-command-result-codec.test.ts": 453,
         "apps/desktop/src/shared/citation-graph-provenance.test.ts": 88,
         "apps/desktop/src/shared/document-revision-sync-repair.test.ts": 223,
+        "apps/desktop/src/shared/knowledge-command-result-codec.test.ts": 194,
         "apps/desktop/src/shared/reference-import.test.ts": 52,
         "apps/desktop/src/shared/saved-search-criteria.test.ts": 69,
         "apps/desktop/src/shared/scholarly-command-result-codec.test.ts": 341,
@@ -1107,7 +1111,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 96066
+      "totalLines": 96614
     }
   },
   "uiDatabaseBoundary": {}

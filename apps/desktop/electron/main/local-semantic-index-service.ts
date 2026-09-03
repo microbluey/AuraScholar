@@ -8,7 +8,9 @@ import {
   type KnowledgeJobRow,
 } from "@aurascholar/db";
 import type { EmbeddingProvider } from "@aurascholar/knowledge";
+import type { LibraryScopeToken } from "../library-read-command-contract";
 import type { LocalEmbeddingProfileDescriptor } from "./local-embedding-provider";
+import { assertActiveLibraryScopeToken } from "./library-scope-token";
 
 const EMBED_BATCH_SIZE = 16;
 const STALE_INDEX_SNAPSHOT_ERROR = "Knowledge index snapshot is stale and must be rebuilt";
@@ -28,6 +30,8 @@ export interface LocalSemanticVectorWriter {
 }
 
 export interface LocalSemanticIndexServiceDependencies {
+  /** Revalidates the active Library generation inside a serialized DB lease. */
+  assertScope?(database: Database, expectedScope: LibraryScopeToken): Promise<LibraryScopeToken>;
   ensureVectorRuntime?(): Promise<void>;
   getEmbeddingProvider(): Promise<LocalSemanticEmbeddingProvider>;
   inspect<T>(operation: DatabaseOperation<T>): Promise<T>;
@@ -66,9 +70,13 @@ export class LocalSemanticIndexService {
   constructor(private readonly dependencies: LocalSemanticIndexServiceDependencies) {}
 
   /** Safe progress projection for renderer status; raw errors and paths stay private. */
-  async getStatus(libraryId: string): Promise<LocalSemanticIndexStatus> {
+  async getStatus(
+    libraryId: string,
+    expectedScope?: LibraryScopeToken,
+  ): Promise<LocalSemanticIndexStatus> {
     assertId(libraryId, "Semantic index Library id");
     const snapshot = await this.dependencies.inspect(async (database) => {
+      await this.assertScopeInLease(database, libraryId, expectedScope);
       const indexes = new KnowledgeIndexesRepo(database, libraryId);
       return {
         indexes: await indexes.list(["active", "building", "failed"]),
@@ -96,43 +104,54 @@ export class LocalSemanticIndexService {
    * job. The model is only resolved as an already-installed local artifact;
    * actual ONNX loading remains lazy until the background job starts.
    */
-  async enqueueBuild(libraryId: string): Promise<EnqueueLocalSemanticIndexBuildResult> {
+  async enqueueBuild(
+    libraryId: string,
+    expectedScope?: LibraryScopeToken,
+  ): Promise<EnqueueLocalSemanticIndexBuildResult> {
     assertId(libraryId, "Semantic index Library id");
+    // Reject a stale request before resolving the optional native runtime or
+    // loading an embedding artifact. The durable boundaries below repeat this
+    // check after each potentially long provider/runtime await.
+    await this.assertScope(libraryId, expectedScope);
     await this.dependencies.ensureVectorRuntime?.();
     const provider = await this.dependencies.getEmbeddingProvider();
     const descriptor = assertLocalProvider(provider);
-    const index = await this.dependencies.transaction(
-      "knowledge.semanticIndex.begin",
+    // Keep profile registration, generation capture, and job creation in one
+    // durable transaction. In particular, a scope check that fails after the
+    // generation is inserted must roll the insert back rather than leaving an
+    // orphaned `building` row that a worker can never claim.
+    const prepared = await this.dependencies.transaction(
+      "knowledge.semanticIndex.enqueueBuild",
       async (database) => {
-        const profile = await new EmbeddingProfilesRepo(database).register(toProfileInput(descriptor));
-        return new KnowledgeIndexesRepo(database, libraryId).begin({
+        await this.assertScopeInLease(database, libraryId, expectedScope);
+        const profile = await new EmbeddingProfilesRepo(database).register(
+          toProfileInput(descriptor),
+        );
+        const index = await new KnowledgeIndexesRepo(database, libraryId).begin({
           embeddingProfileId: profile.id,
           mode: "hybrid",
           now: currentTime(this.dependencies.now),
         });
+
+        // Keep this second lease assertion at the job boundary. The outer
+        // BEGIN IMMEDIATE makes a normal Library switch wait until commit, and
+        // any injected/foreign scope change still aborts the whole transaction.
+        await this.assertScopeInLease(database, libraryId, expectedScope);
+        const enqueued = await new KnowledgeJobsRepo(database, libraryId).enqueue({
+          dedupeKey: `semantic-index:${index.id}`,
+          indexId: index.id,
+          kind: "embed",
+          sourceId: libraryId,
+          sourceType: "library",
+        });
+        return { enqueued, index };
       },
     );
-
-    try {
-      const enqueued = await this.dependencies.transaction(
-        "knowledge.semanticIndex.enqueue",
-        async (database) =>
-          new KnowledgeJobsRepo(database, libraryId).enqueue({
-            dedupeKey: `semantic-index:${index.id}`,
-            indexId: index.id,
-            kind: "embed",
-            sourceId: libraryId,
-            sourceType: "library",
-          }),
-      );
-      return { created: enqueued.created, index, job: enqueued.job };
-    } catch (error) {
-      // Do not leave a seemingly buildable generation behind when its durable
-      // worker record could not be created. The prior active generation stays
-      // untouched by `fail`.
-      await this.failIndex(libraryId, index.id, error);
-      throw error;
-    }
+    return {
+      created: prepared.enqueued.created,
+      index: prepared.index,
+      job: prepared.enqueued.job,
+    };
   }
 
   /** Materializes a pinned hybrid generation in small, transactionally durable batches. */
@@ -186,7 +205,8 @@ export class LocalSemanticIndexService {
         const persisted = await this.dependencies.vectorWriter.persist({
           entries: pending.map((entry, position) => {
             const vector = vectors[position];
-            if (!vector) throw new Error("Local embedding provider returned an incomplete document batch");
+            if (!vector)
+              throw new Error("Local embedding provider returned an incomplete document batch");
             return { contentUnitId: entry.contentUnitId, vector };
           }),
           indexId,
@@ -217,7 +237,11 @@ export class LocalSemanticIndexService {
       // Retries are useful for a temporary native-runtime or storage failure.
       // On the final durable attempt, make the failed generation explicit so
       // it can never be selected for retrieval.
-      if (!isAbort(error, signal) && error instanceof Error && error.message === STALE_INDEX_SNAPSHOT_ERROR) {
+      if (
+        !isAbort(error, signal) &&
+        error instanceof Error &&
+        error.message === STALE_INDEX_SNAPSHOT_ERROR
+      ) {
         await this.failIndex(job.libraryId, indexId, error);
         return { progress: { reason: "stale-snapshot", status: "skipped" } };
       }
@@ -258,16 +282,44 @@ export class LocalSemanticIndexService {
       // masking it with a secondary failure-status write.
     }
   }
+
+  private async assertScope(libraryId: string, expectedScope?: LibraryScopeToken): Promise<void> {
+    if (!expectedScope) return;
+    await this.dependencies.inspect((database) =>
+      this.assertScopeInLease(database, libraryId, expectedScope),
+    );
+  }
+
+  private async assertScopeInLease(
+    database: Database,
+    libraryId: string,
+    expectedScope?: LibraryScopeToken,
+  ): Promise<void> {
+    if (!expectedScope) return;
+    if (expectedScope.libraryId !== libraryId) {
+      throw new Error("Rejected stale or foreign Library scope");
+    }
+    if (this.dependencies.assertScope) {
+      await this.dependencies.assertScope(database, expectedScope);
+      return;
+    }
+    // Keep injectable tests safe even when they do not provide the production
+    // callback; the shared authority remains the fail-closed fallback.
+    await assertActiveLibraryScopeToken(database, expectedScope);
+  }
 }
 
 function assertEmbedJob(job: KnowledgeJobRow): void {
   if (job.kind !== "embed" || job.sourceType !== "library" || job.sourceId !== job.libraryId) {
     throw new Error("Semantic embedding job has an invalid source scope");
   }
-  if (!job.indexId?.trim()) throw new Error("Semantic embedding job is missing an index generation");
+  if (!job.indexId?.trim())
+    throw new Error("Semantic embedding job is missing an index generation");
 }
 
-function assertLocalProvider(provider: LocalSemanticEmbeddingProvider): LocalEmbeddingProfileDescriptor {
+function assertLocalProvider(
+  provider: LocalSemanticEmbeddingProvider,
+): LocalEmbeddingProfileDescriptor {
   if (!provider || provider.egressMode !== "local") {
     throw new Error("Semantic index requires an on-device embedding provider");
   }
@@ -324,7 +376,8 @@ function sameProfile(
 
 function currentTime(now: (() => number) | undefined): number {
   const value = now?.() ?? Date.now();
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error("Semantic index timestamp is invalid");
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new Error("Semantic index timestamp is invalid");
   return value;
 }
 

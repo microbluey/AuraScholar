@@ -6,7 +6,8 @@ import {
   type KnowledgeCorpusScopeResolution,
 } from "@aurascholar/db/repos/knowledge";
 import { createCorpusScopeSnapshot, type CorpusScopeSnapshot } from "@aurascholar/knowledge";
-import { assertActiveLocalLibrary, type DataCommandDependencies } from "./data-command-runtime";
+import { type DataCommandDependencies } from "./data-command-runtime";
+import { assertActiveLibraryScopeToken } from "./library-scope-token";
 import type { ParsedSearchKnowledgeContentInput } from "./knowledge-command-input";
 
 /**
@@ -58,7 +59,7 @@ async function resolveCorpusScopeInDatabase(
   database: Database,
   input: ParsedSearchKnowledgeContentInput,
 ): Promise<KnowledgeCorpusScopeResolution> {
-  await assertActiveLocalLibrary(database, input.libraryId);
+  await assertActiveLibraryScopeToken(database, input.expectedScope);
   return new KnowledgeCorpusScopeRepo(database, input.libraryId).resolve(input.scope);
 }
 
