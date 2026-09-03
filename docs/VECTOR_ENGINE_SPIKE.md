@@ -87,16 +87,17 @@ it stores embedding-profile fingerprints, generation snapshots, and vector
 references, while a ContentUnit retirement automatically retires its old
 generation entry.
 
-The trusted desktop `SqliteVecIndexStore` now owns the next, native-only step.
+The trusted desktop `SqliteVecIndexStore` now owns the native-only write step.
 An explicit vector-write transaction lazily creates a dimension-specific `vec0`
 table, stores the Library, generation, source, and ContentUnit identifiers with
 each vector, and atomically records its durable `vector_ref`. Its KNN query
 filters the Library, generation, and allowed source IDs inside sqlite-vec before
 candidate selection; relational validation then suppresses rows whose canonical
 ContentUnit was retired. Retired or failed generations can delete their physical
-rows before their metadata is garbage-collected. No embedding provider,
-background materialization job, or user-facing semantic-search switch invokes
-this adapter yet.
+rows before their metadata is garbage-collected. The background materialization
+worker invokes this adapter only after a verified local profile is selected, and
+passes the generation's source snapshot and Library scope token at each durable
+write boundary. A missing or incompatible capability still leaves FTS available.
 
 The provisional local model/runtime boundary is tracked separately in [the
 local embedding runtime spike](./LOCAL_EMBEDDING_RUNTIME_SPIKE.md). It keeps

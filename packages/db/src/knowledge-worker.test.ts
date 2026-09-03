@@ -112,4 +112,67 @@ describe("KnowledgeJobWorker", () => {
     await expect(worker.runOnce()).resolves.toMatchObject({ kind: "lost-lease" });
     expect(calls).toEqual(["complete"]);
   });
+
+  it("fails a job when materialization rejects a stale or foreign Library scope", async () => {
+    const calls: string[] = [];
+    const running = job("running");
+    const queue: KnowledgeJobQueue = {
+      async dispatchPendingChanges() {
+        calls.push("dispatch");
+        return [];
+      },
+      async claimNext(owner) {
+        calls.push(`claim:${owner}`);
+        return job("leased");
+      },
+      async start(id, owner) {
+        calls.push(`start:${id}:${owner}`);
+        return running;
+      },
+      async renewLease() {
+        return running;
+      },
+      async complete() {
+        calls.push("complete");
+        return null;
+      },
+      async fail(id, owner, error) {
+        calls.push(`fail:${id}:${owner}:${error instanceof Error ? error.message : String(error)}`);
+        return {
+          ...running,
+          status: "retry-wait",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      },
+    };
+    const worker = new KnowledgeJobWorker(
+      queue,
+      {
+        async execute(current) {
+          calls.push(`execute:${current.id}`);
+          throw new Error("Rejected stale or foreign Library scope");
+        },
+      },
+      { owner: "worker:test", leaseMs: 1_000, heartbeatMs: 500 },
+    );
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({
+      kind: "failed",
+      job: {
+        id: "job:one",
+        status: "retry-wait",
+        error: "Rejected stale or foreign Library scope",
+      },
+    });
+    expect(calls).toEqual([
+      "dispatch",
+      "claim:worker:test",
+      "start:job:one:worker:test",
+      "execute:job:one",
+      "fail:job:one:worker:test:Rejected stale or foreign Library scope",
+    ]);
+    expect(calls).not.toContain("complete");
+  });
 });

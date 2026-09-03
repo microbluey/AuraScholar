@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19726,
-        ".ts": 94844,
+        ".ts": 95042,
         ".tsx": 36958
       },
       "files": {
@@ -95,7 +95,8 @@
         "apps/desktop/electron/main/local-embedding-provider.ts": 470,
         "apps/desktop/electron/main/local-embedding-transformers-runtime.ts": 322,
         "apps/desktop/electron/main/local-semantic-index-runtime.ts": 66,
-        "apps/desktop/electron/main/local-semantic-index-service.ts": 412,
+        "apps/desktop/electron/main/local-semantic-index-service.ts": 495,
+        "apps/desktop/electron/main/local-semantic-index-snapshot.ts": 79,
         "apps/desktop/electron/main/local-semantic-search-runtime.ts": 17,
         "apps/desktop/electron/main/local-semantic-search-service.ts": 94,
         "apps/desktop/electron/main/main-ai-http.ts": 106,
@@ -151,7 +152,7 @@
         "apps/desktop/electron/main/sentinel-runner.ts": 468,
         "apps/desktop/electron/main/snippet-commands.ts": 277,
         "apps/desktop/electron/main/sqlite-vec-index-runtime.ts": 8,
-        "apps/desktop/electron/main/sqlite-vec-index.ts": 461,
+        "apps/desktop/electron/main/sqlite-vec-index.ts": 497,
         "apps/desktop/electron/main/sqlite-vec-runtime.ts": 60,
         "apps/desktop/electron/main/staged-pdf-verification.ts": 146,
         "apps/desktop/electron/main/sync-command-input.ts": 156,
@@ -660,11 +661,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 151528
+      "totalLines": 151726
     },
     "tests": {
       "byExtension": {
-        ".ts": 95334,
+        ".ts": 95654,
         ".tsx": 1280
       },
       "files": {
@@ -728,8 +729,8 @@
         "apps/desktop/electron/main/local-embedding-provider.test.ts": 162,
         "apps/desktop/electron/main/local-embedding-transformers-runtime.test.ts": 179,
         "apps/desktop/electron/main/local-semantic-corpus-regression.test.ts": 441,
-        "apps/desktop/electron/main/local-semantic-index-scope.test.ts": 243,
-        "apps/desktop/electron/main/local-semantic-index-service.test.ts": 240,
+        "apps/desktop/electron/main/local-semantic-index-scope.test.ts": 308,
+        "apps/desktop/electron/main/local-semantic-index-service.test.ts": 357,
         "apps/desktop/electron/main/local-semantic-retrieval-evaluation-integration.test.ts": 355,
         "apps/desktop/electron/main/local-semantic-retrieval-integration.test.ts": 166,
         "apps/desktop/electron/main/local-semantic-search-service.test.ts": 130,
@@ -851,7 +852,7 @@
         "apps/desktop/electron/main/smoke/window-layout.ts": 13,
         "apps/desktop/electron/main/snippet-commands-architecture.test.ts": 57,
         "apps/desktop/electron/main/snippet-commands.test.ts": 220,
-        "apps/desktop/electron/main/sqlite-vec-index.test.ts": 316,
+        "apps/desktop/electron/main/sqlite-vec-index.test.ts": 391,
         "apps/desktop/electron/main/sqlite-vec-runtime.test.ts": 60,
         "apps/desktop/electron/main/staged-pdf-verification.test.ts": 173,
         "apps/desktop/electron/main/sync-command-input.test.ts": 88,
@@ -1049,7 +1050,7 @@
         "packages/db/src/database.test.ts": 10,
         "packages/db/src/document-evidence-migration.test.ts": 462,
         "packages/db/src/ids.test.ts": 89,
-        "packages/db/src/knowledge-worker.test.ts": 115,
+        "packages/db/src/knowledge-worker.test.ts": 178,
         "packages/db/src/library-ownership-migration.test.ts": 605,
         "packages/db/src/library-scope-architecture.test.ts": 116,
         "packages/db/src/local-first.test.ts": 64,
@@ -1111,7 +1112,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 96614
+      "totalLines": 96934
     }
   },
   "uiDatabaseBoundary": {}

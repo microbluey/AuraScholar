@@ -3,6 +3,7 @@ import {
   ContentUnitsRepo,
   DocumentAssetsRepo,
   EmbeddingProfilesRepo,
+  KnowledgeChangesRepo,
   KnowledgeIndexesRepo,
   WorksRepo,
   type ContentUnit,
@@ -62,6 +63,7 @@ describe("SqliteVecIndexStore", () => {
     await store.persist({
       libraryId,
       indexId: index.id,
+      sourceChangeSeq: index.sourceChangeSeq,
       entries: [
         { contentUnitId: allowed.id, vector: new Float32Array([0, 1]) },
         { contentUnitId: excludedButCloser.id, vector: new Float32Array([1, 0]) },
@@ -138,6 +140,7 @@ describe("SqliteVecIndexStore", () => {
       store.persist({
         libraryId,
         indexId: index.id,
+        sourceChangeSeq: index.sourceChangeSeq,
         entries: [
           { contentUnitId: first.id, vector: new Float32Array([1, 0]) },
           { contentUnitId: second.id, vector: new Float32Array([0, 1]) },
@@ -158,6 +161,76 @@ describe("SqliteVecIndexStore", () => {
     });
     await expect(nativeTableExists()).resolves.toBe(false);
     await expect(nativeRowCount(index.id)).resolves.toBe(0);
+  });
+
+  it("rejects a vector batch whose source snapshot changed before the write", async () => {
+    const unit = contentUnit("content-unit:stale-write", {
+      sourceId: "revision:stale-write",
+    });
+    await units.upsertMany([unit]);
+    const index = await beginHybridIndex();
+    await new KnowledgeChangesRepo(database, libraryId).append({
+      changeKind: "upsert",
+      sourceId: unit.sourceId,
+      sourceType: "revision",
+    });
+
+    await expect(
+      store.persist({
+        libraryId,
+        indexId: index.id,
+        sourceChangeSeq: index.sourceChangeSeq,
+        entries: [{ contentUnitId: unit.id, vector: new Float32Array([1, 0]) }],
+      }),
+    ).rejects.toThrow("snapshot is stale and must be rebuilt");
+
+    await expect(nativeTableExists()).resolves.toBe(false);
+    await expect(indexes.get(index.id)).resolves.toMatchObject({
+      indexedCount: 0,
+      status: "building",
+    });
+    await expect(indexes.listEntries(index.id)).resolves.toEqual([
+      expect.objectContaining({ contentUnitId: unit.id, status: "pending", vectorRef: null }),
+    ]);
+  });
+
+  it("discards failed physical rows without hiding failure metadata", async () => {
+    const unit = contentUnit("content-unit:discard", { sourceId: "revision:discard" });
+    await units.upsertMany([unit]);
+    const index = await beginHybridIndex();
+    await store.persist({
+      libraryId,
+      indexId: index.id,
+      sourceChangeSeq: index.sourceChangeSeq,
+      entries: [{ contentUnitId: unit.id, vector: new Float32Array([1, 0]) }],
+      now: 500,
+    });
+    await indexes.fail(index.id, new Error("build failed"), { now: 501 });
+
+    await expect(store.discardPhysicalRows({ libraryId, indexId: index.id })).resolves.toBe(1);
+    await expect(store.discardPhysicalRows({ libraryId, indexId: index.id })).resolves.toBe(0);
+    await expect(nativeRowCount(index.id)).resolves.toBe(0);
+    await expect(indexes.get(index.id)).resolves.toMatchObject({
+      status: "failed",
+      indexedCount: 1,
+    });
+    await expect(indexes.listEntries(index.id)).resolves.toEqual([
+      expect.objectContaining({ contentUnitId: unit.id, status: "ready" }),
+    ]);
+  });
+
+  it("rejects physical cleanup with a stale Library scope token", async () => {
+    const index = await beginHybridIndex();
+    await indexes.retire(index.id, { now: 502 });
+
+    await expect(
+      store.garbageCollect({
+        expectedScope: { libraryId, scopeToken: "stale-scope-token" },
+        indexId: index.id,
+        libraryId,
+      }),
+    ).rejects.toThrow("Rejected stale or foreign Library scope");
+    await expect(indexes.get(index.id)).resolves.toMatchObject({ status: "retired" });
   });
 
   it("suppresses a physically retained vector after its PDF revision is no longer current", async () => {
@@ -196,6 +269,7 @@ describe("SqliteVecIndexStore", () => {
     await store.persist({
       libraryId,
       indexId: index.id,
+      sourceChangeSeq: index.sourceChangeSeq,
       entries: [{ contentUnitId: oldUnit.id, vector: new Float32Array([0, 1]) }],
       now: 300,
     });
@@ -226,6 +300,7 @@ describe("SqliteVecIndexStore", () => {
     await store.persist({
       libraryId,
       indexId: index.id,
+      sourceChangeSeq: index.sourceChangeSeq,
       entries: [{ contentUnitId: unit.id, vector: new Float32Array([0, 1]) }],
       now: 400,
     });

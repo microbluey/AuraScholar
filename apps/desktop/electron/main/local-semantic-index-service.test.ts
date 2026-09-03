@@ -38,29 +38,35 @@ beforeEach(async () => {
 describe("LocalSemanticIndexService", () => {
   it("pins a local profile, queues a durable job, embeds every pending unit, and activates the generation", async () => {
     await new ContentUnitsRepo(database, libraryId).upsertMany([
-      contentUnit("content-unit:semantic-a", "A local vector index preserves source scope.", HASH_A),
+      contentUnit(
+        "content-unit:semantic-a",
+        "A local vector index preserves source scope.",
+        HASH_A,
+      ),
       contentUnit("content-unit:semantic-b", "Embeddings stay on the device.", HASH_B),
     ]);
-    const persist = vi.fn(async (input: {
-      libraryId: string;
-      indexId: string;
-      entries: readonly { contentUnitId: string; vector: Float32Array }[];
-    }) => {
-      return coordinator.transaction("test.vector.persist", async (db) => {
-        const indexes = new KnowledgeIndexesRepo(db, input.libraryId);
-        const rows = [];
-        for (const [position, entry] of input.entries.entries()) {
-          rows.push(
-            await indexes.markVectorReady(input.indexId, {
-              contentUnitId: entry.contentUnitId,
-              now: 10 + position,
-              vectorRef: String(position + 1),
-            }),
-          );
-        }
-        return rows;
-      });
-    });
+    const persist = vi.fn(
+      async (input: {
+        libraryId: string;
+        indexId: string;
+        entries: readonly { contentUnitId: string; vector: Float32Array }[];
+      }) => {
+        return coordinator.transaction("test.vector.persist", async (db) => {
+          const indexes = new KnowledgeIndexesRepo(db, input.libraryId);
+          const rows = [];
+          for (const [position, entry] of input.entries.entries()) {
+            rows.push(
+              await indexes.markVectorReady(input.indexId, {
+                contentUnitId: entry.contentUnitId,
+                now: 10 + position,
+                vectorRef: String(position + 1),
+              }),
+            );
+          }
+          return rows;
+        });
+      },
+    );
     const ensureVectorRuntime = vi.fn().mockResolvedValue(undefined);
     const service = serviceWith({ ensureVectorRuntime, persist });
 
@@ -79,21 +85,27 @@ describe("LocalSemanticIndexService", () => {
       ["A local vector index preserves source scope.", "Embeddings stay on the device."],
       { signal: expect.any(AbortSignal) },
     );
-    expect(persist).toHaveBeenCalledWith({
-      entries: [
-        { contentUnitId: "content-unit:semantic-a", vector: new Float32Array([1, 0]) },
-        { contentUnitId: "content-unit:semantic-b", vector: new Float32Array([0, 1]) },
-      ],
-      indexId: queued.index.id,
-      libraryId,
-    });
+    expect(persist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entries: [
+          { contentUnitId: "content-unit:semantic-a", vector: new Float32Array([1, 0]) },
+          { contentUnitId: "content-unit:semantic-b", vector: new Float32Array([0, 1]) },
+        ],
+        expectedScope: expect.objectContaining({ libraryId }),
+        indexId: queued.index.id,
+        libraryId,
+        sourceChangeSeq: queued.index.sourceChangeSeq,
+      }),
+    );
     expect(result.progress).toMatchObject({
       embedded: 2,
       indexedCount: 2,
       indexId: queued.index.id,
       status: "active",
     });
-    await expect(new KnowledgeIndexesRepo(database, libraryId).get(queued.index.id)).resolves.toMatchObject({
+    await expect(
+      new KnowledgeIndexesRepo(database, libraryId).get(queued.index.id),
+    ).resolves.toMatchObject({
       embeddingProfileId: expect.any(String),
       indexedCount: 2,
       mode: "hybrid",
@@ -147,9 +159,110 @@ describe("LocalSemanticIndexService", () => {
       progress: { reason: "stale-snapshot", status: "skipped" },
     });
     expect(provider.embedDocuments).not.toHaveBeenCalled();
-    await expect(new KnowledgeIndexesRepo(database, libraryId).get(queued.index.id)).resolves.toMatchObject({
+    await expect(
+      new KnowledgeIndexesRepo(database, libraryId).get(queued.index.id),
+    ).resolves.toMatchObject({
       status: "failed",
     });
+  });
+
+  it("rejects a batch that becomes stale while the provider is awaiting", async () => {
+    await new ContentUnitsRepo(database, libraryId).upsertMany([
+      contentUnit("content-unit:await-stale", "The source changes during embedding.", HASH_A),
+    ]);
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let releaseEmbedding!: () => void;
+    const embeddingReleased = new Promise<void>((resolve) => {
+      releaseEmbedding = resolve;
+    });
+    const embedDocuments = vi.fn(async (texts: readonly string[]) => {
+      signalStarted();
+      await embeddingReleased;
+      return texts.map(() => new Float32Array([1, 0]));
+    });
+    const delayedProvider = { ...provider, embedDocuments };
+    const persist = vi.fn().mockResolvedValue([]);
+    const service = serviceWith({
+      getEmbeddingProvider: vi.fn().mockResolvedValue(delayedProvider),
+      persist,
+    });
+    const queued = await service.enqueueBuild(libraryId);
+    const running = service.materialize(queued.job, new AbortController().signal);
+
+    await started;
+    await new KnowledgeChangesRepo(database, libraryId).append({
+      changeKind: "upsert",
+      sourceId: "revision:await-stale",
+      sourceType: "revision",
+    });
+    releaseEmbedding();
+
+    await expect(running).resolves.toEqual({
+      progress: { reason: "stale-snapshot", status: "skipped" },
+    });
+    expect(persist).not.toHaveBeenCalled();
+    await expect(
+      new KnowledgeIndexesRepo(database, libraryId).get(queued.index.id),
+    ).resolves.toMatchObject({
+      status: "failed",
+    });
+  });
+
+  it("cleans already-written vectors when a snapshot changes before activation", async () => {
+    const unit = contentUnit("content-unit:late-stale", "A late vector must be discarded.", HASH_A);
+    await new ContentUnitsRepo(database, libraryId).upsertMany([unit]);
+    let signalPersisted!: () => void;
+    const persisted = new Promise<void>((resolve) => {
+      signalPersisted = resolve;
+    });
+    let releasePersist!: () => void;
+    const persistReleased = new Promise<void>((resolve) => {
+      releasePersist = resolve;
+    });
+    const persist = vi.fn(
+      async (input: {
+        libraryId: string;
+        indexId: string;
+        entries: readonly { contentUnitId: string; vector: Float32Array }[];
+      }) => {
+        const rows = await coordinator.transaction("test.vector.persist", async (db) => {
+          const indexes = new KnowledgeIndexesRepo(db, input.libraryId);
+          return indexes.markVectorReady(input.indexId, {
+            contentUnitId: input.entries[0]!.contentUnitId,
+            vectorRef: "late-vector",
+          });
+        });
+        signalPersisted();
+        await persistReleased;
+        return [rows];
+      },
+    );
+    const discardPhysicalRows = vi.fn().mockResolvedValue(1);
+    const service = serviceWith({ discardPhysicalRows, persist });
+    const queued = await service.enqueueBuild(libraryId);
+    const running = service.materialize(queued.job, new AbortController().signal);
+
+    await persisted;
+    await new KnowledgeChangesRepo(database, libraryId).append({
+      changeKind: "upsert",
+      sourceId: "revision:late-stale",
+      sourceType: "revision",
+    });
+    releasePersist();
+
+    await expect(running).resolves.toEqual({
+      progress: { reason: "stale-snapshot", status: "skipped" },
+    });
+    expect(discardPhysicalRows).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedScope: expect.objectContaining({ libraryId }),
+        indexId: queued.index.id,
+        libraryId,
+      }),
+    );
   });
 
   it("rejects a malformed embed job before reading an embedding provider", async () => {
@@ -174,10 +287,12 @@ describe("LocalSemanticIndexService", () => {
 });
 
 function serviceWith({
+  discardPhysicalRows,
   ensureVectorRuntime,
   getEmbeddingProvider = vi.fn().mockImplementation(async () => provider),
   persist,
 }: {
+  discardPhysicalRows?: ReturnType<typeof vi.fn>;
   ensureVectorRuntime?: ReturnType<typeof vi.fn>;
   getEmbeddingProvider?: ReturnType<typeof vi.fn>;
   persist: ReturnType<typeof vi.fn>;
@@ -188,7 +303,7 @@ function serviceWith({
     inspect: (operation) => coordinator.execute(operation),
     now: () => 1_738_361_600_000,
     transaction: (commandName, operation) => coordinator.transaction(commandName, operation),
-    vectorWriter: { persist },
+    vectorWriter: { discardPhysicalRows, persist },
   });
 }
 
@@ -197,7 +312,9 @@ function fakeProvider(): LocalSemanticEmbeddingProvider {
     dimension: 2,
     egressMode: "local",
     embedDocuments: vi.fn(async (texts: readonly string[]) =>
-      texts.map((_text, index) => (index % 2 === 0 ? new Float32Array([1, 0]) : new Float32Array([0, 1]))),
+      texts.map((_text, index) =>
+        index % 2 === 0 ? new Float32Array([1, 0]) : new Float32Array([0, 1]),
+      ),
     ),
     embedQuery: vi.fn(async () => new Float32Array([1, 0])),
     embeddingProfile: {

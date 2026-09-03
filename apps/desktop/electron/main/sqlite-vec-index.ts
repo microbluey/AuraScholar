@@ -14,6 +14,12 @@ import {
   type VectorSearchInput,
   type VectorStore,
 } from "@aurascholar/knowledge";
+import type { LibraryScopeToken } from "../library-read-command-contract";
+import {
+  assertKnowledgeIndexSnapshot,
+  assertLibraryScope,
+  normalizeSourceChangeSeq,
+} from "./local-semantic-index-snapshot";
 
 const MAX_SOURCE_IDS_PER_KNN_QUERY = 250;
 const MAX_VECTOR_WRITE_BATCH_SIZE = 1_000;
@@ -32,6 +38,8 @@ export interface SqliteVecIndexStoreDependencies {
 export interface PersistSqliteVecEntriesInput {
   libraryId: string;
   indexId: string;
+  sourceChangeSeq: number;
+  expectedScope?: LibraryScopeToken;
   entries: readonly {
     contentUnitId: string;
     vector: Float32Array;
@@ -42,6 +50,7 @@ export interface PersistSqliteVecEntriesInput {
 export interface GarbageCollectSqliteVecIndexInput {
   libraryId: string;
   indexId: string;
+  expectedScope?: LibraryScopeToken;
   now?: number;
 }
 
@@ -87,12 +96,20 @@ export class SqliteVecIndexStore implements VectorStore {
   async persist(input: PersistSqliteVecEntriesInput): Promise<readonly KnowledgeIndexEntryRow[]> {
     const libraryId = normalizeId(input.libraryId, "Vector write Library id");
     const indexId = normalizeId(input.indexId, "Vector write index id");
+    const sourceChangeSeq = normalizeSourceChangeSeq(input.sourceChangeSeq);
     const entries = normalizeEntries(input.entries);
     if (entries.length === 0) return [];
     const now = normalizeNow(input.now);
 
     return this.dependencies.transaction("knowledge.vector.persist", async (database) => {
+      await assertLibraryScope(database, libraryId, input.expectedScope);
       const context = await loadIndexContext(database, libraryId, indexId, ["building"]);
+      await assertKnowledgeIndexSnapshot(
+        database,
+        libraryId,
+        context.index.sourceChangeSeq,
+        sourceChangeSeq,
+      );
       for (const entry of entries) {
         assertEmbeddingVector(entry.vector, context.profile.dimension, "Knowledge index vector");
       }
@@ -204,12 +221,31 @@ export class SqliteVecIndexStore implements VectorStore {
     });
   }
 
-  /** Removes an old physical namespace before its metadata is marked collected. */
+  async discardPhysicalRows(input: {
+    libraryId: string;
+    indexId: string;
+    expectedScope?: LibraryScopeToken;
+  }): Promise<number> {
+    const libraryId = normalizeId(input.libraryId, "Vector cleanup Library id");
+    const indexId = normalizeId(input.indexId, "Vector cleanup index id");
+    return this.dependencies.transaction("knowledge.vector.discard", async (database) => {
+      await assertLibraryScope(database, libraryId, input.expectedScope);
+      const context = await loadIndexContext(database, libraryId, indexId, ["failed", "retired"]);
+      if (!(await sqliteVecTableExists(database, context.tableName))) return 0;
+      await assertSqliteVecTable(database, context.tableName, context.profile.dimension);
+      return database.run(
+        `DELETE FROM ${context.tableName} WHERE library_id = ? AND index_id = ?`,
+        [libraryId, indexId],
+      );
+    });
+  }
+
   async garbageCollect(input: GarbageCollectSqliteVecIndexInput): Promise<boolean> {
     const libraryId = normalizeId(input.libraryId, "Vector cleanup Library id");
     const indexId = normalizeId(input.indexId, "Vector cleanup index id");
     const now = normalizeNow(input.now);
     return this.dependencies.transaction("knowledge.vector.garbageCollect", async (database) => {
+      await assertLibraryScope(database, libraryId, input.expectedScope);
       const context = await loadIndexContext(database, libraryId, indexId, ["retired", "failed"]);
       if (await sqliteVecTableExists(database, context.tableName)) {
         await assertSqliteVecTable(database, context.tableName, context.profile.dimension);
