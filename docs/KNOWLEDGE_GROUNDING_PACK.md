@@ -123,6 +123,30 @@ run/scope identity. The async payload builder revalidates this hash before a
 provider boundary; the source records remain untrusted data rather than
 instructions.
 
+## Grounded synthesis execution
+
+The first execution boundary is deliberately narrow and does not persist an
+answer. It performs the following sequence:
+
+1. validate and freeze the complete GroundingPack before the provider boundary;
+2. construct one fixed system instruction plus a bounded, canonical JSON data
+   payload that labels every source record `untrusted`;
+3. syntax-check and bound provider JSON before any relation resolver sees it;
+4. obtain claim-to-citation relations from a trusted main-process resolver, not
+   from provider output; and
+5. revalidate every issued citation, relation, citation marker, and final
+   coverage state before returning an answer.
+
+An empty eligible pack does not contact a provider. It produces the explicit
+`insufficient` state instead. The relation resolver may use only the frozen
+pack and validated claim/citation references; it must never accept provider
+fields that label a citation as supporting, qualifying, contradicting, or
+background evidence.
+
+This layer creates no durable SynthesisDraft or diagnostic row. A later
+main-process integration must recheck its active Library/scope token and source
+lifecycle state at any durable write boundary.
+
 ## Safety and lifecycle
 
 - Retrieved text is untrusted quoted data. It cannot change system rules,

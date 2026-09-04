@@ -5,7 +5,7 @@
     "production": {
       "byExtension": {
         ".css": 19726,
-        ".ts": 97935,
+        ".ts": 98335,
         ".tsx": 36958
       },
       "files": {
@@ -603,7 +603,10 @@
         "packages/knowledge/src/corpus-scope.ts": 193,
         "packages/knowledge/src/embedding.ts": 47,
         "packages/knowledge/src/evidence.ts": 71,
-        "packages/knowledge/src/grounding-output.ts": 439,
+        "packages/knowledge/src/grounded-synthesis.ts": 202,
+        "packages/knowledge/src/grounding-output-contract.ts": 50,
+        "packages/knowledge/src/grounding-output-prepare.ts": 251,
+        "packages/knowledge/src/grounding-output.ts": 320,
         "packages/knowledge/src/grounding-pack-candidate.ts": 384,
         "packages/knowledge/src/grounding-pack-shape.ts": 428,
         "packages/knowledge/src/grounding-pack-support.ts": 315,
@@ -613,7 +616,7 @@
         "packages/knowledge/src/hash.ts": 33,
         "packages/knowledge/src/hybrid-ranking.ts": 85,
         "packages/knowledge/src/hybrid-retriever.ts": 178,
-        "packages/knowledge/src/index.ts": 255,
+        "packages/knowledge/src/index.ts": 271,
         "packages/knowledge/src/pdf-text.ts": 26,
         "packages/knowledge/src/pdf.ts": 280,
         "packages/knowledge/src/profiles.ts": 22,
@@ -671,11 +674,11 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 154619
+      "totalLines": 155019
     },
     "tests": {
       "byExtension": {
-        ".ts": 97049,
+        ".ts": 97283,
         ".tsx": 1280
       },
       "files": {
@@ -1100,6 +1103,7 @@
         "packages/knowledge/src/annotation-evidence.test.ts": 98,
         "packages/knowledge/src/content-unit.test.ts": 71,
         "packages/knowledge/src/corpus-scope.test.ts": 103,
+        "packages/knowledge/src/grounded-synthesis.test.ts": 234,
         "packages/knowledge/src/grounding-output.test.ts": 368,
         "packages/knowledge/src/grounding-pack.test.ts": 487,
         "packages/knowledge/src/pdf-text.test.ts": 19,
@@ -1125,7 +1129,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 98329
+      "totalLines": 98563
     }
   },
   "uiDatabaseBoundary": {}
