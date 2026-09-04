@@ -235,6 +235,7 @@ export {
   MAX_GROUNDING_CITATIONS_PER_ANSWER,
   MAX_GROUNDING_CITATIONS_PER_CLAIM,
   classifyClaimCoverage,
+  prepareGroundedAnswer,
   validateGroundedAnswer,
   validateGroundedAnswerAsync,
   validateGroundedOutput,
@@ -242,6 +243,7 @@ export {
 } from "./grounding-output.js";
 export type {
   GroundedAnswerInput,
+  GroundedAnswerPreparationOptions,
   GroundedClaimInput,
   GroundedAnswerValidationOptions,
   GroundingAnswerStatus,
@@ -253,3 +255,17 @@ export type {
   ValidatedGroundedAnswer,
   ValidatedGroundedClaim,
 } from "./grounding-output.js";
+export {
+  buildGroundedSynthesisPrompt,
+  GROUNDED_SYNTHESIS_PROMPT_VERSION,
+  GROUNDED_SYNTHESIS_SYSTEM_INSTRUCTION,
+  runGroundedSynthesis,
+} from "./grounded-synthesis.js";
+export type {
+  GroundedSynthesisGenerator,
+  GroundedSynthesisGeneratorInput,
+  GroundedSynthesisPrompt,
+  GroundedSynthesisRelationResolver,
+  GroundedSynthesisRelationResolverInput,
+  GroundedSynthesisRequest,
+} from "./grounded-synthesis.js";
