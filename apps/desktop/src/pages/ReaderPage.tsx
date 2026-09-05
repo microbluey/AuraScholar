@@ -36,6 +36,7 @@ import {
   ReaderPageNavigator,
   type ReaderWorkContext,
 } from "../features/reader/ReaderPageChrome";
+import { ReaderDocumentSynthesisTab } from "../features/reader/DocumentSynthesisPanel";
 import {
   SelectionTranslationPopover,
   translationSettingsCta,
@@ -49,6 +50,12 @@ import {
   consumeReaderSmokeSnippetSaveFailure,
 } from "../features/reader/reader-smoke-failures";
 import { useReaderEvidenceDeepLink } from "../features/reader/useReaderEvidenceDeepLink";
+import {
+  normalizeReaderPanelTab,
+  readerPanelTabIsMounted,
+  readerPanelTabs,
+  type ReaderPanelTab,
+} from "../features/reader/reader-panel-tabs";
 import { resolveReaderScrollPage } from "../features/reader/evidence-deep-link";
 import { recoverReaderEvidenceSource } from "../features/reader/reader-evidence-recovery";
 import {
@@ -95,7 +102,6 @@ const CitationGraphView = lazy(() =>
 configureWorker(workerSrc);
 
 type PageFilter = "none" | "sepia" | "invert";
-type PanelTab = "annotations" | "translate" | "graph";
 type TranslationMode = "selection" | "split" | "inline";
 interface TranslatedSegment {
   source: string;
@@ -114,12 +120,6 @@ const EMPTY_SESSION_TRANSLATED_PAGES: ReaderSessionOwnedValue<TranslatedPages> =
   generation: null,
   value: EMPTY_TRANSLATED_PAGES,
 };
-const PANEL_TABS = new Set<PanelTab>(["annotations", "translate", "graph"]);
-
-function normalizePanelTab(value: string | null): PanelTab | null {
-  return value && PANEL_TABS.has(value as PanelTab) ? (value as PanelTab) : null;
-}
-
 const PAGE_FILTERS: Array<{ value: PageFilter; label: string; title: string }> = [
   { value: "none", label: "原色", title: "保持 PDF 原始色彩" },
   { value: "sepia", label: "护眼", title: "降低长时间阅读的视觉刺激" },
@@ -329,7 +329,7 @@ export function ReaderPage() {
   const evidenceIdParam = params.get("evidence")?.trim() || undefined;
   const attachmentIdParam = params.get("attachment")?.trim() || undefined;
   const pageParam = params.get("page");
-  const tabParam = normalizePanelTab(rawTabParam);
+  const tabParam = normalizeReaderPanelTab(rawTabParam);
   const [ctx, setCtx] = useState<OpenContext | null>(null);
   const [missingWork, setMissingWork] = useState<MissingWorkContext | null>(null);
   const [archivedWork, setArchivedWork] = useState<MissingWorkContext | null>(null);
@@ -342,7 +342,7 @@ export function ReaderPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [jumpPage, setJumpPage] = useState<number | null>(null);
-  const [tab, setTab] = useState<PanelTab>(tabParam ?? "annotations");
+  const [tab, setTab] = useState<ReaderPanelTab>(tabParam ?? "annotations");
   const [panelOpen, setPanelOpen] = useState(true);
   const [translationMode, setTranslationMode] = useState<TranslationMode>("selection");
   const [translatedPagesState, setTranslatedPagesState] = useState<
@@ -389,6 +389,7 @@ export function ReaderPage() {
   const tabWorkIdRef = useRef<string | null>(workIdParam);
   const appliedDeepLinkRef = useRef<string | null>(null);
   const canShowGraphTab = Boolean(ctx?.workDoi);
+  const canSynthesizeDocument = Boolean(ctx?.workId && ctx?.librarySession && isDesktopRuntime());
   const translatedPages = readReaderSessionOwnedValue(
     translatedPagesState,
     ctx?.sessionGeneration,
@@ -1160,16 +1161,7 @@ export function ReaderPage() {
     );
   }
 
-  const tabs: Array<{ key: PanelTab; label: string; disabled?: boolean; title?: string }> = [
-    { key: "annotations", label: `批注 ${annotations.length}` },
-    { key: "translate", label: "翻译" },
-    {
-      key: "graph",
-      label: "脉络",
-      disabled: !ctx.workDoi,
-      title: ctx.workDoi ? undefined : "无 DOI,无法构建图谱",
-    },
-  ];
+  const tabs = readerPanelTabs({ annotationCount: annotations.length, canSynthesizeDocument, workDoi: ctx.workDoi });
   const visibleAnnotationDeleteUndo =
     annotationDeleteUndo?.sessionGeneration === ctx.sessionGeneration ? annotationDeleteUndo : null;
   const evidenceLease = activeLeaseForContext(ctx);
@@ -1364,10 +1356,10 @@ export function ReaderPage() {
             </div>
             <div className="reader-tabs au-tablist" role="tablist" aria-label="研究面板">
               {tabs.map((t) => {
-                const panelMounted =
-                  t.key === "annotations" ||
-                  t.key === "translate" ||
-                  (t.key === "graph" && Boolean(ctx.workDoi && graphMounted));
+                const panelMounted = readerPanelTabIsMounted(t.key, {
+                  graphMounted,
+                  workDoi: ctx.workDoi,
+                });
                 return (
                   <button
                     key={t.key}
@@ -1435,6 +1427,13 @@ export function ReaderPage() {
                   onPagesChange={setTranslatedPagesForActiveSession}
                 />
               </div>
+              <ReaderDocumentSynthesisTab
+                key={ctx.sessionGeneration}
+                active={tab === "synthesis"}
+                enabled={canSynthesizeDocument}
+                workId={ctx.workId ?? ""}
+                workTitle={ctx.workTitle ?? ctx.fileName}
+              />
               {ctx.workDoi && graphMounted && (
                 <div
                   id="reader-panel-graph"

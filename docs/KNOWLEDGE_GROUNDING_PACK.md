@@ -174,6 +174,14 @@ changes during either provider call, the command rejects rather than returning
 an answer tied to stale evidence. Empty packs return `insufficient` without
 constructing or contacting a provider.
 
+The desktop PDF Reader exposes this as a desktop-only **Grounded synthesis**
+panel for the currently open, in-Library Work. The question is the only new
+user-provided input. Its Markdown answer is an editable, session-only draft;
+closing or changing the Reader session discards it. The rendered claim and
+citation cards remain main-issued, revision-bound projections and cannot be
+replaced by the renderer. This UI creates no Evidence, annotation, draft, or
+other durable record.
+
 ## Safety and lifecycle
 
 - Retrieved text is untrusted quoted data. It cannot change system rules,

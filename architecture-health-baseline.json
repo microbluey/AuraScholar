@@ -4,9 +4,9 @@
   "source": {
     "production": {
       "byExtension": {
-        ".css": 19726,
-        ".ts": 98988,
-        ".tsx": 36958
+        ".css": 20054,
+        ".ts": 99134,
+        ".tsx": 37305
       },
       "files": {
         "apps/desktop/electron/ai-command-contract.ts": 254,
@@ -351,11 +351,15 @@
         "apps/desktop/src/features/projects/useProjectIngress.tsx": 133,
         "apps/desktop/src/features/projects/useProjectSourceSearch.ts": 28,
         "apps/desktop/src/features/projects/useResearchProjectController.ts": 34,
+        "apps/desktop/src/features/reader/DocumentSynthesisPanel.tsx": 348,
         "apps/desktop/src/features/reader/ReaderPageChrome.tsx": 314,
         "apps/desktop/src/features/reader/SelectionTranslationPopover.tsx": 154,
+        "apps/desktop/src/features/reader/document-synthesis-presentation.ts": 90,
+        "apps/desktop/src/features/reader/document-synthesis.css": 328,
         "apps/desktop/src/features/reader/evidence-deep-link.ts": 95,
         "apps/desktop/src/features/reader/library-reader-session.ts": 280,
         "apps/desktop/src/features/reader/reader-evidence-recovery.ts": 43,
+        "apps/desktop/src/features/reader/reader-panel-tabs.ts": 56,
         "apps/desktop/src/features/reader/reader-session-coordinator.ts": 107,
         "apps/desktop/src/features/reader/reader-session-state.ts": 45,
         "apps/desktop/src/features/reader/reader-smoke-failures.ts": 48,
@@ -375,7 +379,7 @@
         "apps/desktop/src/pages/GraphPage.tsx": 261,
         "apps/desktop/src/pages/HomepagePage.tsx": 1113,
         "apps/desktop/src/pages/LibraryPage.tsx": 3952,
-        "apps/desktop/src/pages/ReaderPage.tsx": 2060,
+        "apps/desktop/src/pages/ReaderPage.tsx": 2059,
         "apps/desktop/src/pages/ResearchProjectPage.tsx": 276,
         "apps/desktop/src/pages/SentinelPage.tsx": 1202,
         "apps/desktop/src/pages/SettingsPage.tsx": 1970,
@@ -676,12 +680,12 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 155672
+      "totalLines": 156493
     },
     "tests": {
       "byExtension": {
-        ".ts": 97772,
-        ".tsx": 1280
+        ".ts": 97854,
+        ".tsx": 1363
       },
       "files": {
         "apps/desktop/electron/main/ai-commands-architecture.test.ts": 100,
@@ -964,10 +968,13 @@
         "apps/desktop/src/features/projects/project-source-search.test.ts": 93,
         "apps/desktop/src/features/projects/research-project-controller.test.ts": 161,
         "apps/desktop/src/features/projects/routes.test.ts": 41,
+        "apps/desktop/src/features/reader/DocumentSynthesisPanel.test.tsx": 83,
         "apps/desktop/src/features/reader/SelectionTranslationPopover.test.ts": 22,
+        "apps/desktop/src/features/reader/document-synthesis-presentation.test.ts": 48,
         "apps/desktop/src/features/reader/evidence-deep-link.test.ts": 135,
         "apps/desktop/src/features/reader/library-reader-session.test.ts": 464,
         "apps/desktop/src/features/reader/reader-evidence-recovery.test.ts": 90,
+        "apps/desktop/src/features/reader/reader-panel-tabs.test.ts": 34,
         "apps/desktop/src/features/reader/reader-session-coordinator.test.ts": 113,
         "apps/desktop/src/features/reader/reader-session-stale-completion.test.ts": 127,
         "apps/desktop/src/features/reader/reader-session-state.test.ts": 63,
@@ -1133,7 +1140,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 99052
+      "totalLines": 99217
     }
   },
   "uiDatabaseBoundary": {}
