@@ -16,6 +16,7 @@ const SUPPORTED_DATA_COMMAND_NAMES = new Set<DataCommandName>([
   "ai.recordFlashcardFailure",
   "ai.saveSettings",
   "ai.synthesizeCanvas",
+  "ai.synthesizeDocument",
   "ai.testProvider",
   "canvas.listWorkspaces",
   "canvas.loadWorkspace",

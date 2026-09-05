@@ -10,6 +10,8 @@ import type {
   AiRecordFlashcardFailureCommandResult,
   AiSynthesizeCanvasCommandInput,
   AiSynthesizeCanvasCommandResult,
+  AiSynthesizeDocumentCommandInput,
+  AiSynthesizeDocumentCommandResult,
   AiTestProviderCommandResult,
 } from "../../electron/ai-command-contract";
 
@@ -33,6 +35,14 @@ export function synthesizeAiCanvas(
   return invokeCancellableAiRun("ai.synthesizeCanvas", input, signal);
 }
 
+/** Main resolves the current document corpus and returns only validated citations. */
+export function synthesizeAiDocument(
+  input: Omit<AiSynthesizeDocumentCommandInput, "requestId">,
+  signal?: AbortSignal,
+): Promise<AiSynthesizeDocumentCommandResult> {
+  return invokeCancellableAiRun("ai.synthesizeDocument", input, signal);
+}
+
 /** Fixed-prompt provider smoke request; config/secret remain in main. */
 export function testAiProvider(signal?: AbortSignal): Promise<AiTestProviderCommandResult> {
   return invokeCancellableAiRun("ai.testProvider", {}, signal);
@@ -50,7 +60,11 @@ export function recordAiFlashcardFailure(
   return window.aura.data.command("ai.recordFlashcardFailure", input);
 }
 
-type CancellableAiRunName = "ai.generateFlashcards" | "ai.synthesizeCanvas" | "ai.testProvider";
+type CancellableAiRunName =
+  | "ai.generateFlashcards"
+  | "ai.synthesizeCanvas"
+  | "ai.synthesizeDocument"
+  | "ai.testProvider";
 
 type CancellableAiRunInput<K extends CancellableAiRunName> = Omit<
   AiDataCommandInput<K>,

@@ -68,7 +68,6 @@ import {
   type DataCommandDependencies,
 } from "./data-command-runtime";
 
-const MAX_MERGE_DUPLICATE_IDS = 500;
 const MAX_WORK_IDS_PER_COMMAND = 500;
 export type { DataCommandDependencies } from "./data-command-runtime";
 const defaultDependencies: DataCommandDependencies = {
@@ -104,6 +103,7 @@ export async function executeDataCommand(
     case "ai.recordFlashcardFailure":
     case "ai.saveSettings":
     case "ai.synthesizeCanvas":
+    case "ai.synthesizeDocument":
     case "ai.testProvider":
       return executeAiCommand(envelope, {
         execute(commandName, operation) {
@@ -381,8 +381,8 @@ function parseMergeWorksInput(value: unknown): MergeWorksCommandInput {
   if (!Array.isArray(value.duplicateIds) || value.duplicateIds.length === 0) {
     throw new Error("At least one duplicate work id is required");
   }
-  if (value.duplicateIds.length > MAX_MERGE_DUPLICATE_IDS) {
-    throw new Error(`Merging is limited to ${MAX_MERGE_DUPLICATE_IDS} duplicate works at a time`);
+  if (value.duplicateIds.length > MAX_WORK_IDS_PER_COMMAND) {
+    throw new Error(`Merging is limited to ${MAX_WORK_IDS_PER_COMMAND} duplicate works at a time`);
   }
   const duplicateIds = Array.from(value.duplicateIds, (workId, index) =>
     requireRecordId(workId, `Duplicate work id at index ${index}`),

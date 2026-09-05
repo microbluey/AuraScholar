@@ -11,6 +11,7 @@ import type {
   AiRecordFlashcardFailureCommandInput,
   AiSaveSettingsCommandInput,
   AiSynthesizeCanvasCommandInput,
+  AiSynthesizeDocumentCommandInput,
   AiTestProviderCommandInput,
 } from "../ai-command-contract";
 import { isRecord, requireRecordId } from "./data-command-runtime";
@@ -25,6 +26,7 @@ const MAX_AI_CANVAS_SOURCE_ID_LENGTH = 512;
 const MAX_AI_CANVAS_SOURCE_TITLE_BYTES = 16 * 1024;
 const MAX_AI_CANVAS_SOURCE_TOTAL_BYTES = 256 * 1024;
 const MAX_AI_CANVAS_SOURCES = 10;
+const MAX_AI_DOCUMENT_QUERY_BYTES = 16 * 1024;
 const MAX_AI_FLASHCARD_TEXT_BYTES = 512 * 1024;
 const MAX_AI_RUN_REQUEST_ID_LENGTH = 128;
 const MAX_CONTRIBUTIONS = 5;
@@ -126,6 +128,19 @@ export function parseSynthesizeCanvasInput(value: unknown): AiSynthesizeCanvasCo
     mode: requireCanvasSynthesisMode(input.mode),
     requestId: requireAiRunRequestId(input.requestId),
     sources,
+  };
+}
+
+export function parseSynthesizeDocumentInput(value: unknown): AiSynthesizeDocumentCommandInput {
+  const input = requireExactAiInput(value, "ai.synthesizeDocument", [
+    "query",
+    "requestId",
+    "workId",
+  ]);
+  return {
+    query: requireAiText(input.query, "Grounded document query", MAX_AI_DOCUMENT_QUERY_BYTES),
+    requestId: requireAiRunRequestId(input.requestId),
+    workId: requireRecordId(input.workId, "Work id"),
   };
 }
 

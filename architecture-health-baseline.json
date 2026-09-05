@@ -5,11 +5,11 @@
     "production": {
       "byExtension": {
         ".css": 19726,
-        ".ts": 98335,
+        ".ts": 98988,
         ".tsx": 36958
       },
       "files": {
-        "apps/desktop/electron/ai-command-contract.ts": 196,
+        "apps/desktop/electron/ai-command-contract.ts": 254,
         "apps/desktop/electron/annotation-recovery-command-contract.ts": 20,
         "apps/desktop/electron/canvas-command-contract.ts": 258,
         "apps/desktop/electron/citation-graph-command-contract.ts": 85,
@@ -24,8 +24,8 @@
         "apps/desktop/electron/library-page-command-contract.ts": 105,
         "apps/desktop/electron/library-read-command-contract.ts": 152,
         "apps/desktop/electron/main.ts": 168,
-        "apps/desktop/electron/main/ai-command-input.ts": 358,
-        "apps/desktop/electron/main/ai-commands.ts": 409,
+        "apps/desktop/electron/main/ai-command-input.ts": 373,
+        "apps/desktop/electron/main/ai-commands.ts": 431,
         "apps/desktop/electron/main/ai-provider.ts": 39,
         "apps/desktop/electron/main/ai-run-registry.ts": 34,
         "apps/desktop/electron/main/ai-settings-store.ts": 340,
@@ -43,7 +43,7 @@
         "apps/desktop/electron/main/citation-graph-test-fixtures.ts": 44,
         "apps/desktop/electron/main/close-lifecycle-state.ts": 147,
         "apps/desktop/electron/main/close-lifecycle.ts": 207,
-        "apps/desktop/electron/main/data-command-envelope.ts": 173,
+        "apps/desktop/electron/main/data-command-envelope.ts": 174,
         "apps/desktop/electron/main/data-command-runtime.ts": 110,
         "apps/desktop/electron/main/data-commands.ts": 500,
         "apps/desktop/electron/main/database-coordinator.ts": 78,
@@ -58,6 +58,8 @@
         "apps/desktop/electron/main/evidence-shelf-commands.ts": 478,
         "apps/desktop/electron/main/evidence-shelf-promotion-command.ts": 126,
         "apps/desktop/electron/main/evidence-source-recovery.ts": 321,
+        "apps/desktop/electron/main/grounded-document-synthesis.ts": 318,
+        "apps/desktop/electron/main/grounded-synthesis-provider.ts": 225,
         "apps/desktop/electron/main/ipc.ts": 37,
         "apps/desktop/electron/main/knowledge-command-input.ts": 238,
         "apps/desktop/electron/main/knowledge-command-projection.ts": 105,
@@ -379,7 +381,7 @@
         "apps/desktop/src/pages/SettingsPage.tsx": 1970,
         "apps/desktop/src/pages/SnippetsPage.tsx": 1130,
         "apps/desktop/src/pages/SpatialCanvasPage.tsx": 1158,
-        "apps/desktop/src/services/ai-data.ts": 100,
+        "apps/desktop/src/services/ai-data.ts": 114,
         "apps/desktop/src/services/ai.ts": 164,
         "apps/desktop/src/services/app-shell-data.ts": 15,
         "apps/desktop/src/services/aura-platform.ts": 44,
@@ -674,16 +676,16 @@
         "packages/ui/src/index.tsx": 97,
         "packages/ui/src/styles.css": 250
       },
-      "totalLines": 155019
+      "totalLines": 155672
     },
     "tests": {
       "byExtension": {
-        ".ts": 97283,
+        ".ts": 97772,
         ".tsx": 1280
       },
       "files": {
-        "apps/desktop/electron/main/ai-commands-architecture.test.ts": 92,
-        "apps/desktop/electron/main/ai-commands.test.ts": 586,
+        "apps/desktop/electron/main/ai-commands-architecture.test.ts": 100,
+        "apps/desktop/electron/main/ai-commands.test.ts": 596,
         "apps/desktop/electron/main/ai-settings-store.test.ts": 231,
         "apps/desktop/electron/main/annotation-recovery-command-architecture.test.ts": 37,
         "apps/desktop/electron/main/annotation-recovery-commands.test.ts": 267,
@@ -710,6 +712,8 @@
         "apps/desktop/electron/main/evidence-shelf-commands.test.ts": 602,
         "apps/desktop/electron/main/evidence-source-recovery.test.ts": 305,
         "apps/desktop/electron/main/frame-isolation-architecture.test.ts": 27,
+        "apps/desktop/electron/main/grounded-document-synthesis.test.ts": 288,
+        "apps/desktop/electron/main/grounded-synthesis-provider.test.ts": 156,
         "apps/desktop/electron/main/ipc.test.ts": 83,
         "apps/desktop/electron/main/knowledge-command-scope-architecture.test.ts": 39,
         "apps/desktop/electron/main/knowledge-commands.test.ts": 698,
@@ -969,7 +973,7 @@
         "apps/desktop/src/features/reader/reader-session-state.test.ts": 63,
         "apps/desktop/src/features/sentinel/sentinel-preview.test.ts": 95,
         "apps/desktop/src/features/settings/LocalEmbeddingModelCard.test.tsx": 20,
-        "apps/desktop/src/services/ai-data.test.ts": 95,
+        "apps/desktop/src/services/ai-data.test.ts": 122,
         "apps/desktop/src/services/ai.test.ts": 110,
         "apps/desktop/src/services/app-shell-data.test.ts": 44,
         "apps/desktop/src/services/aura-platform.test.ts": 41,
@@ -1129,7 +1133,7 @@
         "packages/sync/src/webdav.test.ts": 288,
         "packages/translate/src/translate.test.ts": 244
       },
-      "totalLines": 98563
+      "totalLines": 99052
     }
   },
   "uiDatabaseBoundary": {}

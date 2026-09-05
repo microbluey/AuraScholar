@@ -147,6 +147,33 @@ This layer creates no durable SynthesisDraft or diagnostic row. A later
 main-process integration must recheck its active Library/scope token and source
 lifecycle state at any durable write boundary.
 
+## Desktop document synthesis boundary
+
+`ai.synthesizeDocument` is the first desktop integration of this contract. Its
+renderer DTO contains only `query`, `workId`, and an opaque cancellation
+`requestId`; it cannot submit a Library ID, source IDs, revisions, citations,
+provider endpoint, API key, or model name. Electron main then:
+
+1. resolves the current local Library and the selected Work into a canonical
+   source allowlist, searches only that frozen scope, and captures each Asset's
+   current revision before it builds the pack;
+2. calls the configured main-process provider only when the pack has eligible
+   citations, with the static instruction channel separated from untrusted
+   source data;
+3. asks a second, fixed-prompt main-process provider call to classify every
+   exact claim/citation pair from the pack quote, rejecting missing, duplicate,
+   unknown, or malformed relation rows; and
+4. re-resolves the Work scope, canonical ContentUnits, and current Asset
+   revisions immediately before it returns the ephemeral result.
+
+The second classification is a defense-in-depth relevance check, not an
+independent source of truth: it has no database access, receives only
+pack-issued quotes and IDs, and its labels are still subject to deterministic
+pack, marker, citation, and coverage validation. If the source lifecycle
+changes during either provider call, the command rejects rather than returning
+an answer tied to stale evidence. Empty packs return `insufficient` without
+constructing or contacting a provider.
+
 ## Safety and lifecycle
 
 - Retrieved text is untrusted quoted data. It cannot change system rules,
