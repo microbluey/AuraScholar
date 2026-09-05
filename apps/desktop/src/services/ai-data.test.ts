@@ -4,6 +4,7 @@ import {
   generateAiFlashcards,
   getAiFlashcardTarget,
   recordAiFlashcardFailure,
+  synthesizeAiDocument,
   testAiProvider,
 } from "./ai-data";
 
@@ -90,6 +91,32 @@ describe("AI command facade", () => {
         },
       ],
       ["ai.recordFlashcardFailure", { error: "safe error", workId: "work-1" }],
+    ]);
+  });
+
+  it("sends a document question only with its Work identity and opaque run id", async () => {
+    const result = {
+      answerMarkdown: "The trial was randomized. cite:1",
+      claims: [],
+      modelName: "main-owned-model",
+      packHash: "a".repeat(64),
+      status: "answer" as const,
+    };
+    command.mockResolvedValueOnce(result);
+
+    await expect(
+      synthesizeAiDocument({ query: "What was the study design?", workId: "work-1" }),
+    ).resolves.toEqual(result);
+
+    expect(command).toHaveBeenCalledWith("ai.synthesizeDocument", {
+      query: "What was the study design?",
+      requestId: expect.stringMatching(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+      workId: "work-1",
+    });
+    expect(Object.keys(command.mock.calls[0]?.[1] as object).sort()).toEqual([
+      "query",
+      "requestId",
+      "workId",
     ]);
   });
 });

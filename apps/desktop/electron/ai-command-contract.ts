@@ -95,6 +95,60 @@ export interface AiSynthesizeCanvasCommandResult {
   title: string;
 }
 
+/**
+ * A document-scoped question. The renderer supplies only a bounded question
+ * and target Work; main resolves every source, revision, and provider setting.
+ */
+export interface AiSynthesizeDocumentCommandInput {
+  query: string;
+  requestId: string;
+  workId: string;
+}
+
+export type AiGroundedAnswerStatus = "answer" | "insufficient" | "conflicting";
+export type AiGroundedClaimKind = "factual" | "interpretive" | "uncertain";
+export type AiGroundedClaimCoverage =
+  | "multiple-supporting-sources"
+  | "partial-support"
+  | "conflicting-sources"
+  | "insufficient-evidence";
+export type AiGroundedClaimRelation = "supports" | "qualifies" | "contradicts" | "background";
+
+/** A durable, revision-bound projection issued from the main-owned source pack. */
+export interface AiGroundedCitation {
+  anchorSnapshot: unknown;
+  assetId: string | null;
+  citationId: string;
+  contentUnitId?: string;
+  quotedText: string;
+  revisionId: string;
+  sourceContentHash: string | null;
+  workId: string | null;
+}
+
+export interface AiGroundedClaim {
+  citationIds: string[];
+  citationRelations: Record<string, AiGroundedClaimRelation>;
+  citations: AiGroundedCitation[];
+  claimKey: string;
+  coverage: AiGroundedClaimCoverage;
+  kind: AiGroundedClaimKind;
+  text: string;
+}
+
+/**
+ * Ephemeral, source-bound synthesis output. This command deliberately does
+ * not create a draft, an AI job record, or any renderer-chosen citation.
+ */
+export interface AiSynthesizeDocumentCommandResult {
+  answerMarkdown: string;
+  claims: AiGroundedClaim[];
+  /** Null proves no provider was contacted when the eligible pack was empty. */
+  modelName: string | null;
+  packHash: string;
+  status: AiGroundedAnswerStatus;
+}
+
 export interface AiFlashcardGeneration {
   contributions: string[];
   limitations: string;
@@ -177,6 +231,10 @@ export interface AiDataCommandMap {
   "ai.synthesizeCanvas": {
     input: AiSynthesizeCanvasCommandInput;
     output: AiSynthesizeCanvasCommandResult;
+  };
+  "ai.synthesizeDocument": {
+    input: AiSynthesizeDocumentCommandInput;
+    output: AiSynthesizeDocumentCommandResult;
   };
   "ai.testProvider": {
     input: AiTestProviderCommandInput;

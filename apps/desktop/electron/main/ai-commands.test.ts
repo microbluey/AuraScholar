@@ -479,12 +479,21 @@ describe("AI flashcard data commands", () => {
         },
         name: "ai.synthesizeCanvas",
       },
+      {
+        input: {
+          model: "attacker-model",
+          query: "What was the design?",
+          requestId: "document-provider-injection-model",
+          workId: "work-1",
+        },
+        name: "ai.synthesizeDocument",
+      },
     ];
 
     for (const request of requests) {
       await expect(
         executeAiCommand(request as AiCommandRequest, commandDependencies),
-      ).rejects.toThrow(/^Invalid ai\.(?:testProvider|synthesizeCanvas) input$/);
+      ).rejects.toThrow(/^Invalid ai\.(?:testProvider|synthesizeCanvas|synthesizeDocument) input$/);
     }
     expect(executeCalls).toBe(0);
     expect(providerFactory).not.toHaveBeenCalled();
@@ -583,4 +592,5 @@ describe("AI flashcard data commands", () => {
     ).rejects.toThrow("不属于当前文献库");
     expect(providerFactory).not.toHaveBeenCalled();
   });
+
 });

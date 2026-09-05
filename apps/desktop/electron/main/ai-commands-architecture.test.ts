@@ -23,12 +23,16 @@ describe("main-owned AI provider architecture", () => {
     const canvasInput = contract.match(
       /export interface AiSynthesizeCanvasCommandInput \{([\s\S]*?)\n\}/,
     )?.[1];
+    const documentInput = contract.match(
+      /export interface AiSynthesizeDocumentCommandInput \{([\s\S]*?)\n\}/,
+    )?.[1];
     const testInput = contract.match(
       /export interface AiTestProviderCommandInput \{([\s\S]*?)\n\}/,
     )?.[1];
 
     expect(contract).toContain('"ai.generateFlashcards"');
     expect(contract).toContain('"ai.synthesizeCanvas"');
+    expect(contract).toContain('"ai.synthesizeDocument"');
     expect(contract).toContain('"ai.testProvider"');
     expect(contract).toContain('"ai.saveSettings"');
     expect(contract).toContain('"ai.cancelRun"');
@@ -40,8 +44,9 @@ describe("main-owned AI provider architecture", () => {
     expect(flashcardInput).not.toContain("apiKey");
     expect(flashcardInput).not.toContain("model");
     expect(canvasInput).toBeDefined();
+    expect(documentInput).toBeDefined();
     expect(testInput).toBeDefined();
-    for (const providerInput of [canvasInput, testInput]) {
+    for (const providerInput of [canvasInput, documentInput, testInput]) {
       expect(providerInput).not.toContain("baseUrl");
       expect(providerInput).not.toContain("apiKey");
       expect(providerInput).not.toContain("model");
@@ -49,6 +54,7 @@ describe("main-owned AI provider architecture", () => {
     expect(commands).toContain("requireLocalLibraryId");
     expect(commands).toContain("assertActiveLocalLibrary");
     expect(commands).toContain("assertCanvasSourcesInActiveLibrary");
+    expect(commands).toContain("synthesizeGroundedDocumentInMain");
     expect(commands).toContain("createConfiguredAiProvider");
     expect(commands).toContain("MainAiRunRegistry");
     expect(commands).toContain("FlashcardsRepo");
@@ -58,6 +64,7 @@ describe("main-owned AI provider architecture", () => {
     expect(commands).toContain('from "./ai-command-input"');
     expect(commandInput).toContain("requireExactAiInput");
     expect(commandInput).toContain("MAX_AI_CANVAS_SOURCE_TOTAL_BYTES");
+    expect(commandInput).toContain("parseSynthesizeDocumentInput");
     expect(commandInput).not.toContain("window.aura");
     expect(commands.split("\n").length).toBeLessThanOrEqual(500);
     expect(commandInput.split("\n").length).toBeLessThanOrEqual(500);
@@ -65,6 +72,7 @@ describe("main-owned AI provider architecture", () => {
     expect(facade).toContain('"ai.cancelRun"');
     expect(facade).toContain('"ai.generateFlashcards"');
     expect(facade).toContain('"ai.synthesizeCanvas"');
+    expect(facade).toContain('"ai.synthesizeDocument"');
     expect(ai).toContain("getAiFlashcardTarget");
     expect(ai).toContain("generateAiFlashcards");
     expect(ai).toContain("recordAiFlashcardFailure");

@@ -18,6 +18,7 @@ import type {
   AiDataCommandName,
   AiGenerateFlashcardsCommandInput,
   AiSynthesizeCanvasCommandInput,
+  AiSynthesizeDocumentCommandInput,
   AiTestProviderCommandInput,
 } from "../ai-command-contract";
 import type { DataCommandOutput, DataCommandRequest } from "../data-command-contract";
@@ -31,12 +32,17 @@ import {
   parseRecordFlashcardFailureInput,
   parseSaveAiSettingsInput,
   parseSynthesizeCanvasInput,
+  parseSynthesizeDocumentInput,
   parseTestAiProviderInput,
 } from "./ai-command-input";
 import { createConfiguredAiProvider } from "./ai-provider";
 import { mainAiRunRegistry, type MainAiRunRegistry } from "./ai-run-registry";
 import { mainAiSettingsStore, type MainAiSettingsStore } from "./ai-settings-store";
 import { assertActiveLocalLibrary, type DataCommandDependencies } from "./data-command-runtime";
+import {
+  synthesizeGroundedDocumentInMain,
+  type GroundedDocumentSynthesisRuntime,
+} from "./grounded-document-synthesis";
 
 const MAX_AI_CANVAS_OUTPUT_BYTES = 1024 * 1024;
 const MAX_AI_TEST_RESPONSE_BYTES = 4 * 1024;
@@ -120,6 +126,10 @@ export async function executeAiCommand(
     case "ai.synthesizeCanvas": {
       const input = parseSynthesizeCanvasInput(request.input);
       return synthesizeCanvasInMain(input, dependencies);
+    }
+    case "ai.synthesizeDocument": {
+      const input = parseSynthesizeDocumentInput(request.input);
+      return synthesizeDocumentInMain(input, dependencies);
     }
     case "ai.testProvider": {
       const input = parseTestAiProviderInput(request.input);
@@ -228,6 +238,18 @@ async function synthesizeCanvasInMain(
       title: output.title,
     };
   });
+}
+
+function synthesizeDocumentInMain(
+  input: AiSynthesizeDocumentCommandInput,
+  dependencies: AiCommandDependencies,
+): Promise<DataCommandOutput<"ai.synthesizeDocument">> {
+  return synthesizeGroundedDocumentInMain(input, {
+    assertNotAborted: assertAiRunNotAborted,
+    createProvider: () => createAiProvider(dependencies),
+    execute: (operation) => executeAiInternalLease(dependencies, "ai.synthesizeDocument", operation),
+    run: (requestId, operation) => withAiRun(requestId, dependencies, operation),
+  } satisfies GroundedDocumentSynthesisRuntime);
 }
 
 async function testProviderInMain(
